@@ -1,4 +1,12 @@
-import type { FormConfig, FormField } from "@prisma/client";
+import type { Category, FormConfig, FormField } from "@prisma/client";
+
+type PublicFormWithRelations = FormConfig & {
+  fields: FormField[];
+  event?: {
+    name?: string;
+    categories?: Pick<Category, "id" | "name">[];
+  };
+};
 
 /** Serialized form field for both admin and public consumers. */
 export function serializeField(field: FormField) {
@@ -43,7 +51,7 @@ export function serializeForm(form: FormConfig & { fields: FormField[] }) {
  * side and returned as booleans.
  */
 export function serializePublicForm(
-  form: FormConfig & { fields: FormField[] },
+  form: PublicFormWithRelations,
   now: Date = new Date(),
 ) {
   const isOpen =
@@ -63,6 +71,12 @@ export function serializePublicForm(
     maxSpeakers: form.maxSpeakers,
     maxBioLength: form.maxBioLength,
     isOpen,
+    // Categories are event-owned, so this public projection is sufficient for
+    // an unauthenticated submitter without exposing the protected categories API.
+    categories: (form.event?.categories ?? []).map((category) => ({
+      id: category.id,
+      name: category.name,
+    })),
     fields: [...form.fields]
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map(serializeField),

@@ -45,14 +45,16 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [day, setDay] = useState<string | null>(null);
   const activeDay = day && days.includes(day) ? day : (days[0] ?? null);
 
-  async function unschedule(sessionId: string) {
+  async function unschedule(sessionId: string, title?: string) {
+    if (!window.confirm(`Unschedule${title ? ` “${title}”` : " this session"}?`)) return false;
     const res = await apiDelete(`/api/agenda/slots?sessionId=${encodeURIComponent(sessionId)}`);
     if (res.ok) startTransition(() => router.refresh());
+    return res.ok;
   }
 
   return (
     <div className="card">
-      <div className="agenda-toolbar" role="tablist" aria-label="Agenda views">
+      <div className="agenda-toolbar" role="group" aria-label="Agenda views">
         <ViewTab id="list" view={view} setView={setView} icon={<List size={15} />} label="List" />
         <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day" />
         <ViewTab id="rooms" view={view} setView={setView} icon={<LayoutGrid size={15} />} label="Tracks" />
@@ -145,8 +147,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
             startTransition(() => router.refresh());
           }}
           onUnschedule={async () => {
-            await unschedule(scheduling.id);
-            setScheduling(null);
+            if (await unschedule(scheduling.id, scheduling.title)) setScheduling(null);
           }}
         />
       ) : null}
@@ -156,7 +157,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
 
 function ViewTab({ id, view, setView, icon, label }: { id: View; view: View; setView: (v: View) => void; icon: React.ReactNode; label: string }) {
   return (
-    <button role="tab" aria-selected={view === id} className={`ghost-button ${view === id ? "active" : ""}`} onClick={() => setView(id)}>
+    <button aria-pressed={view === id} className={`ghost-button ${view === id ? "active" : ""}`} onClick={() => setView(id)}>
       {icon} {label}
     </button>
   );
@@ -180,7 +181,7 @@ function ListView({
   roomName: (id: string) => string;
   trackColor: (id: string | null) => string;
   onReschedule: (s: AgendaSession) => void;
-  onUnschedule: (id: string) => void;
+  onUnschedule: (id: string, title?: string) => void;
   busy: boolean;
 }) {
   const sorted = [...sessions].sort((a, b) => a.slot.startsAt.localeCompare(b.slot.startsAt));
@@ -207,7 +208,7 @@ function ListView({
           </div>
           {conflictIds.has(s.id) ? <Pill tone="bad"><AlertTriangle size={12} /> Conflict</Pill> : null}
           <button className="ghost-button" onClick={() => onReschedule(s)}>Move</button>
-          <button className="ghost-button danger-button" disabled={busy} onClick={() => onUnschedule(s.id)} aria-label={`Unschedule ${s.title}`}>
+          <button className="ghost-button danger-button" disabled={busy} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
             <CalendarX size={15} />
           </button>
         </div>

@@ -19,8 +19,8 @@ public embeds for your event site.
    checklists (tasks can carry forms).
 6. **Agenda builder** — day/room scheduling with transactional room-overlap and
    speaker double-booking conflict detection.
-7. **Public embeds** — mobile-friendly schedule embed with `.ics` calendar
-   export.
+7. **Public embeds** — mobile-friendly schedule and compact speaker gallery,
+   with `.ics` calendar export.
 
 ## Quickstart
 
@@ -33,16 +33,68 @@ npm run dev
 ```
 
 Then open http://localhost:3000/login — one-click demo personas (Admin /
-Evaluator / Speaker) are available, plus login-as-any-email.
+Evaluator / Speaker) are available for the fixed seeded demo personas.
 
 Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
 `sofia@greenroom.demo` (speaker).
 
 ## Deployed demo
 
-**Live at <https://greenroom-omega-dusky.vercel.app>** (Vercel + Neon; pushes to
-`main` auto-deploy). See `docs/DEPLOY.md` for the deploy runbook, environment
-variables, and the gated demo-reset endpoint.
+**Canonical production URL:** <https://greenroom-omega-dusky.vercel.app>
+
+The demo runs on Vercel + Neon; pushes to `main` auto-deploy.
+
+### Production golden-path walkthrough
+
+The public CFP uses the stable seeded slug
+[`/cfp/call-for-speakers`](https://greenroom-omega-dusky.vercel.app/cfp/call-for-speakers).
+Use a distinctive, throwaway talk title so it is easy to find in the admin
+pipeline.
+
+1. Open the public CFP, complete its required fields, and submit it while
+   logged out.
+2. Go to [`/login`](https://greenroom-omega-dusky.vercel.app/login) and choose
+   the **Event admin** persona. Open **Abstracts**, select the submitted row,
+   then choose **Accept**.
+3. With that row still selected after refresh, choose **Create session**.
+4. Open **Agenda**. In the **Unscheduled backlog**, select the new session,
+   choose an available date, time, room, and optional track, then choose
+   **Schedule**. The server prevents room and speaker overlaps.
+5. Verify the result while logged out at
+   [`/embed/schedule`](https://greenroom-omega-dusky.vercel.app/embed/schedule).
+   The demo event can also be selected explicitly with
+   [`?event=forward-2026`](https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026).
+   The scheduled speaker lineup is available at
+   [`/embed/speakers`](https://greenroom-omega-dusky.vercel.app/embed/speakers?event=forward-2026).
+
+### Demo personas
+
+Sign in through the one-click buttons on `/login`; no password is required.
+
+| Role | Persona | Email | Main area |
+| --- | --- | --- | --- |
+| Event admin | Maya Chen | `maya@greenroom.demo` | Forms, Abstracts, Agenda |
+| Evaluator | Ravi Patel | `ravi@greenroom.demo` | Evaluations |
+| Speaker | Sofia Marques | `sofia@greenroom.demo` | Speaker portal |
+
+### Repeatable verification
+
+Run these from a checked-out repository. The production verifier needs the
+configured read-only database connection to discover a live published form; it
+checks that production reset remains refused and does not seed or reset data.
+
+```bash
+npm test
+npm run typecheck
+npm run build
+node --env-file=.env scripts/_frontend-smoke.mjs
+node scripts/prod-verify.mjs https://greenroom-omega-dusky.vercel.app
+```
+
+The frontend smoke creates and removes only its `scratch-frontend` event. For
+an external-origin embed proof, serve
+[`docs/judging/embed-schedule-proof.html`](docs/judging/embed-schedule-proof.html)
+from any static host or localhost.
 
 ## Stack
 

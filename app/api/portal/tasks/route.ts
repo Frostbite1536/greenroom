@@ -37,6 +37,7 @@ export async function PATCH(request: Request) {
 
   const { taskId, status, artifactUrl, notes } = parsed.data;
   const user = await resolveSessionUser(session);
+  if (!user) return fail("UNAUTHORIZED", "Sign in to update your tasks.", 401);
 
   // Scope the task to the caller's current event.
   const task = await prisma.onboardingTask.findFirst({

@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { zonedToUtcIso } from "@/lib/tz";
 
 /**
  * Deterministic, idempotent demo seed for Greenroom.
@@ -6,7 +7,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
  * Running it again wipes and rebuilds all data scoped to the demo event, so it
  * doubles as the demo-reset payload. Global `User` rows are upserted by email
  * (matching the auth contract: users are resolved by lowercased email, not id)
- * so persona and email logins survive a reseed.
+ * so fixed seeded persona sessions survive a reseed.
  */
 
 export const DEMO_EVENT = {
@@ -150,8 +151,10 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   await db.eventMember.deleteMany({ where: { eventId } });
 
   // --- 2. Event --------------------------------------------------------------
-  const startsAt = new Date("2026-05-12T00:00:00.000Z");
-  const endsAt = new Date("2026-05-14T00:00:00.000Z");
+  // These are authored as the event's Los Angeles calendar boundaries, then
+  // stored as UTC instants so every viewer sees May 12–14 in event time.
+  const startsAt = new Date(zonedToUtcIso("2026-05-12", "00:00", DEMO_EVENT.timezone));
+  const endsAt = new Date(zonedToUtcIso("2026-05-14", "00:00", DEMO_EVENT.timezone));
   await db.event.upsert({
     where: { id: eventId },
     update: { name: DEMO_EVENT.name, slug: DEMO_EVENT.slug, timezone: DEMO_EVENT.timezone, startsAt, endsAt },
@@ -420,7 +423,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
     const day = slotIdx < 6 ? day1 : day2;
     const roomI = slotIdx % roomOrder.length;
     const hour = startHours[slotIdx % startHours.length];
-    const startsAtSlot = new Date(`${day}T${String(hour).padStart(2, "0")}:00:00.000Z`);
+    const startsAtSlot = new Date(zonedToUtcIso(day, `${String(hour).padStart(2, "0")}:00`, DEMO_EVENT.timezone));
     const endsAtSlot = new Date(startsAtSlot.getTime() + s.durationMinutes * 60_000);
     await db.scheduleSlot.create({
       data: { eventId, sessionId: s.id, roomId: roomOrder[roomI], trackId: trackOrder[roomI], startsAt: startsAtSlot, endsAt: endsAtSlot },
@@ -429,7 +432,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   }
   // Deliberate conflict: schedule one more session in the SAME room + time as the first slot.
   if (sessions.length > 10) {
-    const conflictStart = new Date(`${day1}T09:00:00.000Z`);
+    const conflictStart = new Date(zonedToUtcIso(day1, "09:00", DEMO_EVENT.timezone));
     const conflicting = sessions[10];
     await db.scheduleSlot.create({
       data: {

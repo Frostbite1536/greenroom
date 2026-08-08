@@ -11,6 +11,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
@@ -26,11 +27,10 @@ if (probe) {
   process.exit(1);
 }
 
-const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
 const ev = { id: EVENT_ID, name: "Scratch Frontend", slug: EVENT_ID };
 const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom.demo" }, event: ev, role: "ADMIN" };
 const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom.demo" }, event: ev, role: "EVALUATOR" };
-const cookie = (s) => `sb_session=${enc(s)}`;
+const cookie = cookieForSession;
 
 async function req(method, path, body, sess) {
   const res = await fetch(BASE + path, {
@@ -182,7 +182,10 @@ const check = (name, pass, detail = "") => {
   console.log(`${pass ? "  ok  " : " FAIL "} ${name}${detail && !pass ? ` — ${detail}` : ""}`);
 };
 
-const server = spawn("npx", ["next", "start", "-p", PORT], { cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn("npx", ["next", "start", "-p", PORT], {
+  cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET },
+});
 console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 
 /**
@@ -194,11 +197,39 @@ console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
  * rule in coordination STATE.md) — this is scoped to our own PID.
  */
 function stopServer() {
-  if (!server.pid) return;
+  if (!server.pid || server.exitCode !== null) return true;
   const res = spawnSync("taskkill", ["/F", "/T", "/PID", String(server.pid)], { encoding: "utf8" });
   console.log(`[smoke] stopped server tree for pid ${server.pid}${res.status === 0 ? "" : ` (exit ${res.status})`}`);
+  if (res.error || res.status !== 0) {
+    cleanupFailed = true;
+    console.error(`[smoke] failed to stop server tree: ${res.error?.message ?? res.stderr ?? `exit ${res.status}`}`);
+    return false;
+  }
+  return true;
 }
-process.on("SIGINT", () => { stopServer(); process.exit(130); });
+let cleanupFailed = false;
+let cleanupPromise;
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    try {
+      await prisma.event.deleteMany({ where: { id: EVENT_ID } });
+      console.log("[smoke] scratch-frontend cleaned up");
+    } catch (error) {
+      cleanupFailed = true;
+      console.error("[smoke] cleanup failed", error);
+    }
+    await prisma.$disconnect().catch((error) => {
+      cleanupFailed = true;
+      console.error("[smoke] Prisma cleanup failed", error);
+    });
+    stopServer();
+    return cleanupFailed;
+  })();
+  return cleanupPromise;
+}
+process.once("SIGINT", () => {
+  void cleanup().finally(() => process.exit(130));
+});
 server.stderr.on("data", (d) => {
   const s = d.toString();
   if (/error|Error/.test(s)) process.stderr.write(s);
@@ -257,6 +288,16 @@ try {
 
   const embedPage = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
   check("embed shows scheduled session", embedPage.text.includes("Scratch Session A"));
+
+  // Calendar downloads remain public: whole event with no session, or one
+  // scheduled session when its affordance is used in the embed.
+  const eventCalendar = await req("GET", `/api/comms/calendar?eventId=${EVENT_ID}`, null, null);
+  check("public event calendar export → 200", eventCalendar.status === 200, `got ${eventCalendar.status}`);
+  check("public event calendar export has scheduled session", eventCalendar.text.includes("SUMMARY:Scratch Session A"));
+
+  const sessionCalendar = await req("GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${fx.sessionA.id}`, null, null);
+  check("public session calendar export → 200", sessionCalendar.status === 200, `got ${sessionCalendar.status}`);
+  check("public session calendar export has one event", (sessionCalendar.text.match(/BEGIN:VEVENT/g) ?? []).length === 1);
 
   // --- mutation 1: builder Save ---
   const savePayload = {
@@ -414,13 +455,6 @@ try {
 } finally {
   const passed = results.filter((r) => r.pass).length;
   console.log(`\n[smoke] ${passed}/${results.length} checks passed`);
-  try {
-    await prisma.event.deleteMany({ where: { id: EVENT_ID } });
-    console.log("[smoke] scratch-frontend cleaned up");
-  } catch (e) {
-    console.error("[smoke] cleanup failed", e);
-  }
-  await prisma.$disconnect();
-  stopServer();
-  process.exit(results.every((r) => r.pass) ? 0 : 1);
+  await cleanup();
+  process.exit(results.every((r) => r.pass) && !cleanupFailed ? 0 : 1);
 }

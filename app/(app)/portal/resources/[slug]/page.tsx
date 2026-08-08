@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { requireSession } from "@/lib/auth";
+import { notFound, redirect } from "next/navigation";
+import { getApiContext } from "@/lib/api/context";
 import { prisma } from "@/lib/prisma";
 import { sanitizeHtml } from "@/lib/sanitize-html";
 import styles from "../../portal.module.css";
@@ -8,11 +8,12 @@ import styles from "../../portal.module.css";
 export const dynamic = "force-dynamic";
 
 export default async function ResourcePage({ params }: { params: Promise<{ slug: string }> }) {
-  const session = await requireSession();
+  const ctx = await getApiContext();
+  if (!ctx) redirect("/login");
   const { slug } = await params;
 
   const resource = await prisma.resourceWiki.findFirst({
-    where: { eventId: session.event.id, slug, published: true },
+    where: { eventId: ctx.eventId, slug, published: true },
     select: { title: true, summary: true, htmlContent: true, updatedAt: true },
   });
 

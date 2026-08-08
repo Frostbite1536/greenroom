@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { requireContext } from "@/lib/api/context";
+import { ApiError } from "@/lib/api/http";
 import { isDemoResetAllowed } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { seedDemo } from "@/lib/demo/seed";
@@ -25,16 +26,22 @@ export async function POST() {
     return fail("RESET_DISABLED", "Demo reset is disabled. Set ALLOW_DEMO_RESET=true to enable it.", 403);
   }
 
-  const session = await getSession();
-  if (!session || session.role !== "ADMIN") {
-    return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
+  try {
+    await requireContext(["ADMIN"]);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
+    }
+    // Keep diagnostics server-side and intentionally avoid request/cookie/DB details.
+    console.error("[reset] authorization unavailable", { errorType: error instanceof Error ? error.name : typeof error });
+    return fail("AUTH_UNAVAILABLE", "Authorization could not be verified. Try again later.", 503);
   }
 
   try {
     const summary = await seedDemo(prisma);
     return NextResponse.json<ApiResponse<typeof summary>>({ ok: true, data: summary });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error during reset.";
-    return fail("RESET_FAILED", message, 500);
+    console.error("[reset] seed failed", { errorType: error instanceof Error ? error.name : typeof error });
+    return fail("RESET_FAILED", "Demo reset could not be completed.", 500);
   }
 }

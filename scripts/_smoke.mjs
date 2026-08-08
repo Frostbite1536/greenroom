@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 /**
  * Backend E2E smoke.
@@ -15,8 +16,7 @@ const SCRATCH_EVENT = {
   slug: "scratch-backend",
 };
 
-// Session cookies are forged to match lib/auth.ts encodeSession. Scratch-only
-// identities (@scratch.test) so demo personas are never touched.
+// Signed scratch-only identities (@scratch.test) so demo personas are never touched.
 const admin = {
   user: { id: "scratch-admin", name: "Scratch Admin", email: "admin@scratch.test" },
   event: SCRATCH_EVENT,
@@ -24,11 +24,22 @@ const admin = {
 };
 const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
 const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
-const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
-const cookie = (s) => `sb_session=${enc(s)}`;
+const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
 const BASE = `http://127.0.0.1:${PORT}`;
+// Refuse a pre-existing listener: otherwise this run can silently verify a
+// server it did not spawn and report a misleading pass.
+const occupiedPort = await fetch(`${BASE}/login`).then(() => true).catch(() => false);
+if (occupiedPort) {
+  console.error(`[smoke] port ${PORT} is already serving. Find and stop that exact PID first:\n` +
+    `  netstat -ano | findstr :${PORT}\n  taskkill /F /PID <pid>`);
+  process.exit(1);
+}
+// The spawned server receives this scratch-only key even when the shell does
+// not have one configured. It exercises the optional v1 read surface without
+// changing any shared environment or touching the judged event.
+const V1_API_KEY = process.env.GREENROOM_API_KEY || "scratch-v1-api-key-for-local-only-0001";
 const j = async (method, path, body, sess) => {
   const res = await fetch(BASE + path, {
     method,
@@ -39,12 +50,62 @@ const j = async (method, path, body, sess) => {
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 };
+const v1 = async (path) => {
+  const res = await fetch(BASE + path, { headers: { authorization: `Bearer ${V1_API_KEY}` } });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data };
+};
 
-const server = spawn("npx", ["next", "start", "-p", PORT], { cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn("npx", ["next", "start", "-p", PORT], {
+  cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY, SESSION_SECRET: SMOKE_SESSION_SECRET },
+});
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
+const prisma = new PrismaClient();
 let ready = false;
 server.stdout.on("data", (d) => { if (/Ready|started server|Local:/i.test(d.toString())) ready = true; });
 server.stderr.on("data", (d) => process.stderr.write(d));
+
+let cleanupFailed = false;
+let cleanupPromise;
+let fatalError = false;
+function stopServer() {
+  if (!server.pid || server.exitCode !== null) return true;
+  if (process.platform === "win32") {
+    // `server.pid` is the shell wrapper; /T limits termination to its exact tree.
+    const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(server.pid)], { encoding: "utf8" });
+    if (result.error || result.status !== 0) {
+      cleanupFailed = true;
+      console.error(`[smoke] failed to stop server tree for pid ${server.pid}: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`);
+      return false;
+    }
+    return true;
+  }
+  if (!server.kill("SIGTERM")) {
+    cleanupFailed = true;
+    console.error(`[smoke] failed to stop server pid ${server.pid}`);
+    return false;
+  }
+  return true;
+}
+
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    await prisma.$disconnect().catch((error) => {
+      cleanupFailed = true;
+      console.error("[smoke] Prisma cleanup failed", error);
+    });
+    stopServer();
+    return cleanupFailed;
+  })();
+  return cleanupPromise;
+}
+
+process.once("SIGINT", () => {
+  fatalError = true;
+  void cleanup().finally(() => process.exit(130));
+});
 
 async function waitReady() {
   for (let i = 0; i < 60; i++) {
@@ -55,8 +116,6 @@ async function waitReady() {
 
 const results = [];
 const check = (name, cond, extra) => { results.push({ name, ok: !!cond, extra }); console.log(`${cond ? "PASS" : "FAIL"} ${name}`, extra ?? ""); };
-
-const prisma = new PrismaClient();
 
 /**
  * Wipe + recreate the scratch event so runs are idempotent and isolated.
@@ -81,11 +140,30 @@ async function resetScratchEvent() {
       tracks: { create: [{ name: "Scratch Track", color: "#3b82f6", sortOrder: 0 }] },
     },
   });
+  for (const identity of [admin, speaker, evalr]) {
+    const user = await prisma.user.upsert({
+      where: { email: identity.user.email },
+      update: { name: identity.user.name },
+      create: { email: identity.user.email, name: identity.user.name },
+    });
+    await prisma.eventMember.upsert({
+      where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: user.id } },
+      update: { role: identity.role },
+      create: { eventId: SCRATCH_EVENT.id, userId: user.id, role: identity.role },
+    });
+  }
   console.log(`[smoke] scratch event '${SCRATCH_EVENT.id}' reset (demo-event untouched)`);
 }
 
 try {
   await resetScratchEvent();
+  await prisma.category.createMany({
+    data: [
+      { eventId: SCRATCH_EVENT.id, name: "Systems", sortOrder: 2 },
+      { eventId: SCRATCH_EVENT.id, name: "AI", sortOrder: 0 },
+      { eventId: SCRATCH_EVENT.id, name: "Community", sortOrder: 0 },
+    ],
+  });
   await waitReady();
 
   // 1. Create + publish a CFP form (admin)
@@ -95,6 +173,11 @@ try {
     fields: [
       { key: "title_note", label: "Talk note", type: "SHORT_TEXT", required: true, sortOrder: 0 },
       { key: "bio", label: "Speaker bio", type: "LONG_TEXT", required: false, sortOrder: 1 },
+      { key: "consent", label: "Consent", type: "CHECKBOX", required: true, sortOrder: 2 },
+      { key: "audience", label: "Audience", type: "SELECT", required: false, options: [{ label: "Beginner", value: "beginner" }, { label: "Advanced", value: "advanced" }], sortOrder: 3 },
+      { key: "topics", label: "Topics", type: "MULTI_SELECT", required: false, options: [{ label: "AI", value: "ai" }, { label: "Community", value: "community" }], sortOrder: 4 },
+      { key: "rating", label: "Rating", type: "NUMBER", required: false, sortOrder: 5 },
+      { key: "website", label: "Website", type: "URL", required: false, sortOrder: 6 },
     ],
   };
   const form = await j("POST", "/api/cfp/forms", formPayload, admin);
@@ -104,6 +187,61 @@ try {
   // 2. Public read of the form (null session)
   const pub = await j("GET", `/api/cfp/public/${formId}`);
   check("public form read (no auth)", pub.status === 200 && pub.data?.data?.isOpen === true);
+  check(
+    "public form includes event categories in stable order",
+    JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
+      JSON.stringify(["AI", "Community", "Systems"]),
+  );
+
+  const importPayload = {
+    eventId: SCRATCH_EVENT.id,
+    format: "csv",
+    entity: "abstracts",
+    mappings: [
+      { sourceField: "Title", targetField: "title" },
+      { sourceField: "Body", targetField: "abstract" },
+      { sourceField: "Email", targetField: "speakerEmail" },
+      { sourceField: "Name", targetField: "speakerName" },
+      { sourceField: "Category", targetField: "category" },
+      { sourceField: "Unused", targetField: "formConfigId", fallback: formId },
+      { sourceField: "Title", targetField: "answers.title_note" },
+      { sourceField: "Consent", targetField: "answers.consent" },
+      { sourceField: "Audience", targetField: "answers.audience" },
+      { sourceField: "Topics", targetField: "answers.topics" },
+      { sourceField: "Rating", targetField: "answers.rating" },
+      { sourceField: "Website", targetField: "answers.website" },
+    ],
+    payload: "Title,Body,Email,Name,Category,Consent,Audience,Topics,Rating,Website\nImported Talk,Imported body,imported@scratch.test,Imported Speaker,AI,yes,beginner,ai;community,4.5,https://example.test/imported",
+  };
+  const imported = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import creates completed abstract job",
+    imported.status === 201 &&
+      imported.data?.data?.job?.status === "COMPLETED" &&
+      imported.data?.data?.summary?.created === 1,
+    imported.status,
+  );
+  const importedAgain = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import is idempotent for matching abstract identity",
+    importedAgain.status === 201 && importedAgain.data?.data?.summary?.updated === 1,
+    importedAgain.status,
+  );
+  const importedRecord = await prisma.abstract.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, title: "Imported Talk" },
+    include: { answers: { include: { formField: true } } },
+  });
+  const importedAnswers = Object.fromEntries(
+    (importedRecord?.answers ?? []).map((answer) => [answer.formField.key, answer.value]),
+  );
+  check(
+    "mapped CSV answers are coerced by field type",
+    importedAnswers.consent === true &&
+      importedAnswers.audience === "beginner" &&
+      JSON.stringify(importedAnswers.topics) === JSON.stringify(["ai", "community"]) &&
+      importedAnswers.rating === 4.5 &&
+      importedAnswers.website === "https://example.test/imported",
+  );
 
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
@@ -116,7 +254,7 @@ try {
   const sub = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My great talk", abstract: "About stuff",
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
-    answers: { title_note: "hello", bio: "a short bio" }, intent: "submit",
+    answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
   check("valid submit", sub.status === 201 && sub.data?.data?.status === "SUBMITTED", sub.status);
   const abstractId = sub.data?.data?.id;
@@ -134,8 +272,7 @@ try {
   check("create plan", plan.status === 201, plan.status);
   const planId = plan.data?.data?.id;
 
-  // 7. Evaluator touches an authed route so context.ts upserts their User +
-  // EventMember rows, then admin resolves the real DB id via /evaluators.
+  // 7. Evaluator has a pre-existing scratch membership; resolve the real DB id.
   await j("GET", "/api/evaluations/plans", null, evalr);
   const eva = await j("GET", "/api/evaluations/evaluators", null, admin);
   const evaluatorId = eva.data?.data?.find((e) => e.email === evalr.user.email.toLowerCase())?.userId;
@@ -161,15 +298,25 @@ try {
   }, evalr);
   check("unknown rubric key rejected", unknownKey.status === 422, unknownKey.data?.error?.code);
 
-  const notAssigned = await j("POST", "/api/evaluations/scores", {
+  const unprovisioned = await j("POST", "/api/evaluations/scores", {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
   }, { ...evalr, user: { id: "x", name: "Stranger", email: "stranger@x.com" } });
-  check("unassigned evaluator refused", notAssigned.status === 403, notAssigned.data?.error?.code);
+  check("unprovisioned evaluator refused", unprovisioned.status === 401, unprovisioned.data?.error?.code);
 
   const score = await j("POST", "/api/evaluations/scores", {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 5, comment: "strong" }], complete: true,
   }, evalr);
   check("valid score recorded + assignment completed", score.status === 200 && score.data?.data?.complete === true, score.status);
+
+  const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
+  const reviewedAbstract = reviewedList.data?.data?.find((item) => item.id === abstractId);
+  check(
+    "abstract list includes completed review progress and average score",
+    reviewedList.status === 200 &&
+      reviewedAbstract?.reviewsComplete === 1 &&
+      reviewedAbstract?.reviewsTotal === 1 &&
+      reviewedAbstract?.avgScore === 5,
+  );
 
   // 10. Convert before acceptance must fail (INV-DOMAIN-001)
   const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
@@ -206,7 +353,7 @@ try {
   const sub2 = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Second talk", abstract: "More stuff",
     speakers: [{ email: "other@x.com", name: "Other Person", isPrimary: true }],
-    answers: { title_note: "hi" }, intent: "submit",
+    answers: { title_note: "hi", consent: true }, intent: "submit",
   });
   const abstractId2 = sub2.data?.data?.id;
   await j("POST", "/api/evaluations/decisions", { abstractId: abstractId2, decision: "ACCEPTED" }, admin);
@@ -222,7 +369,7 @@ try {
   const sub3 = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Third talk", abstract: "Even more",
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }],
-    answers: { title_note: "hi" }, intent: "submit",
+    answers: { title_note: "hi", consent: true }, intent: "submit",
   });
   const abstractId3 = sub3.data?.data?.id;
   await j("POST", "/api/evaluations/decisions", { abstractId: abstractId3, decision: "ACCEPTED" }, admin);
@@ -251,6 +398,15 @@ try {
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
 
+  // 19. Key-protected v1 reads remain explicitly event-scoped and return only
+  // the intended read models (no reviewer data or unplaced sessions).
+  const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
+  check("v1 submissions read is key-gated and event-scoped", v1Submissions.status === 200 && v1Submissions.data?.version === "v1" && v1Submissions.data?.data?.some((item) => item.id === abstractId), v1Submissions.status);
+  const v1Speakers = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  check("v1 speakers are derived from scratch event records", v1Speakers.status === 200 && v1Speakers.data?.data?.some((item) => item.email === "spk@x.com"), v1Speakers.status);
+  const v1Schedule = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("v1 schedule lists placed sessions only", v1Schedule.status === 200 && v1Schedule.data?.data?.length === 2, v1Schedule.status);
+
   // 19b. Cross-event scoping: a scratch-scoped session must not accept a body
   // claiming the demo event (INV-EVENT-001), and must not read demo data.
   const crossEvent = await j("POST", "/api/agenda/slots", {
@@ -276,16 +432,11 @@ try {
 
   console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId }));
 } catch (e) {
+  fatalError = true;
   console.error("SMOKE ERROR", e);
 } finally {
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
-  await prisma.$disconnect().catch(() => {});
-  // Kill ONLY the process tree we spawned (never by image name — see STATE.md incident rule).
-  if (process.platform === "win32") {
-    spawn("taskkill", ["/PID", String(server.pid), "/T", "/F"], { shell: true, stdio: "ignore" });
-  } else {
-    server.kill();
-  }
-  setTimeout(() => process.exit(failed.length ? 1 : 0), 1500);
+  await cleanup();
+  process.exit(fatalError || failed.length || cleanupFailed ? 1 : 0);
 }

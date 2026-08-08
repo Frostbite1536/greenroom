@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Greenroom external schedule embed proof</title>
+  </head>
+  <body>
+    <main>
+      <h1>Greenroom schedule embed: external-origin proof</h1>
+      <p>
+        This standalone file can be served from any static host or localhost.
+        Its iframe defaults to Greenroom&rsquo;s canonical production schedule
+        embed without relying on this page&rsquo;s origin.
+      </p>
+
+      <p>
+        To try it locally, run
+        <code>python -m http.server 8080 --directory docs/judging</code> from
+        the repository root, then open
+        <code>http://localhost:8080/embed-schedule-proof.html</code>.
+      </p>
+
+      <form id="event-form">
+        <label for="event">Optional event slug or ID</label>
+        <input id="event" name="event" placeholder="forward-2026" type="text">
+        <button type="submit">Reload embed</button>
+      </form>
+
+      <p id="embed-url" aria-live="polite"></p>
+
+      <iframe
+        id="schedule"
+        title="Greenroom public schedule"
+        src="https://greenroom-omega-dusky.vercel.app/embed/schedule"
+        width="100%"
+        height="760"
+        style="border: 1px solid #ccd4d1; border-radius: 8px"
+      ></iframe>
+    </main>
+
+    <script>
+      const baseUrl = "https://greenroom-omega-dusky.vercel.app/embed/schedule";
+      const form = document.querySelector("#event-form");
+      const eventInput = document.querySelector("#event");
+      const iframe = document.querySelector("#schedule");
+      const output = document.querySelector("#embed-url");
+
+      function setEmbed(eventValue = "") {
+        const url = new URL(baseUrl);
+        if (eventValue.trim()) url.searchParams.set("event", eventValue.trim());
+        iframe.src = url.toString();
+        output.textContent = `Embedding: ${url}`;
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        setEmbed(eventInput.value);
+      });
+
+      setEmbed();
+    </script>
+  </body>
+</html>

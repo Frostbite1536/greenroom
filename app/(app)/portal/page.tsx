@@ -1,4 +1,5 @@
 import { requireSession } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { ProfileForm, type PortalProfile } from "./profile-form";
@@ -7,21 +8,22 @@ import styles from "./portal.module.css";
 
 export const dynamic = "force-dynamic";
 
-function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | null): string {
+function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | null, timezone: string): string {
   if (!startsAt || !endsAt) return "Not scheduled yet";
-  const day = startsAt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
-  const opts = { hour: "numeric", minute: "2-digit", timeZone: "UTC" } as const;
-  const window = `${startsAt.toLocaleTimeString(undefined, opts)} – ${endsAt.toLocaleTimeString(undefined, opts)}`;
+  const day = startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: timezone });
+  const opts = { hour: "numeric", minute: "2-digit", timeZone: timezone } as const;
+  const window = `${startsAt.toLocaleTimeString("en-US", opts)} – ${endsAt.toLocaleTimeString("en-US", opts)}`;
   return room ? `${day}, ${window} · ${room}` : `${day}, ${window}`;
 }
 
 export default async function PortalPage() {
   const session = await requireSession();
   const user = await resolveSessionUser(session);
+  if (!user) redirect("/login");
   const eventId = session.event.id;
 
   // One round trip per concern, issued in parallel to avoid a request waterfall.
-  const [profile, speakerTasks, sessionSpeakers, abstracts, resources] = await Promise.all([
+  const [profile, speakerTasks, sessionSpeakers, abstracts, resources, event] = await Promise.all([
     prisma.speakerProfile.findUnique({
       where: { userId: user.id },
       select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true },
@@ -58,7 +60,9 @@ export default async function PortalPage() {
       select: { id: true, slug: true, title: true, summary: true },
       orderBy: { title: "asc" },
     }),
+    prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
   ]);
+  const timezone = event?.timezone ?? "UTC";
 
   const tasks: PortalTask[] = speakerTasks.map((row) => ({
     taskId: row.task.id,
@@ -110,7 +114,7 @@ export default async function PortalPage() {
                 <p>Everything the program team needs from you before the event.</p>
               </div>
             </div>
-            <TaskChecklist tasks={tasks} />
+            <TaskChecklist tasks={tasks} timezone={timezone} />
           </section>
 
           <section className={styles.card}>
@@ -134,6 +138,7 @@ export default async function PortalPage() {
                       s.scheduleSlot?.startsAt ?? null,
                       s.scheduleSlot?.endsAt ?? null,
                       s.scheduleSlot?.room.name ?? null,
+                      timezone,
                     )}
                   </p>
                 </div>
@@ -156,7 +161,7 @@ export default async function PortalPage() {
                   <div className={styles.sessionTitle}>{a.title}</div>
                   <p className={styles.sessionMeta}>
                     {a.status.replace(/_/g, " ").toLowerCase()}
-                    {a.submittedAt ? ` · submitted ${a.submittedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}` : ""}
+                    {a.submittedAt ? ` · submitted ${a.submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: timezone })}` : ""}
                   </p>
                 </div>
               ))

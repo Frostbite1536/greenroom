@@ -7,11 +7,11 @@ import {
   LayoutDashboard,
   LogOut,
   Mic2,
-  PanelLeft,
   Users,
 } from "lucide-react";
 import type { DemoSession } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
+import { MobileNavigation } from "@/components/mobile-navigation";
 
 const ROLE_LABELS: Record<DemoSession["role"], string> = {
   ADMIN: "Event admin",
@@ -35,6 +35,7 @@ const navigation = [
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard },
   { href: "/portal", label: "Speaker portal", icon: Users },
   { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays },
+  { href: "/embed/speakers", label: "Public speakers", icon: Mic2 },
 ];
 
 export function AppShell({ session, children }: { session: DemoSession; children: React.ReactNode }) {
@@ -72,9 +73,7 @@ export function AppShell({ session, children }: { session: DemoSession; children
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <button className="icon-button mobile-menu" type="button" aria-label="Open navigation">
-            <PanelLeft size={19} aria-hidden="true" />
-          </button>
+          <MobileNavigation links={navigation.map(({ href, label }) => ({ href, label }))} />
           <span className="status-dot" aria-hidden="true" />
           <span>Planning workspace</span>
           <span className="topbar-spacer" />

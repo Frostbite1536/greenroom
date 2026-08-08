@@ -1,6 +1,14 @@
 import { z } from "zod";
 
 const boolish = z.enum(["true", "false"]);
+export const V1_API_KEY_MIN_LENGTH = 32;
+export const SESSION_SECRET_MIN_LENGTH = 32;
+const v1ApiKeySchema = z.string().trim().min(V1_API_KEY_MIN_LENGTH).optional();
+const sessionSecretSchema = z.string().trim().min(SESSION_SECRET_MIN_LENGTH).optional();
+const resendFromSchema = z.string().trim().min(3).max(320).refine((value) => {
+  const match = value.match(/^(?:[^<>\r\n]+\s)?<([^<>\s]+)>$/);
+  return z.string().email().safeParse(match?.[1] ?? value).success;
+}, "RESEND_FROM must be an email address or display name plus email address.").optional();
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url().startsWith("postgresql://"),
@@ -12,8 +20,17 @@ const envSchema = z.object({
   ALLOW_DEMO_RESET: boolish.default("false"),
   // Optional real-integration credentials. Absent => the mock path is used.
   RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_FROM: resendFromSchema,
   ACCELEVENTS_BASE_URL: z.string().url().optional(),
+  ACCELEVENTS_API_KEY: z.string().min(1).optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
+  AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
+  // Optional server-only key for the read-only v1 REST surface. When absent,
+  // those routes deliberately return 503 instead of becoming public.
+  GREENROOM_API_KEY: v1ApiKeySchema,
+  // Required in production for signed auth cookies; development/test gets an
+  // intentionally non-production fallback so local demo tooling stays usable.
+  SESSION_SECRET: sessionSecretSchema,
   // Public base URL of the deployment (used for absolute links in emails/.ics).
   APP_URL: z.string().url().optional(),
 });
@@ -26,8 +43,13 @@ export function getServerEnv(): ServerEnv {
     MOCK_EXTERNAL_APIS: process.env.MOCK_EXTERNAL_APIS,
     ALLOW_DEMO_RESET: process.env.ALLOW_DEMO_RESET,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
+    RESEND_FROM: process.env.RESEND_FROM,
     ACCELEVENTS_BASE_URL: process.env.ACCELEVENTS_BASE_URL,
+    ACCELEVENTS_API_KEY: process.env.ACCELEVENTS_API_KEY,
     AIRTABLE_API_KEY: process.env.AIRTABLE_API_KEY,
+    AIRTABLE_BASE_ID: process.env.AIRTABLE_BASE_ID,
+    GREENROOM_API_KEY: process.env.GREENROOM_API_KEY,
+    SESSION_SECRET: process.env.SESSION_SECRET,
     APP_URL: process.env.APP_URL,
   });
 }
@@ -40,4 +62,16 @@ export function useMockIntegrations(): boolean {
 /** Whether the destructive demo reset is permitted in this environment. */
 export function isDemoResetAllowed(): boolean {
   return process.env.ALLOW_DEMO_RESET === "true";
+}
+
+/** Server-only key for the optional read-only v1 REST surface. */
+export function getV1ApiKey(): string | undefined {
+  const parsed = v1ApiKeySchema.safeParse(process.env.GREENROOM_API_KEY);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Valid sender identity for live Resend calls. Missing/invalid keeps email mocked. */
+export function getResendFrom(): string | undefined {
+  const parsed = resendFromSchema.safeParse(process.env.RESEND_FROM);
+  return parsed.success ? parsed.data : undefined;
 }

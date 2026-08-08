@@ -34,7 +34,15 @@ export const GET = handle(async (req) => {
       ...(statuses ? { status: { in: statuses } } : {}),
       ...(formConfigId ? { formConfigId } : {}),
     },
-    include: { category: true, speakers: { include: { user: true } }, answers: true },
+    include: {
+      category: true,
+      speakers: { include: { user: true } },
+      answers: true,
+      // Prisma fetches these relation sets for the whole result, rather than
+      // issuing a query per serialized abstract.
+      reviewAssignments: { select: { status: true } },
+      reviewScores: { select: { score: true } },
+    },
     orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
   });
   return ok(abstracts.map(serializeAbstract));
@@ -99,12 +107,13 @@ export const POST = handle(async (req) => {
   }
 
   const saved = await prisma.$transaction(async (tx) => {
-    // Upsert shell users for every speaker by lowercased email.
+    // Public CFP input may create a shell user, but must never overwrite an
+    // existing identity or grant an event membership/role.
     const speakerUsers = await Promise.all(
       input.speakers.map((s) =>
         tx.user.upsert({
           where: { email: s.email },
-          update: { name: s.name },
+          update: {},
           create: { email: s.email, name: s.name },
           select: { id: true },
         }),

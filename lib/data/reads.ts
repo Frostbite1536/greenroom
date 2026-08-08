@@ -15,15 +15,22 @@
  *   getEvaluationQueue()  ~ GET /api/evaluations/{plans,assignments}
  *   getPublicForm()       ~ GET /api/cfp/public/:formId
  *   getPublicAgenda()     ~ GET /api/agenda/public
+ *   getPublicSpeakers()   ~ public scheduled-speaker projection
  *
  * Mutations always go through the HTTP API from client components (see
  * `lib/api-client.ts`) so validation and invariants stay server-enforced.
  */
-import type { AbstractStatus, FormFieldType, UserRole } from "@prisma/client";
+import type { AbstractStatus, FormFieldType, Prisma, UserRole } from "@prisma/client";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
+import {
+  buildPublicSpeakers,
+  PUBLIC_SPEAKER_LIMITS,
+  type PublicSpeakers,
+} from "@/lib/public-speakers";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -97,25 +104,26 @@ export type FormListItem = {
 
 export async function getFormsList(): Promise<{ eventId: string; forms: FormListItem[] }> {
   const ctx = await pageContext(["ADMIN"]);
-  const forms = await prisma.formConfig.findMany({
-    where: { eventId: ctx.eventId },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      published: true,
-      opensAt: true,
-      closesAt: true,
-    },
-  });
-
-  // One grouped query instead of a count per form (avoids N+1).
-  const grouped = await prisma.abstract.groupBy({
-    by: ["formConfigId", "status"],
-    where: { eventId: ctx.eventId },
-    _count: { _all: true },
-  });
+  const [forms, grouped] = await Promise.all([
+    prisma.formConfig.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        published: true,
+        opensAt: true,
+        closesAt: true,
+      },
+    }),
+    // One grouped query instead of a count per form (avoids N+1).
+    prisma.abstract.groupBy({
+      by: ["formConfigId", "status"],
+      where: { eventId: ctx.eventId },
+      _count: { _all: true },
+    }),
+  ]);
 
   const now = Date.now();
   return {
@@ -154,16 +162,20 @@ export type BuilderForm = Omit<ReturnType<typeof serializeForm>, "fields"> & {
 
 export async function getFormForBuilder(
   formId: string,
-): Promise<{ eventId: string; form: BuilderForm } | null> {
+): Promise<{ eventId: string; timezone: string; form: BuilderForm } | null> {
   const ctx = await pageContext(["ADMIN"]);
-  const form = await prisma.formConfig.findFirst({
-    where: { id: formId, eventId: ctx.eventId },
-    include: { fields: true },
-  });
+  const [form, event] = await Promise.all([
+    prisma.formConfig.findFirst({
+      where: { id: formId, eventId: ctx.eventId },
+      include: { fields: true },
+    }),
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+  ]);
   if (!form) return null;
   const serialized = serializeForm(form);
   return {
     eventId: ctx.eventId,
+    timezone: event?.timezone ?? "UTC",
     form: { ...serialized, fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField) },
   };
 }
@@ -186,6 +198,23 @@ export type AbstractRow = {
   avgScore: number | null;
   hasSession: boolean;
 };
+
+type AssignmentProgressGroup = {
+  abstractId: string;
+  status: string;
+  _count: { _all: number };
+};
+
+export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup[]) {
+  const progressByAbstract = new Map<string, { reviewsTotal: number; reviewsComplete: number }>();
+  for (const group of groups) {
+    const progress = progressByAbstract.get(group.abstractId) ?? { reviewsTotal: 0, reviewsComplete: 0 };
+    progress.reviewsTotal += group._count._all;
+    if (group.status === "COMPLETED") progress.reviewsComplete += group._count._all;
+    progressByAbstract.set(group.abstractId, progress);
+  }
+  return progressByAbstract;
+}
 
 export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
@@ -213,24 +242,23 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
     // Review progress without a per-row query.
     prisma.reviewAssignment.groupBy({
       by: ["abstractId", "status"],
+      where: { abstract: { eventId: ctx.eventId } },
       _count: { _all: true },
     }),
     prisma.reviewScore.groupBy({
       by: ["abstractId"],
+      where: { abstract: { eventId: ctx.eventId } },
       _avg: { score: true },
     }),
   ]);
 
+  const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
 
   return {
     eventId: ctx.eventId,
     abstracts: abstracts.map((a) => {
-      const rows = assignmentGroups.filter((g) => g.abstractId === a.id);
-      const reviewsTotal = rows.reduce((n, r) => n + r._count._all, 0);
-      const reviewsComplete = rows
-        .filter((r) => r.status === "COMPLETED")
-        .reduce((n, r) => n + r._count._all, 0);
+      const reviewProgress = assignmentProgressByAbstract.get(a.id) ?? { reviewsTotal: 0, reviewsComplete: 0 };
       const avg = avgByAbstract.get(a.id);
       return {
         id: a.id,
@@ -247,8 +275,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
           isPrimary: s.isPrimary,
         })),
         submittedAt: a.submittedAt?.toISOString() ?? null,
-        reviewsComplete,
-        reviewsTotal,
+        reviewsComplete: reviewProgress.reviewsComplete,
+        reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
         hasSession: a.session !== null,
       };
@@ -472,7 +500,7 @@ export type PublicFormView = Omit<ReturnType<typeof serializePublicForm>, "field
  * that endpoint requires ADMIN/EVALUATOR; the submitter needs to pick one for
  * category-based review routing to work.
  */
-export async function getPublicForm(formId: string): Promise<PublicFormView | null> {
+export const getPublicForm = cache(async function getPublicForm(formId: string): Promise<PublicFormView | null> {
   const form = await prisma.formConfig.findFirst({
     where: { published: true, OR: [{ id: formId }, { slug: formId }] },
     include: { fields: true, event: { select: { name: true } } },
@@ -492,7 +520,7 @@ export async function getPublicForm(formId: string): Promise<PublicFormView | nu
     categories,
     eventName: form.event.name,
   };
-}
+});
 
 export type PublicAgendaSession = {
   slotId: string;
@@ -512,7 +540,7 @@ export type PublicAgenda = {
   sessions: PublicAgendaSession[];
 };
 
-export async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
+export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },
     select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
@@ -565,4 +593,54 @@ export async function getPublicAgenda(eventParam = "forward-2026"): Promise<Publ
       speakers: slot.session.speakers.map((s) => s.user.name),
     })),
   };
-}
+});
+
+export const getPublicSpeakers = cache(async function getPublicSpeakers(
+  eventParam = "forward-2026",
+): Promise<PublicSpeakers | null> {
+  const event = await prisma.event.findFirst({
+    where: { OR: [{ id: eventParam }, { slug: eventParam }] },
+    select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
+  });
+  if (!event) return null;
+
+  const publicSessionWhere: Prisma.SessionSpeakerWhereInput = {
+    session: {
+      eventId: event.id,
+      scheduleSlot: { isNot: null },
+      OR: [
+        { sourceAbstractId: null },
+        { sourceAbstract: { is: { status: "ACCEPTED" } } },
+      ],
+    },
+  };
+  const speakers = await prisma.user.findMany({
+    where: { sessionSpeakers: { some: publicSessionWhere } },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+    take: PUBLIC_SPEAKER_LIMITS.speakers + 1,
+    select: {
+      id: true,
+      name: true,
+      avatarUrl: true,
+      speakerProfile: {
+        select: { bio: true, company: true, jobTitle: true, headshotUrl: true },
+      },
+      sessionSpeakers: {
+        where: publicSessionWhere,
+        orderBy: [{ session: { scheduleSlot: { startsAt: "asc" } } }, { sessionId: "asc" }],
+        take: PUBLIC_SPEAKER_LIMITS.sessionsPerSpeaker + 1,
+        select: {
+          session: {
+            select: {
+              id: true,
+              title: true,
+              scheduleSlot: { select: { track: { select: { name: true } } } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return buildPublicSpeakers(event, speakers);
+});

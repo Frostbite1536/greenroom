@@ -14,12 +14,17 @@ export type PortalTask = {
   status: "TODO" | "IN_PROGRESS" | "COMPLETED" | "WAIVED";
 };
 
-function formatDue(dueAt: string | null): string | null {
+function formatDue(dueAt: string | null, timezone: string): string | null {
   if (!dueAt) return null;
-  return new Date(dueAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(dueAt).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: timezone,
+  });
 }
 
-export function TaskChecklist({ tasks }: { tasks: PortalTask[] }) {
+export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezone: string }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   // Optimistic overrides keyed by taskId, so the checkbox responds instantly.
@@ -78,7 +83,7 @@ export function TaskChecklist({ tasks }: { tasks: PortalTask[] }) {
         {tasks.map((task) => {
           const status = statusOf(task);
           const isDone = status === "COMPLETED" || status === "WAIVED";
-          const due = formatDue(task.dueAt);
+          const due = formatDue(task.dueAt, timezone);
           return (
             <li className={`${styles.task} ${isDone ? styles.taskDone : ""}`} key={task.taskId}>
               <input

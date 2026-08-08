@@ -16,7 +16,19 @@ export function GET(_req: Request, ctx: Params) {
     const { formId } = await ctx.params;
     const form = await prisma.formConfig.findFirst({
       where: { published: true, OR: [{ id: formId }, { slug: formId }] },
-      include: { fields: true },
+      include: {
+        fields: true,
+        event: {
+          select: {
+            categories: {
+              select: { id: true, name: true },
+              // `sortOrder` is the product-defined ordering; the remaining
+              // keys make ties deterministic for public clients.
+              orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+            },
+          },
+        },
+      },
     });
     if (!form) {
       throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");

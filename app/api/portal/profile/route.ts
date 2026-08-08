@@ -30,6 +30,7 @@ export async function PATCH(request: Request) {
   }
 
   const user = await resolveSessionUser(session);
+  if (!user) return fail("UNAUTHORIZED", "Sign in to update your speaker profile.", 401);
   const data = parsed.data;
 
   const profile = await prisma.speakerProfile.upsert({
