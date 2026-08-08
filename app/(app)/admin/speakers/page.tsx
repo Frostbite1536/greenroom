@@ -120,10 +120,14 @@ export default async function AdminSpeakersPage({
           <div className="row wrap" role="group" aria-label="Filter speakers">
             {SPEAKER_STATUS_FILTERS.map((option) => {
               const count = filterSpeakerStatusRows(rows, option.value).length;
+              const active = filter === option.value;
               return (
+                // These are links, not toggles: `aria-pressed` is not allowed on
+                // an anchor (axe: aria-allowed-attr), so the active filter is
+                // marked with `aria-current` instead.
                 <Link
-                  aria-pressed={filter === option.value}
-                  className="ghost-button"
+                  aria-current={active ? "page" : undefined}
+                  className={active ? "ghost-button active" : "ghost-button"}
                   href={option.value === "all" ? "/admin/speakers" : `/admin/speakers?filter=${option.value}`}
                   key={option.value}
                 >
