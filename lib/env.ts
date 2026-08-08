@@ -13,6 +13,7 @@ const envSchema = z.object({
   // Optional real-integration credentials. Absent => the mock path is used.
   RESEND_API_KEY: z.string().min(1).optional(),
   ACCELEVENTS_BASE_URL: z.string().url().optional(),
+  ACCELEVENTS_API_KEY: z.string().min(1).optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
   AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
   // Public base URL of the deployment (used for absolute links in emails/.ics).
@@ -28,6 +29,7 @@ export function getServerEnv(): ServerEnv {
     ALLOW_DEMO_RESET: process.env.ALLOW_DEMO_RESET,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     ACCELEVENTS_BASE_URL: process.env.ACCELEVENTS_BASE_URL,
+    ACCELEVENTS_API_KEY: process.env.ACCELEVENTS_API_KEY,
     AIRTABLE_API_KEY: process.env.AIRTABLE_API_KEY,
     AIRTABLE_BASE_ID: process.env.AIRTABLE_BASE_ID,
     APP_URL: process.env.APP_URL,
