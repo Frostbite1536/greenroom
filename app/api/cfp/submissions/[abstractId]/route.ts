@@ -187,8 +187,17 @@ export function PATCH(req: Request, ctx: Params) {
       await lockAbstractForWrite(tx, existing.id);
       const fresh = await tx.abstract.findUniqueOrThrow({
         where: { id: existing.id },
-        select: { status: true, session: { select: { id: true } } },
+        select: {
+          status: true,
+          session: { select: { id: true } },
+          speakers: { select: { userId: true } },
+        },
       });
+      // Re-verify membership after the lock: a serialized earlier edit may
+      // have removed this caller from the roster, revoking their access.
+      if (!isAbstractSpeaker(apiCtx.userId, fresh.speakers)) {
+        throw new ApiError(403, "NOT_YOUR_SUBMISSION", "You are not a speaker on this submission.");
+      }
       if (!isEditableStatus(fresh.status)) {
         throw new ApiError(
           409,
