@@ -76,6 +76,26 @@ export const formAnswerValueSchema = z.union([
   z.null(),
 ]);
 
+export const coSpeakerInputSchema = z
+  .array(
+    z.object({
+      email: z.string().trim().toLowerCase().email(),
+      name: z.string().trim().min(1).max(120),
+      isPrimary: z.boolean().default(false),
+    }),
+  )
+  .min(1)
+  .max(20);
+
+export const categoryInputSchema = z.object({
+  eventId: idSchema,
+  id: idSchema.optional(),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional(),
+  defaultTeamKey: z.string().trim().max(120).optional(),
+  sortOrder: z.number().int().nonnegative().default(0),
+});
+
 export const abstractUpsertSchema = z.object({
   formConfigId: idSchema,
   abstractId: idSchema.optional(),
@@ -83,8 +103,10 @@ export const abstractUpsertSchema = z.object({
   abstract: z.string().trim().max(5000).optional(),
   format: z.string().trim().max(80).optional(),
   durationMinutes: z.number().int().min(5).max(480).optional(),
-  category: z.string().trim().max(120).optional(),
-  speakerIds: z.array(idSchema).min(1).max(20),
+  categoryId: idSchema.optional(),
+  // Co-speakers are keyed by email; the submission API upserts shell Users by
+  // email (name filled from this payload) before creating AbstractSpeaker rows.
+  speakers: coSpeakerInputSchema,
   answers: z.record(z.string(), formAnswerValueSchema),
   intent: z.enum(["saveDraft", "submit"]),
 });
@@ -152,7 +174,7 @@ export const guaranteedSessionInputSchema = z.object({
   description: z.string().trim().max(5000).optional(),
   format: z.string().trim().max(80).optional(),
   durationMinutes: z.number().int().min(5).max(480),
-  speakerIds: z.array(idSchema).min(1).max(20),
+  speakers: coSpeakerInputSchema,
 });
 
 export const scheduleSlotInputSchema = z

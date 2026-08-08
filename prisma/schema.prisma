@@ -65,6 +65,7 @@ model Event {
 
   memberships     EventMember[]
   forms           FormConfig[]
+  categories      Category[]
   abstracts       Abstract[]
   sessions        Session[]
   evaluationPlans EvaluationPlan[]
@@ -126,6 +127,23 @@ model SpeakerProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+model Category {
+  id             String   @id @default(cuid())
+  eventId        String
+  name           String
+  description    String?
+  defaultTeamKey String?
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  abstracts Abstract[]
+
+  @@unique([eventId, name])
+  @@index([eventId, sortOrder])
+}
+
 model FormConfig {
   id              String    @id @default(cuid())
   eventId         String
@@ -181,7 +199,7 @@ model Abstract {
   abstract        String?
   format          String?
   durationMinutes Int?
-  category        String?
+  categoryId      String?
   status          AbstractStatus @default(DRAFT)
   submittedAt     DateTime?
   decidedAt       DateTime?
@@ -190,6 +208,7 @@ model Abstract {
 
   event             Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
   formConfig        FormConfig         @relation(fields: [formConfigId], references: [id], onDelete: Restrict)
+  category          Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   submitter         User               @relation("AbstractSubmitter", fields: [submitterId], references: [id], onDelete: Restrict)
   speakers          AbstractSpeaker[]
   answers           FormAnswer[]
@@ -199,6 +218,7 @@ model Abstract {
 
   @@index([eventId, status])
   @@index([formConfigId, status])
+  @@index([categoryId])
   @@index([submitterId])
 }
 
