@@ -55,6 +55,31 @@ upsert merge key. Other fields may be single-line text unless noted.
 The mirror uses `PATCH /v0/{base}/{table}` with Airtable `performUpsert` on
 `External ID`, sends at most 10 records per request, and never deletes records.
 
+### Partial-write recovery
+
+A live run returns a per-table report instead of failing whole-hog:
+
+```jsonc
+{ "ok": true, "data": { "mode": "live", "counts": { "Sessions": 13, "Speakers": 10, "Schedule": 11 },
+  "report": { "status": "partial", "attempted": 34, "upserted": 33, "failed": 1, "requests": 15,
+    "tables": [{ "table": "Sessions", "attempted": 13, "upserted": 12, "failed": 1, "requests": 12,
+      "failures": [{ "externalId": "session:abc", "status": 422, "message": "INVALID_VALUE_FOR_COLUMN: …" }],
+      "failuresTruncated": false }] } } }
+```
+
+- A rejected batch is retried one record at a time, so one unmappable row cannot
+  discard the nine valid rows sent with it; each skipped row is reported with its
+  External ID and Airtable's own reason (at most 50 per table, then
+  `failuresTruncated`).
+- Retryable statuses (429/5xx/timeouts) get up to 3 bounded attempts. Credential
+  or table faults (401/403/404) stop that table immediately rather than
+  amplifying requests; the other tables still run.
+- `status` is `complete` (HTTP 200), `partial` (HTTP 200, inspect `failures`), or
+  `failed` (HTTP 502 `AIRTABLE_SYNC_FAILED` when nothing was written).
+- **Resume = re-run the same request.** Upserts merge on `External ID`, so rows
+  that already landed are rewritten identically and failed rows are retried, with
+  no duplicates and no deletes.
+
 ## Accelevents one-way program push
 
 `POST /api/integrations/accelevents/push` is ADMIN-only and event-scoped. It is
