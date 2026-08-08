@@ -420,9 +420,15 @@ function DayGrid({
                 .filter((s) => (groupBy === "room" ? s.slot.roomId === col.id : s.slot.trackId === col.id))
                 .map((s) => {
                   const start = zonedParts(s.slot.startsAt, tz).minutesOfDay;
-                  const end = zonedParts(s.slot.endsAt, tz).minutesOfDay;
+                  // Duration from the real timestamps, clamped to the day
+                  // column: independent minute-of-day endpoints invert across
+                  // local midnight (same rule as toIntervals above).
+                  const durationMin = Math.min(
+                    Math.max(0, Math.round((new Date(s.slot.endsAt).getTime() - new Date(s.slot.startsAt).getTime()) / 60000)),
+                    24 * 60 - start,
+                  );
                   const top = (start - bounds.start) * PX_PER_MIN + 1;
-                  const height = Math.max(18, (end - start) * PX_PER_MIN - 3);
+                  const height = Math.max(18, durationMin * PX_PER_MIN - 3);
                   const conflict = conflictIds.has(s.id);
                   const moving = movingId === s.id;
                   return (
@@ -442,7 +448,7 @@ function DayGrid({
                         drag.current = {
                           session: s,
                           grabOffsetY: event.clientY - event.currentTarget.getBoundingClientRect().top,
-                          durationMin: end - start,
+                          durationMin,
                         };
                         event.dataTransfer.effectAllowed = "move";
                         // Firefox refuses to start a drag without payload data.
