@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { profileCompletion } from "@/lib/speakers/status";
+import { submissionStatusView } from "@/lib/portal/submission-status";
 import { ProfileForm, type PortalProfile } from "./profile-form";
 import { TaskChecklist, type PortalTask } from "./task-checklist";
 import styles from "./portal.module.css";
@@ -151,21 +152,28 @@ export default async function PortalPage() {
             <div className={styles.cardHead}>
               <div>
                 <h2>Your submissions</h2>
-                <p>Every abstract you are listed on.</p>
+                <p>Every proposal you are listed on. Open one to update it.</p>
               </div>
             </div>
             {abstracts.length === 0 ? (
               <p className={styles.empty}>You have no submissions for this event.</p>
             ) : (
-              abstracts.map((a) => (
-                <div className={styles.sessionItem} key={a.id}>
-                  <div className={styles.sessionTitle}>{a.title}</div>
-                  <p className={styles.sessionMeta}>
-                    {a.status.replace(/_/g, " ").toLowerCase()}
-                    {a.submittedAt ? ` · submitted ${a.submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: timezone })}` : ""}
-                  </p>
-                </div>
-              ))
+              abstracts.map((a) => {
+                const view = submissionStatusView(a.status);
+                return (
+                  <div className={styles.sessionItem} key={a.id}>
+                    <div className={styles.sessionTitle}>{a.title}</div>
+                    <p className={styles.sessionMeta}>
+                      <span className={`pill ${view.tone}`}>{view.label}</span>
+                      {a.submittedAt ? ` · sent ${a.submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: timezone })}` : ""}
+                    </p>
+                    <p className={styles.sessionMeta}>{view.detail}</p>
+                    <a className="link-button" href={`/portal/submissions/${a.id}`}>
+                      {view.editable ? "Update this proposal" : "View this proposal"}
+                    </a>
+                  </div>
+                );
+              })
             )}
           </section>
         </div>
