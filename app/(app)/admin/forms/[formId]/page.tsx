@@ -3,7 +3,7 @@ import "@/components/feature.css";
 import { FormBuilder } from "@/components/form-builder";
 import { getForm } from "@/lib/fixtures";
 
-export const metadata = { title: "Edit form · Sessionboard" };
+export const metadata = { title: "Edit form · Greenroom" };
 
 export default async function FormBuilderPage({
   params,

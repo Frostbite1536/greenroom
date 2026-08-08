@@ -41,9 +41,9 @@ export function AppShell({ session, children }: { session: DemoSession; children
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" href="/admin/forms" aria-label="Sessionboard home">
+        <Link className="brand" href="/admin/forms" aria-label="Greenroom home">
           <span className="brand-mark"><Mic2 size={18} aria-hidden="true" /></span>
-          <span>Sessionboard</span>
+          <span>Greenroom</span>
         </Link>
         <div className="event-switcher">
           <span className="event-label">Current event</span>

@@ -1,4 +1,4 @@
-# Sessionboard Program Manager Architecture
+# Greenroom Program Manager Architecture
 
 ## Product boundary
 

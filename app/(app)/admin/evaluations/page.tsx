@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { EvaluationWorkspace } from "@/components/evaluation-workspace";
 import { EVALUATION_PLAN } from "@/lib/fixtures";
 
-export const metadata = { title: "Evaluation · Sessionboard" };
+export const metadata = { title: "Evaluation · Greenroom" };
 
 export default function EvaluationsPage() {
   const plan = EVALUATION_PLAN;

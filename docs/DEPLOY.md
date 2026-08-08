@@ -41,7 +41,7 @@ plan with 3 evaluators + scores, 13 sessions (incl. a guaranteed keynote),
 11 schedule slots **with one deliberate room conflict**, 5 onboarding tasks
 (one carries a form), per-speaker task status, 4 email templates, 2 resources.
 Persona users are upserted by email so logins survive a reseed. The speaker
-persona (`sofia@sessionboard.demo`) owns a confirmed session and is at 3/5 tasks.
+persona (`sofia@greenroom.demo`) owns a confirmed session and is at 3/5 tasks.
 
 > Once the architect wires `package.json`, this is also runnable via
 > `npm run db:seed` / `prisma db seed` (see coordination request).
@@ -57,8 +57,8 @@ Two ways to rebuild demo data from a clean state:
 
 ## Demo credentials
 One-click personas on `/login`:
-- **Admin** — Maya Chen (`maya@sessionboard.demo`)
-- **Evaluator** — Ravi Patel (`ravi@sessionboard.demo`)
-- **Speaker** — Sofia Marques (`sofia@sessionboard.demo`)
+- **Admin** — Maya Chen (`maya@greenroom.demo`)
+- **Evaluator** — Ravi Patel (`ravi@greenroom.demo`)
+- **Speaker** — Sofia Marques (`sofia@greenroom.demo`)
 
 Plus login-as-any-email (SPEAKER role).

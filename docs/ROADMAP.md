@@ -1,4 +1,4 @@
-# Sessionboard Program Manager Roadmap
+# Greenroom Program Manager Roadmap
 
 ## Phase 0 — Foundation (Architect)
 - Lock Abstract vs Session domain boundary, form/evaluation/schedule contracts, shell, and verification commands.
