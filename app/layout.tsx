@@ -1,6 +1,4 @@
 import type { Metadata } from "next";
-import { AppShell } from "@/components/app-shell";
-import { getMockSession } from "@/lib/auth";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -8,14 +6,10 @@ export const metadata: Metadata = {
   description: "Speaker, CFP, review, and agenda operations in one workspace.",
 };
 
-export default async function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const session = await getMockSession();
-
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
-      <body>
-        <AppShell session={session}>{children}</AppShell>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

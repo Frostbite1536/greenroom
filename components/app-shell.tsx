@@ -4,11 +4,28 @@ import {
   ClipboardCheck,
   FileText,
   LayoutDashboard,
+  LogOut,
   Mic2,
   PanelLeft,
   Users,
 } from "lucide-react";
-import type { MockSession } from "@/lib/auth";
+import type { DemoSession } from "@/lib/auth";
+import { logout } from "@/app/login/actions";
+
+const ROLE_LABELS: Record<DemoSession["role"], string> = {
+  ADMIN: "Event admin",
+  EVALUATOR: "Evaluator",
+  SPEAKER: "Speaker",
+};
+
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]!.toUpperCase())
+    .join("");
+}
 
 const navigation = [
   { href: "/admin/forms", label: "CFP forms", icon: FileText },
@@ -18,7 +35,7 @@ const navigation = [
   { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays },
 ];
 
-export function AppShell({ session, children }: { session: MockSession; children: React.ReactNode }) {
+export function AppShell({ session, children }: { session: DemoSession; children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -39,8 +56,16 @@ export function AppShell({ session, children }: { session: MockSession; children
           ))}
         </nav>
         <div className="sidebar-footer">
-          <div className="avatar" aria-hidden="true">MC</div>
-          <div><strong>{session.user.name}</strong><span>Event admin</span></div>
+          <div className="avatar" aria-hidden="true">{initials(session.user.name)}</div>
+          <div>
+            <strong>{session.user.name}</strong>
+            <span>{ROLE_LABELS[session.role]}</span>
+          </div>
+          <form action={logout} className="logout-form">
+            <button className="icon-button" title="Sign out" type="submit" aria-label="Sign out">
+              <LogOut size={16} aria-hidden="true" />
+            </button>
+          </form>
         </div>
       </aside>
       <div className="workspace">
@@ -51,7 +76,7 @@ export function AppShell({ session, children }: { session: MockSession; children
           <span className="status-dot" aria-hidden="true" />
           <span>Planning workspace</span>
           <span className="topbar-spacer" />
-          <span className="role-badge">Mock auth · {session.role.toLowerCase()}</span>
+          <span className="role-badge">{ROLE_LABELS[session.role]}</span>
         </header>
         <main className="main-content">{children}</main>
       </div>
