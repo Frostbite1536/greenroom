@@ -30,6 +30,7 @@ if (probe) {
 const ev = { id: EVENT_ID, name: "Scratch Frontend", slug: EVENT_ID };
 const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom.demo" }, event: ev, role: "ADMIN" };
 const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom.demo" }, event: ev, role: "EVALUATOR" };
+const speaker = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "SPEAKER" };
 const cookie = cookieForSession;
 
 async function req(method, path, body, sess) {
@@ -263,6 +264,7 @@ try {
     ["page /admin/evaluations (evaluator)", "/admin/evaluations", evaluator],
     ["page /cfp/[formId] (public)", `/cfp/${fx.form.id}`, null],
     ["page /embed/schedule (public)", `/embed/schedule?event=${EVENT_ID}`, null],
+    ["page /admin/embeds", "/admin/embeds", admin],
   ]) {
     const r = await req("GET", path, null, sess);
     check(`${name} → 200`, r.status === 200, `got ${r.status}`);
@@ -437,6 +439,33 @@ try {
 
   const unsched = await req("DELETE", `/api/agenda/slots?sessionId=${fx.sessionB.id}`, null, admin);
   check("unschedule → 200", unsched.status === 200, `got ${unsched.status}`);
+
+  // --- embed snippet page (B2) ---
+  const embedsPage = await req("GET", "/admin/embeds", null, admin);
+  check("embeds page offers an absolute schedule iframe",
+    embedsPage.text.includes(`&lt;iframe`) && embedsPage.text.includes(`/embed/schedule?event=${EVENT_ID}`));
+  check("embeds page offers the speaker gallery snippet", embedsPage.text.includes(`/embed/speakers?event=${EVENT_ID}`));
+  check("embeds page reports live counts", embedsPage.text.includes("Scheduled sessions"));
+
+  // --- role-aware navigation (B1) ---
+  // Presentation only: the sidebar must not advertise pages the role's own
+  // server-side guard would bounce.
+  const adminNav = await req("GET", "/admin/forms", null, admin);
+  check("admin nav shows agenda builder", adminNav.text.includes("Agenda builder"));
+  check("admin nav shows embeds", adminNav.text.includes("/admin/embeds"));
+
+  const speakerNav = await req("GET", "/portal", null, speaker);
+  check("speaker portal renders → 200", speakerNav.status === 200, `got ${speakerNav.status}`);
+  check("speaker nav hides admin-only links",
+    !speakerNav.text.includes("/admin/forms") && !speakerNav.text.includes("/admin/agenda"));
+  check("speaker nav keeps portal + public links",
+    speakerNav.text.includes("/portal") && speakerNav.text.includes("/embed/schedule"));
+
+  const evaluatorNav = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator nav hides CFP forms and agenda",
+    !evaluatorNav.text.includes("/admin/forms") && !evaluatorNav.text.includes("/admin/agenda"));
+  check("evaluator nav keeps evaluations + abstracts",
+    evaluatorNav.text.includes("/admin/evaluations") && evaluatorNav.text.includes("/admin/abstracts"));
 
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data
