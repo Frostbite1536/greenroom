@@ -81,7 +81,10 @@ async function resetScratch() {
   const category = await prisma.category.create({
     data: { eventId: EVENT_ID, name: "Applied AI", defaultTeamKey: "team-ai", sortOrder: 0 },
   });
-  const track = await prisma.track.create({ data: { eventId: EVENT_ID, name: "Mainstage", color: "#167565", sortOrder: 0 } });
+  // Amber on purpose: this is the seeded track colour that measured 2.14:1
+  // against white text (ops-a11y-frontend-findings). Keeping it here means the
+  // contrast assertion below guards the exact reported regression.
+  const track = await prisma.track.create({ data: { eventId: EVENT_ID, name: "Mainstage", color: "#f59e0b", sortOrder: 0 } });
   const roomA = await prisma.room.create({ data: { eventId: EVENT_ID, name: "Hall A", capacity: 200, sortOrder: 0 } });
   const roomB = await prisma.room.create({ data: { eventId: EVENT_ID, name: "Hall B", capacity: 200, sortOrder: 1 } });
 
@@ -519,19 +522,55 @@ try {
   const adminNav = await req("GET", "/admin/forms", null, admin);
   check("admin nav shows agenda builder", adminNav.text.includes("Agenda builder"));
   check("admin nav shows embeds", adminNav.text.includes("/admin/embeds"));
+  check("admin nav shows speaker onboarding",
+    adminNav.text.includes("/admin/speakers") && adminNav.text.includes("Speaker onboarding"));
 
   const speakerNav = await req("GET", "/portal", null, speaker);
   check("speaker portal renders → 200", speakerNav.status === 200, `got ${speakerNav.status}`);
   check("speaker nav hides admin-only links",
-    !speakerNav.text.includes("/admin/forms") && !speakerNav.text.includes("/admin/agenda"));
+    !speakerNav.text.includes("/admin/forms") && !speakerNav.text.includes("/admin/agenda")
+    && !speakerNav.text.includes("/admin/speakers"));
   check("speaker nav keeps portal + public links",
     speakerNav.text.includes("/portal") && speakerNav.text.includes("/embed/schedule"));
 
   const evaluatorNav = await req("GET", "/admin/evaluations", null, evaluator);
-  check("evaluator nav hides CFP forms and agenda",
-    !evaluatorNav.text.includes("/admin/forms") && !evaluatorNav.text.includes("/admin/agenda"));
+  check("evaluator nav hides CFP forms, agenda and speaker onboarding",
+    !evaluatorNav.text.includes("/admin/forms") && !evaluatorNav.text.includes("/admin/agenda")
+    && !evaluatorNav.text.includes("/admin/speakers"));
   check("evaluator nav keeps evaluations + abstracts",
     evaluatorNav.text.includes("/admin/evaluations") && evaluatorNav.text.includes("/admin/abstracts"));
+
+  // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
+  // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
+  // has its own unit tests, so re-using it here would only prove it agrees with
+  // itself. This checks what the component actually rendered.
+  const srgb = (v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const luminance = (hex) => {
+    const h = hex.replace("#", "");
+    const n = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    return 0.2126 * srgb(parseInt(n.slice(0, 2), 16))
+      + 0.7152 * srgb(parseInt(n.slice(2, 4), 16))
+      + 0.0722 * srgb(parseInt(n.slice(4, 6), 16));
+  };
+  const ratio = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+
+  check("embed schedule exposes a main landmark", embedPage.text.includes('<main class="embed-body"'));
+
+  // Every agenda slot chip must declare its own background AND text colour, and
+  // the pair must clear WCAG 4.5:1 for small text.
+  const chipStyles = [...agendaPage.text.matchAll(/class="slot-block[^"]*"[^>]*style="([^"]*)"/g)]
+    .map((m) => m[1].replace(/&quot;/g, '"'));
+  check("agenda renders slot chips", chipStyles.length > 0, `found ${chipStyles.length}`);
+  const badChips = chipStyles.filter((style) => {
+    const bg = /background:\s*(#[0-9a-f]{3,6})/i.exec(style)?.[1];
+    const fg = /(?:^|[;"\s])color:\s*(#[0-9a-f]{3,6})/i.exec(style)?.[1];
+    return !bg || !fg || ratio(bg, fg) < 4.5;
+  });
+  check("every agenda slot chip clears 4.5:1 contrast", badChips.length === 0,
+    badChips.join(" | ") || "none");
 
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data

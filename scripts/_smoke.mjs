@@ -444,13 +444,148 @@ try {
   const unschedule = await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
   check("unschedule session", unschedule.status === 200 && unschedule.data?.data?.unscheduled === true, unschedule.status);
 
-  // 21. Guard: the run must not have touched the judged demo event.
+  // 21. R1 — an authorized speaker edits their own submission after acceptance
+  // (requirements delta 2026-08-08). The scratch SPEAKER identity is used as the
+  // primary speaker because the portal requires a persisted event membership.
+  const r1Speakers = [
+    { email: speaker.user.email, name: speaker.user.name, isPrimary: true },
+    { email: "r1co@scratch.test", name: "R1 Co", isPrimary: false },
+  ];
+  const r1Submit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Editable talk", abstract: "Original body",
+    speakers: r1Speakers,
+    answers: { title_note: "original note", bio: "original bio", consent: true }, intent: "submit",
+  });
+  check("R1 setup: speaker submits an abstract", r1Submit.status === 201, r1Submit.status);
+  const r1Id = r1Submit.data?.data?.id;
+  const r1SubmittedAt = r1Submit.data?.data?.submittedAt;
+
+  const mineAnon = await j("GET", "/api/cfp/submissions/mine");
+  check("R1 anonymous cannot list submissions", mineAnon.status === 401, mineAnon.data?.error?.code);
+
+  const mine = await j("GET", "/api/cfp/submissions/mine", null, speaker);
+  const mineRow = mine.data?.data?.submissions?.find((s) => s.id === r1Id);
+  check("R1 speaker lists own submissions with edit affordances",
+    mine.status === 200 && mineRow?.canEdit === true && mineRow?.speakersLocked === false && mineRow?.lockReason === null,
+    mine.status);
+  check("R1 speaker read never exposes review data",
+    mineRow?.avgScore === null && mineRow?.reviewsTotal === 0 && !("reviewScores" in (mineRow ?? {})));
+
+  const notMine = await j("GET", `/api/cfp/submissions/${r1Id}`, null, evalr);
+  check("R1 non-speaker refused (403 NOT_YOUR_SUBMISSION)",
+    notMine.status === 403 && notMine.data?.error?.code === "NOT_YOUR_SUBMISSION", notMine.status);
+  const patchAnon = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { title: "Anonymous edit" });
+  check("R1 anonymous PATCH refused", patchAnon.status === 401, patchAnon.status);
+  const patchStranger = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { title: "Not yours" }, evalr);
+  check("R1 non-speaker PATCH refused", patchStranger.status === 403, patchStranger.data?.error?.code);
+  const patchMissing = await j("PATCH", "/api/cfp/submissions/does-not-exist", { title: "Ghost" }, speaker);
+  check("R1 unknown abstract returns 404", patchMissing.status === 404, patchMissing.data?.error?.code);
+
+  const edit1 = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    title: "Edited talk title", answers: { title_note: "updated note" },
+  }, speaker);
+  check("R1 speaker edits a SUBMITTED abstract",
+    edit1.status === 200 && edit1.data?.data?.submission?.title === "Edited talk title", edit1.status);
+  check("R1 partial answer patch merges instead of replacing",
+    edit1.data?.data?.answersByKey?.title_note === "updated note" &&
+    edit1.data?.data?.answersByKey?.bio === "original bio");
+  check("R1 edit never moves the abstract in the pipeline",
+    edit1.data?.data?.submission?.status === "SUBMITTED" &&
+    edit1.data?.data?.submission?.submittedAt === r1SubmittedAt);
+  check("R1 edit response carries the field spec for the renderer",
+    Array.isArray(edit1.data?.data?.form?.fields) && edit1.data?.data?.form?.fields.length === 7 &&
+    !("isOpen" in (edit1.data?.data?.form ?? {})));
+
+  const clearRequired = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { answers: { title_note: null } }, speaker);
+  check("R1 clearing a required answer refused (422 FIELD_ERRORS)",
+    clearRequired.status === 422 && !!clearRequired.data?.error?.fieldErrors?.title_note,
+    clearRequired.data?.error?.code);
+
+  // Terminal statuses stay locked.
+  const r1Reject = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Rejected talk",
+    speakers: [{ email: speaker.user.email, name: speaker.user.name, isPrimary: true }],
+    answers: { title_note: "n", consent: true }, intent: "submit",
+  });
+  const rejectId = r1Reject.data?.data?.id;
+  await j("POST", "/api/evaluations/decisions", { abstractId: rejectId, decision: "REJECTED" }, admin);
+  const editRejected = await j("PATCH", `/api/cfp/submissions/${rejectId}`, { title: "Trying anyway" }, speaker);
+  check("R1 rejected abstract is locked (409 ABSTRACT_LOCKED)",
+    editRejected.status === 409 && editRejected.data?.error?.code === "ABSTRACT_LOCKED", editRejected.status);
+  const mineAfterReject = await j("GET", "/api/cfp/submissions/mine", null, speaker);
+  const rejectedRow = mineAfterReject.data?.data?.submissions?.find((s) => s.id === rejectId);
+  check("R1 locked submission reports canEdit=false with plain-language copy",
+    rejectedRow?.canEdit === false && typeof rejectedRow?.lockReason === "string" &&
+    rejectedRow.lockReason.length > 10 && !/[A-Z_]{4,}/.test(rejectedRow.lockReason));
+
+  // Accept + convert, then prove the confirmed Session is untouched by an edit.
+  await j("POST", "/api/evaluations/decisions", { abstractId: r1Id, decision: "ACCEPTED" }, admin);
+  const r1Conv = await j("POST", "/api/evaluations/convert", { abstractId: r1Id, durationMinutes: 30 }, admin);
+  const r1SessionId = r1Conv.data?.data?.sessionId;
+  check("R1 setup: accepted abstract converted to a session", r1Conv.status === 201 && !!r1SessionId, r1Conv.status);
+  const sessionBefore = await prisma.session.findUnique({ where: { id: r1SessionId }, include: { speakers: true } });
+
+  const editAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    title: "Accepted and edited", abstract: "Rewritten body",
+  }, speaker);
+  check("R1 ACCEPTED abstract is editable (the required behaviour)",
+    editAccepted.status === 200 && editAccepted.data?.data?.submission?.status === "ACCEPTED" &&
+    editAccepted.data?.data?.submission?.title === "Accepted and edited", editAccepted.status);
+
+  const sessionAfter = await prisma.session.findUnique({ where: { id: r1SessionId }, include: { speakers: true } });
+  check("R1 edit does not touch the linked Session (INV-DOMAIN-001)",
+    sessionAfter?.title === sessionBefore?.title &&
+    sessionAfter?.description === sessionBefore?.description &&
+    sessionAfter?.durationMinutes === sessionBefore?.durationMinutes &&
+    sessionAfter?.updatedAt?.getTime() === sessionBefore?.updatedAt?.getTime() &&
+    sessionAfter?.speakers.length === sessionBefore?.speakers.length,
+    `${sessionBefore?.title} -> ${sessionAfter?.title}`);
+
+  const rosterEdit = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    speakers: [{ email: speaker.user.email, name: speaker.user.name, isPrimary: true }],
+  }, speaker);
+  check("R1 roster change after conversion refused (409 SPEAKERS_LOCKED)",
+    rosterEdit.status === 409 && rosterEdit.data?.error?.code === "SPEAKERS_LOCKED", rosterEdit.status);
+  const rosterSame = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    speakers: [r1Speakers[1], { ...r1Speakers[0], name: "Renamed Speaker" }],
+  }, speaker);
+  check("R1 resending the same roster (reordered/renamed) is allowed", rosterSame.status === 200, rosterSame.status);
+
+  // The CFP window must not gate edits: no edit-lock window (delta Q2).
+  const closeForm = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId, closesAt: new Date(Date.now() - 86_400_000).toISOString(),
+  }, admin);
+  check("R1 setup: CFP window closed", closeForm.status === 200, closeForm.status);
+  const closedSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Too late",
+    speakers: [{ email: "late@scratch.test", name: "Late", isPrimary: true }],
+    answers: { title_note: "x", consent: true }, intent: "submit",
+  });
+  check("R1 public submission is still refused after the window closes",
+    closedSubmit.status === 422 && closedSubmit.data?.error?.code === "FORM_CLOSED", closedSubmit.data?.error?.code);
+  const editAfterClose = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    title: "Edited after the window closed",
+  }, speaker);
+  check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
+
+  // Regression guard: the public, unauthenticated path must NOT have gained the
+  // ability to overwrite a submitted/accepted abstract.
+  const publicOverwrite = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, abstractId: r1Id, title: "Anonymous overwrite",
+    speakers: [{ email: "attacker@scratch.test", name: "Attacker", isPrimary: true }],
+    answers: {}, intent: "saveDraft",
+  });
+  check("R1 public path still refuses to edit a non-DRAFT abstract",
+    publicOverwrite.status === 409 && publicOverwrite.data?.error?.code === "ABSTRACT_LOCKED",
+    publicOverwrite.data?.error?.code);
+
+  // 22. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
   });
   check("demo-event untouched by smoke", demoTouch === 0, `stray demo rows: ${demoTouch}`);
 
-  console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId }));
+  console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId, r1Id, r1SessionId }));
 } catch (e) {
   fatalError = true;
   console.error("SMOKE ERROR", e);

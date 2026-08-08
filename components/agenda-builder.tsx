@@ -6,6 +6,7 @@ import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
+import { readableChip } from "@/lib/color-contrast";
 import { apiDelete, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -431,11 +432,14 @@ function DayGrid({
                   const height = Math.max(18, durationMin * PX_PER_MIN - 3);
                   const conflict = conflictIds.has(s.id);
                   const moving = movingId === s.id;
+                  // Track colours are operator-chosen, so the chip derives its
+                  // own legible text colour instead of assuming white works.
+                  const chip = readableChip(trackColor(s.slot.trackId));
                   return (
                     <button
                       key={s.id}
                       className={`slot-block ${conflict ? "conflict" : ""} ${draggable ? "draggable" : ""} ${moving ? "moving" : ""}`}
-                      style={{ top, height, background: trackColor(s.slot.trackId), border: "none", textAlign: "left" }}
+                      style={{ top, height, background: chip.background, color: chip.color, border: "none", textAlign: "left" }}
                       title={`${s.title} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}${draggable ? " — drag to move" : ""}`}
                       draggable={draggable && movingId === null}
                       onDragStart={draggable ? (event) => {
@@ -532,6 +536,7 @@ function WeekGrid({
                   const s = item.session;
                   const conflict = conflictIds.has(s.id);
                   const width = 100 / laneCount;
+                  const chip = readableChip(trackColor(s.slot.trackId));
                   return (
                     <button
                       key={s.id}
@@ -542,7 +547,8 @@ function WeekGrid({
                         left: `calc(${lanes[i] * width}% + 2px)`,
                         width: `calc(${width}% - 4px)`,
                         right: "auto",
-                        background: trackColor(s.slot.trackId),
+                        background: chip.background,
+                        color: chip.color,
                       }}
                       title={`${s.title} · ${roomName(s.slot.roomId)} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}`}
                       onClick={() => onSelect(s)}
