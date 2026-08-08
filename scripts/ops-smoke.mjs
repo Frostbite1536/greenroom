@@ -36,6 +36,16 @@ function cookieFor(role) {
   return `sb_session=${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`;
 }
 
+/** A login-as-any-email SPEAKER session (no seeded task assignments). */
+function cookieForEmail(email) {
+  const session = {
+    user: { id: `email:${email}`, name: email.split("@")[0], email },
+    event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
+    role: "SPEAKER",
+  };
+  return `sb_session=${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`;
+}
+
 async function waitForServer(port, proc) {
   for (let i = 0; i < 90; i++) {
     if (proc.exitCode !== null) throw new Error(`server exited early (code ${proc.exitCode})`);
@@ -142,6 +152,125 @@ await withServer(PORT_OPEN, { ALLOW_DEMO_RESET: "true" }, async (base) => {
     again.status === 200 && JSON.stringify(againBody?.data) === JSON.stringify(adminBody?.data),
     `status ${again.status}`,
   );
+});
+
+// --- Run C: speaker portal (golden path step 5) -----------------------------
+const { PrismaClient } = await import("@prisma/client");
+const prisma = new PrismaClient();
+let sofiaTaskId;
+try {
+  const sofia = await prisma.user.findUnique({ where: { email: "sofia@sessionboard.demo" } });
+  const assignment = await prisma.speakerTask.findFirst({
+    where: { userId: sofia.id },
+    select: { taskId: true },
+    orderBy: { taskId: "asc" },
+  });
+  sofiaTaskId = assignment.taskId;
+} finally {
+  await prisma.$disconnect();
+}
+
+await withServer(PORT_OPEN + 1, {}, async (base) => {
+  const speaker = cookieFor("SPEAKER");
+
+  const anon = await fetch(`${base}/portal`, { redirect: "manual" });
+  check(
+    "/portal redirects anonymous users to /login",
+    anon.status >= 300 && anon.status < 400 && (anon.headers.get("location") ?? "").includes("/login"),
+    `status ${anon.status} -> ${anon.headers.get("location")}`,
+  );
+
+  const page = await fetch(`${base}/portal`, { headers: { cookie: speaker } });
+  const html = await page.text();
+  check("/portal renders for the speaker persona", page.status === 200, `status ${page.status}`);
+  check("/portal shows real seeded task data", html.includes("Your tasks") && html.includes("Complete your speaker profile"));
+  check("/portal shows the speaker's confirmed session", html.includes("Your sessions") && html.includes("Confirmed sessions"));
+
+  const noAuthTask = await fetch(`${base}/api/portal/tasks`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ taskId: sofiaTaskId, status: "COMPLETED" }),
+  });
+  check("task update requires a session", noAuthTask.status === 401, `status ${noAuthTask.status}`);
+
+  const bogus = await fetch(`${base}/api/portal/tasks`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: speaker },
+    body: JSON.stringify({ taskId: "does-not-exist", status: "COMPLETED" }),
+  });
+  const bogusBody = await json(bogus);
+  check(
+    "task update 404s for an unknown task",
+    bogus.status === 404 && bogusBody?.error?.code === "NOT_FOUND",
+    `status ${bogus.status} code ${bogusBody?.error?.code}`,
+  );
+
+  const stranger = await fetch(`${base}/api/portal/tasks`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: cookieForEmail("stranger@smoke.test") },
+    body: JSON.stringify({ taskId: sofiaTaskId, status: "COMPLETED" }),
+  });
+  const strangerBody = await json(stranger);
+  check(
+    "speaker cannot update a task assigned to someone else",
+    stranger.status === 403 && strangerBody?.error?.code === "NOT_ASSIGNED",
+    `status ${stranger.status} code ${strangerBody?.error?.code}`,
+  );
+
+  const complete = await fetch(`${base}/api/portal/tasks`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: speaker },
+    body: JSON.stringify({ taskId: sofiaTaskId, status: "COMPLETED" }),
+  });
+  const completeBody = await json(complete);
+  check(
+    "speaker completes their own task",
+    complete.status === 200 && completeBody?.data?.status === "COMPLETED" && completeBody?.data?.completedAt,
+    `status ${complete.status} status ${completeBody?.data?.status}`,
+  );
+
+  const reopen = await fetch(`${base}/api/portal/tasks`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: speaker },
+    body: JSON.stringify({ taskId: sofiaTaskId, status: "TODO" }),
+  });
+  const reopenBody = await json(reopen);
+  check(
+    "reopening a task clears completedAt",
+    reopen.status === 200 && reopenBody?.data?.status === "TODO" && reopenBody?.data?.completedAt === null,
+    `status ${reopen.status} completedAt ${reopenBody?.data?.completedAt}`,
+  );
+
+  const badProfile = await fetch(`${base}/api/portal/profile`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: speaker },
+    body: JSON.stringify({ headshotUrl: "not-a-url" }),
+  });
+  const badProfileBody = await json(badProfile);
+  check(
+    "profile rejects an invalid URL",
+    badProfile.status === 422 && badProfileBody?.error?.code === "VALIDATION_ERROR",
+    `status ${badProfile.status} code ${badProfileBody?.error?.code}`,
+  );
+
+  const goodProfile = await fetch(`${base}/api/portal/profile`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: speaker },
+    body: JSON.stringify({ jobTitle: "Principal Engineer", headshotUrl: "https://example.test/a.png" }),
+  });
+  const goodProfileBody = await json(goodProfile);
+  check(
+    "profile saves valid fields",
+    goodProfile.status === 200 && goodProfileBody?.data?.jobTitle === "Principal Engineer",
+    `status ${goodProfile.status}`,
+  );
+
+  const resource = await fetch(`${base}/portal/resources/speaker-handbook`, { headers: { cookie: speaker } });
+  const resourceHtml = await resource.text();
+  check("resource page renders sanitized content", resource.status === 200 && resourceHtml.includes("Welcome, speakers"), `status ${resource.status}`);
+
+  const missingResource = await fetch(`${base}/portal/resources/nope`, { headers: { cookie: speaker } });
+  check("unknown resource 404s", missingResource.status === 404, `status ${missingResource.status}`);
 });
 
 const failed = results.filter((r) => !r.pass);
