@@ -14,13 +14,18 @@ public embeds for your event site.
 3. **Evaluation** — review teams score abstracts against a weighted rubric
    through evaluation plans (blind review supported), routed by category.
 4. **Accept → Session** — accepted abstracts convert into confirmed, schedulable
-   sessions.
-5. **Speaker onboarding** — a speaker portal with profile, status, and task
-   checklists (tasks can carry forms).
-6. **Agenda builder** — day/room scheduling with transactional room-overlap and
+   sessions (at most one session per abstract).
+5. **Speaker edits after acceptance** — speakers keep editing their own proposal
+   while it is in draft, in review, or accepted; rejected and withdrawn
+   proposals are read-only, and a converted talk's speaker list is fixed.
+6. **Speaker onboarding** — a speaker portal with profile, status, and task
+   checklists (tasks can carry forms), plus an admin dashboard at
+   `/admin/speakers` showing who is behind.
+7. **Agenda builder** — List / Day / Week / Tracks / Conflicts views, with
+   drag-and-drop moves in the day grid and transactional room-overlap and
    speaker double-booking conflict detection.
-7. **Public embeds** — mobile-friendly schedule and compact speaker gallery,
-   with `.ics` calendar export.
+8. **Public embeds** — mobile-friendly schedule and compact speaker gallery,
+   with `.ics` calendar export and copy-paste snippets at `/admin/embeds`.
 
 ## Quickstart
 
@@ -69,12 +74,25 @@ pipeline.
 4. Open **Agenda**. In the **Unscheduled backlog**, select the new session,
    choose an available date, time, room, and optional track, then choose
    **Schedule**. The server prevents room and speaker overlaps.
-5. Verify the result while logged out at
+   - Switch to the **Day** tab and drag a session block to another room or time
+     — the move is re-checked on the server and refused if it collides.
+   - Switch to the **Week** tab for a read-only overview of the whole event.
+5. Open **Speaker onboarding** (`/admin/speakers`) to see profile completeness,
+   settled tasks, and unscheduled sessions per speaker, and **Website embeds**
+   (`/admin/embeds`) to copy the `<iframe>` snippets for your event site.
+6. Sign in as the **Speaker** persona (Sofia) and open the speaker portal. Her
+   accepted proposal is still editable — content changes are saved against the
+   original form; the speaker list of a converted talk is locked.
+7. Verify the result while logged out at
    [`/embed/schedule`](https://greenroom-omega-dusky.vercel.app/embed/schedule).
    The demo event can also be selected explicitly with
    [`?event=forward-2026`](https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026).
    The scheduled speaker lineup is available at
    [`/embed/speakers`](https://greenroom-omega-dusky.vercel.app/embed/speakers?event=forward-2026).
+
+Non-technical walkthroughs of the same ground, one per role, live in
+[`docs/guides/`](docs/guides/): [event admin](docs/guides/event-admin.md),
+[evaluator](docs/guides/evaluator.md), [speaker](docs/guides/speaker.md).
 
 ### Demo personas
 
@@ -109,6 +127,17 @@ from any static host or localhost.
 
 Next.js 16 (App Router) · React 19 · Prisma 6 · PostgreSQL · Zod. Plain CSS,
 no UI framework. See `docs/ARCHITECTURE.md`.
+
+## Documentation
+
+| Document | What it covers |
+| --- | --- |
+| [`docs/guides/`](docs/guides/) | Plain-language how-tos for admins, evaluators, and speakers |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Product boundary, domain model, routes, security |
+| [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) | Abstract / Session / ScheduleSlot / SpeakerTask state machines |
+| [`docs/INVARIANTS.md`](docs/INVARIANTS.md) | Rules the server enforces, referenced from code comments |
+| [`docs/API.md`](docs/API.md) | Read-only `/api/v1` REST surface and the in-app speaker endpoints |
+| [`docs/DEPLOY.md`](docs/DEPLOY.md) | Vercel + Neon setup, environment variables, demo operations |
 
 ## Contributing / sprint history
 

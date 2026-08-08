@@ -1,0 +1,194 @@
+# Lifecycles
+
+The state machines behind the golden path: what each record can be, which route moves it,
+and what the server refuses. Every transition below was read off the code at `ff58f13`; file
+paths are cited so a reviewer can check the arrow rather than trust the diagram.
+
+Statuses are Prisma enums in `prisma/schema.prisma` (`AbstractStatus`,
+`EvaluationAssignmentStatus`, `TaskStatus`) and mirrored as Zod enums in `types/api.ts`.
+
+---
+
+## Abstract
+
+An `Abstract` is an evaluated CFP proposal. It is never the schedulable record — that is a
+`Session` (INV-DOMAIN-001).
+
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT: POST /api/cfp/submissions, intent draft
+    [*] --> SUBMITTED: POST /api/cfp/submissions, intent submit
+    [*] --> SUBMITTED: POST /api/integrations/import
+    DRAFT --> SUBMITTED: POST /api/cfp/submissions with abstractId
+    SUBMITTED --> UNDER_REVIEW: POST /api/evaluations/assignments
+    SUBMITTED --> ACCEPTED: POST /api/evaluations/decisions
+    SUBMITTED --> REJECTED: POST /api/evaluations/decisions
+    UNDER_REVIEW --> ACCEPTED: POST /api/evaluations/decisions
+    UNDER_REVIEW --> REJECTED: POST /api/evaluations/decisions
+    ACCEPTED --> REJECTED: decision reversal
+    REJECTED --> ACCEPTED: decision reversal
+    ACCEPTED --> [*]: converted to a Session
+    WITHDRAWN --> [*]: no route sets or leaves this state
+```
+
+### Transitions
+
+| From | To | Route / file | Notes |
+| --- | --- | --- | --- |
+| — | `DRAFT` | `POST /api/cfp/submissions`, `app/api/cfp/submissions/route.ts` | `intent: "draft"`. Unauthenticated: the public CFP page posts this. Returns 201. |
+| — | `SUBMITTED` | same route, `intent: "submit"` | Runs the full INV-FORM-001 check (published, window, speaker count, required fields, bio length) and sets `submittedAt`. Returns 201. |
+| — | `SUBMITTED` | `POST /api/integrations/import`, `app/api/integrations/import/route.ts` | CSV/JSON import creates rows already `SUBMITTED`. Existing rows are only updated when they are `DRAFT` or `SUBMITTED`; anything further along is **skipped**, not overwritten. |
+| `DRAFT` | `SUBMITTED` | `POST /api/cfp/submissions` with `abstractId` | The same handler refuses any non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`. That check is what stops an anonymous caller rewriting a submitted proposal, so it is deliberately *not* relaxed for R1. |
+| `SUBMITTED` | `UNDER_REVIEW` | `POST /api/evaluations/assignments`, `app/api/evaluations/assignments/route.ts` | Only when the abstract is currently `SUBMITTED`; assigning an already `UNDER_REVIEW`/decided abstract creates the assignment without touching status. Admin only. |
+| any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
+| — | `WITHDRAWN` | **no route** | The status exists in the schema and the seed produces withdrawn examples, but nothing in the app writes it today. It is honoured everywhere as a lock (edits and decisions both refuse it). Withdrawal is currently an operator/database action. |
+
+**Two honest caveats**, both visible in the code:
+
+- The decision route does not require a prior review. An abstract can go straight from
+  `SUBMITTED` (or even `DRAFT`) to `ACCEPTED`; evaluation is a workflow, not a gate.
+- Rejecting an abstract that was already converted does **not** remove its `Session`
+  (`app/api/evaluations/decisions/route.ts` writes only the abstract). Un-programming a talk
+  is a schedule action: unschedule the slot (below).
+
+### Editing rules (R1)
+
+Speakers edit through the session-authenticated routes in
+`app/api/cfp/submissions/[abstractId]/route.ts`; the rules themselves live in
+`lib/services/speaker-edit.ts` so they are stated once.
+
+| Status | Editable by a speaker on it? |
+| --- | --- |
+| `DRAFT` | yes — content rules are skipped, exactly like a public draft save |
+| `SUBMITTED` | yes |
+| `UNDER_REVIEW` | yes |
+| `ACCEPTED` | yes — this is the requirement from the competition lead |
+| `REJECTED` | no → `409 ABSTRACT_LOCKED` |
+| `WITHDRAWN` | no → `409 ABSTRACT_LOCKED` |
+
+- **Authorization** is the `AbstractSpeaker` link resolved from the signed session's persisted
+  user id (`isAbstractSpeaker`), not the submitter field: any co-speaker may edit. Existence
+  and event scope are checked first (`404 ABSTRACT_NOT_FOUND`), then ownership
+  (`403 NOT_YOUR_SUBMISSION`), so the route never confirms another event's records.
+- **An edit does not move the abstract through this state machine.** `status`, `submittedAt`,
+  `decidedAt`, and `submitterId` are all absent from the update.
+- **No edit window.** The CFP window gate is skipped on this path
+  (`validateSubmissionContent` vs `validateSubmission` in `lib/services/form-validation.ts`) —
+  an accepted speaker necessarily edits after the CFP has closed. Public submission to a
+  closed form is still refused with `FORM_CLOSED`.
+- **The roster locks at conversion.** If the abstract has a `Session`, changing the speaker
+  set or who is primary returns `409 SPEAKERS_LOCKED`; content fields stay editable. Resending
+  the identical roster is not a change (`rosterChanged` compares lowercased email sets).
+- **The linked `Session` is never touched** by an edit (INV-DOMAIN-001). The confirmed record
+  keeps the title it was converted with until an admin changes it.
+- Concurrency: the PATCH runs inside a transaction that first takes the per-abstract advisory
+  lock (`lib/services/abstract-lock.ts`) and then re-reads status, session, and roster
+  membership under that lock. Concurrent co-speaker edits are last-write-wins by design; there
+  is no optimistic concurrency token in v1.
+
+### Conversion to a Session
+
+`POST /api/evaluations/convert` (`app/api/evaluations/convert/route.ts`), admin only:
+
+- requires `status === "ACCEPTED"`, else `409 NOT_ACCEPTED`;
+- creates **at most one** `Session` per abstract — enforced by the unique `sourceAbstractId`
+  and by re-checking inside the advisory lock (INV-DOMAIN-001);
+- copies the abstract's speakers onto the session as `SessionSpeaker` rows (which is why the
+  roster locks afterwards);
+- is idempotent: `201` with a new session, `200` returning the existing `sessionId`.
+
+---
+
+## Session → ScheduleSlot
+
+A `Session` is a confirmed, schedulable talk. It has **at most one** `ScheduleSlot`
+(unique `sessionId`); "scheduled" and "unscheduled" are simply whether that row exists.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unscheduled: POST /api/evaluations/convert (from an ACCEPTED abstract)
+    Unscheduled --> Scheduled: POST /api/agenda/slots (no conflicts)
+    Unscheduled --> Unscheduled: POST /api/agenda/slots refused 409 SCHEDULE_CONFLICT
+    Scheduled --> Scheduled: POST /api/agenda/slots (move — re-checked, may be refused)
+    Scheduled --> Unscheduled: DELETE /api/agenda/slots?sessionId=...
+```
+
+- **Creation.** Conversion is the only way the running app creates a `Session`. The schema
+  supports guaranteed/sponsor sessions with no source abstract (the seeded opening keynote is
+  one), and `types/api.ts` reserves `guaranteedSessionInputSchema`, but no route implements
+  direct creation yet.
+- **Placement.** `POST /api/agenda/slots` (`app/api/agenda/slots/route.ts`, admin only)
+  validates that the session, room, and optional track all belong to the caller's event
+  (`404 SESSION_NOT_FOUND` / `ROOM_NOT_FOUND` / `TRACK_NOT_FOUND`), then does detection and
+  write **inside one transaction** (INV-SCHEDULE-001).
+- **Conflict rules** (`detectConflicts`, `lib/services/schedule.ts`): intervals are half-open,
+  `[start, end)`, so a talk ending at 10:00 and one starting at 10:00 do not collide. Two
+  kinds are reported, and both can fire for one placement:
+  - `ROOM_OVERLAP` — the same room is already booked for an overlapping interval;
+  - `SPEAKER_OVERLAP` — a speaker on this session is already on stage in that interval.
+  A session's own slot is excluded from its comparison, so moving a talk never conflicts with
+  itself.
+- **Refusal.** Any conflict aborts the write and returns `409 SCHEDULE_CONFLICT` with a
+  `conflicts` list the UI renders. `?force=true` records the placement anyway (used only for
+  the seeded, deliberate demo conflict).
+- **Moving.** The same POST upserts on `sessionId`, so a drag in the agenda day grid
+  (`components/agenda-builder.tsx`) is a re-placement that is re-checked server-side; a
+  refused drag snaps back. The Week tab is a read-only overview and cannot move anything.
+- **Unscheduling.** `DELETE /api/agenda/slots?sessionId=…` removes the slot; the session
+  returns to the unscheduled backlog. The session itself is not deleted.
+- **Public visibility.** Only placed sessions appear on `/embed/schedule`, in the `.ics`
+  export, and in `GET /api/v1/schedule`. The `.ics` entry carries `LOCATION` only when a room
+  is assigned (`lib/calendar/ics.ts`).
+
+---
+
+## SpeakerTask
+
+`OnboardingTask` is the event-level **template**; `SpeakerTask` is the per-speaker
+**assignment** and is the only place completion is recorded (INV-TASK-001).
+
+```mermaid
+stateDiagram-v2
+    [*] --> TODO: assignment created for a confirmed session speaker
+    TODO --> IN_PROGRESS: PATCH /api/portal/tasks
+    IN_PROGRESS --> COMPLETED: PATCH /api/portal/tasks
+    TODO --> COMPLETED: PATCH /api/portal/tasks
+    COMPLETED --> TODO: PATCH /api/portal/tasks (re-open)
+    TODO --> WAIVED: PATCH /api/portal/tasks
+    COMPLETED --> [*]
+    WAIVED --> [*]
+```
+
+- **Creation.** The seed assigns every template task to each confirmed session speaker
+  (`lib/demo/seed.ts`). No route creates assignments; there is no auto-assignment on
+  conversion yet.
+- **Updates.** `PATCH /api/portal/tasks` (`app/api/portal/tasks/route.ts`) accepts any of the
+  four statuses plus optional `artifactUrl`/`notes`. It is fully reversible: `completedAt` is
+  set when the status becomes `COMPLETED` and cleared for every other status.
+- **Authorization.** `401 UNAUTHORIZED` without a session; `404 NOT_FOUND` when the task is
+  not part of the caller's event; `403 NOT_ASSIGNED` when the assignment row is not the
+  caller's own. A speaker can only ever move their own row.
+- **Derived completion (INV-TASK-001).** Nothing stores "this speaker is done". Both readers
+  compute it from the assignment rows, and both count a task as settled when it is `COMPLETED`
+  **or** `WAIVED` (`isTaskSettled`, `lib/speakers/status.ts`):
+  - `/portal` shows `settled / total` for the signed-in speaker
+    (`app/(app)/portal/page.tsx`);
+  - `/admin/speakers` aggregates the same rows per speaker, alongside profile completeness
+    over the four fields the public program renders, and sorts most-urgent-first
+    (`buildSpeakerStatusRows`).
+  - Reminder dispatch (`app/api/comms/reminders/route.ts`) selects assignments whose status is
+    not in `["COMPLETED", "WAIVED"]` — the same rule, expressed once more.
+- `WAIVED` is the "this speaker doesn't need to do this" state: it settles the task without
+  claiming it was done.
+
+---
+
+## ReviewAssignment (supporting)
+
+Scoring progress lives on `ReviewAssignment` (`EvaluationAssignmentStatus`):
+`ASSIGNED` → `IN_PROGRESS` → `COMPLETED`. `POST /api/evaluations/scores`
+(`app/api/evaluations/scores/route.ts`) upserts the evaluator's scores and sets the assignment
+to `COMPLETED` when the request carries `complete: true`, otherwise `IN_PROGRESS`. Scores must
+reference a rubric key in the plan and fall inside that criterion's range (INV-EVAL-001), and
+an evaluator can only score abstracts assigned to them (`403 NOT_ASSIGNED`). `DECLINED` exists
+in the schema but no route sets it.
