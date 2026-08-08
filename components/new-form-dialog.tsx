@@ -14,7 +14,10 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
+    .slice(0, 60)
+    // The slice can cut mid-word and leave a trailing dash, which the slug
+    // pattern rejects; strip again so a long name still yields a valid slug.
+    .replace(/^-+|-+$/g, "");
 }
 
 /**
@@ -162,7 +165,11 @@ export function NewFormDialog({
           method="dialog"
           onSubmit={(event) => {
             event.preventDefault();
-            void create();
+            create().catch((error) => {
+              console.warn("Form creation failed", error);
+              setSubmitting(false);
+              setErrors({ _root: "Could not create the form. Check your connection and try again." });
+            });
           }}
         >
           <h2 id={`${ids}-title`}>New submission form</h2>
