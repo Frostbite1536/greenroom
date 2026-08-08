@@ -16,6 +16,7 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`. |
    | `RESEND_API_KEY` / `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable real integrations when present. |
+   | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
 
 4. First deploy checklist:
@@ -48,6 +49,29 @@ upsert merge key. Other fields may be single-line text unless noted.
 
 The mirror uses `PATCH /v0/{base}/{table}` with Airtable `performUpsert` on
 `External ID`, sends at most 10 records per request, and never deletes records.
+
+## Accelevents one-way program push
+
+`POST /api/integrations/accelevents/push` is ADMIN-only and event-scoped. It is
+safe by default: `{ eventId, dryRun: true }` only returns projected counts. A
+request can make one external POST only when `dryRun: false`,
+`MOCK_EXTERNAL_APIS=false`, and `ACCELEVENTS_BASE_URL` is configured.
+
+`ACCELEVENTS_BASE_URL` is intentionally the **full receiving endpoint URL**
+(including its path), supplied by the operator for an integration adapter. The
+direct Accelevents host-session API requires target event URL, ticket types,
+accepted format values, and an existing remote record ID for updates—data that
+Greenroom does not model—so this integration never appends or assumes a direct
+vendor path. If the configured adapter requires Accelevents-style API-key
+authentication, set optional `ACCELEVENTS_API_KEY`; its value is sent unchanged
+in the `Authorization` header.
+
+The POST body is a stable `schemaVersion: "1.0"`, `operation:
+"program.push"` envelope: event (`event:<id>`), accepted/guaranteed sessions
+(`session:<id>`), deduplicated speakers (`speaker:<id>`), and optional schedule
+details (`slot:<id>`, start/end ISO timestamps, room, track). Stable IDs allow
+the adapter to reconcile idempotently; this application performs no deletes and
+has no schema-level delivery log.
 
 ## Demo seed
 Idempotent, deterministic seed for the whole golden path.
