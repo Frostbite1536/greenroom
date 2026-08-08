@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 
 // Build a demo admin session cookie matching lib/auth.ts encodeSession.
 const admin = {
-  user: { id: "demo-admin", name: "Maya Chen", email: "maya@sessionboard.demo" },
+  user: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
   event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
   role: "ADMIN",
 };
-const speaker = { ...admin, user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@sessionboard.demo" }, role: "SPEAKER" };
-const evalr = { ...admin, user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@sessionboard.demo" }, role: "EVALUATOR" };
+const speaker = { ...admin, user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" }, role: "SPEAKER" };
+const evalr = { ...admin, user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo" }, role: "EVALUATOR" };
 const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
 const cookie = (s) => `sb_session=${enc(s)}`;
 

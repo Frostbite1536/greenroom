@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { AgendaBuilder } from "@/components/agenda-builder";
 import { EVENT_META, ROOMS, SLOTS, TRACKS } from "@/lib/fixtures";
 
-export const metadata = { title: "Agenda · Sessionboard" };
+export const metadata = { title: "Agenda · Greenroom" };
 
 export default function AgendaPage() {
   return (

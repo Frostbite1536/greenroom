@@ -25,8 +25,8 @@ function check(name, pass, detail = "") {
 /** Mirrors lib/auth.ts encodeSession (base64url JSON). */
 function cookieFor(role) {
   const personas = {
-    ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@sessionboard.demo" },
-    SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@sessionboard.demo" },
+    ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
+    SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
   };
   const session = {
     user: personas[role],

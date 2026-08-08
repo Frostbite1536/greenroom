@@ -40,7 +40,7 @@ export default async function LoginPage() {
           <span className="brand-mark">
             <Mic2 size={18} aria-hidden="true" />
           </span>
-          <span>Sessionboard</span>
+          <span>Greenroom</span>
         </div>
         <h1>Sign in to the demo</h1>
         <p className="login-hint">

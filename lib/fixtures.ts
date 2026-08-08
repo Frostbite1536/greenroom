@@ -234,7 +234,7 @@ export type AbstractModel = {
 };
 
 const SPEAKER_POOL: AbstractSpeakerModel[] = [
-  { name: "Sofia Marques", email: "sofia@sessionboard.demo", isPrimary: true },
+  { name: "Sofia Marques", email: "sofia@greenroom.demo", isPrimary: true },
   { name: "Devon Wills", email: "devon@example.com", isPrimary: true },
   { name: "Amara Okafor", email: "amara@example.com", isPrimary: true },
   { name: "Liang Wei", email: "liang@example.com", isPrimary: true },

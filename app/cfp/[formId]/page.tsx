@@ -3,7 +3,7 @@ import "@/components/feature.css";
 import { CfpForm, CfpBrand } from "@/components/cfp-form";
 import { EVENT_META, getForm } from "@/lib/fixtures";
 
-export const metadata = { title: "Submit a proposal · Sessionboard" };
+export const metadata = { title: "Submit a proposal · Greenroom" };
 
 export default async function PublicCfpPage({
   params,
@@ -35,7 +35,7 @@ export default async function PublicCfpPage({
         ) : (
           <CfpForm form={form} />
         )}
-        <p className="hint" style={{ textAlign: "center" }}>Powered by Sessionboard · {EVENT_META.name}</p>
+        <p className="hint" style={{ textAlign: "center" }}>Powered by Greenroom · {EVENT_META.name}</p>
       </div>
     </main>
   );

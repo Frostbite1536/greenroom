@@ -1,4 +1,4 @@
-# Sprint Plan — Sessionboard Clone
+# Sprint Plan — Greenroom
 
 Deadline: **Wed Aug 12, 10 PM PT**. Human availability is front-loaded (next ~48h);
 agents are fast, so phases are scoped to *merge-and-verify cycles*, not days.
@@ -13,7 +13,7 @@ Cloudflare infra (mild), Airtable persistence.
 - After every merge: `tsc`, build, and click the golden path on the deployed URL.
 - Golden path (from STATE.md) outranks any other feature at all times.
 - Screenshot references: `$SPRINT_COORDINATION_DIR/reference/screenshots/` with
-  `brief-with-screenshot-markers.txt` mapping images to Sessionboard pages.
+  `brief-with-screenshot-markers.txt` mapping images to the reference product's pages.
   Match the *job to be done*, not pixel fidelity. Fast > faithful.
 
 ## Phase 1 — Golden path, end to end (now)
@@ -47,7 +47,7 @@ Exit: judge-persona can do the full walkthrough on the deployed URL.
 
 ## Phase 3 — Bonuses + Sunday video (requirement freeze)
 - Public REST API (`/api/v1/*`: read submissions/speakers/schedule, API-key
-  auth) mirroring Sessionboard's mintlify docs surface — bonus points.
+  auth) mirroring the reference product's public docs surface — bonus points.
 - Airtable one-way mirror (accepted sessions/speakers/schedule → base via
   `AIRTABLE_API_KEY`; no-op when unset) — bonus points.
 - Performance pass: no N+1 queries, server-render list pages, measure the
