@@ -22,7 +22,7 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`. |
-   | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a verified Resend sender and keep mocks on otherwise. |
+   | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a verified Resend sender and keep mocks on otherwise. Only the reminder endpoint sends today — see "Email status" below. |
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
    | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
@@ -86,6 +86,18 @@ A live run returns a per-table report instead of failing whole-hog:
 - **Resume = re-run the same request.** Upserts merge on `External ID`, so rows
   that already landed are rewritten identically and failed rows are retried, with
   no duplicates and no deletes.
+
+## Email status
+
+`POST /api/comms/reminders` is the **only** path that sends mail today. It renders an
+event-scoped `EmailTemplate` per eligible speaker and calls Resend only when
+`MOCK_EXTERNAL_APIS=false` **and** `RESEND_API_KEY` **and** a valid `RESEND_FROM` are all
+present; otherwise the send is mocked and logged, and the response says so.
+
+There are **no automatic notifications yet**: submitting a proposal, accepting or declining
+one, and adding a co-speaker send nothing on their own. Docs and UI copy must not promise
+otherwise. (Automatic submission/decision emails are planned; the calendar `.ics` path is
+already real.)
 
 ## Accelevents one-way program push
 

@@ -12,8 +12,8 @@ You do **not** need an account to submit. The event gives you a link — for For
 - Fill in your talk title, description, session type and length, and the track it belongs to.
 - Answer the event's own questions. Required ones are marked; some only appear once an earlier
   answer makes them relevant.
-- Add co-speakers by name and email. Everyone listed is a speaker on the proposal; the event
-  contacts them by email.
+- Add co-speakers by name and email. Everyone listed is a speaker on the proposal; the
+  programme team contacts them at that address.
 - Some events limit how many proposals one person may send (Forward 2026 allows three) and
   when the form is open. If the window has closed, the page tells you instead of failing
   silently.
@@ -32,7 +32,7 @@ means for you:
 | You see | What it means |
 | --- | --- |
 | **Draft** | not sent to the programme team yet |
-| **Submitted** | received; they will be in touch by email |
+| **Submitted** | received; the programme team reviews it and follows up |
 | **In review** | reviewers are reading it now |
 | **Accepted** | you are on the programme |
 | **Not accepted** | it did not make the programme this time |
@@ -69,8 +69,9 @@ Your portal home has three things the programme team is watching:
 **Your tasks.** The event's checklist — for Forward 2026: complete your profile, upload a
 headshot, submit the A/V & logistics form, confirm your session details, and (optional) upload
 your slide deck. Mark each one as in progress or done as you go; you can move one back if you
-were too optimistic. Some tasks open a short form. If a task does not apply to you, the
-programme team can waive it.
+were too optimistic. If a task does not apply to you, the programme team can waive it.
+A task with a **Form** badge means the team needs extra details from you — today they will
+ask you for those directly; filling the form in here is coming soon.
 
 **Your sessions.** Your confirmed talks and when they are scheduled — date, time and room once
 the programme team places them. Before that it simply says "Not scheduled yet".

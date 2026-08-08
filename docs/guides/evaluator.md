@@ -23,8 +23,10 @@ A progress bar above the queue shows how many of yours are scored. Greenroom ope
 unscored proposal for you, and after each submitted review it jumps to the next one — so you
 can work straight down the list without hunting.
 
-If the round is **blind**, a "Blind" badge appears and speaker names are hidden. You judge the
-talk, not the person.
+If the round is **blind**, a "Blind" badge appears and speaker names are hidden in your queue
+and on the proposal you are scoring, so you judge the talk rather than the person. (Blind
+rounds are opt-in per round; Forward 2026's seeded round is not blind, so you will see names
+there.)
 
 ---
 

@@ -43,14 +43,19 @@ point.
 
 **Abstracts** shows every proposal for the event, newest first, with filter chips across the
 top (All / Submitted / Under review / Accepted / Declined / Drafts) and a search box. Select a
-row to read the full proposal, its answers, who is speaking, how many reviews are complete,
-and the average score once reviews are in.
+row to read the proposal itself — title, description, form, category, session type and length,
+who is speaking, how many reviews are complete, and the score so far.
 
 Two useful facts:
 
 - The status wording here is the same wording the speaker sees in their own portal.
 - Proposals brought in from a spreadsheet (CSV import) land here as **Submitted**, exactly
   like ones typed into the form.
+
+> **Coming soon:** the answers to your own custom questions inside this panel (today you see
+> the proposal's standard fields there), and a score that is weighted by your rubric and counts
+> only completed reviews — the figure shown now is a plain average of every score recorded so
+> far.
 
 ---
 
@@ -71,7 +76,7 @@ Rounds can be **blind**: evaluators then see the proposal without the speaker's 
 
 Back in **Abstracts**, open a proposal and choose **Accept** or **Decline** (offered on
 proposals that are Submitted or Under review). Accepting does not put anything on the schedule
-yet — that is deliberate, so an acceptance email and a room booking stay separate decisions.
+yet — that is deliberate: deciding and scheduling stay separate steps.
 
 Once a proposal is accepted, the same panel offers **Create session**. That creates
 the confirmed talk: one session per proposal, carrying its title, description, format, and
