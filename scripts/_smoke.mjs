@@ -102,6 +102,11 @@ try {
     fields: [
       { key: "title_note", label: "Talk note", type: "SHORT_TEXT", required: true, sortOrder: 0 },
       { key: "bio", label: "Speaker bio", type: "LONG_TEXT", required: false, sortOrder: 1 },
+      { key: "consent", label: "Consent", type: "CHECKBOX", required: true, sortOrder: 2 },
+      { key: "audience", label: "Audience", type: "SELECT", required: false, options: [{ label: "Beginner", value: "beginner" }, { label: "Advanced", value: "advanced" }], sortOrder: 3 },
+      { key: "topics", label: "Topics", type: "MULTI_SELECT", required: false, options: [{ label: "AI", value: "ai" }, { label: "Community", value: "community" }], sortOrder: 4 },
+      { key: "rating", label: "Rating", type: "NUMBER", required: false, sortOrder: 5 },
+      { key: "website", label: "Website", type: "URL", required: false, sortOrder: 6 },
     ],
   };
   const form = await j("POST", "/api/cfp/forms", formPayload, admin);
@@ -117,6 +122,56 @@ try {
       JSON.stringify(["AI", "Community", "Systems"]),
   );
 
+  const importPayload = {
+    eventId: SCRATCH_EVENT.id,
+    format: "csv",
+    entity: "abstracts",
+    mappings: [
+      { sourceField: "Title", targetField: "title" },
+      { sourceField: "Body", targetField: "abstract" },
+      { sourceField: "Email", targetField: "speakerEmail" },
+      { sourceField: "Name", targetField: "speakerName" },
+      { sourceField: "Category", targetField: "category" },
+      { sourceField: "Unused", targetField: "formConfigId", fallback: formId },
+      { sourceField: "Title", targetField: "answers.title_note" },
+      { sourceField: "Consent", targetField: "answers.consent" },
+      { sourceField: "Audience", targetField: "answers.audience" },
+      { sourceField: "Topics", targetField: "answers.topics" },
+      { sourceField: "Rating", targetField: "answers.rating" },
+      { sourceField: "Website", targetField: "answers.website" },
+    ],
+    payload: "Title,Body,Email,Name,Category,Consent,Audience,Topics,Rating,Website\nImported Talk,Imported body,imported@scratch.test,Imported Speaker,AI,yes,beginner,ai;community,4.5,https://example.test/imported",
+  };
+  const imported = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import creates completed abstract job",
+    imported.status === 201 &&
+      imported.data?.data?.job?.status === "COMPLETED" &&
+      imported.data?.data?.summary?.created === 1,
+    imported.status,
+  );
+  const importedAgain = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import is idempotent for matching abstract identity",
+    importedAgain.status === 201 && importedAgain.data?.data?.summary?.updated === 1,
+    importedAgain.status,
+  );
+  const importedRecord = await prisma.abstract.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, title: "Imported Talk" },
+    include: { answers: { include: { formField: true } } },
+  });
+  const importedAnswers = Object.fromEntries(
+    (importedRecord?.answers ?? []).map((answer) => [answer.formField.key, answer.value]),
+  );
+  check(
+    "mapped CSV answers are coerced by field type",
+    importedAnswers.consent === true &&
+      importedAnswers.audience === "beginner" &&
+      JSON.stringify(importedAnswers.topics) === JSON.stringify(["ai", "community"]) &&
+      importedAnswers.rating === 4.5 &&
+      importedAnswers.website === "https://example.test/imported",
+  );
+
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My talk", speakers: [{ email: "SPK@x.com", name: "Spk", isPrimary: true }],
@@ -128,7 +183,7 @@ try {
   const sub = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My great talk", abstract: "About stuff",
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
-    answers: { title_note: "hello", bio: "a short bio" }, intent: "submit",
+    answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
   check("valid submit", sub.status === 201 && sub.data?.data?.status === "SUBMITTED", sub.status);
   const abstractId = sub.data?.data?.id;
@@ -228,7 +283,7 @@ try {
   const sub2 = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Second talk", abstract: "More stuff",
     speakers: [{ email: "other@x.com", name: "Other Person", isPrimary: true }],
-    answers: { title_note: "hi" }, intent: "submit",
+    answers: { title_note: "hi", consent: true }, intent: "submit",
   });
   const abstractId2 = sub2.data?.data?.id;
   await j("POST", "/api/evaluations/decisions", { abstractId: abstractId2, decision: "ACCEPTED" }, admin);
@@ -244,7 +299,7 @@ try {
   const sub3 = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Third talk", abstract: "Even more",
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }],
-    answers: { title_note: "hi" }, intent: "submit",
+    answers: { title_note: "hi", consent: true }, intent: "submit",
   });
   const abstractId3 = sub3.data?.data?.id;
   await j("POST", "/api/evaluations/decisions", { abstractId: abstractId3, decision: "ACCEPTED" }, admin);
