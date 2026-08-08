@@ -107,7 +107,7 @@ has no schema-level delivery log.
 Idempotent, deterministic seed for the whole golden path.
 
 ```bash
-npx tsx prisma/seed.ts
+npm run db:seed          # = tsx prisma/seed.ts
 ```
 
 Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
@@ -119,12 +119,9 @@ Persona users are upserted by email so fixed-persona access survives a reseed.
 The speaker persona (`sofia@greenroom.demo`) owns a confirmed session and is at
 3/5 tasks.
 
-> Once the architect wires `package.json`, this is also runnable via
-> `npm run db:seed` / `prisma db seed` (see coordination request).
-
 ## Demo reset
 Two ways to rebuild demo data from a clean state:
-- **Script:** `npx tsx prisma/seed.ts` (server-side, always available to operators).
+- **Script:** `npm run db:seed` (server-side, always available to operators).
 - **Endpoint:** `POST /api/admin/reset` — guarded by INV-RESET-001:
   - environment-gated: refused unless `ALLOW_DEMO_RESET=true`;
   - authorized: requires an **ADMIN** session;
@@ -137,5 +134,9 @@ One-click personas on `/login`:
 - **Evaluator** — Ravi Patel (`ravi@greenroom.demo`)
 - **Speaker** — Sofia Marques (`sofia@greenroom.demo`)
 
-Only these fixed seeded personas can sign in; public CFP submissions do not
-create an authorized portal account.
+`/login` offers only these three buttons — there is no email/password form — and
+a session grants no authority by itself: the role is resolved from the
+`EventMember` row for the signed-in email on every request. Shell users created
+by a public CFP submission (co-speakers keyed by email) have no membership and
+therefore no portal access. See [`LIFECYCLE.md`](LIFECYCLE.md) for what each
+record can do once signed in.
