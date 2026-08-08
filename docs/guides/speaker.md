@@ -90,7 +90,9 @@ else the event has published.
 are contacted by email and do not automatically get an account — ask the programme team to add
 you if you need one.
 
-**I want to withdraw my talk.** Email the programme team; withdrawal is not self-service yet.
+**I want to withdraw my talk.** Ask the programme team and they will withdraw it for you.
+A withdraw button in your portal is on the way; either way, a talk that has already been
+accepted has to be taken off the programme by the team rather than by you.
 
 **Will editing my accepted talk un-accept it?** No. Editing never changes your status or your
 place on the programme.

@@ -87,8 +87,13 @@ The `PATCH` body is a partial update; every key is optional and at least one is 
 (keyed by form-field key; `null` clears an answer). Omitted keys are left untouched, and
 unknown answer keys are ignored.
 
-An edit never changes `status`, `submittedAt`, `decidedAt`, or `submitterId`, and never
+A content edit never changes `status`, `submittedAt`, `decidedAt`, or `submitterId`, and never
 touches the linked `Session` (INV-DOMAIN-001).
+
+**Self-withdraw (W1).** The same `PATCH` accepts `{ "status": "WITHDRAWN" }` — the only status
+a speaker may set, and it must be sent on its own (any other key alongside it is `422`).
+Allowed from `DRAFT`, `SUBMITTED`, and `UNDER_REVIEW`; `ACCEPTED` or any abstract with a
+linked `Session` is refused with `409 WITHDRAW_NOT_ALLOWED`. `decidedAt` stays null.
 
 Status codes:
 
@@ -99,6 +104,7 @@ Status codes:
 | `404 ABSTRACT_NOT_FOUND` | no such abstract in the caller's event (checked before ownership, so it never confirms another event's records) |
 | `409 ABSTRACT_LOCKED` | the abstract is `REJECTED` or `WITHDRAWN` |
 | `409 SPEAKERS_LOCKED` | the roster was changed after the abstract was converted to a session |
+| `409 WITHDRAW_NOT_ALLOWED` | self-withdraw attempted on an accepted or already-converted proposal |
 | `422 VALIDATION_ERROR` | the body itself is malformed (field errors keyed by body path) |
 | `422 FIELD_ERRORS` / `TOO_FEW_SPEAKERS` / `TOO_MANY_SPEAKERS` | the merged result fails the form's own content rules; `FIELD_ERRORS` carries `fieldErrors` keyed by form-field key |
 | `422 NO_PRIMARY_SPEAKER` / `INVALID_CATEGORY` | a supplied roster has no primary speaker, or the category is not in this event |
@@ -106,6 +112,14 @@ Status codes:
 The **public** `POST /api/cfp/submissions` path is unchanged and still refuses any non-`DRAFT`
 abstract with `409 ABSTRACT_LOCKED`: it is unauthenticated, so it must never be a way to
 rewrite a submitted or accepted proposal.
+
+### Related app endpoints worth knowing
+
+- `POST /api/evaluations/decisions` (admin) returns the decided abstract plus an additive
+  `session` key — `{ id, title, isScheduled, scheduledAt, roomName }` or `null` — so the UI
+  can warn when a declined or withdrawn proposal still has a talk on the programme (W2).
+  Nothing is auto-deleted (INV-DOMAIN-001).
+- `POST /api/evaluations/scores` refuses `409 ABSTRACT_WITHDRAWN` once a speaker has withdrawn.
 
 Full transition rules — including which route performs each status change — are in
 [`LIFECYCLE.md`](LIFECYCLE.md).

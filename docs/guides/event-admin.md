@@ -145,11 +145,16 @@ do not need an account — and they update themselves as you change the schedule
 **Can I accept something without any reviews?** Yes — the Accept button is available as soon
 as a proposal is submitted. Scoring is a workflow, not a gate.
 
-**I declined a talk that was already on the schedule — is it off?** No. Declining changes the
-proposal; the confirmed talk stays where it is. Unschedule it in the Agenda builder as well.
+**I declined a talk that was already on the schedule — is it off?** No, and Greenroom says so:
+the proposal shows a **"Still on the programme"** warning with a link to the Agenda builder.
+Nothing is deleted behind your back — take it off the schedule there, or change the decision
+back if it should run after all.
 
-**Someone needs to withdraw a proposal.** There is no self-service withdrawal yet. Decline it,
-or ask your Greenroom administrator to withdraw it for you.
+**Someone wants to withdraw a proposal.** A speaker can withdraw anything that has not been
+accepted yet (their portal button is on the way — until then, do it for them). Once you have
+accepted a talk, only you can take it off the programme: decline it and unschedule it. A
+withdrawn proposal can no longer be scored — a reviewer who tries is told the speaker pulled
+it.
 
 **Can two talks share a room deliberately?** The schedule refuses overlaps by design. If you
 genuinely need one (a demo of the conflict view, for instance), that is an administrator
