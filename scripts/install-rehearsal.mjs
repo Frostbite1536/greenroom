@@ -22,10 +22,17 @@
 import { createHmac } from "node:crypto";
 
 const BASE = (process.argv[2] ?? "http://127.0.0.1:3000").replace(/\/$/, "");
-// Sign with the same secret the target server resolves: its env value when
-// set, otherwise the development fallback from `lib/auth.ts`. Run this script
-// with the same `--env-file` as the server or authenticated steps fail.
-const SECRET = process.env.SESSION_SECRET ?? "greenroom-development-session-secret-not-for-production";
+// Sign with the same secret the target server resolves. This mirrors
+// `getSessionSecret()` in `lib/auth.ts` exactly: a configured secret only
+// counts when trimmed and >= 32 chars, otherwise a dev server falls back to
+// the development secret — so the harness must apply the same rule or a short
+// configured value would make it sign differently from the server. Run this
+// script with the same `--env-file` as the server.
+const configuredSecret = process.env.SESSION_SECRET?.trim();
+const SECRET =
+  configuredSecret && configuredSecret.length >= 32
+    ? configuredSecret
+    : "greenroom-development-session-secret-not-for-production";
 const EVENT = { id: "demo-event", name: "Forward 2026", slug: "forward-2026" };
 
 if (process.env.INSTALL_REHEARSAL_ALLOW_WRITES !== "1") {
