@@ -14,7 +14,7 @@ $tabs = @(
 )
 
 foreach ($tab in $tabs) {
-  $command = "`$env:SPRINT_COORDINATION_DIR='$($env:SPRINT_COORDINATION_DIR)'; pi --name '$($tab.Title)' '$($tab.Prompt)'"
+  $command = "`$env:SPRINT_COORDINATION_DIR='$($env:SPRINT_COORDINATION_DIR)'; pi --provider anthropic --model claude-opus-4-8 --name '$($tab.Title)' '$($tab.Prompt)'"
   Start-Process wt.exe -ArgumentList @("-w", "0", "new-tab", "--title", $tab.Title, "-d", $tab.Dir, "powershell.exe", "-NoExit", "-Command", $command)
 }
 
