@@ -97,6 +97,7 @@ async function resetScratchEvent() {
   console.log(`[smoke] scratch event '${SCRATCH_EVENT.id}' reset (demo-event untouched)`);
 }
 
+let fatalError = false;
 try {
   await resetScratchEvent();
   await prisma.category.createMany({
@@ -375,6 +376,7 @@ try {
 
   console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId }));
 } catch (e) {
+  fatalError = true;
   console.error("SMOKE ERROR", e);
 } finally {
   const failed = results.filter(r => r.ok === false);
@@ -386,5 +388,5 @@ try {
   } else {
     server.kill();
   }
-  setTimeout(() => process.exit(failed.length ? 1 : 0), 1500);
+  setTimeout(() => process.exit(fatalError || failed.length ? 1 : 0), 1500);
 }
