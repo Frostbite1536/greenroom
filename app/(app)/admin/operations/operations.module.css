@@ -1,0 +1,157 @@
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.panelHead h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.panelHead p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.field {
+  display: grid;
+  gap: 5px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+/* Result panels: one consistent shape for every integration outcome. */
+.result {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  display: grid;
+  gap: 6px;
+}
+
+.resultGood { border-left-color: #0f6b41; background: #f4faf6; }
+.resultWarn { border-left-color: #b7791f; background: #fdf8ef; }
+.resultBad { border-left-color: #a3372a; background: #fcf4f2; }
+
+.resultHead {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.resultAdvice,
+.hintText {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.failureList {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.failureList li {
+  font-size: 12px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+
+.failureId {
+  font-weight: 600;
+}
+
+.mappingRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.templateItem {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.templateKey {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.templatePreview {
+  border-top: 1px dashed var(--line);
+  margin-top: 6px;
+  padding-top: 8px;
+  font-size: 12.5px;
+  color: var(--ink);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.templatePreview :global(a) { color: var(--brand-strong); }
+.templatePreview :global(p) { margin: 0 0 8px; }
+
+.recipientList {
+  max-height: 190px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.recipient {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.empty {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+@media (max-width: 1080px) {
+  .grid { grid-template-columns: 1fr; }
+  .mappingRow { grid-template-columns: 1fr; }
+}

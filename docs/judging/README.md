@@ -25,10 +25,11 @@ that brand-new instance.
 
 ## Measured performance and accessibility
 
-[PERFORMANCE.md](PERFORMANCE.md) records Lighthouse performance and
-accessibility scores for the seven hottest routes (96–99 performance, 95–100
-accessibility, zero layout shift, 28–33 ms production TTFB), plus the
-accessibility issues that remain open.
+[PERFORMANCE.md](PERFORMANCE.md) records Lighthouse scores for **ten routes**
+covering all four user journeys: **95–99 performance, 100 accessibility on every
+route**, zero layout shift everywhere, 28–33 ms production TTFB, and every page
+under ~180 KiB. It also lists the four accessibility issues found in the first
+pass and the fix that closed each one.
 
 ## Reproduce
 

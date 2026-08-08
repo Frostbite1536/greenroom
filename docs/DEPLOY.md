@@ -42,6 +42,20 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
 - API-key REST setup, endpoint contracts, and curl examples are in
   [`docs/API.md`](API.md). Do not expose `GREENROOM_API_KEY` to browser code.
 
+## Operator console
+
+`/admin/operations` (ADMIN only) is the operator surface for everything below:
+speaker reminders, mapped CSV import, and the Airtable/Accelevents one-way
+pushes. It adds no privileges — every button is a POST the API already
+authorizes — and it tells the operator **before** they press it whether the
+deployment will really reach the third party, derived from the same rules as
+`resolveAirtableMirrorMode` / `resolveAcceleventsPushMode`. Credentials are
+never sent to the browser; the page passes booleans only.
+
+Both integration runs default to the APIs' own `dryRun: true` — "Check first" is
+the primary action and the live run is a separate button, disabled with the
+reason shown when the deployment cannot write externally.
+
 ## Airtable one-way mirror
 
 `POST /api/comms/airtable/mirror` is ADMIN-only and event-scoped. It returns a
