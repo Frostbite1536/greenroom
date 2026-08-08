@@ -8,6 +8,8 @@ import {
   serializeSpeakerSubmission,
 } from "@/lib/api/speaker-submission";
 import { validateSubmissionContent, type FormSpec } from "@/lib/services/form-validation";
+import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
   isAbstractSpeaker,
   isEditableStatus,
@@ -65,6 +67,7 @@ async function submissionPayload(abstract: LoadedSubmission) {
     where: { eventId: abstract.eventId },
     select: { id: true, name: true },
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+    take: OPERATOR_QUERY_LIMITS.importCategories,
   });
   return {
     submission: serializeSpeakerSubmission(abstract),
@@ -114,19 +117,21 @@ export function PATCH(req: Request, ctx: Params) {
     const form = existing.formConfig;
 
     // A converted abstract's roster was copied onto the confirmed Session, so
-    // changing it here would leave the two records disagreeing.
-    if (patch.speakers) {
-      const current = existing.speakers.map((s) => ({
-        email: s.user.email,
-        isPrimary: s.isPrimary,
-      }));
-      if (existing.session && rosterChanged(current, patch.speakers)) {
-        throw new ApiError(
-          409,
-          "SPEAKERS_LOCKED",
-          "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
-        );
-      }
+    // changing it here would leave the two records disagreeing. This pre-check
+    // gives a fast, friendly failure; the authoritative re-check runs inside
+    // the locked transaction below.
+    const rosterEdit =
+      patch.speakers !== undefined &&
+      rosterChanged(
+        existing.speakers.map((s) => ({ email: s.user.email, isPrimary: s.isPrimary })),
+        patch.speakers,
+      );
+    if (rosterEdit && existing.session) {
+      throw new ApiError(
+        409,
+        "SPEAKERS_LOCKED",
+        "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
+      );
     }
 
     const primary = patch.speakers
@@ -175,6 +180,30 @@ export function PATCH(req: Request, ctx: Params) {
     const fieldByKey = new Map(form.fields.map((f) => [f.key, f]));
 
     const saved = await prisma.$transaction(async (tx) => {
+      // Serialize against concurrent decisions and conversion, then re-read the
+      // row: the pre-transaction status/session checks could otherwise go
+      // stale between read and write (e.g. an admin rejects or converts this
+      // abstract mid-request) and commit an edit against a terminal record.
+      await lockAbstractForWrite(tx, existing.id);
+      const fresh = await tx.abstract.findUniqueOrThrow({
+        where: { id: existing.id },
+        select: { status: true, session: { select: { id: true } } },
+      });
+      if (!isEditableStatus(fresh.status)) {
+        throw new ApiError(
+          409,
+          "ABSTRACT_LOCKED",
+          lockReasonFor(fresh.status) ?? "This submission can no longer be edited.",
+        );
+      }
+      if (rosterEdit && fresh.session) {
+        throw new ApiError(
+          409,
+          "SPEAKERS_LOCKED",
+          "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
+        );
+      }
+
       await tx.abstract.update({
         where: { id: existing.id },
         data: {
