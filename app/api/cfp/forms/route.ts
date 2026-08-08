@@ -128,16 +128,24 @@ export const POST = handle(async (req) => {
     });
   });
 
-  // Two admins creating the same slug concurrently both pass the in-transaction
-  // check and race on the unique index; report that as the same contract error.
+  // Concurrent writes can race past the in-transaction checks onto a unique
+  // index. Classify by the violated constraint: only the FormConfig slug index
+  // is a SLUG_TAKEN contract error; a FormField key race is a concurrent-edit
+  // conflict, not a slug problem.
   let form: Awaited<ReturnType<typeof runWrite>>;
   try {
     form = await runWrite();
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      throw new ApiError(409, "SLUG_TAKEN", "Another form in this event already uses that URL.", {
-        slug: ["This URL is already in use."],
-      });
+      const target = Array.isArray(error.meta?.target)
+        ? (error.meta.target as string[]).join(",")
+        : String(error.meta?.target ?? "");
+      if (target.includes("slug")) {
+        throw new ApiError(409, "SLUG_TAKEN", "Another form in this event already uses that URL.", {
+          slug: ["This URL is already in use."],
+        });
+      }
+      throw new ApiError(409, "CONCURRENT_EDIT", "This form was changed by another request. Reload and try again.");
     }
     throw error;
   }

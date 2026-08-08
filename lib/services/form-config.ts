@@ -1,11 +1,11 @@
 /**
- * Pure helpers for CFP form-config writes and public form resolution.
+ * Pure helpers for CFP form-config writes.
  *
  * These exist so the create-new-form flow (`POST /api/cfp/forms` with no `id`)
  * fails with stable, actionable contract errors instead of leaking a Prisma
- * uniqueness violation as a 500, and so the public `/cfp/:formId` lookup —
- * which accepts either an id or an event-scoped slug — resolves to exactly one
- * form deterministically.
+ * uniqueness violation as a 500. Public `/cfp/:formId` resolution precedence
+ * (exact id, then lowest-id slug match) is enforced by ordered queries in
+ * `app/api/cfp/public/[formId]/route.ts`.
  */
 
 /** Field keys that appear more than once in a form payload, in first-seen order. */
@@ -22,25 +22,3 @@ export function findDuplicateFieldKeys(fields: readonly { key: string }[]): stri
   return duplicates;
 }
 
-export type FormIdentity = { id: string; slug: string };
-
-/**
- * Resolve a public form identifier against candidate rows.
- *
- * `FormConfig.slug` is only unique per event and its allowed character set can
- * also match a generated id, so a raw `OR: [{ id }, { slug }]` lookup is
- * ambiguous across events. Precedence: exact id, then slug ordered by id, so
- * the same URL always resolves to the same form and a slug can never shadow
- * another form's id-based URL.
- */
-export function resolvePublicForm<T extends FormIdentity>(
-  identifier: string,
-  candidates: readonly T[],
-): T | null {
-  const byId = candidates.find((form) => form.id === identifier);
-  if (byId) return byId;
-  const bySlug = candidates
-    .filter((form) => form.slug === identifier)
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return bySlug[0] ?? null;
-}
