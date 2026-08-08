@@ -34,11 +34,22 @@ export function ImportPanel({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
 
+  /** Any failed selection must also drop the previously loaded file: keeping
+   * the old payload behind an error message lets the operator import the
+   * wrong spreadsheet. */
+  function clearLoadedFile() {
+    setFileName(null);
+    setPayload("");
+    setHeaders([]);
+    setMappings([]);
+  }
+
   async function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     setResult(null);
     if (!file) return;
     if (file.size > MAX_UPLOAD_BYTES) {
+      clearLoadedFile();
       setResult({ tone: "bad", headline: "That file is too large.", advice: "Split it into files under 5 MB and import them one at a time." });
       return;
     }
@@ -51,13 +62,7 @@ export function ImportPanel({
       detected = parseCsv(text).headers.filter((header) => header.trim().length > 0);
     } catch (error) {
       console.warn("CSV header parse failed", error);
-      // Drop any previously loaded file too: keeping the old payload while
-      // reporting the new file invalid would let the operator import the
-      // wrong spreadsheet.
-      setFileName(null);
-      setPayload("");
-      setHeaders([]);
-      setMappings([]);
+      clearLoadedFile();
       setResult({ tone: "bad", headline: "That file doesn't look like a valid CSV.", advice: error instanceof Error ? error.message : "Check the file and try again." });
       return;
     }
