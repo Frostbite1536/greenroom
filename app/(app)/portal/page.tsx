@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 
 function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | null, timezone: string): string {
   if (!startsAt || !endsAt) return "Not scheduled yet";
-  const day = startsAt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: timezone });
+  const day = startsAt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: timezone });
   const opts = { hour: "numeric", minute: "2-digit", timeZone: timezone } as const;
-  const window = `${startsAt.toLocaleTimeString(undefined, opts)} – ${endsAt.toLocaleTimeString(undefined, opts)}`;
+  const window = `${startsAt.toLocaleTimeString("en-US", opts)} – ${endsAt.toLocaleTimeString("en-US", opts)}`;
   return room ? `${day}, ${window} · ${room}` : `${day}, ${window}`;
 }
 
