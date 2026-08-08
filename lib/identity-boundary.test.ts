@@ -10,6 +10,13 @@ test("public CFP creates speaker data without granting membership or overwriting
   assert.doesNotMatch(submissionRoute, /eventMember|ensureSpeakerMemberships/);
 });
 
+test("event-scoped CSV import cannot overwrite a shared user identity", () => {
+  const importRoute = source("app/api/integrations/import/route.ts");
+  assert.match(importRoute, /tx\.user\.upsert\([\s\S]*?update:\s*\{\}/);
+  assert.doesNotMatch(importRoute, /update:\s*\{\s*name:\s*item\.speakerName/);
+  assert.match(importRoute, /create:\s*\{\s*email:\s*item\.speakerEmail,\s*name:\s*item\.speakerName\s*\}/);
+});
+
 test("login exposes only fixed demo persona actions", () => {
   const actions = source("app/login/actions.ts");
   const page = source("app/login/page.tsx");

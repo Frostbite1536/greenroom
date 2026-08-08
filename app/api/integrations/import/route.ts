@@ -214,7 +214,10 @@ export const POST = handle(async (req) => {
         await lockAbstractImportIdentity(tx, item, ctx.eventId);
         const speaker = await tx.user.upsert({
           where: { email: item.speakerEmail },
-          update: { name: item.speakerName },
+          // Email identifies a global User shared across events. An event-scoped
+          // import may create a missing shell identity, but it must never let
+          // one event administrator rewrite another event's speaker name.
+          update: {},
           create: { email: item.speakerEmail, name: item.speakerName },
           select: { id: true },
         });
