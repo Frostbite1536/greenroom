@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { FileUp, Plus, X } from "lucide-react";
 import { describeImportError, describeImportSummary, IMPORT_TARGETS } from "@/lib/operations/status";
+import { parseCsv } from "@/lib/integrations/csv-import";
 import styles from "./operations.module.css";
 
 type Mapping = { sourceField: string; targetField: string; fallback?: string };
@@ -42,8 +43,17 @@ export function ImportPanel({
       return;
     }
     const text = await file.text();
-    const firstLine = text.split(/\r?\n/)[0] ?? "";
-    const detected = firstLine.split(",").map((header) => header.trim().replace(/^"|"$/g, "")).filter(Boolean);
+    // Use the real CSV parser for the header row — a naive comma split breaks
+    // quoted headers containing commas and desyncs the mapping controls from
+    // what the server will actually parse.
+    let detected: string[];
+    try {
+      detected = parseCsv(text).headers.filter((header) => header.trim().length > 0);
+    } catch (error) {
+      console.warn("CSV header parse failed", error);
+      setResult({ tone: "bad", headline: "That file doesn't look like a valid CSV.", advice: error instanceof Error ? error.message : "Check the file and try again." });
+      return;
+    }
     setFileName(file.name);
     setPayload(text);
     setHeaders(detected);

@@ -3,7 +3,7 @@ import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { getApiContext } from "@/lib/api/context";
 import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
-import { useMockIntegrations } from "@/lib/env";
+import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { integrationStatus } from "@/lib/operations/status";
 import { RemindersPanel } from "./reminders-panel";
@@ -79,7 +79,9 @@ export default async function AdminOperationsPage() {
   const email = integrationStatus({
     name: "Email",
     mocked,
-    configured: Boolean(process.env.RESEND_API_KEY),
+    // Mirror the reminders route exactly: a key without a valid sender address
+    // still dispatches in mock mode, so "connected" requires both.
+    configured: Boolean(process.env.RESEND_API_KEY) && Boolean(getResendFrom()),
     action: "deliver real email",
   });
 
