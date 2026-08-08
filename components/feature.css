@@ -239,6 +239,35 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .seg button:first-child { border-left: none; }
 .seg button.active { background: var(--soft); color: var(--brand-strong); font-weight: 600; }
 
+/* ---- Evaluation setup (admin) ---- */
+.setup-section { padding: 18px 20px; display: grid; gap: 14px; }
+.setup-head h2 { margin: 0 0 4px; font-size: 16px; }
+.setup-head h3 { margin: 0; font-size: 13px; }
+.setup-note { padding: 10px 12px; border-radius: 8px; background: #fdf3e0; border: 1px solid #eed9b0; color: #8a5a12; }
+.setup-ok { color: #0f6b41; }
+
+.round-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.round-card {
+  text-align: left; border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  padding: 12px 14px; cursor: pointer; display: grid; gap: 3px; font: inherit; color: var(--ink);
+}
+.round-card:hover { border-color: var(--brand); }
+.round-card.active { border-color: var(--brand); background: var(--soft); }
+.round-card:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+.assign-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(260px, 1fr); gap: 20px; align-items: start; }
+.assign-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.pick-list { border: 1px solid var(--line); border-radius: 8px; max-height: 340px; overflow-y: auto; }
+.pick-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.pick-row:last-child { border-bottom: none; }
+.pick-row:hover { background: #f7faf9; }
+.pick-row input { margin-top: 3px; flex-shrink: 0; }
+.pick-row .cell-title, .pick-row .cell-sub { display: block; }
+.pick-row .pill { flex-shrink: 0; }
+
+.criterion-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 84px 84px auto; gap: 8px; align-items: end; margin-bottom: 10px; }
+
+
 /* ---- Modal dialog ---- */
 .app-dialog {
   width: min(460px, calc(100vw - 32px));
@@ -250,6 +279,7 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   box-shadow: 0 18px 48px rgba(16, 24, 22, 0.22);
 }
 .app-dialog::backdrop { background: rgba(16, 24, 22, 0.42); }
+.app-dialog.round-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
 .app-dialog .conflict-banner { font-size: 12.5px; }
 
@@ -286,6 +316,8 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   .speaker-search { min-width: 0; }
   .speaker-grid { grid-template-columns: 1fr; }
   .speaker-card { flex-direction: column; gap: 12px; }
+  .assign-grid { grid-template-columns: 1fr; }
+  .criterion-row { grid-template-columns: 1fr 1fr; }
   .embed-snippet { padding: 16px; }
   .embed-snippet-field .row { flex-direction: column; align-items: stretch; }
   .speaker-avatar { width: 48px; height: 48px; flex-basis: 48px; font-size: 14px; }

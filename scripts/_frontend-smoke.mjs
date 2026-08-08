@@ -15,6 +15,10 @@ import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
+// A second, deliberately empty event: the fresh-event empty states are the
+// first thing a judge driving the product live will see, so they are asserted
+// rather than assumed.
+const FRESH_EVENT_ID = "scratch-frontend-fresh";
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 
@@ -49,7 +53,7 @@ async function req(method, path, body, sess) {
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
-  await prisma.event.deleteMany({ where: { id: EVENT_ID } });
+  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -175,6 +179,17 @@ async function resetScratch() {
     },
   });
 
+  // A brand-new event: an admin, and nothing else. Drives the F2 empty states.
+  await prisma.event.create({
+    data: {
+      id: FRESH_EVENT_ID,
+      name: "Scratch Fresh",
+      slug: FRESH_EVENT_ID,
+      timezone: "America/Los_Angeles",
+      memberships: { create: [{ userId: users.admin, role: "ADMIN" }] },
+    },
+  });
+
   return { event, form, abstract, acceptedAbstract, plan, sessionA, sessionB, roomA, roomB, track, category, users, dayKey };
 }
 
@@ -216,7 +231,7 @@ let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
-      await prisma.event.deleteMany({ where: { id: EVENT_ID } });
+      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -602,6 +617,69 @@ try {
     && !evaluatorNav.text.includes("/admin/speakers"));
   check("evaluator nav keeps evaluations + abstracts",
     evaluatorNav.text.includes("/admin/evaluations") && evaluatorNav.text.includes("/admin/abstracts"));
+
+  // --- F2: admin evaluation setup panel -----------------------------------
+  const setupPage = await req("GET", "/admin/evaluations", null, admin);
+  check("admin evaluations page → 200", setupPage.status === 200, `got ${setupPage.status}`);
+  check("admin sees the round list", setupPage.text.includes("Review rounds"));
+  check("admin sees the assignment panel", setupPage.text.includes("Assign proposals to reviewers"));
+  check("admin sees review coverage", setupPage.text.includes("Review coverage"));
+  check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
+
+  // Role-aware: an evaluator must get the scoring queue, never the setup panel.
+  const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator does NOT see the setup panel",
+    !evaluatorEval.text.includes("Assign proposals to reviewers")
+    && !evaluatorEval.text.includes("Review coverage"));
+
+  // Fresh event: the empty states must tell the admin what to do next.
+  const freshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
+  const freshPage = await req("GET", "/admin/evaluations", null, freshAdmin);
+  check("fresh event evaluations page → 200", freshPage.status === 200, `got ${freshPage.status}`);
+  check("fresh event offers an actionable first step",
+    freshPage.text.includes("No review round yet") && freshPage.text.includes("Create the first round"));
+  check("fresh event does not show a coverage table", !freshPage.text.includes("Review coverage"));
+
+  // The two mutations the panel drives, against the real routes.
+  const newRound = await req("POST", "/api/evaluations/plans", {
+    eventId: FRESH_EVENT_ID,
+    name: "Round 1 — Program Committee",
+    ordinal: 1,
+    isBlind: false,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1.5 }],
+  }, freshAdmin);
+  check("setup panel can create a round → 201", newRound.status === 201,
+    `${newRound.status} ${JSON.stringify(newRound.data?.error ?? "")}`);
+
+  const freshAfterRound = await req("GET", "/admin/evaluations", null, freshAdmin);
+  check("a fresh event with a round but no proposals says so",
+    freshAfterRound.text.includes("No proposals to review yet"));
+
+  // Assigning must move SUBMITTED proposals to UNDER_REVIEW, with the team key
+  // routed from the abstract's category (teamKey omitted on purpose).
+  const submittedId = submit.data?.data?.id;
+  await req("POST", "/api/evaluations/decisions", { abstractId: submittedId, decision: "ACCEPTED" }, admin);
+  const freshAssign = await req("POST", "/api/evaluations/assignments", {
+    planId: fx.plan.id,
+    abstractIds: [fx.acceptedAbstract.id],
+    evaluatorIds: [fx.users.evaluator],
+  }, admin);
+  check("setup panel can assign reviewers → 201", freshAssign.status === 201,
+    `${freshAssign.status} ${JSON.stringify(freshAssign.data?.error ?? "")}`);
+  check("assignment inherits the category's review team",
+    (await prisma.reviewAssignment.findFirst({
+      where: { planId: fx.plan.id, abstractId: fx.acceptedAbstract.id },
+      select: { teamKey: true },
+    }))?.teamKey === "team-ai");
+  check("re-assigning the same pair is idempotent",
+    (await req("POST", "/api/evaluations/assignments", {
+      planId: fx.plan.id,
+      abstractIds: [fx.acceptedAbstract.id],
+      evaluatorIds: [fx.users.evaluator],
+    }, admin)).status === 201
+    && (await prisma.reviewAssignment.count({
+      where: { planId: fx.plan.id, abstractId: fx.acceptedAbstract.id },
+    })) === 1);
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
