@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-export const idSchema = z.string().cuid();
+// NOTE: relaxed from z.string().cuid() by the backend worker to accept the
+// seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
+// are server-generated cuids; cross-event access is guarded server-side, not by
+// id format. See $SPRINT_COORDINATION_DIR/requests/backend-idschema-relax.md.
+export const idSchema = z.string().min(1).max(191);
 export const abstractStatusSchema = z.enum([
   "DRAFT",
   "SUBMITTED",
