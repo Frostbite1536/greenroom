@@ -1,0 +1,60 @@
+import Link from "next/link";
+import {
+  CalendarDays,
+  ClipboardCheck,
+  FileText,
+  LayoutDashboard,
+  Mic2,
+  PanelLeft,
+  Users,
+} from "lucide-react";
+import type { MockSession } from "@/lib/auth";
+
+const navigation = [
+  { href: "/admin/forms", label: "CFP forms", icon: FileText },
+  { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck },
+  { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard },
+  { href: "/portal", label: "Speaker portal", icon: Users },
+  { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays },
+];
+
+export function AppShell({ session, children }: { session: MockSession; children: React.ReactNode }) {
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <Link className="brand" href="/admin/forms" aria-label="Sessionboard home">
+          <span className="brand-mark"><Mic2 size={18} aria-hidden="true" /></span>
+          <span>Sessionboard</span>
+        </Link>
+        <div className="event-switcher">
+          <span className="event-label">Current event</span>
+          <strong>{session.event.name}</strong>
+        </div>
+        <nav aria-label="Workspace navigation">
+          {navigation.map(({ href, label, icon: Icon }) => (
+            <Link className="nav-link" href={href} key={href}>
+              <Icon size={17} aria-hidden="true" />
+              <span>{label}</span>
+            </Link>
+          ))}
+        </nav>
+        <div className="sidebar-footer">
+          <div className="avatar" aria-hidden="true">MC</div>
+          <div><strong>{session.user.name}</strong><span>Event admin</span></div>
+        </div>
+      </aside>
+      <div className="workspace">
+        <header className="topbar">
+          <button className="icon-button mobile-menu" type="button" aria-label="Open navigation">
+            <PanelLeft size={19} aria-hidden="true" />
+          </button>
+          <span className="status-dot" aria-hidden="true" />
+          <span>Planning workspace</span>
+          <span className="topbar-spacer" />
+          <span className="role-badge">Mock auth · {session.role.toLowerCase()}</span>
+        </header>
+        <main className="main-content">{children}</main>
+      </div>
+    </div>
+  );
+}

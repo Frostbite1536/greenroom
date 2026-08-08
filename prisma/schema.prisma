@@ -1,0 +1,470 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  EVALUATOR
+  SPEAKER
+}
+
+enum AbstractStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum FormFieldType {
+  SHORT_TEXT
+  LONG_TEXT
+  NUMBER
+  SELECT
+  MULTI_SELECT
+  CHECKBOX
+  URL
+}
+
+enum EvaluationAssignmentStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  DECLINED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  WAIVED
+}
+
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Event {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  timezone  String    @default("UTC")
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  memberships     EventMember[]
+  forms           FormConfig[]
+  abstracts       Abstract[]
+  sessions        Session[]
+  evaluationPlans EvaluationPlan[]
+  tracks          Track[]
+  rooms           Room[]
+  scheduleSlots   ScheduleSlot[]
+  onboardingTasks OnboardingTask[]
+  resources       ResourceWiki[]
+  emailTemplates  EmailTemplate[]
+  imports         ImportJob[]
+
+  @@index([startsAt])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  avatarUrl String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships        EventMember[]
+  speakerProfile     SpeakerProfile?
+  submittedAbstracts Abstract[]         @relation("AbstractSubmitter")
+  abstractSpeakers   AbstractSpeaker[]
+  sessionSpeakers    SessionSpeaker[]
+  reviewAssignments  ReviewAssignment[]
+  reviewScores       ReviewScore[]
+  taskAssignments    SpeakerTask[]
+  sentEmails         EmailDispatch[]    @relation("EmailSender")
+}
+
+model EventMember {
+  eventId   String
+  userId    String
+  role      UserRole
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@index([eventId, role])
+}
+
+model SpeakerProfile {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  bio          String?
+  company      String?
+  jobTitle     String?
+  headshotUrl  String?
+  slideDeckUrl String?
+  socialLinks  Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model FormConfig {
+  id              String    @id @default(cuid())
+  eventId         String
+  name            String
+  slug            String
+  welcomeText     String?
+  thankYouText    String?
+  opensAt         DateTime?
+  closesAt        DateTime?
+  submissionLimit Int?
+  minSpeakers     Int       @default(1)
+  maxSpeakers     Int       @default(1)
+  maxBioLength    Int       @default(1000)
+  published       Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  event     Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  fields    FormField[]
+  abstracts Abstract[]
+
+  @@unique([eventId, slug])
+  @@index([eventId, published])
+}
+
+model FormField {
+  id               String        @id @default(cuid())
+  formConfigId     String
+  key              String
+  label            String
+  helpText         String?
+  type             FormFieldType
+  required         Boolean       @default(false)
+  options          Json?
+  conditionalLogic Json?
+  sortOrder        Int           @default(0)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  formConfig FormConfig   @relation(fields: [formConfigId], references: [id], onDelete: Cascade)
+  answers    FormAnswer[]
+
+  @@unique([formConfigId, key])
+  @@index([formConfigId, sortOrder])
+}
+
+model Abstract {
+  id              String         @id @default(cuid())
+  eventId         String
+  formConfigId    String
+  submitterId     String
+  title           String
+  abstract        String?
+  format          String?
+  durationMinutes Int?
+  category        String?
+  status          AbstractStatus @default(DRAFT)
+  submittedAt     DateTime?
+  decidedAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  event             Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  formConfig        FormConfig         @relation(fields: [formConfigId], references: [id], onDelete: Restrict)
+  submitter         User               @relation("AbstractSubmitter", fields: [submitterId], references: [id], onDelete: Restrict)
+  speakers          AbstractSpeaker[]
+  answers           FormAnswer[]
+  reviewAssignments ReviewAssignment[]
+  reviewScores      ReviewScore[]
+  session           Session?
+
+  @@index([eventId, status])
+  @@index([formConfigId, status])
+  @@index([submitterId])
+}
+
+model AbstractSpeaker {
+  abstractId String
+  userId     String
+  isPrimary  Boolean @default(false)
+
+  abstract Abstract @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([abstractId, userId])
+  @@index([userId])
+}
+
+model FormAnswer {
+  id          String   @id @default(cuid())
+  abstractId  String
+  formFieldId String
+  value       Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  abstract  Abstract  @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  formField FormField @relation(fields: [formFieldId], references: [id], onDelete: Cascade)
+
+  @@unique([abstractId, formFieldId])
+  @@index([formFieldId])
+}
+
+model EvaluationPlan {
+  id        String    @id @default(cuid())
+  eventId   String
+  name      String
+  ordinal   Int
+  isBlind   Boolean   @default(false)
+  startsAt  DateTime?
+  endsAt    DateTime?
+  rubric    Json
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  event       Event              @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  assignments ReviewAssignment[]
+  scores      ReviewScore[]
+
+  @@unique([eventId, ordinal])
+}
+
+model ReviewAssignment {
+  id          String                     @id @default(cuid())
+  planId      String
+  abstractId  String
+  evaluatorId String
+  teamKey     String?
+  status      EvaluationAssignmentStatus @default(ASSIGNED)
+  assignedAt  DateTime                   @default(now())
+  completedAt DateTime?
+
+  plan      EvaluationPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  abstract  Abstract       @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  evaluator User           @relation(fields: [evaluatorId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, abstractId, evaluatorId])
+  @@index([evaluatorId, status])
+  @@index([abstractId, planId])
+  @@index([planId, teamKey])
+}
+
+model ReviewScore {
+  id          String   @id @default(cuid())
+  planId      String
+  abstractId  String
+  evaluatorId String
+  rubricKey   String
+  score       Decimal  @db.Decimal(5, 2)
+  comment     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  plan      EvaluationPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  abstract  Abstract       @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  evaluator User           @relation(fields: [evaluatorId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, abstractId, evaluatorId, rubricKey])
+  @@index([abstractId, planId])
+}
+
+model Session {
+  id               String   @id @default(cuid())
+  eventId          String
+  sourceAbstractId String?  @unique
+  title            String
+  description      String?
+  format           String?
+  durationMinutes  Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  event          Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  sourceAbstract Abstract?        @relation(fields: [sourceAbstractId], references: [id], onDelete: SetNull)
+  speakers       SessionSpeaker[]
+  scheduleSlot   ScheduleSlot?
+
+  @@index([eventId])
+}
+
+model SessionSpeaker {
+  sessionId String
+  userId    String
+  isPrimary Boolean @default(false)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([sessionId, userId])
+  @@index([userId])
+}
+
+model Track {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  color     String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  event Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  slots ScheduleSlot[]
+
+  @@unique([eventId, name])
+  @@index([eventId, sortOrder])
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  eventId   String
+  name      String
+  capacity  Int?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  event Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  slots ScheduleSlot[]
+
+  @@unique([eventId, name])
+  @@index([eventId, sortOrder])
+}
+
+model ScheduleSlot {
+  id        String   @id @default(cuid())
+  eventId   String
+  sessionId String   @unique
+  roomId    String
+  trackId   String?
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  room    Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  track   Track?  @relation(fields: [trackId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, startsAt, endsAt])
+  @@index([roomId, startsAt, endsAt])
+}
+
+model OnboardingTask {
+  id          String    @id @default(cuid())
+  eventId     String
+  title       String
+  description String?
+  dueAt       DateTime?
+  required    Boolean   @default(true)
+  sortOrder   Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  assignments SpeakerTask[]
+
+  @@unique([eventId, title])
+  @@index([eventId, sortOrder])
+}
+
+model SpeakerTask {
+  taskId      String
+  userId      String
+  status      TaskStatus @default(TODO)
+  artifactUrl String?
+  notes       String?
+  completedAt DateTime?
+  updatedAt   DateTime   @updatedAt
+
+  task OnboardingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId, status])
+}
+
+model ResourceWiki {
+  id          String   @id @default(cuid())
+  eventId     String
+  slug        String
+  title       String
+  summary     String?
+  htmlContent String
+  published   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, slug])
+  @@index([eventId, published])
+}
+
+model EmailTemplate {
+  id        String   @id @default(cuid())
+  eventId   String
+  key       String
+  subject   String
+  htmlBody  String
+  trigger   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  dispatches EmailDispatch[]
+
+  @@unique([eventId, key])
+}
+
+model EmailDispatch {
+  id         String    @id @default(cuid())
+  templateId String
+  senderId   String?
+  recipient  String
+  variables  Json?
+  status     String    @default("queued")
+  providerId String?
+  error      String?
+  createdAt  DateTime  @default(now())
+  sentAt     DateTime?
+
+  template EmailTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  sender   User?         @relation("EmailSender", fields: [senderId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+}
+
+model ImportJob {
+  id           String       @id @default(cuid())
+  eventId      String
+  source       String
+  status       ImportStatus @default(PENDING)
+  fieldMapping Json
+  summary      Json?
+  error        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, status])
+}
