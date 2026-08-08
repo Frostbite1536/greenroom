@@ -1,4 +1,4 @@
-import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 /**
  * Deterministic, idempotent demo seed for Greenroom.
@@ -197,17 +197,24 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   ];
   await db.eventMember.createMany({ data: memberships, skipDuplicates: true });
 
-  // --- 5. Speaker profiles (upsert; global) ----------------------------------
+  // --- 5. Speaker profiles ----------------------------------------------------
+  // `SpeakerProfile` is global (keyed by userId), so it is not covered by the
+  // event-scoped wipe above. Reset the demo fields explicitly on update as well
+  // as create, otherwise edits made through the portal survive a reseed and the
+  // demo drifts (observed: a smoke-test job title persisting across seeds).
   for (const s of speakerUsers) {
+    const demoProfile = {
+      bio: `${s.name} is a practitioner and frequent conference speaker.`,
+      company: "Acme Labs",
+      jobTitle: "Staff Engineer",
+      headshotUrl: null,
+      slideDeckUrl: null,
+      socialLinks: Prisma.DbNull,
+    };
     await db.speakerProfile.upsert({
       where: { userId: s.id },
-      update: {},
-      create: {
-        userId: s.id,
-        bio: `${s.name} is a practitioner and frequent conference speaker.`,
-        company: "Acme Labs",
-        jobTitle: "Staff Engineer",
-      },
+      update: demoProfile,
+      create: { userId: s.id, ...demoProfile },
     });
   }
 

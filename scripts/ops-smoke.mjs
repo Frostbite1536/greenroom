@@ -22,14 +22,23 @@ function check(name, pass, detail = "") {
   console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
 }
 
+/**
+ * Single source of truth for persona identities.
+ *
+ * These MUST match lib/auth.ts DEMO_PERSONAS and lib/demo/seed.ts PERSONAS.
+ * The Greenroom rebrand previously changed these emails and this file was
+ * updated in one place but not another, so the suite silently queried an
+ * orphaned pre-rebrand user. Keep every reference pointed at this object.
+ */
+const PERSONAS = {
+  ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
+  SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
+};
+
 /** Mirrors lib/auth.ts encodeSession (base64url JSON). */
 function cookieFor(role) {
-  const personas = {
-    ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
-    SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
-  };
   const session = {
-    user: personas[role],
+    user: PERSONAS[role],
     event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
     role,
   };
@@ -159,12 +168,19 @@ const { PrismaClient } = await import("@prisma/client");
 const prisma = new PrismaClient();
 let sofiaTaskId;
 try {
-  const sofia = await prisma.user.findUnique({ where: { email: "sofia@sessionboard.demo" } });
+  const sofia = await prisma.user.findUnique({ where: { email: PERSONAS.SPEAKER.email } });
+  if (!sofia) throw new Error(`Speaker persona ${PERSONAS.SPEAKER.email} not found — run the seed first.`);
   const assignment = await prisma.speakerTask.findFirst({
     where: { userId: sofia.id },
     select: { taskId: true },
     orderBy: { taskId: "asc" },
   });
+  if (!assignment) {
+    throw new Error(
+      `Speaker persona ${PERSONAS.SPEAKER.email} (id ${sofia.id}) has no onboarding tasks. ` +
+        `The seed should assign tasks to every confirmed session speaker — reseed and retry.`,
+    );
+  }
   sofiaTaskId = assignment.taskId;
 } finally {
   await prisma.$disconnect();
