@@ -10,26 +10,33 @@ type Params = { params: Promise<{ formId: string }> };
  * GET /api/cfp/public/:formId — public form for the CFP renderer. Works with a
  * null session. Only published forms are exposed; window state is derived
  * server-side (INV-FORM-001). Accepts either a form id or an event-scoped slug.
+ * Slugs are only unique per event, so resolution is two deterministic queries
+ * (exact id first, then lowest-id slug match) with no candidate cap that could
+ * exclude the correct row.
  */
 export function GET(_req: Request, ctx: Params) {
   return handle(async () => {
     const { formId } = await ctx.params;
-    const form = await prisma.formConfig.findFirst({
-      where: { published: true, OR: [{ id: formId }, { slug: formId }] },
-      include: {
-        fields: true,
-        event: {
-          select: {
-            categories: {
-              select: { id: true, name: true },
-              // `sortOrder` is the product-defined ordering; the remaining
-              // keys make ties deterministic for public clients.
-              orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
-            },
+    const include = {
+      fields: true,
+      event: {
+        select: {
+          categories: {
+            select: { id: true, name: true },
+            // `sortOrder` is the product-defined ordering; the remaining
+            // keys make ties deterministic for public clients.
+            orderBy: [{ sortOrder: "asc" as const }, { name: "asc" as const }, { id: "asc" as const }],
           },
         },
       },
-    });
+    };
+    const form =
+      (await prisma.formConfig.findFirst({ where: { published: true, id: formId }, include })) ??
+      (await prisma.formConfig.findFirst({
+        where: { published: true, slug: formId },
+        orderBy: { id: "asc" },
+        include,
+      }));
     if (!form) {
       throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
     }

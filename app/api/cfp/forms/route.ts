@@ -1,9 +1,10 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formConfigInputSchema } from "@/types/api";
 import { requireContext, assertEventScope } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeForm } from "@/lib/api/form-serialize";
+import { findDuplicateFieldKeys } from "@/lib/services/form-config";
 
 export const dynamic = "force-dynamic";
 
@@ -26,11 +27,24 @@ export const GET = handle(async () => {
 /**
  * POST /api/cfp/forms — create or update a form config with its fields (admin).
  * Fields are reconciled to match the payload: upsert incoming, delete removed.
+ *
+ * Omitting `id` creates a new form. Slugs are unique per event and the public
+ * `/cfp/:formId` route accepts an id or a slug, so both collisions are refused
+ * here with `SLUG_TAKEN` rather than surfacing as an unhandled write error.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, formConfigInputSchema);
   assertEventScope(ctx, input.eventId);
+
+  // Reconciliation upserts by key, so duplicates would silently collapse into
+  // one field and drop the operator's edit. Refuse at the boundary instead.
+  const duplicateKeys = findDuplicateFieldKeys(input.fields);
+  if (duplicateKeys.length > 0) {
+    throw new ApiError(422, "VALIDATION_ERROR", "Request validation failed.", {
+      fields: duplicateKeys.map((key) => `Duplicate field key: ${key}`),
+    });
+  }
 
   const data = {
     name: input.name,
@@ -46,12 +60,38 @@ export const POST = handle(async (req) => {
     published: input.published,
   } satisfies Prisma.FormConfigUncheckedUpdateInput;
 
-  const form = await prisma.$transaction(async (tx) => {
+  const runWrite = () => prisma.$transaction(async (tx) => {
     if (input.id) {
       const existing = await tx.formConfig.findUnique({ where: { id: input.id } });
       if (!existing || existing.eventId !== ctx.eventId) {
         throw new ApiError(404, "FORM_NOT_FOUND", "Form not found.");
       }
+    }
+
+    const slugTaken = await tx.formConfig.findFirst({
+      where: {
+        eventId: ctx.eventId,
+        slug: input.slug,
+        ...(input.id ? { id: { not: input.id } } : {}),
+      },
+      select: { id: true },
+    });
+    if (slugTaken) {
+      throw new ApiError(409, "SLUG_TAKEN", "Another form in this event already uses that URL.", {
+        slug: ["This URL is already in use."],
+      });
+    }
+
+    // A slug equal to some other form's id would shadow that form's public
+    // id-based URL (INV-FORM-001: public resolution must be unambiguous).
+    const shadowsFormId = await tx.formConfig.findFirst({
+      where: { id: input.slug, ...(input.id ? { NOT: { id: input.id } } : {}) },
+      select: { id: true },
+    });
+    if (shadowsFormId) {
+      throw new ApiError(409, "SLUG_TAKEN", "That URL is reserved by another form.", {
+        slug: ["This URL is already in use."],
+      });
     }
 
     const saved = await tx.formConfig.upsert({
@@ -87,6 +127,28 @@ export const POST = handle(async (req) => {
       include: { fields: true },
     });
   });
+
+  // Concurrent writes can race past the in-transaction checks onto a unique
+  // index. Classify by the violated constraint: only the FormConfig slug index
+  // is a SLUG_TAKEN contract error; a FormField key race is a concurrent-edit
+  // conflict, not a slug problem.
+  let form: Awaited<ReturnType<typeof runWrite>>;
+  try {
+    form = await runWrite();
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const target = Array.isArray(error.meta?.target)
+        ? (error.meta.target as string[]).join(",")
+        : String(error.meta?.target ?? "");
+      if (target.includes("slug")) {
+        throw new ApiError(409, "SLUG_TAKEN", "Another form in this event already uses that URL.", {
+          slug: ["This URL is already in use."],
+        });
+      }
+      throw new ApiError(409, "CONCURRENT_EDIT", "This form was changed by another request. Reload and try again.");
+    }
+    throw error;
+  }
 
   return ok(serializeForm(form), input.id ? 200 : 201);
 });
