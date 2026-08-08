@@ -11,7 +11,7 @@ event's slug or id. Unknown events return `404 EVENT_NOT_FOUND`.
 
 ```bash
 export BASE_URL="https://your-app.example"
-export GREENROOM_API_KEY="your-server-api-key"
+export GREENROOM_API_KEY="replace-with-at-least-32-random-characters"
 
 curl -H "Authorization: Bearer $GREENROOM_API_KEY" \
   "$BASE_URL/api/v1/submissions?event=forward-2026&limit=50&offset=0"
