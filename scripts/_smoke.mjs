@@ -339,6 +339,66 @@ try {
   check("B2 a checkbox answered with a string is refused",
     b2WrongType.status === 422 && !!b2WrongType.data?.error?.fieldErrors?.consent, b2WrongType.data?.error?.code);
 
+  // 2c. B5 — form edits must not silently delete submitted answers (audit2#1).
+  // At this point b2Hidden/b2Answered have answered title_note, consent and audience.
+  const b5Relabel = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "title_note" ? { ...f, label: "Talk note (reworded)", helpText: "Say more" } : f),
+  }, admin);
+  check("B5 rewording an answered question is still allowed", b5Relabel.status === 200, b5Relabel.status);
+
+  const b5Remove = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId, fields: formPayload.fields.filter((f) => f.key !== "title_note"),
+  }, admin);
+  check("B5 deleting an answered question is refused (409 FIELD_IN_USE)",
+    b5Remove.status === 409 && b5Remove.data?.error?.code === "FIELD_IN_USE" &&
+    !!b5Remove.data?.error?.fieldErrors?.title_note, b5Remove.status);
+  check("B5 the refusal explains itself in plain language",
+    !/[A-Z_]{4,}/.test(b5Remove.data?.error?.fieldErrors?.title_note?.[0] ?? "CODE_LIKE"),
+    b5Remove.data?.error?.fieldErrors?.title_note?.[0]);
+
+  const b5Rename = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "title_note" ? { ...f, key: "talk_note" } : f),
+  }, admin);
+  check("B5 renaming an answered question's key is refused",
+    b5Rename.status === 409 && !!b5Rename.data?.error?.fieldErrors?.title_note, b5Rename.status);
+
+  const b5Retype = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "title_note" ? { ...f, type: "NUMBER" } : f),
+  }, admin);
+  check("B5 changing an answered question's type is refused",
+    b5Retype.status === 409 && !!b5Retype.data?.error?.fieldErrors?.title_note, b5Retype.status);
+
+  const b5DropUsedOption = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "audience" ? { ...f, options: [{ label: "Advanced", value: "advanced" }] } : f),
+  }, admin);
+  check("B5 removing an option someone chose is refused",
+    b5DropUsedOption.status === 409 && !!b5DropUsedOption.data?.error?.fieldErrors?.audience, b5DropUsedOption.status);
+
+  // Adding an option is never destructive, and removing one nobody picked is fine.
+  const withExtraOption = formPayload.fields.map((f) => f.key === "audience"
+    ? { ...f, options: [...f.options, { label: "Expert", value: "expert" }] } : f);
+  const b5AddOption = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId, fields: withExtraOption }, admin);
+  check("B5 adding an option is always allowed", b5AddOption.status === 200, b5AddOption.status);
+  const b5DropUnusedOption = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId }, admin);
+  check("B5 removing an option nobody chose is allowed", b5DropUnusedOption.status === 200, b5DropUnusedOption.status);
+
+  // `bio` has no answers at this point, so it is still free to delete.
+  const b5DropUnanswered = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId, fields: formPayload.fields.filter((f) => f.key !== "bio"),
+  }, admin);
+  check("B5 deleting a question nobody answered is allowed", b5DropUnanswered.status === 200, b5DropUnanswered.status);
+
+  const b5Answers = await prisma.formAnswer.count({ where: { formField: { formConfigId: formId } } });
+  check("B5 no submitted answer was destroyed by any of those edits", b5Answers >= 6, b5Answers);
+
+  // Restore the full field set for the checks that follow.
+  const b5Restore = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId }, admin);
+  check("B5 setup: restore the full field set", b5Restore.status === 200, b5Restore.status);
+
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My talk", speakers: [{ email: "SPK@x.com", name: "Spk", isPrimary: true }],
