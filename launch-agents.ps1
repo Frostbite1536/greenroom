@@ -13,9 +13,20 @@ $tabs = @(
   @{ Title = "Sprint Ops"; Dir = (Join-Path $Root ".worktrees/ops"); Prompt = "You are the ops worker. The Architect has locked the foundation. Read the coordination state, then use /ops." }
 )
 
+$launcherDir = Join-Path $env:TEMP "sprint-launchers"
+New-Item -ItemType Directory -Force -Path $launcherDir | Out-Null
+
 foreach ($tab in $tabs) {
-  $command = "`$env:SPRINT_COORDINATION_DIR='$($env:SPRINT_COORDINATION_DIR)'; pi --provider anthropic --model claude-opus-4-8 --name '$($tab.Title)' '$($tab.Prompt)'"
-  Start-Process wt.exe -ArgumentList @("-w", "0", "new-tab", "--title", $tab.Title, "-d", $tab.Dir, "powershell.exe", "-NoExit", "-Command", $command)
+  $slug = ($tab.Title -replace '[^A-Za-z0-9]', '-').ToLower()
+  $launcher = Join-Path $launcherDir "$slug.ps1"
+  @(
+    "`$env:SPRINT_COORDINATION_DIR = '$($env:SPRINT_COORDINATION_DIR)'"
+    "Set-Location '$($tab.Dir)'"
+    "pi --provider anthropic --model claude-opus-4-8 --name '$($tab.Title)' '$($tab.Prompt)'"
+  ) | Set-Content -Path $launcher -Encoding UTF8
+
+  $wtArgs = "-w 0 new-tab --title `"$($tab.Title)`" -d `"$($tab.Dir)`" powershell.exe -NoExit -ExecutionPolicy Bypass -File `"$launcher`""
+  Start-Process wt.exe -ArgumentList $wtArgs
 }
 
 Write-Host "Launched Pi tabs. Coordination: $env:SPRINT_COORDINATION_DIR"
