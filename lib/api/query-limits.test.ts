@@ -4,6 +4,8 @@ import { ApiError } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 
 test("operator query bounds allow the documented limit and reject the extra sentinel row", () => {
+  assert.equal(OPERATOR_QUERY_LIMITS.sessionSpeakersPerSession, 100);
+  assert.equal(OPERATOR_QUERY_LIMITS.openTasksPerReminderSpeaker, 500);
   assert.doesNotThrow(() =>
     assertEventQueryBound({ length: OPERATOR_QUERY_LIMITS.templates }, OPERATOR_QUERY_LIMITS.templates, "templates"),
   );

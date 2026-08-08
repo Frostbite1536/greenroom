@@ -34,10 +34,13 @@ export const POST = handle(async (req) => {
       select: {
         id: true, sourceAbstractId: true, title: true, description: true, format: true, durationMinutes: true,
         sourceAbstract: { select: { status: true } },
-        speakers: { select: { user: { select: {
-          id: true, name: true, email: true,
-          speakerProfile: { select: { bio: true, company: true, jobTitle: true } },
-        } } } },
+        speakers: {
+          select: { user: { select: {
+            id: true, name: true, email: true,
+            speakerProfile: { select: { bio: true, company: true, jobTitle: true } },
+          } } },
+          take: OPERATOR_QUERY_LIMITS.sessionSpeakersPerSession + 1,
+        },
         scheduleSlot: { select: {
           id: true, startsAt: true, endsAt: true,
           room: { select: { name: true } }, track: { select: { name: true } },
@@ -49,6 +52,13 @@ export const POST = handle(async (req) => {
   ]);
   if (!event) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
   assertEventQueryBound(sessions, OPERATOR_QUERY_LIMITS.acceleventsSessions, "sessions for the Accelevents push");
+  for (const session of sessions) {
+    assertEventQueryBound(
+      session.speakers,
+      OPERATOR_QUERY_LIMITS.sessionSpeakersPerSession,
+      `speakers on session '${session.id}'`,
+    );
+  }
 
   const payload = buildAcceleventsPushPayload(event, sessions.map((session) => ({
     id: session.id,

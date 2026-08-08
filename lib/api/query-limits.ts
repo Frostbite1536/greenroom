@@ -8,7 +8,9 @@ import { ApiError } from "@/lib/api/http";
 export const OPERATOR_QUERY_LIMITS = {
   mirrorSessions: 2_000,
   acceleventsSessions: 2_000,
+  sessionSpeakersPerSession: 100,
   reminderSessionSpeakers: 2_000,
+  openTasksPerReminderSpeaker: 500,
   templates: 500,
   importForms: 250,
   importCategories: 1_000,

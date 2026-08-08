@@ -39,6 +39,7 @@ export const POST = handle(async (req) => {
         user: { select: { id: true, name: true, email: true, taskAssignments: {
           where: { task: { eventId: ctx.eventId }, status: { notIn: ["COMPLETED", "WAIVED"] } },
           select: { taskId: true },
+          take: OPERATOR_QUERY_LIMITS.openTasksPerReminderSpeaker + 1,
         } } },
         session: { select: {
           id: true, title: true, description: true,
@@ -57,6 +58,13 @@ export const POST = handle(async (req) => {
     OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
     "speaker-session rows for reminders",
   );
+  for (const row of rows) {
+    assertEventQueryBound(
+      row.user.taskAssignments,
+      OPERATOR_QUERY_LIMITS.openTasksPerReminderSpeaker,
+      `open tasks for speaker '${row.user.id}'`,
+    );
+  }
 
   const grouped = new Map<string, EligibleSpeaker>();
   for (const row of rows) {
