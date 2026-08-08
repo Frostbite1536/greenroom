@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   EDITABLE_STATUSES,
+  WITHDRAWABLE_STATUSES,
   isAbstractSpeaker,
   isEditableStatus,
   lockReasonFor,
   mergeAnswers,
   rosterChanged,
   speakerSubmissionPatchSchema,
+  withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import {
   validateSubmission,
@@ -189,15 +191,67 @@ test("patch schema allows clearing nullable fields but not the title", () => {
   assert.equal(speakerSubmissionPatchSchema.safeParse({ title: null }).success, false);
 });
 
-test("patch schema cannot smuggle status, submittedAt, or a form change", () => {
+test("patch schema cannot smuggle a status other than WITHDRAWN, or a form change", () => {
+  // WITHDRAWN is the one transition a speaker owns (W1); everything else here
+  // must be stripped or refused.
+  for (const status of ["ACCEPTED", "REJECTED", "UNDER_REVIEW", "SUBMITTED", "DRAFT"]) {
+    assert.equal(
+      speakerSubmissionPatchSchema.safeParse({ status }).success,
+      false,
+      `status ${status} must be refused`,
+    );
+  }
   const parsed = speakerSubmissionPatchSchema.parse({
     title: "Legit edit",
-    status: "ACCEPTED",
     submittedAt: "2020-01-01T00:00:00.000Z",
+    decidedAt: "2020-01-01T00:00:00.000Z",
     formConfigId: "other-form",
     abstractId: "other-abstract",
   });
   assert.deepEqual(Object.keys(parsed), ["title"]);
+});
+
+// --- W1: self-withdraw ------------------------------------------------------
+
+test("withdraw must be sent on its own, not bundled with content edits", () => {
+  assert.equal(speakerSubmissionPatchSchema.safeParse({ status: "WITHDRAWN" }).success, true);
+  const bundled = speakerSubmissionPatchSchema.safeParse({
+    status: "WITHDRAWN",
+    title: "Sneaky rename on the way out",
+  });
+  assert.equal(bundled.success, false);
+});
+
+test("a speaker may withdraw before a decision is made", () => {
+  for (const status of WITHDRAWABLE_STATUSES) {
+    assert.equal(withdrawRefusal(status, false), null, status);
+  }
+});
+
+test("an accepted talk cannot be self-withdrawn - it is the programme team's to remove", () => {
+  const refusal = withdrawRefusal("ACCEPTED", false);
+  assert.equal(refusal?.code, "WITHDRAW_NOT_ALLOWED");
+  assert.ok(refusal && !/[A-Z_]{4,}/.test(refusal.message), "message must be plain language");
+});
+
+test("a converted abstract cannot be self-withdrawn even if its status drifted", () => {
+  // Belt and braces: a confirmed Session must never vanish from the programme
+  // because of a portal click (INV-DOMAIN-001).
+  for (const status of WITHDRAWABLE_STATUSES) {
+    assert.equal(withdrawRefusal(status, true)?.code, "WITHDRAW_NOT_ALLOWED", status);
+  }
+});
+
+test("withdrawing an already-terminal abstract reports the lock, not the withdraw rule", () => {
+  assert.equal(withdrawRefusal("REJECTED", false)?.code, "ABSTRACT_LOCKED");
+  assert.equal(withdrawRefusal("WITHDRAWN", false)?.code, "ABSTRACT_LOCKED");
+});
+
+test("the withdrawable set excludes ACCEPTED and both terminal statuses", () => {
+  assert.deepEqual([...WITHDRAWABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW"]);
+  for (const status of WITHDRAWABLE_STATUSES) {
+    assert.equal(isEditableStatus(status), true, `${status} must also be editable`);
+  }
 });
 
 test("patch schema normalizes co-speaker emails to lowercase", () => {

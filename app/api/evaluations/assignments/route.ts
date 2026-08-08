@@ -43,6 +43,9 @@ export const GET = handle(async (req) => {
         id: a.abstract.id,
         // Blind review hides speaker identity from evaluators.
         title: a.abstract.title,
+        // Speakers can withdraw mid-review (W1); the queue needs to say so
+        // rather than inviting a review that will be refused on submit.
+        status: a.abstract.status,
         category: a.abstract.category
           ? { id: a.abstract.category.id, name: a.abstract.category.name }
           : null,

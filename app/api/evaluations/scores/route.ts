@@ -29,9 +29,19 @@ export const POST = handle(async (req) => {
         evaluatorId: ctx.userId,
       },
     },
+    include: { abstract: { select: { status: true } } },
   });
   if (!assignment) {
     throw new ApiError(403, "NOT_ASSIGNED", "You are not assigned to review this abstract.");
+  }
+  // Speakers can withdraw mid-review (W1), so scoring must stop at that point
+  // rather than recording an opinion on a proposal that no longer stands.
+  if (assignment.abstract.status === "WITHDRAWN") {
+    throw new ApiError(
+      409,
+      "ABSTRACT_WITHDRAWN",
+      "The speaker withdrew this proposal, so it no longer needs a review.",
+    );
   }
 
   const rubric = parseRubric(plan.rubric);

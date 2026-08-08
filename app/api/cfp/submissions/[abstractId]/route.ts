@@ -17,6 +17,7 @@ import {
   mergeAnswers,
   rosterChanged,
   speakerSubmissionPatchSchema,
+  withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import type { FormAnswerValue } from "@/lib/services/types";
 
@@ -98,6 +99,8 @@ export function GET(req: Request, ctx: Params) {
  * - Content rules reuse the public submission validator verbatim
  *   (INV-FORM-001), minus the window gate — edit-lock windows are explicitly
  *   not used, and accepted speakers edit after the CFP has closed.
+ * - `{ "status": "WITHDRAWN" }` is the one status transition a speaker owns
+ *   (W1). It must be sent on its own and is refused once the talk is accepted.
  */
 export function PATCH(req: Request, ctx: Params) {
   return handle(async () => {
@@ -115,6 +118,46 @@ export function PATCH(req: Request, ctx: Params) {
 
     const patch = await parseBody(req, speakerSubmissionPatchSchema);
     const form = existing.formConfig;
+
+    // W1: self-withdraw. Status-only, so it skips content validation entirely —
+    // a speaker must be able to pull an incomplete proposal. Runs under the same
+    // per-abstract advisory lock as decisions and conversion, so it cannot
+    // interleave with an admin accepting the talk between check and write.
+    if (patch.status === "WITHDRAWN") {
+      const refusal = withdrawRefusal(existing.status, Boolean(existing.session));
+      if (refusal) throw new ApiError(409, refusal.code, refusal.message);
+
+      const withdrawn = await prisma.$transaction(async (tx) => {
+        await lockAbstractForWrite(tx, existing.id);
+        const fresh = await tx.abstract.findUniqueOrThrow({
+          where: { id: existing.id },
+          select: {
+            status: true,
+            session: { select: { id: true } },
+            speakers: { select: { userId: true } },
+          },
+        });
+        if (!isAbstractSpeaker(apiCtx.userId, fresh.speakers)) {
+          throw new ApiError(403, "NOT_YOUR_SUBMISSION", "You are not a speaker on this submission.");
+        }
+        // Authoritative re-check: the pre-lock decision above may be stale.
+        const freshRefusal = withdrawRefusal(fresh.status, Boolean(fresh.session));
+        if (freshRefusal) throw new ApiError(409, freshRefusal.code, freshRefusal.message);
+
+        await tx.abstract.update({
+          where: { id: existing.id },
+          // Status only. `decidedAt` stays null: withdrawing is the speaker's
+          // action, not a programme-team decision.
+          data: { status: "WITHDRAWN" },
+        });
+        return tx.abstract.findUniqueOrThrow({
+          where: { id: existing.id },
+          include: submissionInclude,
+        });
+      });
+
+      return ok(await submissionPayload(withdrawn));
+    }
 
     // A converted abstract's roster was copied onto the confirmed Session, so
     // changing it here would leave the two records disagreeing. This pre-check
