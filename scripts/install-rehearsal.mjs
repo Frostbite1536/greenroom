@@ -68,6 +68,37 @@ if (!actualDb.includes(expectedDb)) {
   process.exit(2);
 }
 
+// The check above only proves what THIS process is pointed at; the server is
+// configured independently. Prove they share one database before any
+// server-mediated write: create a sentinel row directly in the asserted
+// disposable DB, read it back THROUGH the server, then remove it. If the
+// server cannot see the sentinel, it is backed by some other database — abort
+// with zero writes issued through it.
+async function assertServerUsesAssertedDatabase() {
+  const { createRequire } = await import("node:module");
+  const { PrismaClient } = createRequire(import.meta.url)("@prisma/client");
+  const prisma = new PrismaClient();
+  const sentinelSlug = `rehearsal-sentinel-${Date.now()}`;
+  try {
+    await prisma.formConfig.create({
+      data: { eventId: EVENT.id, name: "Rehearsal sentinel", slug: sentinelSlug, published: true },
+    });
+    const probe = await fetch(`${BASE}/api/cfp/public/${sentinelSlug}`);
+    if (probe.status !== 200) {
+      console.error(
+        `Sentinel probe failed (HTTP ${probe.status}): the server at ${BASE} is NOT backed by\n` +
+          "the database this harness verified. Refusing to run — no writes were sent through the server.",
+      );
+      process.exit(2);
+    }
+  } finally {
+    await prisma.formConfig.deleteMany({ where: { eventId: EVENT.id, slug: sentinelSlug } });
+    await prisma.$disconnect();
+  }
+  console.log("PASS  sentinel: server and harness share the asserted disposable database");
+}
+await assertServerUsesAssertedDatabase();
+
 function cookie(user, role) {
   const iat = Math.floor(Date.now() / 1000);
   const payload = Buffer.from(JSON.stringify({ user, event: EVENT, role, iat, exp: iat + 604800 }), "utf8").toString("base64url");
