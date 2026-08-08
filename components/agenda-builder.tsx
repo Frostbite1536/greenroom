@@ -26,13 +26,21 @@ const SNAP_MINUTES = 5;
 /** Local echo of a slot move while the server round-trip is in flight. */
 type SlotOverride = { roomId: string; startsAt: string; endsAt: string };
 
-/** Map placed sessions onto the event-local minute intervals the grids lay out. */
+/**
+ * Map placed sessions onto the event-local minute intervals the grids lay out.
+ * `endMin` is derived from the real duration rather than the end timestamp's
+ * minute-of-day so a session crossing local midnight cannot invert its
+ * interval; it renders clamped to the end of its day column instead.
+ */
 function toIntervals(sessions: Placed[], tz: string) {
-  return sessions.map((session) => ({
-    session,
-    startMin: zonedParts(session.slot.startsAt, tz).minutesOfDay,
-    endMin: zonedParts(session.slot.endsAt, tz).minutesOfDay,
-  }));
+  return sessions.map((session) => {
+    const startMin = zonedParts(session.slot.startsAt, tz).minutesOfDay;
+    const durationMin = Math.max(
+      0,
+      Math.round((new Date(session.slot.endsAt).getTime() - new Date(session.slot.startsAt).getTime()) / 60000),
+    );
+    return { session, startMin, endMin: Math.min(startMin + durationMin, 24 * 60) };
+  });
 }
 
 export function AgendaBuilder({ data }: { data: AgendaData }) {
@@ -423,8 +431,14 @@ function DayGrid({
                       className={`slot-block ${conflict ? "conflict" : ""} ${draggable ? "draggable" : ""} ${moving ? "moving" : ""}`}
                       style={{ top, height, background: trackColor(s.slot.trackId), border: "none", textAlign: "left" }}
                       title={`${s.title} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}${draggable ? " — drag to move" : ""}`}
-                      draggable={draggable}
+                      draggable={draggable && movingId === null}
                       onDragStart={draggable ? (event) => {
+                        // One move at a time: racing requests could commit the
+                        // older drop last and desync the persisted position.
+                        if (movingId !== null) {
+                          event.preventDefault();
+                          return;
+                        }
                         drag.current = {
                           session: s,
                           grabOffsetY: event.clientY - event.currentTarget.getBoundingClientRect().top,
