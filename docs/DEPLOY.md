@@ -16,6 +16,7 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`. |
    | `RESEND_API_KEY` / `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable real integrations when present. |
+   | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
 
 4. First deploy checklist:
    - `/login` renders and the three persona buttons work.
@@ -27,6 +28,26 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
   migrations against the shared Neon DB without coordination.
 - Env validation lives in `lib/env.ts` (`getServerEnv`, `useMockIntegrations`,
   `isDemoResetAllowed`).
+
+## Airtable one-way mirror
+
+`POST /api/comms/airtable/mirror` is ADMIN-only and event-scoped. It returns a
+credential-free preview by default (`{ eventId, dryRun: true }`) and never calls
+Airtable unless all of the following are explicit: request `dryRun: false`,
+`MOCK_EXTERNAL_APIS=false`, `AIRTABLE_API_KEY`, and `AIRTABLE_BASE_ID`.
+
+Create these tables in the target base before enabling live sync. Every table
+needs a writable, unique single-line-text **External ID** field; it is the
+upsert merge key. Other fields may be single-line text unless noted.
+
+| Table | Fields |
+| --- | --- |
+| `Sessions` | External ID, Event ID, Event, Title, Description, Format, Duration Minutes (number), Speaker IDs, Speaker Emails, Scheduled Start, Scheduled End, Room, Track |
+| `Speakers` | External ID, Event ID, Event, Name, Email, Company, Job Title, Bio |
+| `Schedule` | External ID, Event ID, Event, Session ID, Session Title, Starts At, Ends At, Room, Track |
+
+The mirror uses `PATCH /v0/{base}/{table}` with Airtable `performUpsert` on
+`External ID`, sends at most 10 records per request, and never deletes records.
 
 ## Demo seed
 Idempotent, deterministic seed for the whole golden path.
