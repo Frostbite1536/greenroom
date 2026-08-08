@@ -15,6 +15,13 @@ used.
 | [screenshots/public-cfp.png](screenshots/public-cfp.png) | <https://greenroom-omega-dusky.vercel.app/cfp/call-for-speakers> |
 | [screenshots/public-schedule.png](screenshots/public-schedule.png) | <https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026> |
 
+## Clean-install rehearsal
+
+[INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) documents a from-scratch install on
+an empty database — fresh clone → seeded, running instance in under four minutes,
+with the golden path passing 20/20 and 108/108 unit tests plus a 71/71 smoke on
+that brand-new instance.
+
 ## Measured performance and accessibility
 
 [PERFORMANCE.md](PERFORMANCE.md) records Lighthouse performance and
