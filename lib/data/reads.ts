@@ -198,6 +198,10 @@ export type AbstractRow = {
   reviewsTotal: number;
   avgScore: number | null;
   hasSession: boolean;
+  /** The confirmed talk created from this proposal, if conversion has happened. */
+  sessionId: string | null;
+  /** True when that talk also holds a schedule slot, i.e. it is on the public programme. */
+  sessionScheduled: boolean;
 };
 
 type AssignmentProgressGroup = {
@@ -237,7 +241,10 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         speakers: {
           select: { isPrimary: true, user: { select: { name: true, email: true } } },
         },
-        session: { select: { id: true } },
+        // `scheduleSlot` tells the admin table whether the confirmed talk is
+        // actually on the public programme, which is what makes a reversed
+        // decision consequential (INV-DOMAIN-001: we never auto-delete it).
+        session: { select: { id: true, scheduleSlot: { select: { id: true } } } },
       },
     }),
     // Review progress without a per-row query.
@@ -280,6 +287,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
         hasSession: a.session !== null,
+        sessionId: a.session?.id ?? null,
+        sessionScheduled: a.session?.scheduleSlot != null,
       };
     }),
   };
