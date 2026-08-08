@@ -37,7 +37,9 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .tab { border: none; background: none; padding: 10px 12px; font: inherit; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; }
 .tab:hover { color: var(--ink); }
 .tab[aria-pressed="true"] { color: var(--brand-strong); border-bottom-color: var(--brand); font-weight: 600; }
-.tab .count { background: #eef1f0; border-radius: 999px; padding: 0 7px; font-size: 11px; color: var(--muted); }
+/* Not var(--muted) (#687276): at 11px on #eef1f0 that measures 4.33:1, just
+   under the 4.5:1 WCAG minimum for small text. #5c6669 measures 5.19:1. */
+.tab .count { background: #eef1f0; border-radius: 999px; padding: 0 7px; font-size: 11px; color: #5c6669; }
 .tab[aria-pressed="true"] .count { background: var(--soft); color: var(--brand-strong); }
 
 /* ---- data table ---- */
@@ -147,6 +149,9 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .time-label { height: 60px; font-size: 11px; color: var(--muted); text-align: right; padding: 2px 8px 0 0; border-top: 1px solid var(--line); }
 .room-col { border-left: 1px solid var(--line); position: relative; }
 .room-col .hour-line { height: 60px; border-top: 1px solid var(--line); }
+/* `color` is a fallback only: each chip sets its own text colour inline from
+   readableChip() in lib/color-contrast.ts, because track colours are picked by
+   operators and white is unreadable on light ones. */
 .slot-block { position: absolute; left: 4px; right: 4px; border-radius: 6px; padding: 6px 8px; color: white; font-size: 11.5px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.15); cursor: pointer; }
 .slot-block.draggable { cursor: grab; }
 .slot-block.draggable:active { cursor: grabbing; }
