@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { FileUp, Plus, X } from "lucide-react";
 import { describeImportError, describeImportSummary, IMPORT_TARGETS } from "@/lib/operations/status";
 import { parseCsv } from "@/lib/integrations/csv-import";
@@ -44,8 +44,13 @@ export function ImportPanel({
     setMappings([]);
   }
 
+  // Guards against overlapping selections: an older file.text() resuming
+  // after a newer selection (or its failure) must not restore stale state.
+  const selectionToken = useRef(0);
+
   async function onFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
+    const token = ++selectionToken.current;
     setResult(null);
     if (!file) return;
     if (file.size > MAX_UPLOAD_BYTES) {
@@ -54,6 +59,7 @@ export function ImportPanel({
       return;
     }
     const text = await file.text();
+    if (token !== selectionToken.current) return; // superseded by a newer selection
     // Use the real CSV parser for the header row — a naive comma split breaks
     // quoted headers containing commas and desyncs the mapping controls from
     // what the server will actually parse.
