@@ -14,6 +14,7 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   ACCELEVENTS_BASE_URL: z.string().url().optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
+  AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
   // Public base URL of the deployment (used for absolute links in emails/.ics).
   APP_URL: z.string().url().optional(),
 });
@@ -28,6 +29,7 @@ export function getServerEnv(): ServerEnv {
     RESEND_API_KEY: process.env.RESEND_API_KEY,
     ACCELEVENTS_BASE_URL: process.env.ACCELEVENTS_BASE_URL,
     AIRTABLE_API_KEY: process.env.AIRTABLE_API_KEY,
+    AIRTABLE_BASE_ID: process.env.AIRTABLE_BASE_ID,
     APP_URL: process.env.APP_URL,
   });
 }
