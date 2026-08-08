@@ -129,9 +129,11 @@ someone who genuinely does not need a task is not a permanent red mark.
 
 - the **public schedule** and the **speaker gallery**, as `<iframe>` code you paste into your
   site's page editor;
-- a direct link to each, if you would rather link than embed;
-- a **calendar (.ics)** link so attendees can add the programme to their own calendar. Each
-  entry carries the room once a room has been assigned.
+- a direct link to each, if you would rather link than embed.
+
+The public schedule itself carries **calendar (.ics)** buttons — "Add all to calendar" for
+the whole programme and one per session — so attendees can add talks to their own calendar.
+Each entry carries the room once a room has been assigned.
 
 Copy a snippet, paste it into your site, and you are done. The embeds are public — visitors
 do not need an account — and they update themselves as you change the schedule.
