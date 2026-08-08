@@ -4,6 +4,7 @@ import { abstractStatusSchema, abstractUpsertSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
+import { notifyAbstractSubmitted } from "@/lib/comms/notify-service";
 import {
   toFormFieldSpecs,
   validateSubmission,
@@ -220,6 +221,11 @@ export const POST = handle(async (req) => {
       include: { category: true, speakers: { include: { user: true } }, answers: true },
     });
   });
+
+  // O2 (Ops): tell the submitter, co-speakers and the program team. Never
+  // throws and never blocks the response contract — a proposal must be saved
+  // even if the mail provider is down. See lib/comms/notify-service.ts.
+  if (input.intent === "submit") await notifyAbstractSubmitted(saved.id);
 
   return ok(serializeAbstract(saved), input.abstractId ? 200 : 201);
 });
