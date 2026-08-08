@@ -2,9 +2,10 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, CalendarX, LayoutGrid, List, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
+import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { apiDelete, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -16,11 +17,18 @@ import {
   zonedToUtcIso,
 } from "@/lib/tz";
 
-type View = "list" | "day" | "rooms" | "conflicts";
+type View = "list" | "day" | "week" | "rooms" | "conflicts";
 
 const PX_PER_MIN = 1;
-const GRID_START = 8 * 60;
-const GRID_END = 19 * 60;
+
+/** Map placed sessions onto the event-local minute intervals the grids lay out. */
+function toIntervals(sessions: Placed[], tz: string) {
+  return sessions.map((session) => ({
+    session,
+    startMin: zonedParts(session.slot.startsAt, tz).minutesOfDay,
+    endMin: zonedParts(session.slot.endsAt, tz).minutesOfDay,
+  }));
+}
 
 export function AgendaBuilder({ data }: { data: AgendaData }) {
   const router = useRouter();
@@ -57,6 +65,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
       <div className="agenda-toolbar" role="group" aria-label="Agenda views">
         <ViewTab id="list" view={view} setView={setView} icon={<List size={15} />} label="List" />
         <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day" />
+        <ViewTab id="week" view={view} setView={setView} icon={<CalendarRange size={15} />} label="Week" />
         <ViewTab id="rooms" view={view} setView={setView} icon={<LayoutGrid size={15} />} label="Tracks" />
         <ViewTab
           id="conflicts"
@@ -129,6 +138,17 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           groupBy={view === "day" ? "room" : "track"}
           conflictIds={conflictIds}
           trackColor={trackColor}
+          onSelect={setScheduling}
+        />
+      )}
+      {view === "week" && (
+        <WeekGrid
+          sessions={placed}
+          tz={tz}
+          days={days}
+          conflictIds={conflictIds}
+          trackColor={trackColor}
+          roomName={roomName}
           onSelect={setScheduling}
         />
       )}
@@ -251,8 +271,9 @@ function DayGrid({
     );
   }
 
-  const hours = Array.from({ length: (GRID_END - GRID_START) / 60 + 1 }, (_, i) => GRID_START + i * 60);
   const daySessions = sessions.filter((s) => zonedParts(s.slot.startsAt, tz).dateKey === day);
+  const bounds = gridBounds(toIntervals(daySessions, tz));
+  const hours = hourMarks(bounds);
 
   return (
     <div className="table-scroll">
@@ -273,7 +294,7 @@ function DayGrid({
                 .map((s) => {
                   const start = zonedParts(s.slot.startsAt, tz).minutesOfDay;
                   const end = zonedParts(s.slot.endsAt, tz).minutesOfDay;
-                  const top = (start - GRID_START) * PX_PER_MIN + 1;
+                  const top = (start - bounds.start) * PX_PER_MIN + 1;
                   const height = Math.max(18, (end - start) * PX_PER_MIN - 3);
                   const conflict = conflictIds.has(s.id);
                   return (
@@ -292,6 +313,94 @@ function DayGrid({
                 })}
             </div>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Read-only multi-day overview: one column per event day, every room folded
+ * into that column with lane packing. Scheduling still happens through the
+ * dialog, so the server stays the only conflict authority.
+ */
+function WeekGrid({
+  sessions,
+  tz,
+  days,
+  conflictIds,
+  trackColor,
+  roomName,
+  onSelect,
+}: {
+  sessions: Placed[];
+  tz: string;
+  days: string[];
+  conflictIds: Set<string>;
+  trackColor: (id: string | null) => string;
+  roomName: (id: string) => string;
+  onSelect: (s: AgendaSession) => void;
+}) {
+  if (days.length === 0) {
+    return (
+      <EmptyState icon={<CalendarRange size={22} />} title="Nothing scheduled yet">
+        Place a session from the backlog to see the week take shape.
+      </EmptyState>
+    );
+  }
+
+  const bounds = gridBounds(toIntervals(sessions, tz));
+  const hours = hourMarks(bounds);
+
+  return (
+    <div className="table-scroll">
+      <div style={{ ["--room-count" as string]: days.length }}>
+        <div className="agenda-grid">
+          <div className="col-head time-head">{tzAbbreviation(tz)}</div>
+          {days.map((d) => <div className="col-head" key={d}>{formatDayLabel(d, tz)}</div>)}
+        </div>
+        <div className="agenda-body">
+          <div className="time-col">
+            {hours.map((h) => <div className="time-label" key={h}>{minutesToTimeInput(h)}</div>)}
+          </div>
+          {days.map((d) => {
+            const dayItems = toIntervals(
+              sessions.filter((s) => zonedParts(s.slot.startsAt, tz).dateKey === d),
+              tz,
+            ).sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+            const { lanes, laneCount } = packLanes(dayItems);
+
+            return (
+              <div className="room-col" key={d}>
+                {hours.map((h) => <div className="hour-line" key={h} />)}
+                {dayItems.map((item, i) => {
+                  const s = item.session;
+                  const conflict = conflictIds.has(s.id);
+                  const width = 100 / laneCount;
+                  return (
+                    <button
+                      key={s.id}
+                      className={`slot-block week-block ${conflict ? "conflict" : ""}`}
+                      style={{
+                        top: (item.startMin - bounds.start) * PX_PER_MIN + 1,
+                        height: Math.max(18, (item.endMin - item.startMin) * PX_PER_MIN - 3),
+                        left: `calc(${lanes[i] * width}% + 2px)`,
+                        width: `calc(${width}% - 4px)`,
+                        right: "auto",
+                        background: trackColor(s.slot.trackId),
+                      }}
+                      title={`${s.title} · ${roomName(s.slot.roomId)} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}`}
+                      onClick={() => onSelect(s)}
+                    >
+                      {conflict ? <span className="conflict-flag"><AlertTriangle size={12} /></span> : null}
+                      <strong>{s.title}</strong>
+                      <span>{roomName(s.slot.roomId)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>

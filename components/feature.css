@@ -151,6 +151,8 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .slot-block strong { display: block; font-size: 12px; line-height: 1.2; }
 .slot-block.conflict { outline: 2px solid #d64933; outline-offset: -2px; }
 .slot-block .conflict-flag { position: absolute; top: 4px; right: 4px; }
+.slot-block.week-block { border: none; cursor: pointer; text-align: left; }
+.slot-block.week-block span { display: block; opacity: 0.9; }
 .agenda-list-item { display: flex; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items: center; }
 .agenda-list-item .track-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .agenda-list-item .time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; width: 130px; flex-shrink: 0; }

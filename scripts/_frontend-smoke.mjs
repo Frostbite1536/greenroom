@@ -280,6 +280,8 @@ try {
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
   check("agenda shows unscheduled backlog", agendaPage.text.includes("Scratch Session B"));
+  check("agenda offers day, week, tracks and conflicts views",
+    ["Day", "Week", "Tracks", "Conflicts"].every((t) => agendaPage.text.includes(t)));
 
   const cfpPage = await req("GET", `/cfp/${fx.form.id}`, null, null);
   check("public CFP renders open form (not closed state)", !cfpPage.text.includes("Submissions are closed"));
