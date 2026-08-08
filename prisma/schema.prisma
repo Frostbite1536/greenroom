@@ -161,9 +161,10 @@ model FormConfig {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  event     Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event     Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   fields    FormField[]
   abstracts Abstract[]
+  tasks     OnboardingTask[] @relation("TaskForm")
 
   @@unique([eventId, slug])
   @@index([eventId, published])
@@ -389,17 +390,19 @@ model ScheduleSlot {
 }
 
 model OnboardingTask {
-  id          String    @id @default(cuid())
-  eventId     String
-  title       String
-  description String?
-  dueAt       DateTime?
-  required    Boolean   @default(true)
-  sortOrder   Int       @default(0)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id           String    @id @default(cuid())
+  eventId      String
+  title        String
+  description  String?
+  dueAt        DateTime?
+  required     Boolean   @default(true)
+  formConfigId String? // optional form the speaker fills to complete this task
+  sortOrder    Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   event       Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  formConfig  FormConfig?   @relation("TaskForm", fields: [formConfigId], references: [id], onDelete: SetNull)
   assignments SpeakerTask[]
 
   @@unique([eventId, title])
@@ -411,6 +414,7 @@ model SpeakerTask {
   userId      String
   status      TaskStatus @default(TODO)
   artifactUrl String?
+  responses   Json? // answers when the task carries a form
   notes       String?
   completedAt DateTime?
   updatedAt   DateTime   @updatedAt
