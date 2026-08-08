@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   CalendarDays,
   ClipboardCheck,
+  FileStack,
   FileText,
   LayoutDashboard,
   LogOut,
@@ -29,6 +30,7 @@ function initials(name: string): string {
 
 const navigation = [
   { href: "/admin/forms", label: "CFP forms", icon: FileText },
+  { href: "/admin/abstracts", label: "Abstracts", icon: FileStack },
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck },
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard },
   { href: "/portal", label: "Speaker portal", icon: Users },
