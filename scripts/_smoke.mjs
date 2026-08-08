@@ -579,13 +579,96 @@ try {
     publicOverwrite.status === 409 && publicOverwrite.data?.error?.code === "ABSTRACT_LOCKED",
     publicOverwrite.data?.error?.code);
 
-  // 22. Guard: the run must not have touched the judged demo event.
+  // 22. W1 — speaker self-withdraw, and the states it makes reachable for the
+  // first time (nothing wrote WITHDRAWN before this).
+  // The R1 block above closed this form's window, so reopen it to submit again.
+  const reopen = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId, closesAt: new Date(Date.now() + 86_400_000).toISOString(),
+  }, admin);
+  check("W1 setup: CFP window reopened", reopen.status === 200, reopen.status);
+
+  const wSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Withdrawable talk",
+    speakers: [{ email: speaker.user.email, name: speaker.user.name, isPrimary: true }],
+    answers: { title_note: "w", consent: true }, intent: "submit",
+  });
+  const wId = wSubmit.data?.data?.id;
+  check("W1 setup: speaker submits a withdrawable abstract", wSubmit.status === 201 && !!wId, wSubmit.status);
+
+  const wAssign = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [wId], evaluatorIds: [evaluatorId],
+  }, admin);
+  check("W1 setup: assignment moves it to UNDER_REVIEW", wAssign.status === 201, wAssign.status);
+
+  const wBundled = await j("PATCH", `/api/cfp/submissions/${wId}`, {
+    status: "WITHDRAWN", title: "Sneaky rename on the way out",
+  }, speaker);
+  check("W1 withdraw bundled with a content edit refused (422)", wBundled.status === 422, wBundled.data?.error?.code);
+
+  const wStranger = await j("PATCH", `/api/cfp/submissions/${wId}`, { status: "WITHDRAWN" }, evalr);
+  check("W1 only a speaker on the abstract can withdraw it",
+    wStranger.status === 403 && wStranger.data?.error?.code === "NOT_YOUR_SUBMISSION", wStranger.status);
+
+  const wDraw = await j("PATCH", `/api/cfp/submissions/${wId}`, { status: "WITHDRAWN" }, speaker);
+  check("W1 speaker withdraws an UNDER_REVIEW proposal",
+    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN", wDraw.status);
+  check("W1 withdrawing does not stamp a programme decision",
+    wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
+
+  const wReEdit = await j("PATCH", `/api/cfp/submissions/${wId}`, { title: "Back from the dead" }, speaker);
+  check("W1 a withdrawn proposal is locked for further edits",
+    wReEdit.status === 409 && wReEdit.data?.error?.code === "ABSTRACT_LOCKED", wReEdit.status);
+
+  const wScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId: wId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  check("W1 evaluators cannot score a withdrawn proposal",
+    wScore.status === 409 && wScore.data?.error?.code === "ABSTRACT_WITHDRAWN", wScore.data?.error?.code);
+
+  const wDecide = await j("POST", "/api/evaluations/decisions", { abstractId: wId, decision: "ACCEPTED" }, admin);
+  check("W1 admins cannot decide on a withdrawn proposal",
+    wDecide.status === 409 && wDecide.data?.error?.code === "ABSTRACT_WITHDRAWN", wDecide.data?.error?.code);
+
+  const wQueue = await j("GET", `/api/evaluations/assignments?planId=${planId}`, null, evalr);
+  const wQueueRow = wQueue.data?.data?.find((a) => a.abstractId === wId);
+  check("W1 the evaluator queue reports the withdrawn status",
+    wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN", wQueueRow?.abstract?.status);
+
+  const wAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { status: "WITHDRAWN" }, speaker);
+  check("W1 an accepted, converted talk cannot be self-withdrawn",
+    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED", wAccepted.status);
+
+  // 23. W2 — a decision reports the session it leaves behind, so the admin UI
+  // can prompt to unschedule (no auto-deletion: INV-DOMAIN-001).
+  const w2NoSession = await j("POST", "/api/evaluations/decisions", { abstractId: rejectId, decision: "REJECTED" }, admin);
+  check("W2 decision on an unconverted abstract reports no session",
+    w2NoSession.status === 200 && w2NoSession.data?.data?.session === null, w2NoSession.status);
+
+  const rePlace = await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
+  }, admin);
+  check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
+
+  const reversed = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "REJECTED" }, admin);
+  check("W2 reversing a decision reports the still-scheduled session",
+    reversed.status === 200 &&
+    reversed.data?.data?.session?.id === sessionId &&
+    reversed.data?.data?.session?.isScheduled === true &&
+    typeof reversed.data?.data?.session?.roomName === "string" &&
+    typeof reversed.data?.data?.session?.scheduledAt === "string",
+    JSON.stringify(reversed.data?.data?.session));
+
+  const stillThere = await prisma.session.findUnique({ where: { id: sessionId }, include: { scheduleSlot: true } });
+  check("W2 the reversed decision does not delete the confirmed session (INV-DOMAIN-001)",
+    !!stillThere && !!stillThere.scheduleSlot);
+
+  // 24. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
   });
   check("demo-event untouched by smoke", demoTouch === 0, `stray demo rows: ${demoTouch}`);
 
-  console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId, r1Id, r1SessionId }));
+  console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId, r1Id, r1SessionId, wId }));
 } catch (e) {
   fatalError = true;
   console.error("SMOKE ERROR", e);

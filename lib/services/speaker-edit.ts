@@ -31,6 +31,45 @@ export function isEditableStatus(status: AbstractStatus): status is EditableStat
 }
 
 /**
+ * Statuses a speaker may withdraw from (W1). `ACCEPTED` is excluded on purpose:
+ * once the programme team has accepted a talk it is theirs to remove, because a
+ * confirmed `Session` may already be built and scheduled from it.
+ */
+export const WITHDRAWABLE_STATUSES = [
+  "DRAFT",
+  "SUBMITTED",
+  "UNDER_REVIEW",
+] as const satisfies readonly AbstractStatus[];
+
+export type WithdrawRefusal = { code: string; message: string };
+
+/**
+ * Why a self-withdraw is refused, or null when it is allowed. `hasSession` is
+ * belt-and-braces: only an ACCEPTED abstract can have been converted, so the
+ * status rule already covers it, but a confirmed talk must never disappear from
+ * the programme because of a portal click.
+ */
+export function withdrawRefusal(
+  status: AbstractStatus,
+  hasSession: boolean,
+): WithdrawRefusal | null {
+  if (!isEditableStatus(status)) {
+    return {
+      code: "ABSTRACT_LOCKED",
+      message: lockReasonFor(status) ?? "This submission can no longer be changed.",
+    };
+  }
+  if (status === "ACCEPTED" || hasSession) {
+    return {
+      code: "WITHDRAW_NOT_ALLOWED",
+      message:
+        "This talk has already been accepted for the programme, so it can't be withdrawn here. Contact the program team and they will take it off the schedule for you.",
+    };
+  }
+  return null;
+}
+
+/**
  * Plain-language reason an abstract cannot be edited, or null when it can.
  * End users are non-technical event professionals, so this is user-facing copy,
  * not an error string.
@@ -115,6 +154,11 @@ export function mergeAnswers(
  */
 export const speakerSubmissionPatchSchema = z
   .object({
+    /**
+     * The only status a speaker may set, and only on its own (W1). Every other
+     * transition belongs to the programme team's decision endpoint.
+     */
+    status: z.literal("WITHDRAWN").optional(),
     title: z.string().trim().min(3).max(180).optional(),
     abstract: z.string().trim().max(5000).nullable().optional(),
     format: z.string().trim().max(80).nullable().optional(),
@@ -125,6 +169,10 @@ export const speakerSubmissionPatchSchema = z
   })
   .refine((patch) => Object.keys(patch).length > 0, {
     message: "Provide at least one field to update.",
+  })
+  .refine((patch) => patch.status === undefined || Object.keys(patch).length === 1, {
+    message: "Withdrawing must be sent on its own, without other changes.",
+    path: ["status"],
   });
 
 export type SpeakerSubmissionPatch = z.infer<typeof speakerSubmissionPatchSchema>;
