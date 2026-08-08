@@ -12,7 +12,8 @@ public embeds for your event site.
 2. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
    email); drafts and validation included.
 3. **Evaluation** — review teams score abstracts against a weighted rubric
-   through evaluation plans (blind review supported), routed by category.
+   through evaluation plans, routed by category. A round can be marked blind,
+   which hides speaker names in the evaluator's scoring queue.
 4. **Accept → Session** — accepted abstracts convert into confirmed, schedulable
    sessions (at most one session per abstract).
 5. **Speaker edits after acceptance** — speakers keep editing their own proposal
