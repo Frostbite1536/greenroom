@@ -5,6 +5,10 @@ headless Microsoft Edge and a fresh temporary browser profile. Each capture is
 public and read-only; no authenticated session, mutation, reset, or seed was
 used.
 
+> The schedule image reflects the currently deployed seed before local timezone
+> correction `46e3885`. Recapture it after that change is deployed and the demo
+> event is reset through the coordinated single-writer path.
+
 | File | Public URL |
 | --- | --- |
 | [screenshots/login.png](screenshots/login.png) | <https://greenroom-omega-dusky.vercel.app/login> |
