@@ -4,13 +4,19 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
 export const dynamic = "force-dynamic";
 
 /**
  * POST /api/evaluations/decisions — accept or reject an abstract (admin).
- * Records `decidedAt`; conversion to a schedulable Session is a separate,
- * explicit step (`/api/evaluations/convert`) per INV-DOMAIN-001.
+ *
+ * Accepting is the moment a proposal becomes a talk, so it now provisions the
+ * whole thing in one locked transaction (WAVE1-B1, director requirement #4):
+ * the confirmed `Session` (with its speakers) and every speaker's onboarding
+ * checklist. Both steps are idempotent, so re-accepting tops up what is missing
+ * instead of duplicating. `/api/evaluations/convert` remains for explicit
+ * durations and manual backfill.
  *
  * Reversing a decision deliberately does NOT delete the Session built from the
  * abstract: the session is the confirmed record, and silently pulling a talk
@@ -37,9 +43,23 @@ export const POST = handle(async (req) => {
       throw new ApiError(409, "ABSTRACT_WITHDRAWN", "This abstract has been withdrawn.");
     }
 
-    return tx.abstract.update({
+    const decided = await tx.abstract.update({
       where: { id: input.abstractId },
       data: { status: input.decision, decidedAt: new Date() },
+      include: { speakers: { select: { userId: true, isPrimary: true } }, session: { select: { id: true } } },
+    });
+
+    // Rejecting deliberately provisions nothing and removes nothing: an already
+    // confirmed session stays on the programme for the admin to unschedule
+    // (INV-DOMAIN-001, W2), and its speakers keep any tasks they are working on
+    // for other talks.
+    const provisioned =
+      input.decision === "ACCEPTED"
+        ? await provisionAcceptedAbstract(tx, decided)
+        : { sessionId: decided.session?.id ?? null, created: false, tasksAssigned: 0 };
+
+    const full = await tx.abstract.findUniqueOrThrow({
+      where: { id: input.abstractId },
       include: {
         category: true,
         speakers: { include: { user: true } },
@@ -54,19 +74,24 @@ export const POST = handle(async (req) => {
         },
       },
     });
+    return { abstract: full, provisioned };
   });
 
+  const { abstract: decided, provisioned } = updated;
   return ok({
-    ...serializeAbstract(updated),
-    // Additive key: existing clients that ignore it are unaffected.
-    session: updated.session
+    ...serializeAbstract(decided),
+    // Additive keys: existing clients that ignore them are unaffected.
+    session: decided.session
       ? {
-          id: updated.session.id,
-          title: updated.session.title,
-          isScheduled: Boolean(updated.session.scheduleSlot),
-          scheduledAt: updated.session.scheduleSlot?.startsAt.toISOString() ?? null,
-          roomName: updated.session.scheduleSlot?.room.name ?? null,
+          id: decided.session.id,
+          title: decided.session.title,
+          isScheduled: Boolean(decided.session.scheduleSlot),
+          scheduledAt: decided.session.scheduleSlot?.startsAt.toISOString() ?? null,
+          roomName: decided.session.scheduleSlot?.room.name ?? null,
         }
       : null,
+    // What accepting just built, so the UI can confirm it in plain language.
+    sessionCreated: provisioned.created,
+    tasksAssigned: provisioned.tasksAssigned,
   });
 });
