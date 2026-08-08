@@ -1,29 +1,39 @@
 # Clean-database installation rehearsal
 
 Evidence that the README Quickstart works verbatim on a machine that has never
-seen this project. Performed **2026-08-08** by the Ops worker against a
-**separate, disposable Neon project** (its own host, never the shared demo
-database, never added to Vercel; deleted after this report).
+seen this project. Performed by the Ops worker against a **separate, disposable
+Neon project** (its own host, never the shared demo database, never added to
+Vercel; deleted after this report).
 
-Rehearsed commit: **`798580f`** (`origin/main` at the time), fresh `git clone`
-from GitHub — not a copy of a working tree.
+Rehearsed twice on **2026-08-08**: first at `798580f`, then re-run at
+**`f80247e`** — the freeze-candidate tree, including the operator console, the
+speaker proposal editor and the template editor. Both runs were a fresh
+`git clone` from GitHub, not a copy of a working tree. The second run started
+from a **genuinely empty database** (`DROP SCHEMA public CASCADE` first), so
+`db:push` had to build all 24+ tables from nothing.
 
 ## Result: clean install works, golden path 20/20
 
+Timings below are the second (freeze-candidate) run.
+
 | Step | Command | Time | Result |
 | --- | --- | ---: | --- |
-| 1 | `git clone …/greenroom.git app` | 2.4 s | clean |
-| 2 | `npm install` | 29 s | 69 packages, **0 vulnerabilities** |
+| 1 | `git clone …/greenroom.git app` | 2.8 s | clean |
+| 2 | `npm install` | 30 s | 69 packages, **0 vulnerabilities** |
 | 3 | `cp .env.example .env` + set `DATABASE_URL` | — | only that one variable had to change |
-| 4 | `npm run db:push` | 17 s | schema in sync; Prisma Client generated automatically |
-| 5 | `npm run db:seed` | 69 s | 45 users, 4 categories, 3 tracks, 4 rooms, 2 forms, 40 abstracts, 13 sessions, 11 slots, 5 onboarding tasks, 60 speaker tasks, 4 templates, 2 resources |
-| 6 | `npm run dev` | ready in **1.0 s** | `http://localhost:3000/login` renders |
-| 7 | `npm test` | 6 s | **108/108** |
-| 8 | `npm run build` | 24 s | compiled successfully |
-| 9 | `SMOKE_PORT=3237 node --env-file=.env scripts/_frontend-smoke.mjs` | 36 s | **71/71** |
+| 4 | `npm run db:push` | 16 s | built the whole schema from an empty database; Prisma Client generated automatically |
+| 5 | `npm run db:seed` | 53 s | 45 users, 4 categories, 3 tracks, 4 rooms, 2 forms, 40 abstracts, 13 sessions, 11 slots, 5 onboarding tasks, 60 speaker tasks, 4 templates, 2 resources |
+| 6 | `npm run dev` | ready in **0.8 s** | `http://localhost:3000/login` renders |
+| 7 | `npm test` | 6.5 s | **162/162** |
+| 8 | `npm run build` | 21 s | compiled successfully |
+| 9 | `SMOKE_PORT=3237 node --env-file=.env scripts/_frontend-smoke.mjs` | 35 s | **75/75** |
 
-**Total: under four minutes from `git clone` to a working, fully seeded
-instance**, of which ~70 s is seeding 40 abstracts and a full schedule.
+**Total: under three minutes from `git clone` to a working, fully seeded
+instance**, of which ~53 s is seeding 40 abstracts and a full schedule.
+
+The first run at `798580f` produced the same outcome (108/108 tests, 71/71 smoke
+against the suites of the day, golden path 20/20), so this is a repeatable
+property of the project rather than a lucky machine.
 
 The seeded counts are byte-identical to the production demo event, which is the
 point of a deterministic seed: a judge who installs locally sees the same data as
@@ -43,6 +53,11 @@ Driven by `scripts/install-rehearsal.mjs` against the `npm run dev` server.
 | 6. Admin schedules without conflicts | conflicting placement **refused 409 `SCHEDULE_CONFLICT` / `ROOM_OVERLAP`**; clean placement → **200** |
 | 7. Public embed + `.ics` | new talk visible on `/embed/schedule` **logged out**; `.ics` export → 200 and contains the talk; `/embed/speakers` → 200 |
 | guardrails | `/api/admin/reset` refused **403 `RESET_DISABLED`**; `/api/v1/*` returns **503** with no `GREENROOM_API_KEY` (fails closed, never public); a SPEAKER session is **307**-redirected away from `/admin/agenda` |
+
+The run also asserts a **sentinel** before touching anything: the harness proves
+the server it is about to drive shares the disposable database the operator
+named. Loopback alone would not prove that — a local dev server pointed at the
+shared demo database would still be mutated.
 
 The three guardrails matter as much as the happy path: a fresh install is safe by
 default — destructive reset off, public API off rather than open, role
