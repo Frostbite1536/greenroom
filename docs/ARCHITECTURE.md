@@ -16,13 +16,17 @@ Explicit non-goals: CRM, marketing automation, payments, multi-language support,
 6. Admin schedules the session; room and speaker overlap checks must pass.
 7. Public schedule embed exposes the session and an `.ics` download.
 
+Off the main line: an accepted speaker can still edit their own submission (R1 — statuses
+`DRAFT`/`SUBMITTED`/`UNDER_REVIEW`/`ACCEPTED`), and an admin can copy embed snippets from
+`/admin/embeds` and watch onboarding progress on `/admin/speakers`.
+
 ## Stack
 
 - Next.js 16 App Router, React 19, TypeScript strict mode
-- PostgreSQL via Prisma 6
+- PostgreSQL (Neon) via Prisma 6
 - Zod contracts at `types/api.ts`
 - Server components by default; client components only for interactive builders
-- Mock auth boundary at `lib/auth.ts`
+- Auth boundary at `lib/auth.ts`: HMAC-signed, expiring `sb_session` cookie
 
 ## Domain model
 
@@ -37,43 +41,82 @@ All program data is event-scoped. `EventMember` assigns admin, evaluator, or spe
 - `OnboardingTask` templates produce per-speaker `SpeakerTask` status/artifact records.
 - Email, import, and resource records support the demo integration surfaces.
 
+Status transitions for `Abstract`, `Session`/`ScheduleSlot`, and `SpeakerTask` — including
+which route performs each one — are documented in [`LIFECYCLE.md`](LIFECYCLE.md).
+
 Primary keys are CUID strings. Unique/index constraints are documented in `prisma/schema.prisma`.
 
 ## Locked routes and contracts
 
-Shell routes:
+Shell routes (inside `app/(app)/`, behind the sidebar shell; sidebar entries are filtered by
+role in `components/app-shell.tsx`, mirroring the server-side authorization each page enforces):
 
-- `/admin/forms`
-- `/admin/evaluations`
-- `/admin/agenda`
-- `/cfp/[formId]`
-- `/portal`
-- `/embed/schedule`
-- `/embed/speakers`
+- `/admin/forms` and `/admin/forms/[formId]` — form list, create-form dialog, form builder
+- `/admin/abstracts` — submission pipeline, accept/decline, create session
+- `/admin/evaluations` — evaluator scoring workspace
+- `/admin/agenda` — agenda builder: List / Day / Week / Tracks / Conflicts views.
+  Drag-and-drop moves are offered in the **Day** view only (`onMove` is passed for
+  `view === "day"`); Week is a read-only multi-day overview.
+- `/admin/speakers` — speaker onboarding status dashboard (read-only, filterable)
+- `/admin/embeds` — copy-paste `<iframe>`/link snippets for the public embeds
+- `/portal` and `/portal/resources/[slug]` — speaker workspace
+
+Public routes (no shell, must render with a null session): `/cfp/[formId]`,
+`/embed/schedule`, `/embed/speakers`, `/login`.
 
 Backend ownership routes:
 
 - `/api/cfp/*`: form config, public form, draft/submit abstract
+- `/api/cfp/submissions/mine` and `/api/cfp/submissions/[abstractId]`: R1 — a signed-in
+  speaker lists and edits their own submissions after submission/acceptance
 - `/api/evaluations/*`: plans, assignments, scores, decisions, abstract-to-session conversion
 - `/api/agenda/*`: sessions, slots, conflict checks
 - `/api/integrations/*`: Accelevents webhook and CSV/JSON import
+- `/api/v1/*`: read-only, API-key-gated server-to-server surface (see [`API.md`](API.md))
 
 Ops ownership routes:
 
 - `/api/portal/*`: profile and task updates
-- `/api/comms/*`: email dispatch and calendar downloads
+- `/api/comms/*`: email dispatch, calendar downloads, Airtable one-way mirror
+- `/api/admin/reset`: environment-gated demo reset (refused in production)
 
 Request schemas and API envelope types are locked in `types/api.ts`. Workers must request shared changes through coordination rather than redefining contracts.
 
 ## Security and performance
 
-- Every API verifies event membership and role server-side; mock auth is development-only.
+- Sessions are HMAC-signed and expiring (`lib/auth.ts`, `SESSION_SECRET`, 7-day TTL). In
+  production a missing or short secret fails closed — every cookie decode is rejected.
+- The cookie identifies an email and active event; it **never** carries authority. Roles are
+  resolved from the persisted `EventMember` row on each request (`lib/api/context.ts`,
+  `getResolvedSession`), so a forged role claim buys nothing.
+- Every API verifies event membership and role server-side (INV-EVENT-001).
 - Public form reads/submissions are scoped to a published form and its event.
 - Resource HTML must be sanitized before persistence or rendering.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
-- Schedule conflict checks and writes happen in one transaction.
+- Schedule conflict checks and writes happen in one transaction (INV-SCHEDULE-001).
+- Every writer that check-then-writes one abstract (speaker edit, admin decision, conversion)
+  first takes a per-abstract transaction-scoped advisory lock (`lib/services/abstract-lock.ts`,
+  INV-ABSTRACT-001) and re-reads the row inside the transaction, closing the TOCTOU window.
+- The v1 API authenticates before any database work and compares fixed-size key hashes.
 - Keep interactive client islands narrow and avoid serial data waterfalls.
 
-## Environment status
+## Environment and deployment status
 
-PostgreSQL 16 is running and accepts connections on port 5432, but password authentication is required. `.env` is currently absent, so `prisma db push` remains blocked until a valid `DATABASE_URL` is supplied. Prisma client generation and schema validation succeed independently.
+The app is deployed and live on **Vercel + Neon Postgres**; pushes to `main` auto-deploy.
+The schema is applied with `prisma db push` against the Neon database and the deterministic
+demo seed (`lib/demo/seed.ts`) has been run against it.
+
+- Local setup needs `DATABASE_URL` only; everything else defaults safely (external
+  integrations mocked, demo reset disabled, v1 API disabled). See the README Quickstart and
+  [`DEPLOY.md`](DEPLOY.md) for the full variable table.
+- `SESSION_SECRET` is required in production (see Security above) and is configured
+  separately for Preview and Production.
+- `GREENROOM_API_KEY` is configured, so `/api/v1/*` is live; unset it and those routes return
+  `503 API_KEY_NOT_CONFIGURED`.
+- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` answers
+  `403 RESET_DISABLED` (INV-RESET-001).
+- Airtable mirror credentials (`AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`,
+  `MOCK_EXTERNAL_APIS=false`) are configured in production and a live one-way mirror run has
+  completed.
+- **Vercel bakes environment variables at deploy time**: after editing any variable you must
+  redeploy before it takes effect.

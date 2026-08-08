@@ -6,6 +6,8 @@
 - **INV-EVAL-001:** A score must reference a rubric key in its evaluation plan and fall within that criterion's range.
 - **INV-SCHEDULE-001:** A room or speaker cannot occupy overlapping schedule intervals. Conflict detection and slot write are transactional.
 - **INV-TASK-001:** Speaker completion state is derived from per-speaker assignments, not task-template state.
+- **INV-ABSTRACT-001:** Every writer that check-then-writes a single abstract (speaker edit, admin decision, abstract-to-session conversion) takes the per-abstract advisory lock in `lib/services/abstract-lock.ts` inside its transaction and re-reads the row under that lock before writing.
+- **INV-EDIT-001:** A speaker may edit their own submission while it is `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, or `ACCEPTED`; `REJECTED` and `WITHDRAWN` are terminal for edits (409 `ABSTRACT_LOCKED`). An edit never changes `status`, `submittedAt`, `decidedAt`, or `submitterId`, never touches the linked `Session`, and cannot change the speaker roster once the abstract has been converted (409 `SPEAKERS_LOCKED`).
 - **INV-HTML-001:** Embedded resource HTML is sanitized before storage or rendering.
 - **INV-SECRET-001:** Secrets never enter client bundles, logs, or Git.
 - **INV-RESET-001:** Demo reset is explicit, idempotent, environment-gated, and unauthorized in production.

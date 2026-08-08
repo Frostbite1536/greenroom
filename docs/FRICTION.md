@@ -33,3 +33,27 @@ comparison fails. Also note `frog init` creates `.github/ISSUE_TEMPLATE/`
 (repository automation) as a side effect. Friction logging for this repo is
 plain markdown in this file instead. Needs an upstream fix or wrapper; not
 sprint-worthy.
+
+## 5. Vercel bakes environment variables at deploy time (major)
+Editing a variable in Project → Settings → Environment Variables changes nothing
+for the running deployment: the values are baked into the build. A corrected
+`AIRTABLE_BASE_ID` looked "applied" in the dashboard while production kept
+failing with the old value. **Mitigation:** treat every env edit as a two-step
+operation — save, then **redeploy**, then re-verify the behaviour that depends
+on it. The same applies to `SESSION_SECRET`, `GREENROOM_API_KEY`, and `APP_URL`.
+
+## 6. Airtable base id vs. what you actually copied (moderate)
+Two pastes in a row produced two different production failures. Pasting the
+base **URL** into `AIRTABLE_BASE_ID` yields a table-level `404 NOT_FOUND` on
+every table (it looks exactly like "the tables are named wrong"); a truncated or
+whitespace-damaged PAT then yields `401`. **Mitigation:** `AIRTABLE_BASE_ID` is
+only the `app…` segment of the base URL, never the whole URL and never the token
+id; verify credentials with a single `curl` against the Airtable API before
+redeploying, and read the status code — 404 means base/table, 401 means key.
+
+## 7. Stale `.next/types` fails typecheck after switching branches (minor)
+After building one worker branch and then checking out another, Next's generated
+`.next/types/` still references routes that no longer exist, so `npm run
+typecheck` fails with a phantom missing module in code you did not touch. It is
+not a code defect and it bites whoever verifies two branches in either order.
+**Mitigation:** `rm -rf .next tsconfig.tsbuildinfo` before re-running the gate.
