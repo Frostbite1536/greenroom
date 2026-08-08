@@ -447,6 +447,8 @@ export type QueueRow = {
   categoryName: string | null;
   teamKey: string | null;
   status: "ASSIGNED" | "IN_PROGRESS" | "COMPLETED" | "DECLINED";
+  /** The proposal's own status: a speaker can withdraw mid-review (W1). */
+  abstractStatus: AbstractStatus;
   speakers: string[];
   myScores: Record<string, number>;
   myComment: string | null;
@@ -498,6 +500,7 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
           select: {
             title: true,
             abstract: true,
+            status: true,
             category: { select: { name: true } },
             speakers: { select: { user: { select: { name: true } } } },
           },
@@ -543,6 +546,7 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
         categoryName: a.abstract.category?.name ?? null,
         teamKey: a.teamKey,
         status: a.status,
+        abstractStatus: a.abstract.status,
         speakers: blind ? [] : a.abstract.speakers.map((s) => s.user.name),
         myScores: mine?.scores ?? {},
         myComment: mine?.comment ?? null,
