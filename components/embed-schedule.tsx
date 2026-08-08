@@ -69,7 +69,9 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
         )}
       </header>
 
-      <div className="embed-body">
+      {/* <main> (not <div>) so the embed exposes a landmark, matching
+          embed-speakers.tsx — closes the Lighthouse a11y finding. */}
+      <main className="embed-body">
         {agenda.sessions.length === 0 ? (
           <EmptyState icon={<CalendarDays size={22} />} title="Schedule coming soon">
             Sessions will appear here once the agenda is published.
@@ -108,7 +110,7 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
             </section>
           ))
         )}
-      </div>
+      </main>
     </div>
   );
 }
