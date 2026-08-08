@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   LogOut,
   Mic2,
+  Settings2,
   UserCheck,
   Users,
 } from "lucide-react";
@@ -47,6 +48,7 @@ const navigation: { href: string; label: string; icon: typeof FileText; roles: R
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard, roles: ["ADMIN"] },
   { href: "/admin/speakers", label: "Speaker onboarding", icon: UserCheck, roles: ["ADMIN"] },
   { href: "/admin/embeds", label: "Website embeds", icon: Code2, roles: ["ADMIN"] },
+  { href: "/admin/operations", label: "Operations", icon: Settings2, roles: ["ADMIN"] },
   { href: "/portal", label: "Speaker portal", icon: Users, roles: ["ADMIN", "SPEAKER"] },
   { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays, roles: EVERYONE },
   { href: "/embed/speakers", label: "Public speakers", icon: Mic2, roles: EVERYONE },
