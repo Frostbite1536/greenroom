@@ -45,12 +45,15 @@ function isEmpty(value: FormAnswerValue): boolean {
 }
 
 /**
- * Validate a submission attempt. `now` is injectable for deterministic tests.
- * Draft saves bypass window/required checks (see `submissionAllowsDraft`).
+ * Publication + window gate: may a *new* submission be accepted right now?
+ *
+ * Split out from `validateSubmission` so the authenticated speaker-edit path
+ * can reuse the content rules below without it. An accepted speaker normally
+ * edits long after the CFP window closed, and the competition lead confirmed
+ * edit-lock windows are not used, so the window governs new submissions only.
  */
-export function validateSubmission(
+export function validateSubmissionWindow(
   form: FormSpec,
-  input: SubmissionInput,
   now: Date = new Date(),
 ): FormValidationError | null {
   if (!form.published) {
@@ -62,7 +65,18 @@ export function validateSubmission(
   if (form.closesAt && now >= form.closesAt) {
     return { code: "FORM_CLOSED", message: "The submission window has closed." };
   }
+  return null;
+}
 
+/**
+ * Content rules (INV-FORM-001): speaker counts, required fields, bio length.
+ * Shared verbatim by public submission and by authorized speaker edits so the
+ * two paths can never drift apart.
+ */
+export function validateSubmissionContent(
+  form: FormSpec,
+  input: SubmissionInput,
+): FormValidationError | null {
   if (input.speakerCount < form.minSpeakers) {
     return {
       code: "TOO_FEW_SPEAKERS",
@@ -102,4 +116,17 @@ export function validateSubmission(
   }
 
   return null;
+}
+
+/**
+ * Validate a public submission attempt: window gate, then content rules.
+ * `now` is injectable for deterministic tests. Draft saves bypass this entirely
+ * (the route only calls it for `intent: "submit"`).
+ */
+export function validateSubmission(
+  form: FormSpec,
+  input: SubmissionInput,
+  now: Date = new Date(),
+): FormValidationError | null {
+  return validateSubmissionWindow(form, now) ?? validateSubmissionContent(form, input);
 }
