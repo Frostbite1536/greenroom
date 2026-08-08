@@ -114,7 +114,7 @@ export default async function PortalPage() {
                 <p>Everything the program team needs from you before the event.</p>
               </div>
             </div>
-            <TaskChecklist tasks={tasks} />
+            <TaskChecklist tasks={tasks} timezone={timezone} />
           </section>
 
           <section className={styles.card}>
@@ -135,10 +135,10 @@ export default async function PortalPage() {
                   </p>
                   <p className={styles.sessionMeta}>
                     {formatSlot(
-                        s.scheduleSlot?.startsAt ?? null,
-                        s.scheduleSlot?.endsAt ?? null,
-                        s.scheduleSlot?.room.name ?? null,
-                        timezone,
+                      s.scheduleSlot?.startsAt ?? null,
+                      s.scheduleSlot?.endsAt ?? null,
+                      s.scheduleSlot?.room.name ?? null,
+                      timezone,
                     )}
                   </p>
                 </div>
@@ -161,7 +161,7 @@ export default async function PortalPage() {
                   <div className={styles.sessionTitle}>{a.title}</div>
                   <p className={styles.sessionMeta}>
                     {a.status.replace(/_/g, " ").toLowerCase()}
-                    {a.submittedAt ? ` · submitted ${a.submittedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}` : ""}
+                    {a.submittedAt ? ` · submitted ${a.submittedAt.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: timezone })}` : ""}
                   </p>
                 </div>
               ))

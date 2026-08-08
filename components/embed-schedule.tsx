@@ -36,7 +36,7 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
             <p className="hint">
               {agenda.sessions.length} sessions
               {agenda.event.startsAt
-                ? ` · ${new Intl.DateTimeFormat(undefined, { timeZone: tz, month: "long", day: "numeric", year: "numeric" }).format(new Date(agenda.event.startsAt))}`
+                ? ` · ${new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "long", day: "numeric", year: "numeric" }).format(new Date(agenda.event.startsAt))}`
                 : ""}
             </p>
           </div>
