@@ -138,6 +138,13 @@ async function resetScratchEvent() {
         ],
       },
       tracks: { create: [{ name: "Scratch Track", color: "#3b82f6", sortOrder: 0 }] },
+      // Accepting a talk assigns this checklist to every speaker on it (B1).
+      onboardingTasks: {
+        create: [
+          { title: "Scratch task: confirm travel", required: true, sortOrder: 0 },
+          { title: "Scratch task: send headshot", required: false, sortOrder: 1 },
+        ],
+      },
     },
   });
   for (const identity of [admin, speaker, evalr]) {
@@ -346,9 +353,41 @@ try {
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
+  // B1: accepting is the moment the talk becomes real — session + checklist.
+  const sessionId = decision.data?.data?.session?.id;
+  check("B1 accept auto-creates the confirmed session",
+    decision.data?.data?.sessionCreated === true && !!sessionId, JSON.stringify(decision.data?.data?.session));
+  check("B1 accept assigns the checklist to every speaker (2 tasks x 2 speakers)",
+    decision.data?.data?.tasksAssigned === 4, decision.data?.data?.tasksAssigned);
+
+  const autoSpeakers = await prisma.sessionSpeaker.count({ where: { sessionId } });
+  const autoTasks = await prisma.speakerTask.findMany({
+    where: { task: { eventId: SCRATCH_EVENT.id } }, select: { taskId: true, userId: true, status: true },
+  });
+  check("B1 the auto-created session carries both speakers", autoSpeakers === 2, autoSpeakers);
+  check("B1 every assignment starts as TODO",
+    autoTasks.length === 4 && autoTasks.every((t) => t.status === "TODO"), autoTasks.length);
+
+  const reAccept = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
+  check("B1 re-accepting creates nothing new (idempotent)",
+    reAccept.status === 200 && reAccept.data?.data?.sessionCreated === false &&
+    reAccept.data?.data?.tasksAssigned === 0 && reAccept.data?.data?.session?.id === sessionId,
+    JSON.stringify({ created: reAccept.data?.data?.sessionCreated, tasks: reAccept.data?.data?.tasksAssigned }));
+
   const conv = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
-  check("convert to session", conv.status === 201 && conv.data?.data?.created === true, conv.status);
-  const sessionId = conv.data?.data?.sessionId;
+  check("convert after auto-provisioning is an idempotent backfill",
+    conv.status === 200 && conv.data?.data?.created === false && conv.data?.data?.sessionId === sessionId, conv.status);
+
+  // B1 backfill: a checklist item added after acceptance reaches existing talks.
+  const lateTask = await prisma.onboardingTask.create({
+    data: { eventId: SCRATCH_EVENT.id, title: "Scratch task: added after acceptance", sortOrder: 2 },
+  });
+  const backfill = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("B1 convert backfills a checklist item added after acceptance",
+    backfill.data?.data?.tasksAssigned === 2 && backfill.data?.data?.created === false,
+    backfill.data?.data?.tasksAssigned);
+  const backfilled = await prisma.speakerTask.count({ where: { taskId: lateTask.id } });
+  check("B1 the backfilled item reaches both speakers", backfilled === 2, backfilled);
 
   const conv2 = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
   check("convert is idempotent", conv2.data?.data?.created === false && conv2.data?.data?.sessionId === sessionId);
@@ -522,7 +561,8 @@ try {
   await j("POST", "/api/evaluations/decisions", { abstractId: r1Id, decision: "ACCEPTED" }, admin);
   const r1Conv = await j("POST", "/api/evaluations/convert", { abstractId: r1Id, durationMinutes: 30 }, admin);
   const r1SessionId = r1Conv.data?.data?.sessionId;
-  check("R1 setup: accepted abstract converted to a session", r1Conv.status === 201 && !!r1SessionId, r1Conv.status);
+  check("R1 setup: accepted abstract has its session (auto-provisioned by accept)",
+    r1Conv.status === 200 && r1Conv.data?.data?.created === false && !!r1SessionId, r1Conv.status);
   const sessionBefore = await prisma.session.findUnique({ where: { id: r1SessionId }, include: { speakers: true } });
 
   const editAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
@@ -643,6 +683,8 @@ try {
   const w2NoSession = await j("POST", "/api/evaluations/decisions", { abstractId: rejectId, decision: "REJECTED" }, admin);
   check("W2 decision on an unconverted abstract reports no session",
     w2NoSession.status === 200 && w2NoSession.data?.data?.session === null, w2NoSession.status);
+  check("B1 rejecting provisions nothing",
+    w2NoSession.data?.data?.sessionCreated === false && w2NoSession.data?.data?.tasksAssigned === 0);
 
   const rePlace = await j("POST", "/api/agenda/slots", {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
