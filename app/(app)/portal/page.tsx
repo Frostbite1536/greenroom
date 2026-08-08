@@ -2,6 +2,7 @@ import { requireSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
+import { profileCompletion } from "@/lib/speakers/status";
 import { ProfileForm, type PortalProfile } from "./profile-form";
 import { TaskChecklist, type PortalTask } from "./task-checklist";
 import styles from "./portal.module.css";
@@ -85,9 +86,9 @@ export default async function PortalPage() {
   const sessions = sessionSpeakers.map((s) => s.session);
   const doneCount = tasks.filter((t) => t.status === "COMPLETED" || t.status === "WAIVED").length;
 
-  // Profile completeness drives the headline metric speakers see first.
-  const profileFields = [initialProfile.bio, initialProfile.company, initialProfile.jobTitle, initialProfile.headshotUrl];
-  const profilePct = Math.round((profileFields.filter((v) => v.trim().length > 0).length / profileFields.length) * 100);
+  // Profile completeness drives the headline metric speakers see first. Shared
+  // with /admin/speakers so both sides of the handoff quote the same number.
+  const profilePct = profileCompletion(initialProfile).percent;
 
   return (
     <section className="page-stack">
