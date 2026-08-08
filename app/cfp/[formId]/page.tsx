@@ -42,10 +42,7 @@ export default async function PublicCfpPage({
                   ? `The submission window closed on ${closesAt.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}.`
                   : "This call for speakers is not currently accepting submissions."}
             </p>
-            <p className="hint">If you already submitted, you can track its status in your speaker portal.</p>
-            <div className="row" style={{ marginTop: 12 }}>
-              <a className="ghost-button" href="/portal">Go to speaker portal</a>
-            </div>
+            <p className="hint">If you already submitted, the program team will follow up by email.</p>
           </div>
         )}
         <p className="hint" style={{ textAlign: "center" }}>{form.eventName} · call for speakers</p>
