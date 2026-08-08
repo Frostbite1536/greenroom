@@ -5,12 +5,11 @@ import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { useMockIntegrations } from "@/lib/env";
 import {
-  AIRTABLE_TABLES,
-  AirtableMirrorError,
   buildAirtableProjection,
+  mirrorAirtableTables,
   projectionCounts,
   resolveAirtableMirrorMode,
-  upsertAirtableTable,
+  summarizeMirrorReport,
 } from "@/lib/airtable/mirror";
 
 const mirrorRequestSchema = z.object({
@@ -94,23 +93,22 @@ export const POST = handle(async (req) => {
   });
 
   if (decision.mode !== "live") {
-    return ok({ ...decision, counts, batches: 0 });
+    return ok({ ...decision, counts, report: null });
   }
 
-  try {
-    let batches = 0;
-    for (const table of AIRTABLE_TABLES) {
-      batches += await upsertAirtableTable(fetch, {
-        apiKey: process.env.AIRTABLE_API_KEY!,
-        baseId: process.env.AIRTABLE_BASE_ID!,
-      }, table, projection.tables[table]);
-    }
-    return ok({ mode: "live" as const, counts, batches });
-  } catch (error) {
-    if (error instanceof AirtableMirrorError) {
-      console.error(`[airtable] ${error.table} upsert failed with status ${error.status}`);
-      throw new ApiError(502, "AIRTABLE_SYNC_FAILED", "The Airtable mirror did not complete.");
-    }
-    throw error;
+  // Partial-write recovery lives in the mirror: rows that Airtable rejects are
+  // reported individually instead of discarding the rows that did land. Re-running
+  // the mirror is the resume path (upsert on External ID, never deletes).
+  const report = await mirrorAirtableTables(fetch, {
+    apiKey: process.env.AIRTABLE_API_KEY!,
+    baseId: process.env.AIRTABLE_BASE_ID!,
+  }, projection);
+
+  if (report.status !== "complete") {
+    console.error(`[airtable] mirror ${report.status}: ${summarizeMirrorReport(report)}`);
   }
+  if (report.status === "failed") {
+    throw new ApiError(502, "AIRTABLE_SYNC_FAILED", `The Airtable mirror wrote nothing: ${summarizeMirrorReport(report)}`);
+  }
+  return ok({ mode: "live" as const, counts, report });
 });

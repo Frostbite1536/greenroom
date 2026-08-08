@@ -15,6 +15,13 @@ used.
 | [screenshots/public-cfp.png](screenshots/public-cfp.png) | <https://greenroom-omega-dusky.vercel.app/cfp/call-for-speakers> |
 | [screenshots/public-schedule.png](screenshots/public-schedule.png) | <https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026> |
 
+## Measured performance and accessibility
+
+[PERFORMANCE.md](PERFORMANCE.md) records Lighthouse performance and
+accessibility scores for the seven hottest routes (96–99 performance, 95–100
+accessibility, zero layout shift, 28–33 ms production TTFB), plus the
+accessibility issues that remain open.
+
 ## Reproduce
 
 Run this PowerShell template from the repository root for any of the URLs above.

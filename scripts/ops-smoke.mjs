@@ -8,11 +8,27 @@
  * Ports: ops owns the 323x range. Only the PID tree we spawn is ever killed
  * (never `taskkill /IM node.exe` — see the 04:18 incident rule in STATE.md).
  *
- * Usage: node scripts/ops-smoke.mjs
+ * Usage: OPS_SMOKE_ALLOW_DEMO_WRITES=1 node scripts/ops-smoke.mjs
  */
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
+
+/**
+ * GUARD: this suite WRITES to `demo-event` — it resets/reseeds it and mutates
+ * the speaker persona's tasks and profile. STATE.md makes `demo-event`
+ * read-only for workers (judged demo data must stay pristine), so refuse to run
+ * unless an operator opts in inside an announced single-writer window.
+ */
+if (process.env.OPS_SMOKE_ALLOW_DEMO_WRITES !== "1") {
+  console.error(
+    "ops-smoke writes to demo-event (reset + portal mutations) and is blocked by default.\n" +
+      "Run it only inside an announced single-writer window, then set\n" +
+      "  OPS_SMOKE_ALLOW_DEMO_WRITES=1\n" +
+      "and re-run. Reseed with `npm run db:seed` afterwards.",
+  );
+  process.exit(2);
+}
 
 const PORT_CLOSED = Number(process.env.OPS_SMOKE_PORT ?? 3230);
 const PORT_OPEN = PORT_CLOSED + 1;
