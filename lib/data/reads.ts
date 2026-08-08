@@ -16,6 +16,7 @@
  *   getPublicForm()       ~ GET /api/cfp/public/:formId
  *   getPublicAgenda()     ~ GET /api/agenda/public
  *   getPublicSpeakers()   ~ public scheduled-speaker projection
+ *   getEmbedTargets()     ~ admin metadata for the embed snippet page
  *
  * Mutations always go through the HTTP API from client components (see
  * `lib/api-client.ts`) so validation and invariants stay server-enforced.
@@ -644,3 +645,41 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
 
   return buildPublicSpeakers(event, speakers);
 });
+
+// ---- Embeds ---------------------------------------------------------------
+
+export type EmbedTargets = {
+  event: { id: string; name: string; slug: string };
+  scheduledSessions: number;
+  publicSpeakers: number;
+};
+
+/**
+ * Admin-only metadata for `/admin/embeds`: which event the snippets point at
+ * and how much public content each embed currently renders (so the page can
+ * warn when an embed would look empty to a visitor).
+ */
+export async function getEmbedTargets(): Promise<EmbedTargets> {
+  const ctx = await pageContext(["ADMIN"]);
+  const [event, scheduledSessions, publicSpeakers] = await Promise.all([
+    prisma.event.findUniqueOrThrow({
+      where: { id: ctx.eventId },
+      select: { id: true, name: true, slug: true },
+    }),
+    prisma.scheduleSlot.count({ where: { eventId: ctx.eventId } }),
+    prisma.user.count({
+      where: {
+        sessionSpeakers: {
+          some: {
+            session: {
+              eventId: ctx.eventId,
+              scheduleSlot: { isNot: null },
+              OR: [{ sourceAbstractId: null }, { sourceAbstract: { is: { status: "ACCEPTED" } } }],
+            },
+          },
+        },
+      },
+    }),
+  ]);
+  return { event, scheduledSessions, publicSpeakers };
+}

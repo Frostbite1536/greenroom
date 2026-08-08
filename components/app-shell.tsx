@@ -2,6 +2,7 @@ import Link from "next/link";
 import {
   CalendarDays,
   ClipboardCheck,
+  Code2,
   FileStack,
   FileText,
   LayoutDashboard,
@@ -9,7 +10,7 @@ import {
   Mic2,
   Users,
 } from "lucide-react";
-import type { DemoSession } from "@/lib/auth";
+import { homeForRole, type DemoSession } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 import { MobileNavigation } from "@/components/mobile-navigation";
 
@@ -28,21 +29,34 @@ function initials(name: string): string {
     .join("");
 }
 
-const navigation = [
-  { href: "/admin/forms", label: "CFP forms", icon: FileText },
-  { href: "/admin/abstracts", label: "Abstracts", icon: FileStack },
-  { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck },
-  { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard },
-  { href: "/portal", label: "Speaker portal", icon: Users },
-  { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays },
-  { href: "/embed/speakers", label: "Public speakers", icon: Mic2 },
+type Role = DemoSession["role"];
+
+const EVERYONE: Role[] = ["ADMIN", "EVALUATOR", "SPEAKER"];
+
+/**
+ * `roles` mirrors the server-side authorization each destination already
+ * enforces (`pageContext()` in `lib/data/reads.ts`, `requireSession()` in the
+ * portal), so the sidebar never advertises a page that would bounce the user
+ * back to `/login`. This is presentation only — authorization is unchanged.
+ */
+const navigation: { href: string; label: string; icon: typeof FileText; roles: Role[] }[] = [
+  { href: "/admin/forms", label: "CFP forms", icon: FileText, roles: ["ADMIN"] },
+  { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN", "EVALUATOR"] },
+  { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"] },
+  { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard, roles: ["ADMIN"] },
+  { href: "/admin/embeds", label: "Embeds", icon: Code2, roles: ["ADMIN"] },
+  { href: "/portal", label: "Speaker portal", icon: Users, roles: ["ADMIN", "SPEAKER"] },
+  { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays, roles: EVERYONE },
+  { href: "/embed/speakers", label: "Public speakers", icon: Mic2, roles: EVERYONE },
 ];
 
 export function AppShell({ session, children }: { session: DemoSession; children: React.ReactNode }) {
+  const links = navigation.filter((item) => item.roles.includes(session.role));
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <Link className="brand" href="/admin/forms" aria-label="Greenroom home">
+        <Link className="brand" href={homeForRole(session.role)} aria-label="Greenroom home">
           <span className="brand-mark"><Mic2 size={18} aria-hidden="true" /></span>
           <span>Greenroom</span>
         </Link>
@@ -51,7 +65,7 @@ export function AppShell({ session, children }: { session: DemoSession; children
           <strong>{session.event.name}</strong>
         </div>
         <nav aria-label="Workspace navigation">
-          {navigation.map(({ href, label, icon: Icon }) => (
+          {links.map(({ href, label, icon: Icon }) => (
             <Link className="nav-link" href={href} key={href}>
               <Icon size={17} aria-hidden="true" />
               <span>{label}</span>
@@ -73,7 +87,7 @@ export function AppShell({ session, children }: { session: DemoSession; children
       </aside>
       <div className="workspace">
         <header className="topbar">
-          <MobileNavigation links={navigation.map(({ href, label }) => ({ href, label }))} />
+          <MobileNavigation links={links.map(({ href, label }) => ({ href, label }))} />
           <span className="status-dot" aria-hidden="true" />
           <span>Planning workspace</span>
           <span className="topbar-spacer" />
