@@ -69,6 +69,7 @@ server.stderr.on("data", (d) => process.stderr.write(d));
 
 let cleanupFailed = false;
 let cleanupPromise;
+let fatalError = false;
 function stopServer() {
   if (!server.pid || server.exitCode !== null) return true;
   if (process.platform === "win32") {
@@ -154,7 +155,6 @@ async function resetScratchEvent() {
   console.log(`[smoke] scratch event '${SCRATCH_EVENT.id}' reset (demo-event untouched)`);
 }
 
-let fatalError = false;
 try {
   await resetScratchEvent();
   await prisma.category.createMany({
