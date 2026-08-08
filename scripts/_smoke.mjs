@@ -184,9 +184,29 @@ try {
   check("create form", form.status === 201 && form.data?.ok, form.status);
   const formId = form.data?.data?.id;
 
+  // 1b. Create-new-form guards (the admin "New form" flow depends on these)
+  const dupSlug = await j("POST", "/api/cfp/forms", { ...formPayload, name: "Duplicate slug" }, admin);
+  check("duplicate slug refused (409 SLUG_TAKEN)", dupSlug.status === 409 && dupSlug.data?.error?.code === "SLUG_TAKEN", dupSlug.status);
+
+  const shadowSlug = await j("POST", "/api/cfp/forms", { ...formPayload, name: "Shadow", slug: formId }, admin);
+  check("slug shadowing another form id refused", shadowSlug.status === 409 && shadowSlug.data?.error?.code === "SLUG_TAKEN", shadowSlug.status);
+
+  const dupKeys = await j("POST", "/api/cfp/forms", {
+    ...formPayload,
+    name: "Duplicate keys",
+    slug: formPayload.slug + "-dupkeys",
+    fields: [...formPayload.fields, { key: "bio", label: "Bio again", type: "LONG_TEXT", required: false, sortOrder: 7 }],
+  }, admin);
+  check("duplicate field key refused (422)", dupKeys.status === 422 && !!dupKeys.data?.error?.fieldErrors?.fields, dupKeys.data?.error?.code);
+
+  const resaved = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId, name: "Smoke CFP v2" }, admin);
+  check("update keeps own slug and returns 200", resaved.status === 200 && resaved.data?.data?.name === "Smoke CFP v2", resaved.status);
+
   // 2. Public read of the form (null session)
   const pub = await j("GET", `/api/cfp/public/${formId}`);
   check("public form read (no auth)", pub.status === 200 && pub.data?.data?.isOpen === true);
+  const pubBySlug = await j("GET", `/api/cfp/public/${formPayload.slug}`);
+  check("public form resolves by slug to the same form", pubBySlug.status === 200 && pubBySlug.data?.data?.id === formId, pubBySlug.status);
   check(
     "public form includes event categories in stable order",
     JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
