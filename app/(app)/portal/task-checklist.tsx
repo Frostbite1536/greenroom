@@ -90,9 +90,15 @@ export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezo
                 className={styles.toggle}
                 type="checkbox"
                 checked={isDone}
-                disabled={pending[task.taskId]}
+                // A form-carrying task is completed by filling the form in; the
+                // server refuses the shortcut anyway, so don't offer it here.
+                disabled={pending[task.taskId] || (task.hasForm && !isDone)}
                 onChange={(e) => toggle(task, e.target.checked)}
-                aria-label={`Mark "${task.title}" as ${isDone ? "not complete" : "complete"}`}
+                aria-label={
+                  task.hasForm && !isDone
+                    ? `Open the form for "${task.title}" to complete it`
+                    : `Mark "${task.title}" as ${isDone ? "not complete" : "complete"}`
+                }
               />
               <div className={styles.taskBody}>
                 <div className={styles.taskTitle}>
@@ -103,6 +109,11 @@ export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezo
                 </div>
                 {task.description ? <p className={styles.taskMeta}>{task.description}</p> : null}
                 {due ? <p className={styles.taskMeta}>Due {due}</p> : null}
+                {task.hasForm ? (
+                  <a className="link-button" href={`/portal/tasks/${task.taskId}`}>
+                    {isDone ? "Review your answers" : "Fill in the form"}
+                  </a>
+                ) : null}
               </div>
             </li>
           );
