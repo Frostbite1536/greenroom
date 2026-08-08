@@ -282,6 +282,10 @@ try {
   check("agenda shows unscheduled backlog", agendaPage.text.includes("Scratch Session B"));
   check("agenda offers day, week, tracks and conflicts views",
     ["Day", "Week", "Tracks", "Conflicts"].every((t) => agendaPage.text.includes(t)));
+  // Drag-and-drop itself needs a browser; these assert the affordance ships and
+  // the underlying move is the same POST /api/agenda/slots covered below.
+  check("day grid renders draggable slot blocks", agendaPage.text.includes('draggable="true"'));
+  check("day grid explains the drag affordance", agendaPage.text.includes("Drag a session to another room or time"));
 
   const cfpPage = await req("GET", `/cfp/${fx.form.id}`, null, null);
   check("public CFP renders open form (not closed state)", !cfpPage.text.includes("Submissions are closed"));
@@ -481,6 +485,23 @@ try {
     endsAt: `${fx.dayKey}T19:30:00.000Z`,
   }, admin);
   check("clean placement → 200", clean.status === 200, `${clean.status} ${JSON.stringify(clean.data?.error ?? "")}`);
+
+  // The drag-and-drop move (B6) posts this exact shape for an ALREADY-scheduled
+  // session: same slot, new room and start, duration preserved. The endpoint must
+  // not treat the slot as conflicting with itself.
+  const dragMove = await req("POST", "/api/agenda/slots", {
+    eventId: EVENT_ID,
+    sessionId: fx.sessionB.id,
+    roomId: fx.roomA.id,
+    trackId: fx.track.id,
+    startsAt: `${fx.dayKey}T20:00:00.000Z`,
+    endsAt: `${fx.dayKey}T20:30:00.000Z`,
+  }, admin);
+  check("drag move of a scheduled session → 200", dragMove.status === 200, `${dragMove.status} ${JSON.stringify(dragMove.data?.error ?? "")}`);
+  check("drag move landed in the new room", dragMove.data?.data?.slot?.roomId === fx.roomA.id,
+    JSON.stringify(dragMove.data?.data?.slot ?? {}));
+  check("drag move landed at the new time", dragMove.data?.data?.slot?.startsAt === `${fx.dayKey}T20:00:00.000Z`,
+    dragMove.data?.data?.slot?.startsAt ?? "none");
 
   const unsched = await req("DELETE", `/api/agenda/slots?sessionId=${fx.sessionB.id}`, null, admin);
   check("unschedule → 200", unsched.status === 200, `got ${unsched.status}`);

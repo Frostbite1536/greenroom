@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
@@ -20,6 +20,11 @@ import {
 type View = "list" | "day" | "week" | "rooms" | "conflicts";
 
 const PX_PER_MIN = 1;
+/** Drop targets snap to 5-minute marks so dragging produces tidy start times. */
+const SNAP_MINUTES = 5;
+
+/** Local echo of a slot move while the server round-trip is in flight. */
+type SlotOverride = { roomId: string; startsAt: string; endsAt: string };
 
 /** Map placed sessions onto the event-local minute intervals the grids lay out. */
 function toIntervals(sessions: Placed[], tz: string) {
@@ -35,14 +40,29 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [pending, startTransition] = useTransition();
   const [view, setView] = useState<View>("day");
   const [scheduling, setScheduling] = useState<AgendaSession | null>(null);
+  const [overrides, setOverrides] = useState<Record<string, SlotOverride>>({});
+  const [movingId, setMovingId] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
   const tz = data.timezone;
   const roomName = (id: string) => data.rooms.find((r) => r.id === id)?.name ?? id;
   const trackColor = (id: string | null) => data.tracks.find((t) => t.id === id)?.color ?? "#687276";
 
-  const placed = useMemo(() => placedSessions(data.sessions), [data.sessions]);
-  const unscheduled = useMemo(() => data.sessions.filter((s) => s.slot === null), [data.sessions]);
-  const conflicts = useMemo(() => findConflicts(data.sessions, roomName), [data.sessions]);
+  // Fresh server data supersedes any local echo.
+  useEffect(() => setOverrides({}), [data.sessions]);
+
+  const sessions = useMemo(
+    () =>
+      data.sessions.map((s) => {
+        const override = overrides[s.id];
+        return override && s.slot ? { ...s, slot: { ...s.slot, ...override } } : s;
+      }),
+    [data.sessions, overrides],
+  );
+
+  const placed = useMemo(() => placedSessions(sessions), [sessions]);
+  const unscheduled = useMemo(() => sessions.filter((s) => s.slot === null), [sessions]);
+  const conflicts = useMemo(() => findConflicts(sessions, roomName), [sessions]);
   const conflictIds = useMemo(() => conflictedSessionIds(conflicts), [conflicts]);
 
   // Days that actually have content, so the grid follows the real event.
@@ -58,6 +78,47 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
     const res = await apiDelete(`/api/agenda/slots?sessionId=${encodeURIComponent(sessionId)}`);
     if (res.ok) startTransition(() => router.refresh());
     return res.ok;
+  }
+
+  /**
+   * Drag-and-drop move. The block follows the cursor optimistically, but the
+   * server re-checks room/speaker overlap transactionally and is the only
+   * authority: a refusal drops the local echo (the block snaps back) and shows
+   * the conflict message the API returned.
+   */
+  async function moveSlot(session: Placed, roomId: string, startMin: number) {
+    const dayKey = zonedParts(session.slot.startsAt, tz).dateKey;
+    const startsAt = zonedToUtcIso(dayKey, minutesToTimeInput(startMin), tz);
+    if (startsAt === session.slot.startsAt && roomId === session.slot.roomId) return;
+
+    const durationMs = new Date(session.slot.endsAt).getTime() - new Date(session.slot.startsAt).getTime();
+    const endsAt = new Date(new Date(startsAt).getTime() + durationMs).toISOString();
+
+    setMoveError(null);
+    setMovingId(session.id);
+    setOverrides((prev) => ({ ...prev, [session.id]: { roomId, startsAt, endsAt } }));
+
+    const res = await apiPost("/api/agenda/slots", {
+      eventId: data.eventId,
+      sessionId: session.id,
+      roomId,
+      trackId: session.slot.trackId || undefined,
+      startsAt,
+      endsAt,
+    });
+    setMovingId(null);
+
+    if (!res.ok) {
+      setOverrides((prev) => {
+        const next = { ...prev };
+        delete next[session.id];
+        return next;
+      });
+      const detail = res.error.fieldErrors?.conflicts?.join(" · ");
+      setMoveError(detail ? `${res.error.message} ${detail}` : res.error.message);
+      return;
+    }
+    startTransition(() => router.refresh());
   }
 
   return (
@@ -85,6 +146,18 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           </div>
         )}
       </div>
+
+      {moveError && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>Move refused.</strong> {moveError}{" "}
+              <button className="link-button" onClick={() => setMoveError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {conflicts.length > 0 && view !== "conflicts" && (
         <div style={{ padding: 12 }}>
@@ -139,6 +212,8 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           conflictIds={conflictIds}
           trackColor={trackColor}
           onSelect={setScheduling}
+          onMove={view === "day" ? moveSlot : undefined}
+          movingId={movingId}
         />
       )}
       {view === "week" && (
@@ -153,7 +228,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         />
       )}
       {view === "conflicts" && (
-        <ConflictsView conflicts={conflicts} sessions={data.sessions} tz={tz} onSelect={setScheduling} />
+        <ConflictsView conflicts={conflicts} sessions={sessions} tz={tz} onSelect={setScheduling} />
       )}
 
       {scheduling ? (
@@ -246,6 +321,8 @@ function DayGrid({
   conflictIds,
   trackColor,
   onSelect,
+  onMove,
+  movingId,
 }: {
   sessions: Placed[];
   tz: string;
@@ -255,7 +332,16 @@ function DayGrid({
   conflictIds: Set<string>;
   trackColor: (id: string | null) => string;
   onSelect: (s: AgendaSession) => void;
+  /** Omitted for the track view, where a column is not a bookable resource. */
+  onMove?: (session: Placed, roomId: string, startMin: number) => void;
+  movingId: string | null;
 }) {
+  // A drag carries an object, which `dataTransfer` cannot hold across the
+  // dragover/drop handlers, so the payload lives in a ref.
+  const drag = useRef<{ session: Placed; grabOffsetY: number; durationMin: number } | null>(null);
+  const [dropCol, setDropCol] = useState<string | null>(null);
+  const draggable = typeof onMove === "function";
+
   if (!day) {
     return (
       <EmptyState icon={<CalendarDays size={22} />} title="Nothing scheduled yet">
@@ -275,8 +361,28 @@ function DayGrid({
   const bounds = gridBounds(toIntervals(daySessions, tz));
   const hours = hourMarks(bounds);
 
+  function handleDrop(event: React.DragEvent<HTMLDivElement>, colId: string) {
+    event.preventDefault();
+    setDropCol(null);
+    const payload = drag.current;
+    drag.current = null;
+    if (!payload || !onMove) return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const rawStart = bounds.start + (event.clientY - rect.top - payload.grabOffsetY) / PX_PER_MIN;
+    const snapped = Math.round(rawStart / SNAP_MINUTES) * SNAP_MINUTES;
+    const clamped = Math.max(bounds.start, Math.min(snapped, bounds.end - payload.durationMin));
+    onMove(payload.session, colId, clamped);
+  }
+
   return (
     <div className="table-scroll">
+      {draggable ? (
+        <p className="hint agenda-drag-hint">
+          Drag a session to another room or time. Conflicts are re-checked on the server, so a
+          refused move snaps back. Keyboard: focus a session and press Enter to open the scheduler.
+        </p>
+      ) : null}
       <div style={{ ["--room-count" as string]: columns.length }}>
         <div className="agenda-grid">
           <div className="col-head time-head">{tzAbbreviation(tz)}</div>
@@ -287,7 +393,20 @@ function DayGrid({
             {hours.map((h) => <div className="time-label" key={h}>{minutesToTimeInput(h)}</div>)}
           </div>
           {columns.map((col) => (
-            <div className="room-col" key={col.id}>
+            <div
+              className={`room-col ${dropCol === col.id ? "drop-target" : ""}`}
+              key={col.id}
+              onDragOver={draggable ? (event) => {
+                if (!drag.current) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                if (dropCol !== col.id) setDropCol(col.id);
+              } : undefined}
+              onDragLeave={draggable ? (event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropCol(null);
+              } : undefined}
+              onDrop={draggable ? (event) => handleDrop(event, col.id) : undefined}
+            >
               {hours.map((h) => <div className="hour-line" key={h} />)}
               {daySessions
                 .filter((s) => (groupBy === "room" ? s.slot.roomId === col.id : s.slot.trackId === col.id))
@@ -297,12 +416,28 @@ function DayGrid({
                   const top = (start - bounds.start) * PX_PER_MIN + 1;
                   const height = Math.max(18, (end - start) * PX_PER_MIN - 3);
                   const conflict = conflictIds.has(s.id);
+                  const moving = movingId === s.id;
                   return (
                     <button
                       key={s.id}
-                      className={`slot-block ${conflict ? "conflict" : ""}`}
-                      style={{ top, height, background: trackColor(s.slot.trackId), border: "none", cursor: "pointer", textAlign: "left" }}
-                      title={`${s.title} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}`}
+                      className={`slot-block ${conflict ? "conflict" : ""} ${draggable ? "draggable" : ""} ${moving ? "moving" : ""}`}
+                      style={{ top, height, background: trackColor(s.slot.trackId), border: "none", textAlign: "left" }}
+                      title={`${s.title} · ${formatTime(s.slot.startsAt, tz)}–${formatTime(s.slot.endsAt, tz)}${draggable ? " — drag to move" : ""}`}
+                      draggable={draggable}
+                      onDragStart={draggable ? (event) => {
+                        drag.current = {
+                          session: s,
+                          grabOffsetY: event.clientY - event.currentTarget.getBoundingClientRect().top,
+                          durationMin: end - start,
+                        };
+                        event.dataTransfer.effectAllowed = "move";
+                        // Firefox refuses to start a drag without payload data.
+                        event.dataTransfer.setData("text/plain", s.id);
+                      } : undefined}
+                      onDragEnd={draggable ? () => {
+                        drag.current = null;
+                        setDropCol(null);
+                      } : undefined}
                       onClick={() => onSelect(s)}
                     >
                       {conflict ? <span className="conflict-flag"><AlertTriangle size={12} /></span> : null}
