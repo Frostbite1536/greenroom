@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
@@ -28,6 +28,14 @@ const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
 const BASE = `http://127.0.0.1:${PORT}`;
+// Refuse a pre-existing listener: otherwise this run can silently verify a
+// server it did not spawn and report a misleading pass.
+const occupiedPort = await fetch(`${BASE}/login`).then(() => true).catch(() => false);
+if (occupiedPort) {
+  console.error(`[smoke] port ${PORT} is already serving. Find and stop that exact PID first:\n` +
+    `  netstat -ano | findstr :${PORT}\n  taskkill /F /PID <pid>`);
+  process.exit(1);
+}
 // The spawned server receives this scratch-only key even when the shell does
 // not have one configured. It exercises the optional v1 read surface without
 // changing any shared environment or touching the judged event.
@@ -54,9 +62,49 @@ const server = spawn("npx", ["next", "start", "-p", PORT], {
   env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY, SESSION_SECRET: SMOKE_SESSION_SECRET },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
+const prisma = new PrismaClient();
 let ready = false;
 server.stdout.on("data", (d) => { if (/Ready|started server|Local:/i.test(d.toString())) ready = true; });
 server.stderr.on("data", (d) => process.stderr.write(d));
+
+let cleanupFailed = false;
+let cleanupPromise;
+function stopServer() {
+  if (!server.pid || server.exitCode !== null) return true;
+  if (process.platform === "win32") {
+    // `server.pid` is the shell wrapper; /T limits termination to its exact tree.
+    const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(server.pid)], { encoding: "utf8" });
+    if (result.error || result.status !== 0) {
+      cleanupFailed = true;
+      console.error(`[smoke] failed to stop server tree for pid ${server.pid}: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`);
+      return false;
+    }
+    return true;
+  }
+  if (!server.kill("SIGTERM")) {
+    cleanupFailed = true;
+    console.error(`[smoke] failed to stop server pid ${server.pid}`);
+    return false;
+  }
+  return true;
+}
+
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    await prisma.$disconnect().catch((error) => {
+      cleanupFailed = true;
+      console.error("[smoke] Prisma cleanup failed", error);
+    });
+    stopServer();
+    return cleanupFailed;
+  })();
+  return cleanupPromise;
+}
+
+process.once("SIGINT", () => {
+  fatalError = true;
+  void cleanup().finally(() => process.exit(130));
+});
 
 async function waitReady() {
   for (let i = 0; i < 60; i++) {
@@ -67,8 +115,6 @@ async function waitReady() {
 
 const results = [];
 const check = (name, cond, extra) => { results.push({ name, ok: !!cond, extra }); console.log(`${cond ? "PASS" : "FAIL"} ${name}`, extra ?? ""); };
-
-const prisma = new PrismaClient();
 
 /**
  * Wipe + recreate the scratch event so runs are idempotent and isolated.
@@ -391,12 +437,6 @@ try {
 } finally {
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
-  await prisma.$disconnect().catch(() => {});
-  // Kill ONLY the process tree we spawned (never by image name — see STATE.md incident rule).
-  if (process.platform === "win32") {
-    spawn("taskkill", ["/PID", String(server.pid), "/T", "/F"], { shell: true, stdio: "ignore" });
-  } else {
-    server.kill();
-  }
-  setTimeout(() => process.exit(fatalError || failed.length ? 1 : 0), 1500);
+  await cleanup();
+  process.exit(fatalError || failed.length || cleanupFailed ? 1 : 0);
 }

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ClipboardCheck, Mic2, ShieldCheck, Users } from "lucide-react";
-import { DEMO_PERSONAS, getSession } from "@/lib/auth";
+import { DEMO_PERSONAS, getResolvedSession, homeForRole } from "@/lib/auth";
 import { loginAsPersona, loginWithEmail } from "./actions";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -28,9 +28,9 @@ const personas = [
 ] as const;
 
 export default async function LoginPage() {
-  const session = await getSession();
+  const session = await getResolvedSession();
   if (session) {
-    redirect(session.role === "SPEAKER" ? "/portal" : "/admin/forms");
+    redirect(homeForRole(session.role));
   }
 
   return (

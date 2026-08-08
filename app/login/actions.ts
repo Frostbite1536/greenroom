@@ -7,16 +7,11 @@ import {
   DEMO_PERSONAS,
   SESSION_COOKIE,
   encodeSession,
+  homeForRole,
   type DemoSession,
   type PersonaKey,
 } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
-const HOME_BY_ROLE: Record<DemoSession["role"], string> = {
-  ADMIN: "/admin/forms",
-  EVALUATOR: "/admin/evaluations",
-  SPEAKER: "/portal",
-};
 
 async function establish(session: DemoSession): Promise<never> {
   const jar = await cookies();
@@ -27,7 +22,7 @@ async function establish(session: DemoSession): Promise<never> {
     maxAge: 60 * 60 * 24 * 7,
     secure: process.env.NODE_ENV === "production",
   });
-  redirect(HOME_BY_ROLE[session.role]);
+  redirect(homeForRole(session.role));
 }
 
 export async function loginAsPersona(formData: FormData): Promise<void> {

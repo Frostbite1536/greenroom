@@ -61,6 +61,15 @@ export const DEMO_PERSONAS = {
 export type PersonaKey = keyof typeof DEMO_PERSONAS;
 
 const ROLES: UserRole[] = ["ADMIN", "EVALUATOR", "SPEAKER"];
+const HOME_BY_ROLE: Record<UserRole, string> = {
+  ADMIN: "/admin/forms",
+  EVALUATOR: "/admin/evaluations",
+  SPEAKER: "/portal",
+};
+
+export function homeForRole(role: UserRole): string {
+  return HOME_BY_ROLE[role];
+}
 
 type SignedSession = DemoSession & { iat: number; exp: number };
 
@@ -132,21 +141,11 @@ export const getSession = cache(async (): Promise<DemoSession | null> => {
   return raw ? decodeSession(raw) : null;
 });
 
-async function redirectToLogin(): Promise<never> {
-  const { redirect } = await import("next/navigation");
-  redirect("/login");
-  throw new Error("redirect() unexpectedly returned");
-}
-
-export async function requireSession(roles?: UserRole[]): Promise<DemoSession> {
+/** Resolve a signed identity to its current persisted event membership and role. */
+export const getResolvedSession = cache(async (): Promise<DemoSession | null> => {
   const session = await getSession();
-  if (!session) {
-    return redirectToLogin();
-  }
+  if (!session) return null;
 
-  // The cookie identifies a user/event but its role is never authoritative.
-  // Resolve the existing membership for page/server-action authorization too,
-  // so a role change or removed membership takes effect immediately.
   const email = session.user.email.trim().toLowerCase();
   const user = await prisma.user.findUnique({
     where: { email },
@@ -158,12 +157,24 @@ export async function requireSession(roles?: UserRole[]): Promise<DemoSession> {
     },
   });
   const membership = user?.memberships[0];
-  if (!user || !membership || (roles && !roles.includes(membership.role))) {
-    return redirectToLogin();
-  }
+  if (!user || !membership) return null;
   return {
     ...session,
     user: { id: user.id, name: user.name, email: user.email },
     role: membership.role,
   };
+});
+
+async function redirectToLogin(): Promise<never> {
+  const { redirect } = await import("next/navigation");
+  redirect("/login");
+  throw new Error("redirect() unexpectedly returned");
+}
+
+export async function requireSession(roles?: UserRole[]): Promise<DemoSession> {
+  const session = await getResolvedSession();
+  if (!session || (roles && !roles.includes(session.role))) {
+    return redirectToLogin();
+  }
+  return session;
 }

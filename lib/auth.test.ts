@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEMO_PERSONAS, SESSION_TTL_SECONDS, decodeSession, encodeSession } from "./auth";
+import { DEMO_PERSONAS, SESSION_TTL_SECONDS, decodeSession, encodeSession, homeForRole } from "./auth";
 
 test("signed session round-trips and keeps only the expected session fields", () => {
   const now = Date.UTC(2026, 4, 12, 9, 0, 0);
@@ -37,4 +37,10 @@ test("production fails closed when its configured secret is missing or too short
     if (originalSecret === undefined) delete env.SESSION_SECRET;
     else env.SESSION_SECRET = originalSecret;
   }
+});
+
+test("persisted roles choose the same homes for login and root redirects", () => {
+  assert.equal(homeForRole("ADMIN"), "/admin/forms");
+  assert.equal(homeForRole("EVALUATOR"), "/admin/evaluations");
+  assert.equal(homeForRole("SPEAKER"), "/portal");
 });

@@ -197,11 +197,39 @@ console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
  * rule in coordination STATE.md) — this is scoped to our own PID.
  */
 function stopServer() {
-  if (!server.pid) return;
+  if (!server.pid || server.exitCode !== null) return true;
   const res = spawnSync("taskkill", ["/F", "/T", "/PID", String(server.pid)], { encoding: "utf8" });
   console.log(`[smoke] stopped server tree for pid ${server.pid}${res.status === 0 ? "" : ` (exit ${res.status})`}`);
+  if (res.error || res.status !== 0) {
+    cleanupFailed = true;
+    console.error(`[smoke] failed to stop server tree: ${res.error?.message ?? res.stderr ?? `exit ${res.status}`}`);
+    return false;
+  }
+  return true;
 }
-process.on("SIGINT", () => { stopServer(); process.exit(130); });
+let cleanupFailed = false;
+let cleanupPromise;
+function cleanup() {
+  cleanupPromise ??= (async () => {
+    try {
+      await prisma.event.deleteMany({ where: { id: EVENT_ID } });
+      console.log("[smoke] scratch-frontend cleaned up");
+    } catch (error) {
+      cleanupFailed = true;
+      console.error("[smoke] cleanup failed", error);
+    }
+    await prisma.$disconnect().catch((error) => {
+      cleanupFailed = true;
+      console.error("[smoke] Prisma cleanup failed", error);
+    });
+    stopServer();
+    return cleanupFailed;
+  })();
+  return cleanupPromise;
+}
+process.once("SIGINT", () => {
+  void cleanup().finally(() => process.exit(130));
+});
 server.stderr.on("data", (d) => {
   const s = d.toString();
   if (/error|Error/.test(s)) process.stderr.write(s);
@@ -427,13 +455,6 @@ try {
 } finally {
   const passed = results.filter((r) => r.pass).length;
   console.log(`\n[smoke] ${passed}/${results.length} checks passed`);
-  try {
-    await prisma.event.deleteMany({ where: { id: EVENT_ID } });
-    console.log("[smoke] scratch-frontend cleaned up");
-  } catch (e) {
-    console.error("[smoke] cleanup failed", e);
-  }
-  await prisma.$disconnect();
-  stopServer();
-  process.exit(results.every((r) => r.pass) ? 0 : 1);
+  await cleanup();
+  process.exit(results.every((r) => r.pass) && !cleanupFailed ? 0 : 1);
 }

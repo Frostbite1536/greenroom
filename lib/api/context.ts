@@ -1,6 +1,5 @@
 import type { UserRole } from "@prisma/client";
-import { getSession } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { getResolvedSession } from "@/lib/auth";
 import { ApiError } from "@/lib/api/http";
 
 /**
@@ -21,31 +20,14 @@ export type ApiContext = {
 
 /** Resolve the current API context, or null when unauthenticated. */
 export async function getApiContext(): Promise<ApiContext | null> {
-  const session = await getSession();
+  const session = await getResolvedSession();
   if (!session) return null;
 
-  const email = session.user.email.trim().toLowerCase();
-  const user = await prisma.user.findUnique({
-    where: { email },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      memberships: {
-        where: { eventId: session.event.id },
-        select: { role: true },
-        take: 1,
-      },
-    },
-  });
-  const membership = user?.memberships[0];
-  if (!user || !membership) return null;
-
   return {
-    userId: user.id,
-    email: user.email,
-    name: user.name,
-    role: membership.role,
+    userId: session.user.id,
+    email: session.user.email,
+    name: session.user.name,
+    role: session.role,
     eventId: session.event.id,
   };
 }
