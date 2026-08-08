@@ -1,0 +1,117 @@
+import { redirect } from "next/navigation";
+import "@/components/feature.css";
+import { PageHeader } from "@/components/ui";
+import { getApiContext } from "@/lib/api/context";
+import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { useMockIntegrations } from "@/lib/env";
+import { prisma } from "@/lib/prisma";
+import { integrationStatus } from "@/lib/operations/status";
+import { RemindersPanel } from "./reminders-panel";
+import { ImportPanel } from "./import-panel";
+import { IntegrationsPanel } from "./integrations-panel";
+import { TemplatesPanel } from "./templates-panel";
+import { sanitizeHtml } from "@/lib/sanitize-html";
+import styles from "./operations.module.css";
+
+export const metadata = { title: "Operations" };
+export const dynamic = "force-dynamic";
+
+/**
+ * `/admin/operations` — the operator surface for integrations that previously
+ * existed only as APIs (plan item B5).
+ *
+ * Every action is a POST the server already authorizes and validates; this page
+ * adds no new privileges. Credentials are never sent to the browser — only
+ * booleans describing whether an integration is connected, so the console can
+ * say up front whether a button will really reach a third party.
+ */
+export default async function AdminOperationsPage() {
+  const ctx = await getApiContext();
+  if (!ctx) redirect("/login");
+  if (ctx.role !== "ADMIN") redirect("/portal");
+  const eventId = ctx.eventId;
+
+  const [templates, forms, speakerRows] = await Promise.all([
+    prisma.emailTemplate.findMany({
+      where: { eventId },
+      select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
+      orderBy: { key: "asc" },
+      take: OPERATOR_QUERY_LIMITS.templates,
+    }),
+    prisma.formConfig.findMany({
+      where: { eventId },
+      select: { id: true, name: true, slug: true },
+      orderBy: { name: "asc" },
+      take: OPERATOR_QUERY_LIMITS.importForms,
+    }),
+    prisma.sessionSpeaker.findMany({
+      where: { session: { eventId } },
+      select: {
+        userId: true,
+        user: { select: { name: true, email: true } },
+        session: { select: { title: true } },
+      },
+      orderBy: { user: { email: "asc" } },
+      take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
+    }),
+  ]);
+
+  // One row per speaker; the reminders API is keyed by user, not by session.
+  const speakers = [...new Map(speakerRows.map((row) => [row.userId, {
+    userId: row.userId,
+    name: row.user.name,
+    email: row.user.email,
+  }])).values()];
+
+  const mocked = useMockIntegrations();
+  const airtable = integrationStatus({
+    name: "Airtable",
+    mocked,
+    configured: Boolean(process.env.AIRTABLE_API_KEY && process.env.AIRTABLE_BASE_ID),
+    action: "copy the programme to Airtable",
+  });
+  const accelevents = integrationStatus({
+    name: "Accelevents",
+    mocked,
+    configured: Boolean(process.env.ACCELEVENTS_BASE_URL),
+    action: "send the programme to Accelevents",
+  });
+  const email = integrationStatus({
+    name: "Email",
+    mocked,
+    configured: Boolean(process.env.RESEND_API_KEY),
+    action: "deliver real email",
+  });
+
+  return (
+    <section className="page-stack">
+      <PageHeader
+        eyebrow="Operations"
+        title="Operations"
+        description="Send speaker reminders, bring proposals in from a spreadsheet, and keep your other tools in step with the programme."
+      />
+
+      <div className={styles.grid}>
+        <RemindersPanel
+          eventId={eventId}
+          templates={templates.map((template) => ({ key: template.key, subject: template.subject }))}
+          speakers={speakers}
+          email={email}
+        />
+        <ImportPanel eventId={eventId} forms={forms} />
+        <IntegrationsPanel eventId={eventId} airtable={airtable} accelevents={accelevents} />
+        <TemplatesPanel
+          templates={templates.map((template) => ({
+            id: template.id,
+            key: template.key,
+            subject: template.subject,
+            trigger: template.trigger,
+            // Defense in depth: seeded/admin HTML is sanitized before any client sees it.
+            htmlBody: sanitizeHtml(template.htmlBody),
+            updatedAt: template.updatedAt.toISOString(),
+          }))}
+        />
+      </div>
+    </section>
+  );
+}
