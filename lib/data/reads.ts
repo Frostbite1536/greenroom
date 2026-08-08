@@ -97,25 +97,26 @@ export type FormListItem = {
 
 export async function getFormsList(): Promise<{ eventId: string; forms: FormListItem[] }> {
   const ctx = await pageContext(["ADMIN"]);
-  const forms = await prisma.formConfig.findMany({
-    where: { eventId: ctx.eventId },
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      published: true,
-      opensAt: true,
-      closesAt: true,
-    },
-  });
-
-  // One grouped query instead of a count per form (avoids N+1).
-  const grouped = await prisma.abstract.groupBy({
-    by: ["formConfigId", "status"],
-    where: { eventId: ctx.eventId },
-    _count: { _all: true },
-  });
+  const [forms, grouped] = await Promise.all([
+    prisma.formConfig.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        published: true,
+        opensAt: true,
+        closesAt: true,
+      },
+    }),
+    // One grouped query instead of a count per form (avoids N+1).
+    prisma.abstract.groupBy({
+      by: ["formConfigId", "status"],
+      where: { eventId: ctx.eventId },
+      _count: { _all: true },
+    }),
+  ]);
 
   const now = Date.now();
   return {
@@ -187,6 +188,23 @@ export type AbstractRow = {
   hasSession: boolean;
 };
 
+type AssignmentProgressGroup = {
+  abstractId: string;
+  status: string;
+  _count: { _all: number };
+};
+
+export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup[]) {
+  const progressByAbstract = new Map<string, { reviewsTotal: number; reviewsComplete: number }>();
+  for (const group of groups) {
+    const progress = progressByAbstract.get(group.abstractId) ?? { reviewsTotal: 0, reviewsComplete: 0 };
+    progress.reviewsTotal += group._count._all;
+    if (group.status === "COMPLETED") progress.reviewsComplete += group._count._all;
+    progressByAbstract.set(group.abstractId, progress);
+  }
+  return progressByAbstract;
+}
+
 export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
 
@@ -213,24 +231,23 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
     // Review progress without a per-row query.
     prisma.reviewAssignment.groupBy({
       by: ["abstractId", "status"],
+      where: { abstract: { eventId: ctx.eventId } },
       _count: { _all: true },
     }),
     prisma.reviewScore.groupBy({
       by: ["abstractId"],
+      where: { abstract: { eventId: ctx.eventId } },
       _avg: { score: true },
     }),
   ]);
 
+  const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
 
   return {
     eventId: ctx.eventId,
     abstracts: abstracts.map((a) => {
-      const rows = assignmentGroups.filter((g) => g.abstractId === a.id);
-      const reviewsTotal = rows.reduce((n, r) => n + r._count._all, 0);
-      const reviewsComplete = rows
-        .filter((r) => r.status === "COMPLETED")
-        .reduce((n, r) => n + r._count._all, 0);
+      const reviewProgress = assignmentProgressByAbstract.get(a.id) ?? { reviewsTotal: 0, reviewsComplete: 0 };
       const avg = avgByAbstract.get(a.id);
       return {
         id: a.id,
@@ -247,8 +264,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
           isPrimary: s.isPrimary,
         })),
         submittedAt: a.submittedAt?.toISOString() ?? null,
-        reviewsComplete,
-        reviewsTotal,
+        reviewsComplete: reviewProgress.reviewsComplete,
+        reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
         hasSession: a.session !== null,
       };
