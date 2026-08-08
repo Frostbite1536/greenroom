@@ -86,6 +86,13 @@ async function resetScratchEvent() {
 
 try {
   await resetScratchEvent();
+  await prisma.category.createMany({
+    data: [
+      { eventId: SCRATCH_EVENT.id, name: "Systems", sortOrder: 2 },
+      { eventId: SCRATCH_EVENT.id, name: "AI", sortOrder: 0 },
+      { eventId: SCRATCH_EVENT.id, name: "Community", sortOrder: 0 },
+    ],
+  });
   await waitReady();
 
   // 1. Create + publish a CFP form (admin)
@@ -104,6 +111,11 @@ try {
   // 2. Public read of the form (null session)
   const pub = await j("GET", `/api/cfp/public/${formId}`);
   check("public form read (no auth)", pub.status === 200 && pub.data?.data?.isOpen === true);
+  check(
+    "public form includes event categories in stable order",
+    JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
+      JSON.stringify(["AI", "Community", "Systems"]),
+  );
 
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
@@ -170,6 +182,16 @@ try {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 5, comment: "strong" }], complete: true,
   }, evalr);
   check("valid score recorded + assignment completed", score.status === 200 && score.data?.data?.complete === true, score.status);
+
+  const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
+  const reviewedAbstract = reviewedList.data?.data?.find((item) => item.id === abstractId);
+  check(
+    "abstract list includes completed review progress and average score",
+    reviewedList.status === 200 &&
+      reviewedAbstract?.reviewsComplete === 1 &&
+      reviewedAbstract?.reviewsTotal === 1 &&
+      reviewedAbstract?.avgScore === 5,
+  );
 
   // 10. Convert before acceptance must fail (INV-DOMAIN-001)
   const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);

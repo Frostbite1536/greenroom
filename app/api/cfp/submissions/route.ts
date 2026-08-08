@@ -34,7 +34,15 @@ export const GET = handle(async (req) => {
       ...(statuses ? { status: { in: statuses } } : {}),
       ...(formConfigId ? { formConfigId } : {}),
     },
-    include: { category: true, speakers: { include: { user: true } }, answers: true },
+    include: {
+      category: true,
+      speakers: { include: { user: true } },
+      answers: true,
+      // Prisma fetches these relation sets for the whole result, rather than
+      // issuing a query per serialized abstract.
+      reviewAssignments: { select: { status: true } },
+      reviewScores: { select: { score: true } },
+    },
     orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
   });
   return ok(abstracts.map(serializeAbstract));

@@ -3,6 +3,8 @@ import type {
   AbstractSpeaker,
   Category,
   FormAnswer,
+  ReviewAssignment,
+  ReviewScore,
   User,
 } from "@prisma/client";
 
@@ -10,10 +12,20 @@ type AbstractWithRelations = Abstract & {
   category?: Category | null;
   speakers?: (AbstractSpeaker & { user: User })[];
   answers?: FormAnswer[];
+  reviewAssignments?: Pick<ReviewAssignment, "status">[];
+  reviewScores?: Pick<ReviewScore, "score">[];
 };
 
 /** Serialize an abstract for admin tables and speaker portal reads. */
 export function serializeAbstract(abstract: AbstractWithRelations) {
+  const reviewAssignments = abstract.reviewAssignments ?? [];
+  const reviewScores = abstract.reviewScores ?? [];
+  const averageScore =
+    reviewScores.length > 0
+      ? reviewScores.reduce((sum, review) => sum + Number(review.score), 0) /
+        reviewScores.length
+      : null;
+
   return {
     id: abstract.id,
     eventId: abstract.eventId,
@@ -39,5 +51,10 @@ export function serializeAbstract(abstract: AbstractWithRelations) {
     answers: Object.fromEntries(
       (abstract.answers ?? []).map((a) => [a.formFieldId, a.value]),
     ),
+    // These field names match the admin pipeline's existing row contract.
+    // Relations are included by the list query, avoiding a per-abstract query.
+    reviewsComplete: reviewAssignments.filter((review) => review.status === "COMPLETED").length,
+    reviewsTotal: reviewAssignments.length,
+    avgScore: averageScore,
   };
 }
