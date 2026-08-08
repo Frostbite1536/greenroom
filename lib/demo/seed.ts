@@ -7,7 +7,7 @@ import { zonedToUtcIso } from "@/lib/tz";
  * Running it again wipes and rebuilds all data scoped to the demo event, so it
  * doubles as the demo-reset payload. Global `User` rows are upserted by email
  * (matching the auth contract: users are resolved by lowercased email, not id)
- * so persona and email logins survive a reseed.
+ * so fixed seeded persona sessions survive a reseed.
  */
 
 export const DEMO_EVENT = {

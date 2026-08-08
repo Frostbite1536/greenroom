@@ -90,8 +90,9 @@ Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
 plan with 3 evaluators + scores, 13 sessions (incl. a guaranteed keynote),
 11 schedule slots **with one deliberate room conflict**, 5 onboarding tasks
 (one carries a form), per-speaker task status, 4 email templates, 2 resources.
-Persona users are upserted by email so logins survive a reseed. The speaker
-persona (`sofia@greenroom.demo`) owns a confirmed session and is at 3/5 tasks.
+Persona users are upserted by email so fixed-persona access survives a reseed.
+The speaker persona (`sofia@greenroom.demo`) owns a confirmed session and is at
+3/5 tasks.
 
 > Once the architect wires `package.json`, this is also runnable via
 > `npm run db:seed` / `prisma db seed` (see coordination request).
