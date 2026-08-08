@@ -40,9 +40,9 @@ Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
 
 ## Deployed demo
 
-Deployment target is Vercel + Neon; the live demo URL will be published here
-once the ops deploy lands (see `docs/DEPLOY.md` for the full deploy runbook,
-environment variables, and the gated demo-reset endpoint).
+**Live at <https://greenroom-omega-dusky.vercel.app>** (Vercel + Neon; pushes to
+`main` auto-deploy). See `docs/DEPLOY.md` for the deploy runbook, environment
+variables, and the gated demo-reset endpoint.
 
 ## Stack
 
