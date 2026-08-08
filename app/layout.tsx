@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: { default: "Sessionboard", template: "%s | Sessionboard" },
+  title: { default: "Greenroom", template: "%s | Greenroom" },
   description: "Speaker, CFP, review, and agenda operations in one workspace.",
 };
 

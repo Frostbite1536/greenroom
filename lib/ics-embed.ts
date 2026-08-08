@@ -21,7 +21,7 @@ export function buildIcs(slots: SlotModel[], eventName: string): string {
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Sessionboard//Embed//EN",
+    "PRODID:-//Greenroom//Embed//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     `X-WR-CALNAME:${escape(eventName)}`,
@@ -29,7 +29,7 @@ export function buildIcs(slots: SlotModel[], eventName: string): string {
   for (const s of slots) {
     lines.push(
       "BEGIN:VEVENT",
-      `UID:${s.id}@sessionboard`,
+      `UID:${s.id}@greenroom`,
       `DTSTART:${toIcsDate(s.startsAt)}`,
       `DTEND:${toIcsDate(s.endsAt)}`,
       `SUMMARY:${escape(s.title)}`,

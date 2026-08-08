@@ -1,7 +1,7 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 
 /**
- * Deterministic, idempotent demo seed for the Sessionboard clone.
+ * Deterministic, idempotent demo seed for Greenroom.
  *
  * Running it again wipes and rebuilds all data scoped to the demo event, so it
  * doubles as the demo-reset payload. Global `User` rows are upserted by email
@@ -18,9 +18,9 @@ export const DEMO_EVENT = {
 
 // Personas must match lib/auth.ts DEMO_PERSONAS emails.
 const PERSONAS = {
-  admin: { email: "maya@sessionboard.demo", name: "Maya Chen" },
-  evaluator: { email: "ravi@sessionboard.demo", name: "Ravi Patel" },
-  speaker: { email: "sofia@sessionboard.demo", name: "Sofia Marques" },
+  admin: { email: "maya@greenroom.demo", name: "Maya Chen" },
+  evaluator: { email: "ravi@greenroom.demo", name: "Ravi Patel" },
+  speaker: { email: "sofia@greenroom.demo", name: "Sofia Marques" },
 } as const;
 
 const CATEGORIES = [
@@ -174,8 +174,8 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   const speakerPrimaryId = await upsertUser(PERSONAS.speaker.email, PERSONAS.speaker.name);
 
   // Two more evaluators for a realistic review team.
-  const evaluator2Id = await upsertUser("lena@sessionboard.demo", "Lena Fischer");
-  const evaluator3Id = await upsertUser("theo@sessionboard.demo", "Theo Almeida");
+  const evaluator2Id = await upsertUser("lena@greenroom.demo", "Lena Fischer");
+  const evaluator3Id = await upsertUser("theo@greenroom.demo", "Theo Almeida");
   const evaluatorIds = [evaluatorPrimaryId, evaluator2Id, evaluator3Id];
 
   // Speaker pool (Sofia is index 0 so she owns real abstracts/tasks).

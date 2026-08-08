@@ -1,37 +1,63 @@
-# SaaS Replication Sprint Workspace
+# Greenroom
 
-A lightweight Pi + Git worktree workspace for a 48-hour SaaS replication sprint.
+Open-source event program management — an alternative to closed CFP/speaker-ops
+SaaS. Greenroom covers the full life of a conference program: CFP forms,
+abstract evaluation, speaker onboarding, and a conflict-aware agenda, with
+public embeds for your event site.
 
-## Workflow
+## Features (the golden path)
 
-1. Start Pi manually in the root and reveal the target SaaS to the Architect.
-2. Have the Architect lock only the contracts needed for the golden path and commit the foundation.
-3. Confirm the Architect commit is on `main`, then run `./launch-agents.sh` from Git Bash (or `./launch-agents.ps1` from PowerShell).
-4. Workers implement non-overlapping vertical areas in their worktrees.
-5. Workers commit small slices and write status to the external coordination directory.
-6. The Architect merges one branch at a time, runs checks, and keeps `main` demoable.
+1. **CFP forms** — build a submission form (custom fields, conditional logic,
+   submission limits, welcome/thank-you pages) and publish it at a public URL.
+2. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
+   email); drafts and validation included.
+3. **Evaluation** — review teams score abstracts against a weighted rubric
+   through evaluation plans (blind review supported), routed by category.
+4. **Accept → Session** — accepted abstracts convert into confirmed, schedulable
+   sessions.
+5. **Speaker onboarding** — a speaker portal with profile, status, and task
+   checklists (tasks can carry forms).
+6. **Agenda builder** — day/room scheduling with transactional room-overlap and
+   speaker double-booking conflict detection.
+7. **Public embeds** — mobile-friendly schedule embed with `.ics` calendar
+   export.
 
-## Coordination
-
-Live coordination is outside Git at:
-
-```text
-../SAAS-sprint-coordination/
-```
-
-The launch scripts set `SPRINT_COORDINATION_DIR` to that path. Use `JEREMY-INBOX.md` for decisions and `STATE.md` for current status, requests, and merge notes.
-
-Optional friction logging is documented in `docs/FRICTION_LOGGING.md`; it is intentionally not installed or made a merge gate by this scaffold.
-
-## Quick commands
+## Quickstart
 
 ```bash
-pi
-./launch-agents.sh
-# or from PowerShell:
-./launch-agents.ps1
+npm install
+cp .env.example .env       # set DATABASE_URL (Postgres, e.g. Neon)
+npm run db:push            # apply the Prisma schema
+npm run db:seed            # deterministic demo data (event, forms, 40 abstracts, schedule)
+npm run dev
 ```
 
-## Safety gates
+Then open http://localhost:3000/login — one-click demo personas (Admin /
+Evaluator / Speaker) are available, plus login-as-any-email.
 
-See `REVIEW.md`, `docs/INVARIANTS.md`, and `docs/SPRINT_PLAYBOOK.md`. AI review supplements human review; it never replaces reading changed code and exercising the golden path.
+Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
+`sofia@greenroom.demo` (speaker).
+
+## Deployed demo
+
+Deployment target is Vercel + Neon; the live demo URL will be published here
+once the ops deploy lands (see `docs/DEPLOY.md` for the full deploy runbook,
+environment variables, and the gated demo-reset endpoint).
+
+## Stack
+
+Next.js 16 (App Router) · React 19 · Prisma 6 · PostgreSQL · Zod. Plain CSS,
+no UI framework. See `docs/ARCHITECTURE.md`.
+
+## Contributing / sprint history
+
+This codebase was built during a 48-hour replication sprint; the multi-agent
+workflow that produced it is documented in `docs/SPRINT_WORKFLOW.md`.
+
+## License
+
+Copyright © 2026 Frostbite1536.
+
+Greenroom is licensed under the GNU Affero General Public License v3.0
+(**AGPL-3.0-only**) — chosen so that hosted forks must share their source. See
+[LICENSE](LICENSE) for the full text.

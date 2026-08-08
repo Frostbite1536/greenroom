@@ -32,17 +32,17 @@ export const DEMO_EVENT = {
 
 export const DEMO_PERSONAS = {
   admin: {
-    user: { id: "demo-admin", name: "Maya Chen", email: "maya@sessionboard.demo" },
+    user: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
     event: DEMO_EVENT,
     role: "ADMIN",
   },
   evaluator: {
-    user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@sessionboard.demo" },
+    user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo" },
     event: DEMO_EVENT,
     role: "EVALUATOR",
   },
   speaker: {
-    user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@sessionboard.demo" },
+    user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
     event: DEMO_EVENT,
     role: "SPEAKER",
   },

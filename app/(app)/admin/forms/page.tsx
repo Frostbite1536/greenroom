@@ -4,7 +4,7 @@ import "@/components/feature.css";
 import { PageHeader, Pill } from "@/components/ui";
 import { FORMS } from "@/lib/fixtures";
 
-export const metadata = { title: "Submission Forms · Sessionboard" };
+export const metadata = { title: "Submission Forms · Greenroom" };
 
 function formatWindow(form: (typeof FORMS)[number]): string {
   if (!form.closesAt) return "No deadline";

@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/ui";
 import { AbstractsTable } from "@/components/abstracts-table";
 import { ABSTRACTS } from "@/lib/fixtures";
 
-export const metadata = { title: "Abstracts · Sessionboard" };
+export const metadata = { title: "Abstracts · Greenroom" };
 
 export default function AbstractsPage() {
   const accepted = ABSTRACTS.filter((a) => a.status === "ACCEPTED").length;
