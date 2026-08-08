@@ -312,6 +312,7 @@ export async function mirrorAirtableTable(
   };
 
   const batches = chunks(records, AIRTABLE_BATCH_SIZE);
+  let fatal = false;
   for (const [index, batch] of batches.entries()) {
     const batchResult = await sendWithRetry(fetcher, config, table, batch, resolved);
     report.requests += batchResult.requests;
@@ -326,12 +327,25 @@ export async function mirrorAirtableTable(
       break;
     }
 
-    for (const record of batch) {
+    for (const [recordIndex, record] of batch.entries()) {
       const single = await sendWithRetry(fetcher, config, table, [record], resolved);
       report.requests += single.requests;
-      if (single.outcome.ok) report.upserted++;
-      else recordFailure(record, single.outcome.status, single.outcome.message);
+      if (single.outcome.ok) {
+        report.upserted++;
+        continue;
+      }
+      recordFailure(record, single.outcome.status, single.outcome.message);
+      // A credential/table fault reported mid-recovery is just as fatal as one
+      // reported for a whole batch: stop this table instead of issuing one
+      // doomed request per remaining record.
+      if (FATAL_TABLE_STATUSES.has(single.outcome.status)) {
+        const remaining = [...batch.slice(recordIndex + 1), ...batches.slice(index + 1).flat()];
+        for (const rest of remaining) recordFailure(rest, single.outcome.status, single.outcome.message);
+        fatal = true;
+        break;
+      }
     }
+    if (fatal) break;
   }
 
   return report;

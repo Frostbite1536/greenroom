@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import {
   SPEAKER_STATUS_FILTERS,
   buildSpeakerStatusRows,
+  completeUserBoundary,
   filterSpeakerStatusRows,
   parseSpeakerStatusFilter,
   summarizeSpeakerStatus,
@@ -72,7 +73,19 @@ export default async function AdminSpeakersPage({
 
   const truncated = sessionSpeakers.length > LIMITS.assignments || speakerTasks.length > LIMITS.taskAssignments;
 
-  const assignments: SpeakerAssignment[] = sessionSpeakers.slice(0, LIMITS.assignments).map((row) => ({
+  // Both reads are userId-ordered, so a truncated list is only guaranteed
+  // complete for userIds strictly below the last one it contains. Deriving a
+  // status from partially loaded rows would show "Ready" for a speaker whose
+  // open tasks were cut off — exclude those speakers instead of guessing.
+  const sessionSlice = sessionSpeakers.slice(0, LIMITS.assignments);
+  const taskSlice = speakerTasks.slice(0, LIMITS.taskAssignments);
+  const boundary = completeUserBoundary([
+    { truncated: sessionSpeakers.length > LIMITS.assignments, lastUserId: sessionSlice.at(-1)?.userId ?? null },
+    { truncated: speakerTasks.length > LIMITS.taskAssignments, lastUserId: taskSlice.at(-1)?.userId ?? null },
+  ]);
+  const isComplete = (userId: string) => boundary === null || userId < boundary;
+
+  const assignments: SpeakerAssignment[] = sessionSlice.filter((row) => isComplete(row.userId)).map((row) => ({
     userId: row.userId,
     name: row.user.name,
     email: row.user.email,
@@ -81,7 +94,7 @@ export default async function AdminSpeakersPage({
     sessionTitle: row.session.title,
     scheduled: row.session.scheduleSlot !== null,
   }));
-  const taskAssignments: SpeakerTaskAssignment[] = speakerTasks.slice(0, LIMITS.taskAssignments).map((row) => ({
+  const taskAssignments: SpeakerTaskAssignment[] = taskSlice.filter((row) => isComplete(row.userId)).map((row) => ({
     userId: row.userId,
     taskId: row.task.id,
     taskTitle: row.task.title,
@@ -110,8 +123,8 @@ export default async function AdminSpeakersPage({
 
       {truncated ? (
         <p className="hint" role="status">
-          This event exceeds the bounded read for this page, so the list below is partial. Narrow the event data before
-          relying on these totals.
+          This event exceeds the bounded read for this page. Speakers whose data could not be fully loaded are
+          excluded from the list and totals below — narrow the event data to see everyone.
         </p>
       ) : null}
 

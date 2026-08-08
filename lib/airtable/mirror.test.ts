@@ -119,6 +119,30 @@ test("network faults are reported per row instead of throwing", async () => {
   assert.equal(report.requests, 4);
 });
 
+test("a fatal status during per-record recovery stops the table immediately", async () => {
+  const singles: string[] = [];
+  const fetcher: typeof fetch = async (_input, init) => {
+    const ids = batchIds(JSON.parse(String(init?.body)));
+    if (ids.length > 1) {
+      return new Response(JSON.stringify({ error: { type: "INVALID_VALUE_FOR_COLUMN", message: "Bad value." } }), { status: 422 });
+    }
+    singles.push(ids[0]);
+    if (ids[0] === "session:0") return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify({ error: { type: "AUTHENTICATION_REQUIRED", message: "Invalid token" } }), { status: 401 });
+  };
+
+  const report = await mirrorAirtableTable(fetcher, config, "Sessions", records(12), { sleep: noSleep });
+  // 10-record batch rejected → recovery upserts session:0, hits 401 on
+  // session:1, and must NOT issue requests for the remaining 10 records.
+  assert.deepEqual(singles, ["session:0", "session:1"]);
+  assert.deepEqual(
+    { upserted: report.upserted, failed: report.failed, requests: report.requests },
+    { upserted: 1, failed: 11, requests: 3 },
+  );
+  const statuses = new Set(report.failures.slice(1).map((failure) => failure.status));
+  assert.deepEqual([...statuses], [401]);
+});
+
 test("a missing table stops that table instead of amplifying requests", async () => {
   let calls = 0;
   const fetcher: typeof fetch = async () => {

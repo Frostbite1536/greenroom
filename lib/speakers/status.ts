@@ -173,3 +173,21 @@ export function summarizeSpeakerStatus(rows: SpeakerStatusRow[]): {
     unscheduledSessions: rows.reduce((total, row) => total + (row.sessionCount - row.scheduledCount), 0),
   };
 }
+
+/**
+ * Upper bound (exclusive) on userIds whose rows are guaranteed complete after
+ * bounded, userId-ordered reads. A truncated list may have lost rows for its
+ * last included user and for every user sorting after it, so statuses derived
+ * from a mix of truncated lists are only sound strictly below the smallest
+ * such boundary. `null` means every loaded user is complete.
+ */
+export function completeUserBoundary(
+  lists: { truncated: boolean; lastUserId: string | null }[],
+): string | null {
+  let boundary: string | null = null;
+  for (const list of lists) {
+    if (!list.truncated || list.lastUserId === null) continue;
+    if (boundary === null || list.lastUserId < boundary) boundary = list.lastUserId;
+  }
+  return boundary;
+}

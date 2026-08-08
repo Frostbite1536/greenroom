@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildSpeakerStatusRows,
+  completeUserBoundary,
   filterSpeakerStatusRows,
   parseSpeakerStatusFilter,
   profileCompletion,
@@ -111,4 +112,25 @@ test("an unknown filter value falls back to the full list", () => {
   assert.equal(parseSpeakerStatusFilter("incomplete-profile"), "incomplete-profile");
   assert.equal(parseSpeakerStatusFilter("drop-table"), "all");
   assert.equal(parseSpeakerStatusFilter(undefined), "all");
+});
+
+test("completeUserBoundary is null when nothing truncated", () => {
+  assert.equal(
+    completeUserBoundary([
+      { truncated: false, lastUserId: "user-z" },
+      { truncated: false, lastUserId: null },
+    ]),
+    null,
+  );
+});
+
+test("completeUserBoundary takes the smallest truncated boundary", () => {
+  assert.equal(
+    completeUserBoundary([
+      { truncated: true, lastUserId: "user-m" },
+      { truncated: true, lastUserId: "user-c" },
+      { truncated: false, lastUserId: "user-a" },
+    ]),
+    "user-c",
+  );
 });
