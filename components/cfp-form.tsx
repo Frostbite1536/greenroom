@@ -155,11 +155,8 @@ export function CfpForm({ form }: { form: PublicFormView }) {
           <div className="check"><Check size={28} aria-hidden="true" /></div>
           <h2 style={{ margin: 0 }}>Submission received</h2>
           <p className="muted" style={{ maxWidth: 460, margin: "0 auto" }}>
-            {form.thankYouText ?? "Thanks for your submission! You can track its status from your speaker portal."}
+            {form.thankYouText ?? "Thanks for your submission! The program team will follow up by email."}
           </p>
-          <div className="row" style={{ justifyContent: "center", marginTop: 8 }}>
-            <a className="primary-button" href="/portal">Go to speaker portal</a>
-          </div>
         </div>
       </div>
     );
@@ -281,7 +278,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
           <h2 style={{ marginTop: 0 }}>Participants</h2>
           <p className="hint" style={{ marginBottom: 18 }}>
             Add {form.minSpeakers === form.maxSpeakers ? form.minSpeakers : `${form.minSpeakers}–${form.maxSpeakers}`} speaker(s).
-            Co-speakers get their own portal access by email.
+            Co-speakers will be contacted by email.
           </p>
           {errors.speakers ? <p className="field-error" style={{ marginBottom: 10 }} role="alert">{errors.speakers}</p> : null}
           {speakers.map((sp, i) => (
