@@ -5,8 +5,10 @@ import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import {
   CsvImportError,
+  coerceCsvAnswer,
   mapCsvRows,
   parseCsv,
+  validateImportedAnswers,
   validateAbstractMappings,
 } from "@/lib/integrations/csv-import";
 import { validateSubmission } from "@/lib/services/form-validation";
@@ -94,16 +96,24 @@ export const POST = handle(async (req) => {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(speakerEmail)) {
           throw new CsvImportError("speakerEmail must be a valid email address.");
         }
-        const answers = Object.fromEntries(
+        const rawAnswers = Object.fromEntries(
           Object.entries(row.values)
             .filter(([target]) => target.startsWith("answers."))
             .map(([target, value]) => [target.slice("answers.".length), value]),
-        ) as Record<string, FormAnswerValue>;
+        ) as Record<string, string>;
         const knownFieldKeys = new Set(form.fields.map((field) => field.key));
-        const unknownAnswerKey = Object.keys(answers).find((key) => !knownFieldKeys.has(key));
+        const unknownAnswerKey = Object.keys(rawAnswers).find((key) => !knownFieldKeys.has(key));
         if (unknownAnswerKey) {
           throw new CsvImportError(`answers.${unknownAnswerKey} is not a field on this form.`);
         }
+        const fieldsByKey = new Map(form.fields.map((field) => [field.key, field]));
+        const answers = Object.fromEntries(
+          Object.entries(rawAnswers).map(([key, value]) => [
+            key,
+            coerceCsvAnswer(value, fieldsByKey.get(key)!),
+          ]),
+        ) as Record<string, FormAnswerValue>;
+        validateImportedAnswers(form.fields, answers);
         const validationError = validateSubmission(
           {
             // Admin imports must satisfy field and speaker requirements, but

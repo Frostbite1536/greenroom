@@ -4,6 +4,8 @@
  * it intentionally has no dependency on that repository.
  */
 
+import type { FormAnswerValue } from "@/lib/services/types";
+
 export type CsvImportMapping = {
   sourceField: string;
   targetField: string;
@@ -18,6 +20,13 @@ export type ParsedCsvRow = {
 export type ParsedCsv = {
   headers: string[];
   rows: ParsedCsvRow[];
+};
+
+export type CsvFormField = {
+  key: string;
+  type: string;
+  required: boolean;
+  options: unknown;
 };
 
 export class CsvImportError extends Error {}
@@ -37,14 +46,31 @@ const ABSTRACT_TARGETS = new Set([
   "category",
 ]);
 
-function parseCsvLine(line: string): string[] {
-  const values: string[] = [];
+type RawCsvRow = { rowNumber: number; values: string[] };
+
+/**
+ * Parse records with RFC-style quoted cells. CRLF and LF inside quotes become
+ * `\n` in the value while each record keeps its starting physical row number.
+ */
+function parseCsvRecords(payload: string): RawCsvRow[] {
+  const rows: RawCsvRow[] = [];
+  let rowNumber = 1;
+  let recordStartRow = 1;
+  let values: string[] = [];
   let current = "";
   let inQuotes = false;
+  let quoteStartRow = 1;
 
-  for (let index = 0; index < line.length; index++) {
-    const character = line[index];
-    const next = line[index + 1];
+  const finishRecord = () => {
+    values.push(current);
+    rows.push({ rowNumber: recordStartRow, values });
+    values = [];
+    current = "";
+  };
+
+  for (let index = 0; index < payload.length; index++) {
+    const character = payload[index];
+    const next = payload[index + 1];
 
     if (inQuotes) {
       if (character === '"' && next === '"') {
@@ -52,31 +78,43 @@ function parseCsvLine(line: string): string[] {
         index++;
       } else if (character === '"') {
         inQuotes = false;
+      } else if (character === "\r" || character === "\n") {
+        current += "\n";
+        if (character === "\r" && next === "\n") index++;
+        rowNumber++;
       } else {
         current += character;
       }
     } else if (character === '"') {
       inQuotes = true;
+      quoteStartRow = rowNumber;
     } else if (character === ",") {
       values.push(current);
       current = "";
+    } else if (character === "\r" || character === "\n") {
+      finishRecord();
+      if (character === "\r" && next === "\n") index++;
+      rowNumber++;
+      recordStartRow = rowNumber;
     } else {
       current += character;
     }
   }
 
-  if (inQuotes) throw new CsvImportError("CSV contains an unterminated quoted value.");
-  values.push(current);
-  return values;
+  if (inQuotes) {
+    throw new CsvImportError(`CSV contains an unterminated quoted value starting on row ${quoteStartRow}.`);
+  }
+  if (current.length > 0 || values.length > 0) finishRecord();
+  return rows;
 }
 
 /** Parse a comma-delimited payload, retaining original CSV row numbers for errors. */
 export function parseCsv(payload: string): ParsedCsv {
-  const lines = payload.split(/\r?\n/);
-  const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
-  if (firstContentLine === -1) throw new CsvImportError("CSV payload is empty.");
+  const records = parseCsvRecords(payload);
+  const firstContentRecord = records.findIndex((record) => record.values.some((value) => value.trim().length > 0));
+  if (firstContentRecord === -1) throw new CsvImportError("CSV payload is empty.");
 
-  const headers = parseCsvLine(lines[firstContentLine])
+  const headers = records[firstContentRecord].values
     .map((header, index) => (index === 0 ? header.replace(/^\uFEFF/, "") : header).trim());
   if (headers.length === 0 || headers.some((header) => !header)) {
     throw new CsvImportError("CSV headers must be non-empty.");
@@ -86,15 +124,14 @@ export function parseCsv(payload: string): ParsedCsv {
   }
 
   const rows: ParsedCsvRow[] = [];
-  for (let index = firstContentLine + 1; index < lines.length; index++) {
-    const line = lines[index];
-    if (!line.trim()) continue;
-    const cells = parseCsvLine(line);
+  for (const record of records.slice(firstContentRecord + 1)) {
+    if (!record.values.some((value) => value.trim().length > 0)) continue;
+    const cells = record.values;
     if (cells.length > headers.length) {
-      throw new CsvImportError(`Row ${index + 1} has more values than headers.`);
+      throw new CsvImportError(`Row ${record.rowNumber} has more values than headers.`);
     }
     rows.push({
-      rowNumber: index + 1,
+      rowNumber: record.rowNumber,
       values: Object.fromEntries(headers.map((header, cellIndex) => [header, cells[cellIndex]?.trim() ?? ""])),
     });
   }
@@ -102,6 +139,80 @@ export function parseCsv(payload: string): ParsedCsv {
   if (rows.length === 0) throw new CsvImportError("CSV payload has no data rows.");
   if (rows.length > 1_000) throw new CsvImportError("CSV payload may contain at most 1,000 data rows.");
   return { headers, rows };
+}
+
+function optionValues(options: unknown): string[] {
+  if (!Array.isArray(options)) return [];
+  return options.flatMap((option) =>
+    typeof option === "object" && option !== null && typeof option.value === "string"
+      ? [option.value]
+      : [],
+  );
+}
+
+/**
+ * Convert mapped answer text to the stored form-answer shape before validation.
+ * Multi-select values are JSON string arrays when the cell begins with `[`, or
+ * otherwise a semicolon-delimited list (`Design; Platform; Community`).
+ */
+export function coerceCsvAnswer(value: string, field: CsvFormField): FormAnswerValue {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (field.type === "NUMBER") {
+    const number = Number(trimmed);
+    if (!Number.isFinite(number)) throw new CsvImportError(`answers.${field.key} must be a finite number.`);
+    return number;
+  }
+  if (field.type === "CHECKBOX") {
+    const normalized = trimmed.toLowerCase();
+    if (["true", "yes", "1"].includes(normalized)) return true;
+    if (["false", "no", "0"].includes(normalized)) return false;
+    throw new CsvImportError(`answers.${field.key} must be true/false, yes/no, or 1/0.`);
+  }
+  if (field.type === "MULTI_SELECT") {
+    let selected: string[];
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
+          throw new Error("not a string array");
+        }
+        selected = parsed.map((entry) => entry.trim()).filter(Boolean);
+      } catch {
+        throw new CsvImportError(`answers.${field.key} must be a JSON string array or semicolon-delimited list.`);
+      }
+    } else {
+      selected = trimmed.split(";").map((entry) => entry.trim()).filter(Boolean);
+    }
+    const allowed = optionValues(field.options);
+    if (allowed.length > 0 && selected.some((entry) => !allowed.includes(entry))) {
+      throw new CsvImportError(`answers.${field.key} contains a value outside this field's options.`);
+    }
+    return selected;
+  }
+  if (field.type === "SELECT") {
+    const allowed = optionValues(field.options);
+    if (allowed.length > 0 && !allowed.includes(trimmed)) {
+      throw new CsvImportError(`answers.${field.key} must match one of this field's options.`);
+    }
+  }
+  if (field.type === "URL") {
+    try {
+      new URL(trimmed);
+    } catch {
+      throw new CsvImportError(`answers.${field.key} must be a valid URL.`);
+    }
+  }
+  return trimmed;
+}
+
+/** Import-only required checkbox rule: false is a valid value, but not a checked required consent. */
+export function validateImportedAnswers(fields: CsvFormField[], answers: Record<string, FormAnswerValue>): void {
+  const uncheckedRequired = fields.find((field) => field.type === "CHECKBOX" && field.required && answers[field.key] !== true);
+  if (uncheckedRequired) {
+    throw new CsvImportError(`answers.${uncheckedRequired.key} must be checked.`);
+  }
 }
 
 /** Validate and normalize the only targets supported by the narrow abstract importer. */
