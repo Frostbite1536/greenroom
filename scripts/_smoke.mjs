@@ -117,6 +117,36 @@ try {
       JSON.stringify(["AI", "Community", "Systems"]),
   );
 
+  const importPayload = {
+    eventId: SCRATCH_EVENT.id,
+    format: "csv",
+    entity: "abstracts",
+    mappings: [
+      { sourceField: "Title", targetField: "title" },
+      { sourceField: "Body", targetField: "abstract" },
+      { sourceField: "Email", targetField: "speakerEmail" },
+      { sourceField: "Name", targetField: "speakerName" },
+      { sourceField: "Category", targetField: "category" },
+      { sourceField: "Unused", targetField: "formConfigId", fallback: formId },
+      { sourceField: "Title", targetField: "answers.title_note" },
+    ],
+    payload: "Title,Body,Email,Name,Category\nImported Talk,Imported body,imported@scratch.test,Imported Speaker,AI",
+  };
+  const imported = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import creates completed abstract job",
+    imported.status === 201 &&
+      imported.data?.data?.job?.status === "COMPLETED" &&
+      imported.data?.data?.summary?.created === 1,
+    imported.status,
+  );
+  const importedAgain = await j("POST", "/api/integrations/import", importPayload, admin);
+  check(
+    "mapped CSV import is idempotent for matching abstract identity",
+    importedAgain.status === 201 && importedAgain.data?.data?.summary?.updated === 1,
+    importedAgain.status,
+  );
+
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My talk", speakers: [{ email: "SPK@x.com", name: "Spk", isPrimary: true }],
