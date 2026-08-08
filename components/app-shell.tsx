@@ -35,6 +35,7 @@ const navigation = [
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard },
   { href: "/portal", label: "Speaker portal", icon: Users },
   { href: "/embed/schedule", label: "Public schedule", icon: CalendarDays },
+  { href: "/embed/speakers", label: "Public speakers", icon: Mic2 },
 ];
 
 export function AppShell({ session, children }: { session: DemoSession; children: React.ReactNode }) {

@@ -19,8 +19,8 @@ public embeds for your event site.
    checklists (tasks can carry forms).
 6. **Agenda builder** — day/room scheduling with transactional room-overlap and
    speaker double-booking conflict detection.
-7. **Public embeds** — mobile-friendly schedule embed with `.ics` calendar
-   export.
+7. **Public embeds** — mobile-friendly schedule and compact speaker gallery,
+   with `.ics` calendar export.
 
 ## Quickstart
 
@@ -64,6 +64,8 @@ pipeline.
    [`/embed/schedule`](https://greenroom-omega-dusky.vercel.app/embed/schedule).
    The demo event can also be selected explicitly with
    [`?event=forward-2026`](https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026).
+   The scheduled speaker lineup is available at
+   [`/embed/speakers`](https://greenroom-omega-dusky.vercel.app/embed/speakers?event=forward-2026).
 
 ### Demo personas
 

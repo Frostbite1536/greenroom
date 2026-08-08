@@ -83,7 +83,7 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
             <section key={dayKey}>
               <h2 className="time-heading" style={{ fontSize: 13 }}>{formatDayLabel(dayKey, tz)}</h2>
               {items.map((s) => (
-                <article className="embed-session" key={s.slotId} style={{ marginTop: 8 }}>
+                <article className="embed-session" id={`session-${s.sessionId}`} key={s.slotId} style={{ marginTop: 8 }}>
                   <span className="rail" style={{ background: s.track?.color ?? "#687276" }} aria-hidden="true" />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <h3>{s.title}</h3>

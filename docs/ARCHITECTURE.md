@@ -49,6 +49,7 @@ Shell routes:
 - `/cfp/[formId]`
 - `/portal`
 - `/embed/schedule`
+- `/embed/speakers`
 
 Backend ownership routes:
 

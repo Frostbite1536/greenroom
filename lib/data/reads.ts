@@ -15,16 +15,22 @@
  *   getEvaluationQueue()  ~ GET /api/evaluations/{plans,assignments}
  *   getPublicForm()       ~ GET /api/cfp/public/:formId
  *   getPublicAgenda()     ~ GET /api/agenda/public
+ *   getPublicSpeakers()   ~ public scheduled-speaker projection
  *
  * Mutations always go through the HTTP API from client components (see
  * `lib/api-client.ts`) so validation and invariants stay server-enforced.
  */
-import type { AbstractStatus, FormFieldType, UserRole } from "@prisma/client";
+import type { AbstractStatus, FormFieldType, Prisma, UserRole } from "@prisma/client";
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
+import {
+  buildPublicSpeakers,
+  PUBLIC_SPEAKER_LIMITS,
+  type PublicSpeakers,
+} from "@/lib/public-speakers";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -587,4 +593,54 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       speakers: slot.session.speakers.map((s) => s.user.name),
     })),
   };
+});
+
+export const getPublicSpeakers = cache(async function getPublicSpeakers(
+  eventParam = "forward-2026",
+): Promise<PublicSpeakers | null> {
+  const event = await prisma.event.findFirst({
+    where: { OR: [{ id: eventParam }, { slug: eventParam }] },
+    select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
+  });
+  if (!event) return null;
+
+  const publicSessionWhere: Prisma.SessionSpeakerWhereInput = {
+    session: {
+      eventId: event.id,
+      scheduleSlot: { isNot: null },
+      OR: [
+        { sourceAbstractId: null },
+        { sourceAbstract: { is: { status: "ACCEPTED" } } },
+      ],
+    },
+  };
+  const speakers = await prisma.user.findMany({
+    where: { sessionSpeakers: { some: publicSessionWhere } },
+    orderBy: [{ name: "asc" }, { id: "asc" }],
+    take: PUBLIC_SPEAKER_LIMITS.speakers + 1,
+    select: {
+      id: true,
+      name: true,
+      avatarUrl: true,
+      speakerProfile: {
+        select: { bio: true, company: true, jobTitle: true, headshotUrl: true },
+      },
+      sessionSpeakers: {
+        where: publicSessionWhere,
+        orderBy: [{ session: { scheduleSlot: { startsAt: "asc" } } }, { sessionId: "asc" }],
+        take: PUBLIC_SPEAKER_LIMITS.sessionsPerSpeaker + 1,
+        select: {
+          session: {
+            select: {
+              id: true,
+              title: true,
+              scheduleSlot: { select: { track: { select: { name: true } } } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  return buildPublicSpeakers(event, speakers);
 });

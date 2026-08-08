@@ -25,7 +25,7 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
 4. First deploy checklist:
    - `/login` renders and the three persona buttons work.
    - After login, the shell (`/admin/*`, `/portal`) loads.
-   - `/cfp/[formId]` and `/embed/schedule` render without a session.
+   - `/cfp/[formId]`, `/embed/schedule`, and `/embed/speakers` render without a session.
 
 ## Database
 - Schema is applied with `prisma db push` (see architect). Do not run destructive
