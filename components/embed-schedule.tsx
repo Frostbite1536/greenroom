@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { CalendarDays, CalendarPlus, Download, MapPin, User } from "lucide-react";
 import type { PublicAgenda, PublicAgendaSession } from "@/lib/data/reads";
-import { downloadIcs } from "@/lib/ics-embed";
+import { calendarExportUrl } from "@/lib/ics-embed";
 import { formatDayLabel, formatTime, zonedParts } from "@/lib/tz";
 import { EmptyState } from "@/components/ui";
 
@@ -41,12 +41,13 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
             </p>
           </div>
           {filtered.length > 0 && (
-            <button
+            <a
               className="ghost-button"
-              onClick={() => downloadIcs(filtered, agenda.event.name, `${agenda.event.slug}.ics`)}
+              href={calendarExportUrl(agenda.event.id)}
+              style={{ textDecoration: "none" }}
             >
               <CalendarPlus size={15} /> Add all to calendar
-            </button>
+            </a>
           )}
         </div>
         {agenda.tracks.length > 0 && (
@@ -94,12 +95,13 @@ export function EmbedSchedule({ agenda }: { agenda: PublicAgenda }) {
                       <span>{formatTime(s.startsAt, tz)}–{formatTime(s.endsAt, tz)}</span>
                       {s.track ? <span>{s.track.name}</span> : null}
                     </div>
-                    <button
+                    <a
                       className="ghost-button ics-button"
-                      onClick={() => downloadIcs([s], agenda.event.name, `${s.sessionId}.ics`)}
+                      href={calendarExportUrl(agenda.event.id, s.sessionId)}
+                      style={{ textDecoration: "none" }}
                     >
                       <Download size={14} /> Add to calendar
-                    </button>
+                    </a>
                   </div>
                 </article>
               ))}
