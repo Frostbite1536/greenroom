@@ -83,7 +83,8 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
           return;
         }
         hydrate(body.data as Loaded);
-      } catch {
+      } catch (error) {
+        console.warn("Submission load failed", error);
         if (!cancelled) setLoadError(submissionErrorMessage("NETWORK_ERROR"));
       }
     })();
@@ -113,6 +114,13 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    const trimmedDuration = durationMinutes.trim();
+    const parsedDuration = trimmedDuration === "" ? null : Number(trimmedDuration);
+    if (parsedDuration !== null && !Number.isFinite(parsedDuration)) {
+      setFieldErrors({ durationMinutes: ["Enter the length in minutes, numbers only."] });
+      setSaveError(submissionErrorMessage("VALIDATION_ERROR"));
+      return;
+    }
     setSaving(true);
     setSaved(false);
     setSaveError(null);
@@ -125,7 +133,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
           title,
           abstract: abstract.trim() === "" ? null : abstract,
           format: format.trim() === "" ? null : format,
-          durationMinutes: durationMinutes.trim() === "" ? null : Number(durationMinutes),
+          durationMinutes: parsedDuration,
           categoryId: categoryId === "" ? null : categoryId,
           // Only the questions currently on screen are sent; the backend merges
           // by key, so untouched answers stay exactly as they were.
@@ -140,7 +148,8 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       }
       hydrate(body.data as Loaded);
       setSaved(true);
-    } catch {
+    } catch (error) {
+      console.warn("Submission save failed", error);
       setSaveError(submissionErrorMessage("NETWORK_ERROR"));
     } finally {
       setSaving(false);

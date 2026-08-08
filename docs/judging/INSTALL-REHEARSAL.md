@@ -78,10 +78,15 @@ npm run dev                   # http://localhost:3000/login
 
 # in a second shell
 npm test
-INSTALL_REHEARSAL_ALLOW_WRITES=1 node scripts/install-rehearsal.mjs
+INSTALL_REHEARSAL_ALLOW_WRITES=1 \
+INSTALL_REHEARSAL_EXPECTED_DB=<distinctive substring of the disposable DB host> \
+node --env-file=.env scripts/install-rehearsal.mjs
 npm run build && SMOKE_PORT=3237 node --env-file=.env scripts/_frontend-smoke.mjs
 ```
 
 `scripts/install-rehearsal.mjs` **writes** (submit → accept → convert → schedule
-→ task completion), so it refuses to run without the explicit opt-in above and
-refuses any non-loopback target. Never point it at the shared demo database.
+→ task completion), so it refuses to run unless all three guards pass: the
+explicit opt-in, a loopback-only target, and `INSTALL_REHEARSAL_EXPECTED_DB`
+matching the `DATABASE_URL` it was launched with — loopback alone proves the
+server is local, not that its database is disposable. Never point it at the
+shared demo database.

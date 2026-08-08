@@ -170,6 +170,10 @@ curl -H "Authorization: Bearer gr_live_WXOfTCCYVp9zZQ8QQCqZ-YxGhNbf_P0x" \
 > "There's also a read-only API, so the schedule can feed a mobile app or a
 > website build."
 
+*(That bearer token is the demo-scope API key intentionally shared with the
+judges — see `docs/API.md`. It authorizes read-only access to demo data only
+and is rotated after judging.)*
+
 *Then run the same URL with no key:*
 
 ```bash

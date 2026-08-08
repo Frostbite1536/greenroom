@@ -14,12 +14,18 @@
  * it ONLY at a disposable database. It refuses to run without an explicit opt-in
  * and refuses any non-loopback target, so it can never touch production.
  *
- * Usage: INSTALL_REHEARSAL_ALLOW_WRITES=1 node scripts/install-rehearsal.mjs [baseUrl]
+ * Usage:
+ *   INSTALL_REHEARSAL_ALLOW_WRITES=1 \
+ *   INSTALL_REHEARSAL_EXPECTED_DB=<distinctive substring of the DISPOSABLE DATABASE_URL host> \
+ *   node --env-file=.env scripts/install-rehearsal.mjs [baseUrl]
  */
 import { createHmac } from "node:crypto";
 
 const BASE = (process.argv[2] ?? "http://127.0.0.1:3000").replace(/\/$/, "");
-const SECRET = "greenroom-development-session-secret-not-for-production";
+// Sign with the same secret the target server resolves: its env value when
+// set, otherwise the development fallback from `lib/auth.ts`. Run this script
+// with the same `--env-file` as the server or authenticated steps fail.
+const SECRET = process.env.SESSION_SECRET ?? "greenroom-development-session-secret-not-for-production";
 const EVENT = { id: "demo-event", name: "Forward 2026", slug: "forward-2026" };
 
 if (process.env.INSTALL_REHEARSAL_ALLOW_WRITES !== "1") {
@@ -36,6 +42,29 @@ if (process.env.INSTALL_REHEARSAL_ALLOW_WRITES !== "1") {
 const host = new URL(BASE).hostname;
 if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
   console.error(`Refusing to run against '${host}': this harness is loopback-only, so it cannot reach a deployed environment.`);
+  process.exit(2);
+}
+
+// Loopback proves the SERVER is local, not that its DATABASE is disposable — a
+// local dev server pointed at the shared demo DB would still be mutated. The
+// operator must assert which database they expect: a distinctive substring of
+// the disposable DATABASE_URL (e.g. its Neon host), checked against the env
+// this script was launched with (use the same --env-file as the server).
+const expectedDb = process.env.INSTALL_REHEARSAL_EXPECTED_DB;
+const actualDb = process.env.DATABASE_URL ?? "";
+if (!expectedDb) {
+  console.error(
+    "Set INSTALL_REHEARSAL_EXPECTED_DB to a distinctive substring of the DISPOSABLE\n" +
+      "database's host (e.g. 'ep-nameless-flower') and run with the same --env-file\n" +
+      "as the server. This asserts the rehearsal cannot hit a shared database.",
+  );
+  process.exit(2);
+}
+if (!actualDb.includes(expectedDb)) {
+  console.error(
+    `DATABASE_URL in this environment does not contain '${expectedDb}'.\n` +
+      "Refusing to run: the server may be backed by a database you did not intend to mutate.",
+  );
   process.exit(2);
 }
 
