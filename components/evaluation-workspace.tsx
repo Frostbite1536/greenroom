@@ -33,39 +33,21 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  if (!view.plan) {
-    return (
-      <div className="card">
-        <EmptyState icon={<Inbox size={22} />} title="No evaluation round yet">
-          An admin needs to create an evaluation plan before scoring can start.
-        </EmptyState>
-      </div>
-    );
-  }
-
-  if (view.queue.length === 0) {
-    return (
-      <div className="card">
-        <EmptyState icon={<Inbox size={22} />} title="Nothing assigned to you">
-          {view.role === "ADMIN"
-            ? "You have no review assignments in this round. Assign abstracts to the review team, or sign in with the Evaluator persona to see a populated scoring queue."
-            : "You have no review assignments in this round yet. Check back once the program team assigns abstracts."}
-        </EmptyState>
-      </div>
-    );
-  }
-
+  // NOTE: every hook must run before the early returns below. `weightedTotal`
+  // used to sit after them, so a queue going from empty to non-empty without a
+  // remount changed the hook count and would crash the workspace.
   const plan = view.plan;
-  const active = view.queue.find((q) => q.abstractId === activeId) ?? view.queue[0];
-  const scores = { ...active.myScores, ...(edits[active.abstractId] ?? {}) };
-
-  const completed = view.queue.filter((q) => q.status === "COMPLETED").length;
-  const progress = Math.round((completed / view.queue.length) * 100);
+  // Explicitly annotated: without `noUncheckedIndexedAccess`, `queue[0]` types as
+  // QueueRow even when the queue is empty, which would hide the null case from
+  // the compiler while it still happens at runtime.
+  const active: QueueRow | null =
+    view.queue.find((q) => q.abstractId === activeId) ?? view.queue[0] ?? null;
+  const scores = active ? { ...active.myScores, ...(edits[active.abstractId] ?? {}) } : {};
 
   const weightedTotal = useMemo(() => {
     let sum = 0;
     let wsum = 0;
-    for (const c of plan.rubric) {
+    for (const c of plan?.rubric ?? []) {
       const v = scores[c.key];
       if (v !== undefined) {
         sum += v * c.weight;
@@ -73,11 +55,40 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
       }
     }
     return wsum ? (sum / wsum).toFixed(2) : "—";
-  }, [scores, plan.rubric]);
+  }, [scores, plan]);
 
+  if (!plan) {
+    return (
+      <div className="card">
+        <EmptyState icon={<Inbox size={22} />} title="No evaluation round yet">
+          An admin needs to create a review round before scoring can start.
+        </EmptyState>
+      </div>
+    );
+  }
+
+  if (!active) {
+    return (
+      <div className="card">
+        <EmptyState icon={<Inbox size={22} />} title="Nothing assigned to you">
+          {view.role === "ADMIN"
+            ? "You have no review assignments in this round. Assign proposals to yourself in the panel above, or sign in with the Evaluator persona to see a populated scoring queue."
+            : "You have no review assignments in this round yet. Check back once the program team assigns proposals."}
+        </EmptyState>
+      </div>
+    );
+  }
+
+  const completed = view.queue.filter((q) => q.status === "COMPLETED").length;
+  const progress = Math.round((completed / view.queue.length) * 100);
+
+  // A speaker can withdraw mid-review (W1); scoring one is refused server-side
+  // with 409 ABSTRACT_WITHDRAWN, so the form must not invite the attempt.
+  const withdrawn = active.abstractStatus === "WITHDRAWN";
   const allScored = plan.rubric.every((c) => scores[c.key] !== undefined);
 
   function setScore(key: string, value: number) {
+    if (!active) return;
     setEdits((e) => ({
       ...e,
       [active.abstractId]: { ...(e[active.abstractId] ?? {}), [key]: value },
@@ -93,6 +104,8 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   }
 
   async function submitScores() {
+    // Declared above the early returns, so it cannot rely on their narrowing.
+    if (!plan || !active) return;
     setBusy(true);
     setError(null);
     const res = await apiPost("/api/evaluations/scores", {
@@ -140,9 +153,13 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
             >
               <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
                 <h3>{item.title}</h3>
-                <Pill tone={STATUS_TONE[item.status]}>
-                  {item.status === "COMPLETED" ? <Check size={11} /> : null}
-                  {STATUS_LABEL[item.status]}
+                <Pill tone={item.abstractStatus === "WITHDRAWN" ? "neutral" : STATUS_TONE[item.status]}>
+                  {item.abstractStatus === "WITHDRAWN" ? "Withdrawn" : (
+                    <>
+                      {item.status === "COMPLETED" ? <Check size={11} /> : null}
+                      {STATUS_LABEL[item.status]}
+                    </>
+                  )}
                 </Pill>
               </div>
               <p className="hint">
@@ -173,6 +190,13 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
         ) : (
           <p className="muted" style={{ marginTop: 12 }}>No abstract body provided.</p>
         )}
+
+        {withdrawn ? (
+          <p className="setup-note" role="status" style={{ marginTop: 16 }}>
+            The speaker withdrew this proposal, so it no longer needs a review. Pick another one
+            from your queue.
+          </p>
+        ) : null}
 
         <div style={{ marginTop: 16 }}>
           {plan.rubric.map((c) => (
@@ -210,11 +234,15 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
         {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
 
         <div className="row wrap" style={{ marginTop: 16, gap: 10 }}>
-          <button className="primary-button" type="button" disabled={!allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <button className="primary-button" type="button" disabled={withdrawn || !allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
             <ClipboardCheck size={16} />
             {busy ? "Saving…" : active.status === "COMPLETED" ? "Update review" : "Submit review"}
           </button>
-          {!allScored ? <span className="hint">Score every criterion to submit.</span> : null}
+          {withdrawn ? (
+            <span className="hint">This proposal was withdrawn — no review needed.</span>
+          ) : !allScored ? (
+            <span className="hint">Score every criterion to submit.</span>
+          ) : null}
         </div>
       </div>
     </div>

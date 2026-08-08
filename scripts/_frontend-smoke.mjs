@@ -706,6 +706,17 @@ try {
       where: { planId: fx.plan.id, abstractId: setupAbstract.id },
     })) === 1);
 
+  // A speaker can withdraw mid-review (W1), and scoring one is refused 409.
+  // The evaluator queue must say so rather than offering a form that will fail.
+  // Target the row the page opens on (first not-yet-scored assignment), so both
+  // the queue badge and the scoring-panel notice are exercised.
+  await prisma.abstract.update({ where: { id: fx.acceptedAbstract.id }, data: { status: "WITHDRAWN" } });
+  const withdrawnQueue = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator queue badges a withdrawn proposal", withdrawnQueue.text.includes("Withdrawn"));
+  check("scoring panel explains no review is needed",
+    withdrawnQueue.text.includes("no longer needs a review"));
+  await prisma.abstract.update({ where: { id: fx.acceptedAbstract.id }, data: { status: "ACCEPTED" } });
+
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
   // has its own unit tests, so re-using it here would only prove it agrees with
