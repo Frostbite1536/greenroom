@@ -1,0 +1,568 @@
+/**
+ * Server-side reads for the frontend screens.
+ *
+ * These run in server components and query Prisma directly rather than fetching
+ * this app's own HTTP API: an internal fetch would need manual cookie
+ * forwarding and costs an extra round trip per page (the sprint judges on
+ * performance). Authorization still goes through the backend-owned
+ * `requireContext()` helper, so INV-EVENT-001 event scoping is identical to the
+ * API routes, and the returned shapes mirror the corresponding endpoints:
+ *
+ *   getAdminAbstracts()   ~ GET /api/cfp/submissions
+ *   getAgendaData()       ~ GET /api/agenda
+ *   getFormsList()        ~ GET /api/cfp/forms
+ *   getFormForBuilder()   ~ GET /api/cfp/forms/:id
+ *   getEvaluationQueue()  ~ GET /api/evaluations/{plans,assignments}
+ *   getPublicForm()       ~ GET /api/cfp/public/:formId
+ *   getPublicAgenda()     ~ GET /api/agenda/public
+ *
+ * Mutations always go through the HTTP API from client components (see
+ * `lib/api-client.ts`) so validation and invariants stay server-enforced.
+ */
+import type { AbstractStatus, FormFieldType, UserRole } from "@prisma/client";
+import { redirect } from "next/navigation";
+import { prisma } from "@/lib/prisma";
+import { getApiContext, type ApiContext } from "@/lib/api/context";
+import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
+
+/**
+ * Page-level auth: redirect to `/login` rather than throwing.
+ *
+ * `requireContext()` throws `ApiError(401)`, which is right for an API route but
+ * renders an error page here — a layout's `requireSession()` redirect cannot win
+ * because Next renders layouts and pages in parallel. This resolves the same
+ * context (user by email + event membership, INV-EVENT-001) and redirects on
+ * missing session or insufficient role.
+ */
+async function pageContext(roles?: UserRole[]): Promise<ApiContext> {
+  const ctx = await getApiContext();
+  if (!ctx) redirect("/login");
+  if (roles && !roles.includes(ctx.role)) redirect("/login");
+  return ctx;
+}
+
+export type FieldOption = { label: string; value: string };
+export type ConditionalLogicJson = {
+  match: "all" | "any";
+  rules: { fieldKey: string; operator: string; value?: string | number | boolean }[];
+};
+
+export type FieldView = {
+  id: string;
+  key: string;
+  label: string;
+  helpText: string | null;
+  type: FormFieldType;
+  required: boolean;
+  options: FieldOption[] | null;
+  conditionalLogic: ConditionalLogicJson | null;
+  sortOrder: number;
+};
+
+/** Narrow the loosely-typed JSON columns coming back from Prisma. */
+function normalizeField(field: {
+  id: string;
+  key: string;
+  label: string;
+  helpText: string | null;
+  type: FormFieldType;
+  required: boolean;
+  options: unknown;
+  conditionalLogic: unknown;
+  sortOrder: number;
+}): FieldView {
+  return {
+    ...field,
+    options: Array.isArray(field.options) ? (field.options as FieldOption[]) : null,
+    conditionalLogic:
+      field.conditionalLogic && typeof field.conditionalLogic === "object"
+        ? (field.conditionalLogic as ConditionalLogicJson)
+        : null,
+  };
+}
+
+// ---- Forms ----------------------------------------------------------------
+
+export type FormListItem = {
+  id: string;
+  name: string;
+  slug: string;
+  published: boolean;
+  submissionCount: number;
+  draftCount: number;
+  closesAt: string | null;
+  opensAt: string | null;
+  isOpen: boolean;
+};
+
+export async function getFormsList(): Promise<{ eventId: string; forms: FormListItem[] }> {
+  const ctx = await pageContext(["ADMIN"]);
+  const forms = await prisma.formConfig.findMany({
+    where: { eventId: ctx.eventId },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      published: true,
+      opensAt: true,
+      closesAt: true,
+    },
+  });
+
+  // One grouped query instead of a count per form (avoids N+1).
+  const grouped = await prisma.abstract.groupBy({
+    by: ["formConfigId", "status"],
+    where: { eventId: ctx.eventId },
+    _count: { _all: true },
+  });
+
+  const now = Date.now();
+  return {
+    eventId: ctx.eventId,
+    forms: forms.map((form) => {
+      const rows = grouped.filter((g) => g.formConfigId === form.id);
+      const draftCount = rows
+        .filter((r) => r.status === "DRAFT")
+        .reduce((n, r) => n + r._count._all, 0);
+      const submissionCount = rows
+        .filter((r) => r.status !== "DRAFT")
+        .reduce((n, r) => n + r._count._all, 0);
+      return {
+        id: form.id,
+        name: form.name,
+        slug: form.slug,
+        published: form.published,
+        opensAt: form.opensAt?.toISOString() ?? null,
+        closesAt: form.closesAt?.toISOString() ?? null,
+        submissionCount,
+        draftCount,
+        isOpen:
+          form.published &&
+          (!form.opensAt || now >= form.opensAt.getTime()) &&
+          (!form.closesAt || now < form.closesAt.getTime()),
+      };
+    }),
+  };
+}
+
+// `Omit` the serializer's loosely-typed `fields` so the narrowed `FieldView[]`
+// replaces it instead of intersecting with the raw Prisma JSON types.
+export type BuilderForm = Omit<ReturnType<typeof serializeForm>, "fields"> & {
+  fields: FieldView[];
+};
+
+export async function getFormForBuilder(
+  formId: string,
+): Promise<{ eventId: string; form: BuilderForm } | null> {
+  const ctx = await pageContext(["ADMIN"]);
+  const form = await prisma.formConfig.findFirst({
+    where: { id: formId, eventId: ctx.eventId },
+    include: { fields: true },
+  });
+  if (!form) return null;
+  const serialized = serializeForm(form);
+  return {
+    eventId: ctx.eventId,
+    form: { ...serialized, fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField) },
+  };
+}
+
+// ---- Abstracts pipeline ---------------------------------------------------
+
+export type AbstractRow = {
+  id: string;
+  title: string;
+  abstract: string | null;
+  status: AbstractStatus;
+  format: string | null;
+  durationMinutes: number | null;
+  categoryName: string | null;
+  formName: string;
+  speakers: { name: string; email: string; isPrimary: boolean }[];
+  submittedAt: string | null;
+  reviewsComplete: number;
+  reviewsTotal: number;
+  avgScore: number | null;
+  hasSession: boolean;
+};
+
+export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
+  const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+
+  const [abstracts, assignmentGroups, scoreRows] = await Promise.all([
+    prisma.abstract.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        title: true,
+        abstract: true,
+        status: true,
+        format: true,
+        durationMinutes: true,
+        submittedAt: true,
+        category: { select: { name: true } },
+        formConfig: { select: { name: true } },
+        speakers: {
+          select: { isPrimary: true, user: { select: { name: true, email: true } } },
+        },
+        session: { select: { id: true } },
+      },
+    }),
+    // Review progress without a per-row query.
+    prisma.reviewAssignment.groupBy({
+      by: ["abstractId", "status"],
+      _count: { _all: true },
+    }),
+    prisma.reviewScore.groupBy({
+      by: ["abstractId"],
+      _avg: { score: true },
+    }),
+  ]);
+
+  const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
+
+  return {
+    eventId: ctx.eventId,
+    abstracts: abstracts.map((a) => {
+      const rows = assignmentGroups.filter((g) => g.abstractId === a.id);
+      const reviewsTotal = rows.reduce((n, r) => n + r._count._all, 0);
+      const reviewsComplete = rows
+        .filter((r) => r.status === "COMPLETED")
+        .reduce((n, r) => n + r._count._all, 0);
+      const avg = avgByAbstract.get(a.id);
+      return {
+        id: a.id,
+        title: a.title,
+        abstract: a.abstract,
+        status: a.status,
+        format: a.format,
+        durationMinutes: a.durationMinutes,
+        categoryName: a.category?.name ?? null,
+        formName: a.formConfig.name,
+        speakers: a.speakers.map((s) => ({
+          name: s.user.name,
+          email: s.user.email,
+          isPrimary: s.isPrimary,
+        })),
+        submittedAt: a.submittedAt?.toISOString() ?? null,
+        reviewsComplete,
+        reviewsTotal,
+        avgScore: avg === null || avg === undefined ? null : Number(avg),
+        hasSession: a.session !== null,
+      };
+    }),
+  };
+}
+
+// ---- Agenda ---------------------------------------------------------------
+
+export type AgendaSession = {
+  id: string;
+  title: string;
+  format: string | null;
+  durationMinutes: number;
+  speakers: { userId: string; name: string }[];
+  slot: {
+    id: string;
+    roomId: string;
+    trackId: string | null;
+    startsAt: string;
+    endsAt: string;
+  } | null;
+};
+
+export type AgendaData = {
+  eventId: string;
+  timezone: string;
+  rooms: { id: string; name: string; capacity: number | null }[];
+  tracks: { id: string; name: string; color: string }[];
+  sessions: AgendaSession[];
+};
+
+export async function getAgendaData(): Promise<AgendaData> {
+  const ctx = await pageContext(["ADMIN"]);
+  const [event, rooms, tracks, sessions] = await Promise.all([
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+    prisma.room.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, capacity: true },
+    }),
+    prisma.track.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, color: true },
+    }),
+    prisma.session.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        title: true,
+        format: true,
+        durationMinutes: true,
+        speakers: { select: { userId: true, user: { select: { name: true } } } },
+        scheduleSlot: {
+          select: { id: true, roomId: true, trackId: true, startsAt: true, endsAt: true },
+        },
+      },
+    }),
+  ]);
+
+  return {
+    eventId: ctx.eventId,
+    timezone: event?.timezone ?? "UTC",
+    rooms,
+    tracks,
+    sessions: sessions.map((s) => ({
+      id: s.id,
+      title: s.title,
+      format: s.format,
+      durationMinutes: s.durationMinutes,
+      speakers: s.speakers.map((sp) => ({ userId: sp.userId, name: sp.user.name })),
+      slot: s.scheduleSlot
+        ? {
+            id: s.scheduleSlot.id,
+            roomId: s.scheduleSlot.roomId,
+            trackId: s.scheduleSlot.trackId,
+            startsAt: s.scheduleSlot.startsAt.toISOString(),
+            endsAt: s.scheduleSlot.endsAt.toISOString(),
+          }
+        : null,
+    })),
+  };
+}
+
+// ---- Evaluation ----------------------------------------------------------
+
+export type RubricCriterionView = {
+  key: string;
+  label: string;
+  description?: string;
+  min: number;
+  max: number;
+  weight: number;
+};
+
+export type QueueRow = {
+  abstractId: string;
+  title: string;
+  abstractBody: string | null;
+  categoryName: string | null;
+  teamKey: string | null;
+  status: "ASSIGNED" | "IN_PROGRESS" | "COMPLETED" | "DECLINED";
+  speakers: string[];
+  myScores: Record<string, number>;
+  myComment: string | null;
+};
+
+export type EvaluationView = {
+  eventId: string;
+  role: string;
+  plan: {
+    id: string;
+    name: string;
+    ordinal: number;
+    isBlind: boolean;
+    rubric: RubricCriterionView[];
+    assignmentCount: number;
+    completedCount: number;
+  } | null;
+  queue: QueueRow[];
+};
+
+/**
+ * The scoring queue for the signed-in reviewer.
+ *
+ * Always filtered to the caller's own assignments: `POST /api/evaluations/scores`
+ * rejects an unassigned reviewer with `NOT_ASSIGNED`, so showing another
+ * reviewer's rows would render an unusable form.
+ */
+export async function getEvaluationQueue(): Promise<EvaluationView> {
+  const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+
+  const plan = await prisma.evaluationPlan.findFirst({
+    where: { eventId: ctx.eventId },
+    orderBy: { ordinal: "desc" },
+    include: { _count: { select: { assignments: true } } },
+  });
+  if (!plan) {
+    return { eventId: ctx.eventId, role: ctx.role, plan: null, queue: [] };
+  }
+
+  const [assignments, myScores, completedCount] = await Promise.all([
+    prisma.reviewAssignment.findMany({
+      where: { planId: plan.id, evaluatorId: ctx.userId },
+      orderBy: { assignedAt: "asc" },
+      select: {
+        abstractId: true,
+        teamKey: true,
+        status: true,
+        abstract: {
+          select: {
+            title: true,
+            abstract: true,
+            category: { select: { name: true } },
+            speakers: { select: { user: { select: { name: true } } } },
+          },
+        },
+      },
+    }),
+    prisma.reviewScore.findMany({
+      where: { planId: plan.id, evaluatorId: ctx.userId },
+      select: { abstractId: true, rubricKey: true, score: true, comment: true },
+    }),
+    prisma.reviewAssignment.count({ where: { planId: plan.id, status: "COMPLETED" } }),
+  ]);
+
+  const scoresByAbstract = new Map<string, { scores: Record<string, number>; comment: string | null }>();
+  for (const row of myScores) {
+    const entry = scoresByAbstract.get(row.abstractId) ?? { scores: {}, comment: null };
+    entry.scores[row.rubricKey] = Number(row.score);
+    if (row.comment) entry.comment = row.comment;
+    scoresByAbstract.set(row.abstractId, entry);
+  }
+
+  const rubric = Array.isArray(plan.rubric) ? (plan.rubric as unknown as RubricCriterionView[]) : [];
+  const blind = plan.isBlind && ctx.role === "EVALUATOR";
+
+  return {
+    eventId: ctx.eventId,
+    role: ctx.role,
+    plan: {
+      id: plan.id,
+      name: plan.name,
+      ordinal: plan.ordinal,
+      isBlind: plan.isBlind,
+      rubric,
+      assignmentCount: plan._count.assignments,
+      completedCount,
+    },
+    queue: assignments.map((a) => {
+      const mine = scoresByAbstract.get(a.abstractId);
+      return {
+        abstractId: a.abstractId,
+        title: a.abstract.title,
+        abstractBody: a.abstract.abstract,
+        categoryName: a.abstract.category?.name ?? null,
+        teamKey: a.teamKey,
+        status: a.status,
+        speakers: blind ? [] : a.abstract.speakers.map((s) => s.user.name),
+        myScores: mine?.scores ?? {},
+        myComment: mine?.comment ?? null,
+      };
+    }),
+  };
+}
+
+// ---- Public surfaces -----------------------------------------------------
+
+export type PublicFormView = Omit<ReturnType<typeof serializePublicForm>, "fields"> & {
+  fields: FieldView[];
+  categories: { id: string; name: string }[];
+  eventName: string;
+};
+
+/**
+ * Public CFP form by id or slug. No session required.
+ *
+ * Categories are read here rather than from `GET /api/cfp/categories` because
+ * that endpoint requires ADMIN/EVALUATOR; the submitter needs to pick one for
+ * category-based review routing to work.
+ */
+export async function getPublicForm(formId: string): Promise<PublicFormView | null> {
+  const form = await prisma.formConfig.findFirst({
+    where: { published: true, OR: [{ id: formId }, { slug: formId }] },
+    include: { fields: true, event: { select: { name: true } } },
+  });
+  if (!form) return null;
+
+  const categories = await prisma.category.findMany({
+    where: { eventId: form.eventId },
+    orderBy: { sortOrder: "asc" },
+    select: { id: true, name: true },
+  });
+
+  const serialized = serializePublicForm(form);
+  return {
+    ...serialized,
+    fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField),
+    categories,
+    eventName: form.event.name,
+  };
+}
+
+export type PublicAgendaSession = {
+  slotId: string;
+  sessionId: string;
+  title: string;
+  description: string | null;
+  room: { id: string; name: string };
+  track: { id: string; name: string; color: string } | null;
+  startsAt: string;
+  endsAt: string;
+  speakers: string[];
+};
+
+export type PublicAgenda = {
+  event: { id: string; name: string; slug: string; timezone: string; startsAt: string | null; endsAt: string | null };
+  tracks: { id: string; name: string; color: string }[];
+  sessions: PublicAgendaSession[];
+};
+
+export async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
+  const event = await prisma.event.findFirst({
+    where: { OR: [{ id: eventParam }, { slug: eventParam }] },
+    select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
+  });
+  if (!event) return null;
+
+  const [tracks, slots] = await Promise.all([
+    prisma.track.findMany({
+      where: { eventId: event.id },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, color: true },
+    }),
+    prisma.scheduleSlot.findMany({
+      where: { eventId: event.id },
+      orderBy: { startsAt: "asc" },
+      select: {
+        id: true,
+        sessionId: true,
+        startsAt: true,
+        endsAt: true,
+        room: { select: { id: true, name: true } },
+        track: { select: { id: true, name: true, color: true } },
+        session: {
+          select: {
+            title: true,
+            description: true,
+            speakers: { select: { user: { select: { name: true } } } },
+          },
+        },
+      },
+    }),
+  ]);
+
+  return {
+    event: {
+      ...event,
+      startsAt: event.startsAt?.toISOString() ?? null,
+      endsAt: event.endsAt?.toISOString() ?? null,
+    },
+    tracks,
+    sessions: slots.map((slot) => ({
+      slotId: slot.id,
+      sessionId: slot.sessionId,
+      title: slot.session.title,
+      description: slot.session.description,
+      room: slot.room,
+      track: slot.track,
+      startsAt: slot.startsAt.toISOString(),
+      endsAt: slot.endsAt.toISOString(),
+      speakers: slot.session.speakers.map((s) => s.user.name),
+    })),
+  };
+}

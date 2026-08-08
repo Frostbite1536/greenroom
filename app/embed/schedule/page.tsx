@@ -1,12 +1,30 @@
+import { notFound } from "next/navigation";
 import "@/components/feature.css";
 import { EmbedSchedule } from "@/components/embed-schedule";
-import { EVENT_META } from "@/lib/fixtures";
+import { getPublicAgenda } from "@/lib/data/reads";
 
-export const metadata = {
-  title: `${EVENT_META.name} Schedule`,
-  description: `Public schedule for ${EVENT_META.name}.`,
-};
+export const dynamic = "force-dynamic";
 
-export default function EmbedSchedulePage() {
-  return <EmbedSchedule />;
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ event?: string }>;
+}) {
+  const { event } = await searchParams;
+  const agenda = await getPublicAgenda(event);
+  return {
+    title: agenda ? `${agenda.event.name} — Schedule` : "Schedule",
+    description: agenda ? `Public session schedule for ${agenda.event.name}.` : undefined,
+  };
+}
+
+export default async function EmbedSchedulePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ event?: string }>;
+}) {
+  const { event } = await searchParams;
+  const agenda = await getPublicAgenda(event);
+  if (!agenda) notFound();
+  return <EmbedSchedule agenda={agenda} />;
 }
