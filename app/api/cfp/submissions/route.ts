@@ -4,7 +4,11 @@ import { abstractStatusSchema, abstractUpsertSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
-import { validateSubmission, type FormSpec } from "@/lib/services/form-validation";
+import {
+  toFormFieldSpecs,
+  validateSubmission,
+  type FormSpec,
+} from "@/lib/services/form-validation";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 export const dynamic = "force-dynamic";
@@ -85,12 +89,7 @@ export const POST = handle(async (req) => {
       minSpeakers: form.minSpeakers,
       maxSpeakers: form.maxSpeakers,
       maxBioLength: form.maxBioLength,
-      fields: form.fields.map((f) => ({
-        key: f.key,
-        label: f.label,
-        type: f.type,
-        required: f.required,
-      })),
+      fields: toFormFieldSpecs(form.fields),
     };
     const error = validateSubmission(spec, {
       speakerCount: input.speakers.length,
