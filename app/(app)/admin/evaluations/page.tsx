@@ -1,12 +1,14 @@
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { EvaluationWorkspace } from "@/components/evaluation-workspace";
-import { EVALUATION_PLAN } from "@/lib/fixtures";
+import { getEvaluationQueue } from "@/lib/data/reads";
 
-export const metadata = { title: "Evaluation · Greenroom" };
+export const metadata = { title: "Evaluation" };
+export const dynamic = "force-dynamic";
 
-export default function EvaluationsPage() {
-  const plan = EVALUATION_PLAN;
+export default async function EvaluationsPage() {
+  const view = await getEvaluationQueue();
+
   return (
     <section className="page-stack" style={{ width: "min(1280px, 100%)" }}>
       <PageHeader
@@ -15,11 +17,14 @@ export default function EvaluationsPage() {
         description="Score abstracts against your rubric. Assignments are routed to review teams by category."
       />
       <div className="metric-grid">
-        <div className="metric"><span>Round</span><strong>{plan.name.split(" — ")[0]}</strong></div>
-        <div className="metric"><span>Rubric criteria</span><strong>{plan.rubric.length}</strong></div>
-        <div className="metric"><span>Completed</span><strong>{plan.completedCount}/{plan.assignedCount}</strong></div>
+        <div className="metric"><span>Round</span><strong>{view.plan ? `Round ${view.plan.ordinal}` : "—"}</strong></div>
+        <div className="metric"><span>Rubric criteria</span><strong>{view.plan?.rubric.length ?? 0}</strong></div>
+        <div className="metric">
+          <span>Completed reviews</span>
+          <strong>{view.plan ? `${view.plan.completedCount}/${view.plan.assignmentCount}` : "—"}</strong>
+        </div>
       </div>
-      <EvaluationWorkspace />
+      <EvaluationWorkspace view={view} />
     </section>
   );
 }

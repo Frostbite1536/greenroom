@@ -1,34 +1,74 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Check, ClipboardCheck, EyeOff } from "lucide-react";
-import { EVALUATION_PLAN, REVIEW_QUEUE, type QueueItem } from "@/lib/fixtures";
-import { Pill } from "@/components/ui";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Check, ClipboardCheck, EyeOff, Inbox } from "lucide-react";
+import type { EvaluationView, QueueRow } from "@/lib/data/reads";
+import { apiPost } from "@/lib/api-client";
+import { EmptyState, Pill } from "@/components/ui";
 
-const STATUS_TONE: Record<QueueItem["status"], string> = {
+const STATUS_TONE: Record<string, string> = {
   ASSIGNED: "info",
   IN_PROGRESS: "warn",
   COMPLETED: "good",
+  DECLINED: "neutral",
+};
+const STATUS_LABEL: Record<string, string> = {
+  ASSIGNED: "To do",
+  IN_PROGRESS: "In progress",
+  COMPLETED: "Done",
+  DECLINED: "Declined",
 };
 
-export function EvaluationWorkspace() {
-  const plan = EVALUATION_PLAN;
-  const [queue, setQueue] = useState<QueueItem[]>(REVIEW_QUEUE);
-  const [activeId, setActiveId] = useState(REVIEW_QUEUE.find((q) => q.status !== "COMPLETED")?.abstractId ?? REVIEW_QUEUE[0].abstractId);
+export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [activeId, setActiveId] = useState<string | null>(
+    view.queue.find((q) => q.status !== "COMPLETED")?.abstractId ?? view.queue[0]?.abstractId ?? null,
+  );
+  // Local score edits layered over the server state, keyed by abstract id.
+  const [edits, setEdits] = useState<Record<string, Record<string, number>>>({});
   const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const active = queue.find((q) => q.abstractId === activeId)!;
-  const scores = active.myScores ?? {};
+  if (!view.plan) {
+    return (
+      <div className="card">
+        <EmptyState icon={<Inbox size={22} />} title="No evaluation round yet">
+          An admin needs to create an evaluation plan before scoring can start.
+        </EmptyState>
+      </div>
+    );
+  }
 
-  const completed = queue.filter((q) => q.status === "COMPLETED").length;
-  const progress = Math.round((completed / queue.length) * 100);
+  if (view.queue.length === 0) {
+    return (
+      <div className="card">
+        <EmptyState icon={<Inbox size={22} />} title="Nothing assigned to you">
+          {view.role === "ADMIN"
+            ? "You have no review assignments in this round. Assign abstracts to the review team, or sign in with the Evaluator persona to see a populated scoring queue."
+            : "You have no review assignments in this round yet. Check back once the program team assigns abstracts."}
+        </EmptyState>
+      </div>
+    );
+  }
+
+  const plan = view.plan;
+  const active = view.queue.find((q) => q.abstractId === activeId) ?? view.queue[0];
+  const scores = { ...active.myScores, ...(edits[active.abstractId] ?? {}) };
+
+  const completed = view.queue.filter((q) => q.status === "COMPLETED").length;
+  const progress = Math.round((completed / view.queue.length) * 100);
 
   const weightedTotal = useMemo(() => {
     let sum = 0;
     let wsum = 0;
     for (const c of plan.rubric) {
-      if (scores[c.key] !== undefined) {
-        sum += scores[c.key] * c.weight;
+      const v = scores[c.key];
+      if (v !== undefined) {
+        sum += v * c.weight;
         wsum += c.weight;
       }
     }
@@ -38,73 +78,109 @@ export function EvaluationWorkspace() {
   const allScored = plan.rubric.every((c) => scores[c.key] !== undefined);
 
   function setScore(key: string, value: number) {
-    setQueue((qs) =>
-      qs.map((q) =>
-        q.abstractId === activeId
-          ? { ...q, status: q.status === "COMPLETED" ? "COMPLETED" : "IN_PROGRESS", myScores: { ...(q.myScores ?? {}), [key]: value } }
-          : q,
-      ),
-    );
+    setEdits((e) => ({
+      ...e,
+      [active.abstractId]: { ...(e[active.abstractId] ?? {}), [key]: value },
+    }));
+    setNotice(null);
   }
 
-  function submitScores() {
-    setQueue((qs) => qs.map((q) => (q.abstractId === activeId ? { ...q, status: "COMPLETED" } : q)));
+  function selectRow(row: QueueRow) {
+    setActiveId(row.abstractId);
     setComment("");
-    const nextItem = queue.find((q) => q.status !== "COMPLETED" && q.abstractId !== activeId);
-    if (nextItem) setActiveId(nextItem.abstractId);
+    setError(null);
+    setNotice(null);
+  }
+
+  async function submitScores() {
+    setBusy(true);
+    setError(null);
+    const res = await apiPost("/api/evaluations/scores", {
+      planId: plan.id,
+      abstractId: active.abstractId,
+      scores: plan.rubric.map((c) => ({
+        rubricKey: c.key,
+        score: scores[c.key],
+        ...(comment.trim() && c.key === plan.rubric[0].key ? { comment: comment.trim() } : {}),
+      })),
+      complete: true,
+    });
+    setBusy(false);
+    if (!res.ok) {
+      setError(res.error.message);
+      return;
+    }
+    setNotice("Review submitted.");
+    setComment("");
+    const nextRow = view.queue.find((q) => q.status !== "COMPLETED" && q.abstractId !== active.abstractId);
+    if (nextRow) setActiveId(nextRow.abstractId);
+    startTransition(() => router.refresh());
   }
 
   return (
     <div className="eval-grid">
-      {/* queue */}
       <div className="card">
         <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--line)" }}>
           <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
             <strong>{plan.name}</strong>
             {plan.isBlind ? <Pill tone="neutral"><EyeOff size={12} /> Blind</Pill> : null}
           </div>
-          <div className="progress-bar" aria-label={`${progress}% complete`}><span style={{ width: `${progress}%` }} /></div>
-          <p className="hint" style={{ marginTop: 6 }}>{completed} of {queue.length} in your queue scored</p>
+          <div className="progress-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Your review progress">
+            <span style={{ width: `${progress}%` }} />
+          </div>
+          <p className="hint" style={{ marginTop: 6 }}>{completed} of {view.queue.length} in your queue scored</p>
         </div>
-        <div role="list" aria-label="Review queue">
-          {queue.map((item) => (
+        <div>
+          {view.queue.map((item) => (
             <button
               key={item.abstractId}
-              role="listitem"
-              className={`queue-item ${item.abstractId === activeId ? "active" : ""}`}
-              onClick={() => setActiveId(item.abstractId)}
+              className={`queue-item ${item.abstractId === active.abstractId ? "active" : ""}`}
+              onClick={() => selectRow(item)}
+              aria-current={item.abstractId === active.abstractId}
             >
               <div className="row" style={{ justifyContent: "space-between", gap: 8 }}>
-                <h3>{plan.isBlind ? `Submission ${item.abstractId.replace("abs_", "#")}` : item.title}</h3>
+                <h3>{item.title}</h3>
                 <Pill tone={STATUS_TONE[item.status]}>
                   {item.status === "COMPLETED" ? <Check size={11} /> : null}
-                  {item.status === "ASSIGNED" ? "To do" : item.status === "IN_PROGRESS" ? "In progress" : "Done"}
+                  {STATUS_LABEL[item.status]}
                 </Pill>
               </div>
-              <p className="hint">{item.categoryName} · {item.teamKey}</p>
+              <p className="hint">
+                {item.categoryName ?? "Uncategorised"}
+                {item.teamKey ? ` · ${item.teamKey}` : ""}
+              </p>
             </button>
           ))}
         </div>
       </div>
 
-      {/* scoring */}
       <div className="card" style={{ padding: 24 }}>
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-          <p className="eyebrow">Now scoring · {active.teamKey}</p>
+        <div className="row wrap" style={{ justifyContent: "space-between", marginBottom: 4 }}>
+          <p className="eyebrow">Now scoring{active.teamKey ? ` · ${active.teamKey}` : ""}</p>
           <span className="hint">Weighted score: <strong>{weightedTotal}</strong></span>
         </div>
-        <h2 style={{ margin: "0 0 6px" }}>{plan.isBlind ? `Submission ${active.abstractId.replace("abs_", "#")}` : active.title}</h2>
-        <p className="hint">{active.categoryName}{plan.isBlind ? " · Speaker identity hidden (blind review)" : ""}</p>
+        <h2 style={{ margin: "0 0 6px" }}>{active.title}</h2>
+        <p className="hint">
+          {active.categoryName ?? "Uncategorised"}
+          {plan.isBlind && active.speakers.length === 0
+            ? " · Speaker identity hidden (blind review)"
+            : active.speakers.length > 0
+              ? ` · ${active.speakers.join(", ")}`
+              : ""}
+        </p>
+        {active.abstractBody ? (
+          <p style={{ lineHeight: 1.6, marginTop: 12 }}>{active.abstractBody}</p>
+        ) : (
+          <p className="muted" style={{ marginTop: 12 }}>No abstract body provided.</p>
+        )}
 
         <div style={{ marginTop: 16 }}>
           {plan.rubric.map((c) => (
             <div className="rubric-row" key={c.key}>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <div>
-                  <span className="field-label">{c.label}</span>
-                  {c.weight !== 1 ? <span className="hint"> · weight {c.weight}</span> : null}
-                  {c.description ? <p className="hint">{c.description}</p> : null}
-                </div>
+              <div>
+                <span className="field-label">{c.label}</span>
+                {c.weight !== 1 ? <span className="hint"> · weight {c.weight}</span> : null}
+                {c.description ? <p className="hint">{c.description}</p> : null}
               </div>
               <div className="score-buttons" role="radiogroup" aria-label={c.label}>
                 {Array.from({ length: c.max - c.min + 1 }, (_, i) => c.min + i).map((n) => (
@@ -127,11 +203,16 @@ export function EvaluationWorkspace() {
         <label className="stack" style={{ marginTop: 8 }}>
           <span className="field-label">Comments (optional)</span>
           <textarea className="text-input" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Feedback for the program committee…" />
+          {active.myComment && !comment ? <span className="hint">Previously: “{active.myComment}”</span> : null}
         </label>
 
-        <div className="row" style={{ marginTop: 16, gap: 10 }}>
-          <button className="primary-button" type="button" disabled={!allScored} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-            <ClipboardCheck size={16} /> {active.status === "COMPLETED" ? "Update review" : "Submit review"}
+        {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
+        {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
+
+        <div className="row wrap" style={{ marginTop: 16, gap: 10 }}>
+          <button className="primary-button" type="button" disabled={!allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <ClipboardCheck size={16} />
+            {busy ? "Saving…" : active.status === "COMPLETED" ? "Update review" : "Submit review"}
           </button>
           {!allScored ? <span className="hint">Score every criterion to submit.</span> : null}
         </div>
