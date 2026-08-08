@@ -117,6 +117,20 @@ occupied. Let the conflict message appear.*
 
 *Tick a task off; show the progress update.*
 
+*Scroll to* **Your submissions***. Open the accepted proposal — Sofia's is
+"Scaling Vector Search" — via* **Update this proposal***.*
+
+> "And because plans change, an accepted speaker can still edit their own
+> proposal — the title, the description, the answers to your custom questions."
+
+*Change a word in the description and save; show the confirmation.*
+
+> "That updates what attendees will read. The one thing they can't change here is
+> who's presenting — the talk is already on the schedule, so the speaker list is
+> fixed and it tells them to contact the programme team. That's deliberate: a
+> speaker quietly rewriting the line-up after you've built the agenda is a
+> problem, not a feature."
+
 *Then navigate to* `/admin/speakers` *(type the URL) as the admin persona.*
 
 > "And the programme team sees the other side of that — who's onboarded, who
@@ -187,7 +201,7 @@ curl -i "https://greenroom-omega-dusky.vercel.app/api/v1/schedule?event=forward-
 | 4 | Evaluator → Evaluations | rubric scoring saved |
 | 5 | Accept → Create session | both actions |
 | 6 | Agenda | **the refused conflict**, then a clean placement |
-| 7 | Portal + `/admin/speakers` | a task ticked; the chase list |
+| 7 | Portal + `/admin/speakers` | a task ticked; **an accepted proposal edited and saved**; the locked speaker list; the chase list |
 | 8 | `/embed/*` logged out + `.ics` | signed-out state, downloaded file, Embeds snippet |
 | 9 | Terminal | 200 with key, 401 without |
 
