@@ -51,6 +51,13 @@ export function ImportPanel({
       detected = parseCsv(text).headers.filter((header) => header.trim().length > 0);
     } catch (error) {
       console.warn("CSV header parse failed", error);
+      // Drop any previously loaded file too: keeping the old payload while
+      // reporting the new file invalid would let the operator import the
+      // wrong spreadsheet.
+      setFileName(null);
+      setPayload("");
+      setHeaders([]);
+      setMappings([]);
       setResult({ tone: "bad", headline: "That file doesn't look like a valid CSV.", advice: error instanceof Error ? error.message : "Check the file and try again." });
       return;
     }
