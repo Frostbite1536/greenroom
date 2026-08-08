@@ -33,7 +33,7 @@ npm run dev
 ```
 
 Then open http://localhost:3000/login — one-click demo personas (Admin /
-Evaluator / Speaker) are available, plus login-as-any-email.
+Evaluator / Speaker) are available for the fixed seeded demo personas.
 
 Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
 `sofia@greenroom.demo` (speaker).

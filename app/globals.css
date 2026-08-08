@@ -78,12 +78,6 @@ button { letter-spacing: 0; }
 .persona-button:hover { border-color: var(--brand); background: var(--soft); }
 .persona-copy { display: flex; flex-direction: column; gap: 2px; }
 .persona-copy span { color: var(--muted); font-size: 12.5px; }
-.login-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
-.login-divider::before, .login-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.login-email-form { display: flex; gap: 8px; }
-.login-email-form input { flex: 1; padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-.login-footnote { margin: 0; color: var(--muted); font-size: 12.5px; }
-
 @media (max-width: 820px) {
   .app-shell { display: block; }
   .sidebar { display: none; }

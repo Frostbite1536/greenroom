@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ClipboardCheck, Mic2, ShieldCheck, Users } from "lucide-react";
 import { DEMO_PERSONAS, getResolvedSession, homeForRole } from "@/lib/auth";
-import { loginAsPersona, loginWithEmail } from "./actions";
+import { loginAsPersona } from "./actions";
 
 export const metadata: Metadata = { title: "Sign in" };
 
@@ -60,28 +60,6 @@ export default async function LoginPage() {
             </form>
           ))}
         </div>
-        <div className="login-divider" role="separator">
-          or continue as a specific speaker
-        </div>
-        <form action={loginWithEmail} className="login-email-form">
-          <label className="sr-only" htmlFor="login-email">
-            Speaker email
-          </label>
-          <input
-            autoComplete="email"
-            id="login-email"
-            name="email"
-            placeholder="you@example.com"
-            required
-            type="email"
-          />
-          <button className="primary-button" type="submit">
-            Continue
-          </button>
-        </form>
-        <p className="login-footnote">
-          Use the email you submitted a talk with to see that submission&apos;s status and tasks.
-        </p>
       </main>
     </div>
   );

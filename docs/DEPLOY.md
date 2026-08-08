@@ -111,4 +111,5 @@ One-click personas on `/login`:
 - **Evaluator** — Ravi Patel (`ravi@greenroom.demo`)
 - **Speaker** — Sofia Marques (`sofia@greenroom.demo`)
 
-Plus login-as-any-email (SPEAKER role).
+Only these fixed seeded personas can sign in; public CFP submissions do not
+create an authorized portal account.

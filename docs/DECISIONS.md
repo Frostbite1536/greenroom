@@ -30,15 +30,16 @@ invited keynotes). Keeping them separate makes the accept→convert step an
 explicit state transition, lets sessions exist without CFP provenance, and
 keeps evaluation data (scores, assignments) off the schedulable entity.
 
-## Demo auth: signed cookie personas with persisted authorization
-`sb_session` is an HMAC-signed, seven-day cookie carrying the demo identity and
-active event. One-click Admin/Evaluator/Speaker personas keep judging
-frictionless; speaker email login is limited to an existing event membership.
-Every protected page, action, and API resolves the current `EventMember` role
-from Postgres, so the cookie cannot create a user, membership, or role. Users
-are resolved by lowercased email (not synthetic persona id), so sessions survive
-reseeds. Public routes (`/cfp/*`, `/embed/*`) work with a null session. A random
-server-only `SESSION_SECRET` of at least 32 characters is required in production.
+## Demo auth: signed, fixed personas with persisted authorization
+`sb_session` is an HMAC-signed, seven-day cookie for the three fixed seeded
+personas (Admin/Evaluator/Speaker). Every protected page, action, and API
+resolves the current `EventMember` role from Postgres; public CFP input can
+create speaker data but never grants membership or authorization. This keeps
+the judged demo's role switching frictionless without treating an email address
+as authentication. Public routes (`/cfp/*`, `/embed/*`) work with a null
+session. A random server-only `SESSION_SECRET` of at least 32 characters is
+required in production. Neon Auth was evaluated and declined as unneeded
+complexity for the fixed demo-persona boundary.
 
 ## Single-writer DB discipline
 All agents share one `DATABASE_URL`; concurrent seeds/smokes caused P2002

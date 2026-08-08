@@ -46,8 +46,8 @@ function cookieFor(role) {
   return cookieForSession(session);
 }
 
-/** A login-as-any-email SPEAKER session (no seeded task assignments). */
-function cookieForEmail(email) {
+/** A signed but unprovisioned identity must not gain portal access. */
+function cookieForUnprovisionedIdentity(email) {
   const session = {
     user: { id: `email:${email}`, name: email.split("@")[0], email },
     event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
@@ -224,13 +224,13 @@ await withServer(PORT_OPEN + 1, {}, async (base) => {
 
   const stranger = await fetch(`${base}/api/portal/tasks`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", cookie: cookieForEmail("stranger@smoke.test") },
+    headers: { "content-type": "application/json", cookie: cookieForUnprovisionedIdentity("stranger@smoke.test") },
     body: JSON.stringify({ taskId: sofiaTaskId, status: "COMPLETED" }),
   });
   const strangerBody = await json(stranger);
   check(
-    "speaker cannot update a task assigned to someone else",
-    stranger.status === 403 && strangerBody?.error?.code === "NOT_ASSIGNED",
+    "unprovisioned identity cannot update speaker tasks",
+    stranger.status === 401 && strangerBody?.error?.code === "UNAUTHORIZED",
     `status ${stranger.status} code ${strangerBody?.error?.code}`,
   );
 

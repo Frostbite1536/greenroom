@@ -298,10 +298,10 @@ try {
   }, evalr);
   check("unknown rubric key rejected", unknownKey.status === 422, unknownKey.data?.error?.code);
 
-  const notAssigned = await j("POST", "/api/evaluations/scores", {
+  const unprovisioned = await j("POST", "/api/evaluations/scores", {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
   }, { ...evalr, user: { id: "x", name: "Stranger", email: "stranger@x.com" } });
-  check("unassigned evaluator refused", notAssigned.status === 403, notAssigned.data?.error?.code);
+  check("unprovisioned evaluator refused", unprovisioned.status === 401, unprovisioned.data?.error?.code);
 
   const score = await j("POST", "/api/evaluations/scores", {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 5, comment: "strong" }], complete: true,

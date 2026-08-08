@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireContext } from "@/lib/api/context";
+import { ApiError } from "@/lib/api/http";
 import { isDemoResetAllowed } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { seedDemo } from "@/lib/demo/seed";
@@ -27,14 +28,20 @@ export async function POST() {
 
   try {
     await requireContext(["ADMIN"]);
-  } catch {
-    return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
+    }
+    // Keep diagnostics server-side and intentionally avoid request/cookie/DB details.
+    console.error("[reset] authorization unavailable", { errorType: error instanceof Error ? error.name : typeof error });
+    return fail("AUTH_UNAVAILABLE", "Authorization could not be verified. Try again later.", 503);
   }
 
   try {
     const summary = await seedDemo(prisma);
     return NextResponse.json<ApiResponse<typeof summary>>({ ok: true, data: summary });
-  } catch {
+  } catch (error) {
+    console.error("[reset] seed failed", { errorType: error instanceof Error ? error.name : typeof error });
     return fail("RESET_FAILED", "Demo reset could not be completed.", 500);
   }
 }
