@@ -1,24 +1,28 @@
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { AgendaBuilder } from "@/components/agenda-builder";
-import { EVENT_META, ROOMS, SLOTS, TRACKS } from "@/lib/fixtures";
+import { getAgendaData } from "@/lib/data/reads";
 
-export const metadata = { title: "Agenda · Sessionboard" };
+export const metadata = { title: "Agenda" };
+export const dynamic = "force-dynamic";
 
-export default function AgendaPage() {
+export default async function AgendaPage() {
+  const data = await getAgendaData();
+  const scheduled = data.sessions.filter((s) => s.slot !== null).length;
+
   return (
     <section className="page-stack" style={{ width: "min(1280px, 100%)" }}>
       <PageHeader
         eyebrow="Program"
         title="Agenda"
-        description={`Build the ${EVENT_META.name} schedule across rooms and tracks with live room and speaker conflict detection.`}
+        description="Build the schedule across rooms and tracks with live room and speaker conflict detection."
       />
       <div className="metric-grid">
-        <div className="metric"><span>Scheduled</span><strong>{SLOTS.length}</strong></div>
-        <div className="metric"><span>Rooms</span><strong>{ROOMS.length}</strong></div>
-        <div className="metric"><span>Tracks</span><strong>{TRACKS.length}</strong></div>
+        <div className="metric"><span>Scheduled</span><strong>{scheduled}</strong></div>
+        <div className="metric"><span>Unscheduled</span><strong>{data.sessions.length - scheduled}</strong></div>
+        <div className="metric"><span>Rooms · Tracks</span><strong>{data.rooms.length} · {data.tracks.length}</strong></div>
       </div>
-      <AgendaBuilder />
+      <AgendaBuilder data={data} />
     </section>
   );
 }

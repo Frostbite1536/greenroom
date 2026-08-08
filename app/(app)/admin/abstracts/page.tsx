@@ -1,13 +1,16 @@
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { AbstractsTable } from "@/components/abstracts-table";
-import { ABSTRACTS } from "@/lib/fixtures";
+import { getAdminAbstracts } from "@/lib/data/reads";
 
-export const metadata = { title: "Abstracts · Sessionboard" };
+export const metadata = { title: "Abstracts" };
+export const dynamic = "force-dynamic";
 
-export default function AbstractsPage() {
-  const accepted = ABSTRACTS.filter((a) => a.status === "ACCEPTED").length;
-  const pending = ABSTRACTS.filter((a) => a.status === "SUBMITTED" || a.status === "UNDER_REVIEW").length;
+export default async function AbstractsPage() {
+  const { abstracts } = await getAdminAbstracts();
+
+  const accepted = abstracts.filter((a) => a.status === "ACCEPTED").length;
+  const pending = abstracts.filter((a) => a.status === "SUBMITTED" || a.status === "UNDER_REVIEW").length;
 
   return (
     <section className="page-stack">
@@ -17,11 +20,11 @@ export default function AbstractsPage() {
         description="Review and manage abstract submissions through the acceptance pipeline."
       />
       <div className="metric-grid">
-        <div className="metric"><span>Total</span><strong>{ABSTRACTS.length}</strong></div>
+        <div className="metric"><span>Total</span><strong>{abstracts.length}</strong></div>
         <div className="metric"><span>Pending review</span><strong>{pending}</strong></div>
         <div className="metric"><span>Accepted</span><strong>{accepted}</strong></div>
       </div>
-      <AbstractsTable />
+      <AbstractsTable abstracts={abstracts} />
     </section>
   );
 }

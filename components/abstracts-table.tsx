@@ -1,11 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { FileStack, Search, Star, X } from "lucide-react";
-import { ABSTRACTS, ABSTRACT_STATUS_META, type AbstractModel, type Status } from "@/lib/fixtures";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { CalendarPlus, FileStack, Search, Star, X } from "lucide-react";
+import type { AbstractRow } from "@/lib/data/reads";
+import { apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 
-const TABS: { key: Status | "ALL"; label: string }[] = [
+const STATUS_META: Record<string, { label: string; tone: string }> = {
+  DRAFT: { label: "Draft", tone: "neutral" },
+  SUBMITTED: { label: "Submitted", tone: "info" },
+  UNDER_REVIEW: { label: "Under review", tone: "warn" },
+  ACCEPTED: { label: "Accepted", tone: "good" },
+  REJECTED: { label: "Declined", tone: "bad" },
+  WITHDRAWN: { label: "Withdrawn", tone: "neutral" },
+};
+
+const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "SUBMITTED", label: "Submitted" },
   { key: "UNDER_REVIEW", label: "Under review" },
@@ -14,36 +25,37 @@ const TABS: { key: Status | "ALL"; label: string }[] = [
   { key: "DRAFT", label: "Drafts" },
 ];
 
-export function AbstractsTable() {
-  const [tab, setTab] = useState<Status | "ALL">("ALL");
+export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
+  const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<AbstractModel | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const counts = useMemo(() => {
-    const c: Record<string, number> = { ALL: ABSTRACTS.length };
-    for (const a of ABSTRACTS) c[a.status] = (c[a.status] ?? 0) + 1;
+    const c: Record<string, number> = { ALL: abstracts.length };
+    for (const a of abstracts) c[a.status] = (c[a.status] ?? 0) + 1;
     return c;
-  }, []);
+  }, [abstracts]);
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return ABSTRACTS.filter((a) => (tab === "ALL" ? true : a.status === tab)).filter(
-      (a) => !needle || a.title.toLowerCase().includes(needle) || a.speakers.some((s) => s.name.toLowerCase().includes(needle)),
-    );
-  }, [tab, q]);
+    return abstracts
+      .filter((a) => (tab === "ALL" ? true : a.status === tab))
+      .filter(
+        (a) =>
+          !needle ||
+          a.title.toLowerCase().includes(needle) ||
+          a.speakers.some((s) => s.name.toLowerCase().includes(needle)),
+      );
+  }, [abstracts, tab, q]);
+
+  const selected = abstracts.find((a) => a.id === selectedId) ?? null;
 
   return (
     <div className="card">
       <div style={{ padding: "6px 8px 0" }}>
         <div className="tabs" role="tablist" aria-label="Abstract status">
           {TABS.map((t) => (
-            <button
-              key={t.key}
-              role="tab"
-              aria-selected={tab === t.key}
-              className="tab"
-              onClick={() => setTab(t.key)}
-            >
+            <button key={t.key} role="tab" aria-selected={tab === t.key} className="tab" onClick={() => setTab(t.key)}>
               {t.label} <span className="count">{counts[t.key] ?? 0}</span>
             </button>
           ))}
@@ -62,11 +74,15 @@ export function AbstractsTable() {
             aria-label="Search abstracts"
           />
         </span>
-        <span className="hint">{rows.length} of {ABSTRACTS.length}</span>
+        <span className="hint">{rows.length} of {abstracts.length}</span>
       </div>
 
-      {rows.length === 0 ? (
-        <EmptyState icon={<FileStack size={22} />} title="No abstracts here">
+      {abstracts.length === 0 ? (
+        <EmptyState icon={<FileStack size={22} />} title="No submissions yet">
+          Abstracts appear here once speakers submit through a published CFP form.
+        </EmptyState>
+      ) : rows.length === 0 ? (
+        <EmptyState icon={<FileStack size={22} />} title="No abstracts match">
           Try a different status filter or clear your search.
         </EmptyState>
       ) : (
@@ -84,23 +100,30 @@ export function AbstractsTable() {
             </thead>
             <tbody>
               {rows.map((a) => {
-                const meta = ABSTRACT_STATUS_META[a.status];
+                const meta = STATUS_META[a.status];
                 return (
-                  <tr key={a.id} onClick={() => setSelected(a)} style={{ cursor: "pointer" }}>
-                    <td><Pill tone={meta.tone}>{meta.label}</Pill></td>
+                  <tr key={a.id} onClick={() => setSelectedId(a.id)} style={{ cursor: "pointer" }}>
+                    <td>
+                      <Pill tone={meta.tone}>{meta.label}</Pill>
+                      {a.hasSession ? <div className="cell-sub">Session created</div> : null}
+                    </td>
                     <td>
                       <div className="cell-title">{a.title}</div>
-                      <div className="cell-sub">{a.format}</div>
+                      <div className="cell-sub">{a.format ?? "—"}</div>
                     </td>
-                    <td>{a.categoryName}</td>
+                    <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                     <td>
-                      {a.speakers.map((s) => s.name).join(", ")}
+                      {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
                       {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
                     </td>
-                    <td>{a.reviewsComplete}/{a.reviewsTotal}</td>
                     <td>
-                      {a.avgScore ? (
-                        <span className="row" style={{ gap: 4 }}><Star size={13} fill="#e8a13a" color="#e8a13a" /> {a.avgScore.toFixed(1)}</span>
+                      {a.reviewsTotal > 0 ? `${a.reviewsComplete}/${a.reviewsTotal}` : <span className="muted">—</span>}
+                    </td>
+                    <td>
+                      {a.avgScore !== null ? (
+                        <span className="row" style={{ gap: 4 }}>
+                          <Star size={13} fill="#e8a13a" color="#e8a13a" /> {a.avgScore.toFixed(1)}
+                        </span>
                       ) : (
                         <span className="muted">—</span>
                       )}
@@ -113,14 +136,51 @@ export function AbstractsTable() {
         </div>
       )}
 
-      {selected ? <AbstractDrawer abstract={selected} onClose={() => setSelected(null)} /> : null}
+      {selected ? <AbstractDrawer abstract={selected} onClose={() => setSelectedId(null)} /> : null}
     </div>
   );
 }
 
-function AbstractDrawer({ abstract, onClose }: { abstract: AbstractModel; onClose: () => void }) {
-  const meta = ABSTRACT_STATUS_META[abstract.status];
-  const canAccept = abstract.status === "UNDER_REVIEW" || abstract.status === "SUBMITTED";
+function AbstractDrawer({ abstract, onClose }: { abstract: AbstractRow; onClose: () => void }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [busy, setBusy] = useState<null | "accept" | "reject" | "convert">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const meta = STATUS_META[abstract.status];
+  const canDecide = abstract.status === "UNDER_REVIEW" || abstract.status === "SUBMITTED";
+  const canConvert = abstract.status === "ACCEPTED" && !abstract.hasSession;
+
+  async function decide(decision: "ACCEPTED" | "REJECTED") {
+    setBusy(decision === "ACCEPTED" ? "accept" : "reject");
+    setError(null);
+    const res = await apiPost("/api/evaluations/decisions", { abstractId: abstract.id, decision });
+    setBusy(null);
+    if (!res.ok) {
+      setError(res.error.message);
+      return;
+    }
+    setNotice(decision === "ACCEPTED" ? "Accepted." : "Declined.");
+    startTransition(() => router.refresh());
+  }
+
+  async function convert() {
+    setBusy("convert");
+    setError(null);
+    const res = await apiPost<{ sessionId: string; created: boolean }>("/api/evaluations/convert", {
+      abstractId: abstract.id,
+      durationMinutes: abstract.durationMinutes ?? 30,
+    });
+    setBusy(null);
+    if (!res.ok) {
+      setError(res.error.message);
+      return;
+    }
+    setNotice(res.data.created ? "Session created — schedule it on the agenda." : "Session already existed.");
+    startTransition(() => router.refresh());
+  }
+
   return (
     <div
       role="dialog"
@@ -139,21 +199,43 @@ function AbstractDrawer({ abstract, onClose }: { abstract: AbstractModel; onClos
           <button className="ghost-button" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
         <h2 style={{ marginTop: 0 }}>{abstract.title}</h2>
-        <p style={{ lineHeight: 1.6 }}>{abstract.abstract}</p>
+        {abstract.abstract ? <p style={{ lineHeight: 1.6 }}>{abstract.abstract}</p> : <p className="muted">No abstract body provided.</p>}
+
         <div className="detail-drawer">
-          <div className="kv"><span>Category</span><span>{abstract.categoryName}</span></div>
-          <div className="kv"><span>Format</span><span>{abstract.format}</span></div>
-          <div className="kv"><span>Speakers</span><span>{abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ")}</span></div>
-          <div className="kv"><span>Reviews</span><span>{abstract.reviewsComplete}/{abstract.reviewsTotal} complete</span></div>
-          <div className="kv"><span>Avg score</span><span>{abstract.avgScore ? abstract.avgScore.toFixed(1) : "Not scored"}</span></div>
+          <div className="kv"><span>Form</span><span>{abstract.formName}</span></div>
+          <div className="kv"><span>Category</span><span>{abstract.categoryName ?? "—"}</span></div>
+          <div className="kv"><span>Format</span><span>{abstract.format ?? "—"}</span></div>
+          <div className="kv"><span>Duration</span><span>{abstract.durationMinutes ? `${abstract.durationMinutes} min` : "—"}</span></div>
+          <div className="kv">
+            <span>Speakers</span>
+            <span>{abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}</span>
+          </div>
+          <div className="kv"><span>Reviews</span><span>{abstract.reviewsTotal > 0 ? `${abstract.reviewsComplete}/${abstract.reviewsTotal} complete` : "Not assigned"}</span></div>
+          <div className="kv"><span>Avg score</span><span>{abstract.avgScore !== null ? abstract.avgScore.toFixed(2) : "Not scored"}</span></div>
           <div className="kv"><span>Submitted</span><span>{abstract.submittedAt ? new Date(abstract.submittedAt).toLocaleString() : "—"}</span></div>
         </div>
-        {canAccept ? (
-          <div className="row" style={{ marginTop: 16, gap: 8 }}>
-            <button className="primary-button">Accept → create session</button>
-            <button className="ghost-button danger-button">Decline</button>
-          </div>
-        ) : null}
+
+        {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
+        {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
+
+        <div className="row wrap" style={{ marginTop: 16, gap: 8 }}>
+          {canDecide && (
+            <>
+              <button className="primary-button" disabled={busy !== null || pending} onClick={() => decide("ACCEPTED")}>
+                {busy === "accept" ? "Accepting…" : "Accept"}
+              </button>
+              <button className="ghost-button danger-button" disabled={busy !== null || pending} onClick={() => decide("REJECTED")}>
+                {busy === "reject" ? "Declining…" : "Decline"}
+              </button>
+            </>
+          )}
+          {canConvert && (
+            <button className="primary-button" disabled={busy !== null || pending} onClick={convert} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <CalendarPlus size={16} /> {busy === "convert" ? "Creating…" : "Create session"}
+            </button>
+          )}
+          {abstract.hasSession ? <span className="hint">Session exists — schedule it in the agenda builder.</span> : null}
+        </div>
       </div>
     </div>
   );
