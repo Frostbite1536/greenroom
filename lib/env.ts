@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const boolish = z.enum(["true", "false"]);
+export const V1_API_KEY_MIN_LENGTH = 32;
+const v1ApiKeySchema = z.string().trim().min(V1_API_KEY_MIN_LENGTH).optional();
 
 const envSchema = z.object({
   DATABASE_URL: z.string().url().startsWith("postgresql://"),
@@ -16,6 +18,9 @@ const envSchema = z.object({
   ACCELEVENTS_API_KEY: z.string().min(1).optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
   AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
+  // Optional server-only key for the read-only v1 REST surface. When absent,
+  // those routes deliberately return 503 instead of becoming public.
+  GREENROOM_API_KEY: v1ApiKeySchema,
   // Public base URL of the deployment (used for absolute links in emails/.ics).
   APP_URL: z.string().url().optional(),
 });
@@ -32,6 +37,7 @@ export function getServerEnv(): ServerEnv {
     ACCELEVENTS_API_KEY: process.env.ACCELEVENTS_API_KEY,
     AIRTABLE_API_KEY: process.env.AIRTABLE_API_KEY,
     AIRTABLE_BASE_ID: process.env.AIRTABLE_BASE_ID,
+    GREENROOM_API_KEY: process.env.GREENROOM_API_KEY,
     APP_URL: process.env.APP_URL,
   });
 }
@@ -44,4 +50,10 @@ export function useMockIntegrations(): boolean {
 /** Whether the destructive demo reset is permitted in this environment. */
 export function isDemoResetAllowed(): boolean {
   return process.env.ALLOW_DEMO_RESET === "true";
+}
+
+/** Server-only key for the optional read-only v1 REST surface. */
+export function getV1ApiKey(): string | undefined {
+  const parsed = v1ApiKeySchema.safeParse(process.env.GREENROOM_API_KEY);
+  return parsed.success ? parsed.data : undefined;
 }

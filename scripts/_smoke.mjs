@@ -29,6 +29,10 @@ const cookie = (s) => `sb_session=${enc(s)}`;
 
 const PORT = process.env.SMOKE_PORT || "3212";
 const BASE = `http://127.0.0.1:${PORT}`;
+// The spawned server receives this scratch-only key even when the shell does
+// not have one configured. It exercises the optional v1 read surface without
+// changing any shared environment or touching the judged event.
+const V1_API_KEY = process.env.GREENROOM_API_KEY || "scratch-v1-api-key-for-local-only-0001";
 const j = async (method, path, body, sess) => {
   const res = await fetch(BASE + path, {
     method,
@@ -39,8 +43,17 @@ const j = async (method, path, body, sess) => {
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 };
+const v1 = async (path) => {
+  const res = await fetch(BASE + path, { headers: { authorization: `Bearer ${V1_API_KEY}` } });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data };
+};
 
-const server = spawn("npx", ["next", "start", "-p", PORT], { cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn("npx", ["next", "start", "-p", PORT], {
+  cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY },
+});
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
 let ready = false;
 server.stdout.on("data", (d) => { if (/Ready|started server|Local:/i.test(d.toString())) ready = true; });
@@ -327,6 +340,15 @@ try {
   // 18. Public embed shows placed sessions with a null session
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
+
+  // 19. Key-protected v1 reads remain explicitly event-scoped and return only
+  // the intended read models (no reviewer data or unplaced sessions).
+  const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
+  check("v1 submissions read is key-gated and event-scoped", v1Submissions.status === 200 && v1Submissions.data?.version === "v1" && v1Submissions.data?.data?.some((item) => item.id === abstractId), v1Submissions.status);
+  const v1Speakers = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  check("v1 speakers are derived from scratch event records", v1Speakers.status === 200 && v1Speakers.data?.data?.some((item) => item.email === "spk@x.com"), v1Speakers.status);
+  const v1Schedule = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("v1 schedule lists placed sessions only", v1Schedule.status === 200 && v1Schedule.data?.data?.length === 2, v1Schedule.status);
 
   // 19b. Cross-event scoping: a scratch-scoped session must not accept a body
   // claiming the demo event (INV-EVENT-001), and must not read demo data.

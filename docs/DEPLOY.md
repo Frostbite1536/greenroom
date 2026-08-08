@@ -18,6 +18,7 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
    | `RESEND_API_KEY` / `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable real integrations when present. |
    | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
+   | `GREENROOM_API_KEY` | optional | Enables the server-only, read-only `/api/v1/*` surface; leave unset to disable it (503). |
 
 4. First deploy checklist:
    - `/login` renders and the three persona buttons work.
@@ -28,7 +29,9 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
 - Schema is applied with `prisma db push` (see architect). Do not run destructive
   migrations against the shared Neon DB without coordination.
 - Env validation lives in `lib/env.ts` (`getServerEnv`, `useMockIntegrations`,
-  `isDemoResetAllowed`).
+  `isDemoResetAllowed`, `getV1ApiKey`).
+- API-key REST setup, endpoint contracts, and curl examples are in
+  [`docs/API.md`](API.md). Do not expose `GREENROOM_API_KEY` to browser code.
 
 ## Airtable one-way mirror
 
