@@ -12,6 +12,8 @@ test("session rejects an altered payload or signature", () => {
   const now = Date.UTC(2026, 4, 12, 9, 0, 0);
   const encoded = encodeSession(DEMO_PERSONAS.speaker, now);
   const [payload, signature] = encoded.split(".");
+  const legacyUnsigned = Buffer.from(JSON.stringify(DEMO_PERSONAS.admin), "utf8").toString("base64url");
+  assert.equal(decodeSession(legacyUnsigned, now), null);
   assert.equal(decodeSession(`${payload}x.${signature}`, now), null);
   assert.equal(decodeSession(`${payload}.${signature}x`, now), null);
 });
