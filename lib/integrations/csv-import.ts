@@ -31,6 +31,10 @@ export type CsvFormField = {
 
 export class CsvImportError extends Error {}
 
+// The request schema enforces the same payload cap before this parser runs.
+export const MAX_CSV_IMPORT_PAYLOAD_CHARS = 5_000_000;
+export const MAX_CSV_IMPORT_ROWS = 1_000;
+
 /** Stable advisory-lock key for one import identity; JSON prevents delimiter collisions. */
 export function csvAbstractImportIdentityKey(input: {
   eventId: string;
@@ -149,6 +153,9 @@ function parseCsvRecords(payload: string): RawCsvRow[] {
 
 /** Parse a comma-delimited payload, retaining original CSV row numbers for errors. */
 export function parseCsv(payload: string): ParsedCsv {
+  if (payload.length > MAX_CSV_IMPORT_PAYLOAD_CHARS) {
+    throw new CsvImportError(`CSV payload may contain at most ${MAX_CSV_IMPORT_PAYLOAD_CHARS} characters.`);
+  }
   const records = parseCsvRecords(payload);
   const firstContentRecord = records.findIndex((record) => record.values.some((value) => value.trim().length > 0));
   if (firstContentRecord === -1) throw new CsvImportError("CSV payload is empty.");
@@ -176,7 +183,9 @@ export function parseCsv(payload: string): ParsedCsv {
   }
 
   if (rows.length === 0) throw new CsvImportError("CSV payload has no data rows.");
-  if (rows.length > 1_000) throw new CsvImportError("CSV payload may contain at most 1,000 data rows.");
+  if (rows.length > MAX_CSV_IMPORT_ROWS) {
+    throw new CsvImportError(`CSV payload may contain at most ${MAX_CSV_IMPORT_ROWS.toLocaleString()} data rows.`);
+  }
   return { headers, rows };
 }
 

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { importRequestSchema } from "@/types/api";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
   CsvImportError,
   csvAbstractImportIdentityKey,
@@ -91,9 +92,26 @@ export const POST = handle(async (req) => {
     const mappings = validateAbstractMappings(input.mappings);
     const mappedRows = mapCsvRows(parseCsv(input.payload), mappings);
     const [forms, categories] = await Promise.all([
-      prisma.formConfig.findMany({ where: { eventId: ctx.eventId }, include: { fields: true } }),
-      prisma.category.findMany({ where: { eventId: ctx.eventId } }),
+      prisma.formConfig.findMany({
+        where: { eventId: ctx.eventId },
+        include: {
+          fields: {
+            orderBy: { sortOrder: "asc" },
+            take: OPERATOR_QUERY_LIMITS.importFieldsPerForm + 1,
+          },
+        },
+        take: OPERATOR_QUERY_LIMITS.importForms + 1,
+      }),
+      prisma.category.findMany({
+        where: { eventId: ctx.eventId },
+        take: OPERATOR_QUERY_LIMITS.importCategories + 1,
+      }),
     ]);
+    assertEventQueryBound(forms, OPERATOR_QUERY_LIMITS.importForms, "forms available to CSV import");
+    assertEventQueryBound(categories, OPERATOR_QUERY_LIMITS.importCategories, "categories available to CSV import");
+    for (const form of forms) {
+      assertEventQueryBound(form.fields, OPERATOR_QUERY_LIMITS.importFieldsPerForm, `fields on form '${form.id}'`);
+    }
     const formsById = new Map(forms.map((form) => [form.id, form]));
     const categoriesByValue = new Map(
       categories.flatMap((category) => [

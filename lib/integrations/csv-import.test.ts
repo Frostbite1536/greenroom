@@ -4,6 +4,7 @@ import {
   CsvImportError,
   coerceCsvAnswer,
   csvAbstractImportIdentityKey,
+  MAX_CSV_IMPORT_ROWS,
   mapCsvRows,
   parseCsv,
   validateImportedAnswers,
@@ -61,6 +62,14 @@ test("CSV import identity keys normalize retries without delimiter collisions", 
   assert.notEqual(
     csvAbstractImportIdentityKey({ eventId: "event-1", formConfigId: "form-1\u0000extra", speakerEmail: "ada@example.test", title: "my talk" }),
     normalized,
+  );
+});
+
+test("parseCsv rejects an over-limit row set before any import database reads", () => {
+  const rows = Array.from({ length: MAX_CSV_IMPORT_ROWS + 1 }, (_value, index) => `Talk ${index}`);
+  assert.throws(
+    () => parseCsv(["Title", ...rows].join("\n")),
+    (error: unknown) => error instanceof CsvImportError && /at most 1,000 data rows/.test(error.message),
   );
 });
 

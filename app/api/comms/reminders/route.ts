@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import {
   buildSpeakerCalendarInvite,
@@ -45,11 +46,17 @@ export const POST = handle(async (req) => {
         } },
       },
       orderBy: { user: { email: "asc" } },
+      take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers + 1,
     }),
   ]);
 
   if (!event) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
   if (!template) throw new ApiError(404, "TEMPLATE_NOT_FOUND", "That template does not exist for this event.");
+  assertEventQueryBound(
+    rows,
+    OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
+    "speaker-session rows for reminders",
+  );
 
   const grouped = new Map<string, EligibleSpeaker>();
   for (const row of rows) {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { useMockIntegrations } from "@/lib/env";
 import {
   AcceleventsPushError,
@@ -43,9 +44,11 @@ export const POST = handle(async (req) => {
         } },
       },
       orderBy: { title: "asc" },
+      take: OPERATOR_QUERY_LIMITS.acceleventsSessions + 1,
     }),
   ]);
   if (!event) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
+  assertEventQueryBound(sessions, OPERATOR_QUERY_LIMITS.acceleventsSessions, "sessions for the Accelevents push");
 
   const payload = buildAcceleventsPushPayload(event, sessions.map((session) => ({
     id: session.id,
