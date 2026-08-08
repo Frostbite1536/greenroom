@@ -1,0 +1,25 @@
+# Worktrees and local coordination
+.worktrees/
+.sprint/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies/build
+node_modules/
+.next/
+dist/
+build/
+coverage/
+*.log
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local agent state
+.claude.local.md
