@@ -1,13 +1,29 @@
 import { spawn } from "node:child_process";
+import { PrismaClient } from "@prisma/client";
 
-// Build a demo admin session cookie matching lib/auth.ts encodeSession.
+/**
+ * Backend E2E smoke.
+ *
+ * DB CONCURRENCY RULE (STATE.md): `demo-event` is READ-ONLY for workers — it is
+ * the judged demo data. Every write below is scoped to the per-worker scratch
+ * event `scratch-backend`, which this script wipes and recreates on each run.
+ * Never point this script at `demo-event`.
+ */
+const SCRATCH_EVENT = {
+  id: "scratch-backend",
+  name: "Backend Scratch Event",
+  slug: "scratch-backend",
+};
+
+// Session cookies are forged to match lib/auth.ts encodeSession. Scratch-only
+// identities (@scratch.test) so demo personas are never touched.
 const admin = {
-  user: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
-  event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
+  user: { id: "scratch-admin", name: "Scratch Admin", email: "admin@scratch.test" },
+  event: SCRATCH_EVENT,
   role: "ADMIN",
 };
-const speaker = { ...admin, user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" }, role: "SPEAKER" };
-const evalr = { ...admin, user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo" }, role: "EVALUATOR" };
+const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
+const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
 const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
 const cookie = (s) => `sb_session=${enc(s)}`;
 
@@ -40,12 +56,41 @@ async function waitReady() {
 const results = [];
 const check = (name, cond, extra) => { results.push({ name, ok: !!cond, extra }); console.log(`${cond ? "PASS" : "FAIL"} ${name}`, extra ?? ""); };
 
+const prisma = new PrismaClient();
+
+/**
+ * Wipe + recreate the scratch event so runs are idempotent and isolated.
+ * Deleting the Event cascades to forms, abstracts, sessions, slots, plans and
+ * memberships. Guarded so this can never target the judged demo event.
+ */
+async function resetScratchEvent() {
+  if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
+    throw new Error("Refusing to run: smoke must never target the demo event.");
+  }
+  await prisma.event.deleteMany({ where: { id: SCRATCH_EVENT.id } });
+  await prisma.event.create({
+    data: {
+      ...SCRATCH_EVENT,
+      timezone: "UTC",
+      rooms: {
+        create: [
+          { name: "Scratch Room A", capacity: 100, sortOrder: 0 },
+          { name: "Scratch Room B", capacity: 60, sortOrder: 1 },
+        ],
+      },
+      tracks: { create: [{ name: "Scratch Track", color: "#3b82f6", sortOrder: 0 }] },
+    },
+  });
+  console.log(`[smoke] scratch event '${SCRATCH_EVENT.id}' reset (demo-event untouched)`);
+}
+
 try {
+  await resetScratchEvent();
   await waitReady();
 
   // 1. Create + publish a CFP form (admin)
   const formPayload = {
-    eventId: "demo-event", name: "Smoke CFP", slug: "smoke-cfp-" + Date.now().toString(36),
+    eventId: SCRATCH_EVENT.id, name: "Smoke CFP", slug: "smoke-cfp-" + Date.now().toString(36),
     minSpeakers: 1, maxSpeakers: 2, maxBioLength: 500, published: true,
     fields: [
       { key: "title_note", label: "Talk note", type: "SHORT_TEXT", required: true, sortOrder: 0 },
@@ -83,7 +128,7 @@ try {
 
   // 6. Create evaluation plan
   const plan = await j("POST", "/api/evaluations/plans", {
-    eventId: "demo-event", name: "Round 1 Smoke", ordinal: Math.floor(Math.random()*100000),
+    eventId: SCRATCH_EVENT.id, name: "Round 1 Smoke", ordinal: 1,
     rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
   }, admin);
   check("create plan", plan.status === 201, plan.status);
@@ -153,7 +198,7 @@ try {
 
   // 13. Place the session
   const place = await j("POST", "/api/agenda/slots", {
-    eventId: "demo-event", sessionId, roomId: roomA, startsAt: start, endsAt: end,
+    eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("place session on schedule", place.status === 200 && !!place.data?.data?.slot?.id, place.status);
 
@@ -169,7 +214,7 @@ try {
   const sessionId2 = conv3.data?.data?.sessionId;
 
   const roomClash = await j("POST", "/api/agenda/slots", {
-    eventId: "demo-event", sessionId: sessionId2, roomId: roomA, startsAt: start, endsAt: end,
+    eventId: SCRATCH_EVENT.id, sessionId: sessionId2, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("room conflict refused (409)", roomClash.status === 409 && /ROOM_OVERLAP/.test(JSON.stringify(roomClash.data)), roomClash.data?.error?.code);
 
@@ -183,7 +228,7 @@ try {
   await j("POST", "/api/evaluations/decisions", { abstractId: abstractId3, decision: "ACCEPTED" }, admin);
   const conv4 = await j("POST", "/api/evaluations/convert", { abstractId: abstractId3, durationMinutes: 45 }, admin);
   const speakerClash = await j("POST", "/api/agenda/slots", {
-    eventId: "demo-event", sessionId: conv4.data?.data?.sessionId, roomId: roomB,
+    eventId: SCRATCH_EVENT.id, sessionId: conv4.data?.data?.sessionId, roomId: roomB,
     startsAt: start, endsAt: end,
   }, admin);
   check("speaker double-booking refused", speakerClash.status === 409 && /SPEAKER_OVERLAP/.test(JSON.stringify(speakerClash.data)), speakerClash.data?.error?.code);
@@ -191,20 +236,27 @@ try {
   // 16. Non-overlapping placement succeeds
   const later = iso(t0.getTime() + 60 * 60000), laterEnd = iso(t0.getTime() + 105 * 60000);
   const okPlace = await j("POST", "/api/agenda/slots", {
-    eventId: "demo-event", sessionId: sessionId2, roomId: roomA, startsAt: later, endsAt: laterEnd,
+    eventId: SCRATCH_EVENT.id, sessionId: sessionId2, roomId: roomA, startsAt: later, endsAt: laterEnd,
   }, admin);
   check("non-overlapping placement succeeds", okPlace.status === 200 && !!okPlace.data?.data?.slot?.id, okPlace.status);
 
   // 17. Moving a session doesn't conflict with itself
   const move = await j("POST", "/api/agenda/slots", {
-    eventId: "demo-event", sessionId: sessionId2, roomId: roomA,
+    eventId: SCRATCH_EVENT.id, sessionId: sessionId2, roomId: roomA,
     startsAt: iso(t0.getTime() + 65 * 60000), endsAt: iso(t0.getTime() + 110 * 60000),
   }, admin);
   check("move own slot without self-conflict", move.status === 200, move.status);
 
   // 18. Public embed shows placed sessions with a null session
-  const pubAgenda = await j("GET", "/api/agenda/public?event=forward-2026");
-  check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length >= 2, pubAgenda.data?.data?.sessions?.length);
+  const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
+  check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
+
+  // 19b. Cross-event scoping: a scratch-scoped session must not accept a body
+  // claiming the demo event (INV-EVENT-001), and must not read demo data.
+  const crossEvent = await j("POST", "/api/agenda/slots", {
+    eventId: "demo-event", sessionId, roomId: roomA, startsAt: start, endsAt: end,
+  }, admin);
+  check("cross-event write refused (EVENT_SCOPE)", crossEvent.status === 403, crossEvent.data?.error?.code);
 
   // 19. Authorization: speaker persona cannot reach admin surfaces
   const forbidden = await j("GET", "/api/agenda", null, speaker);
@@ -212,9 +264,15 @@ try {
   const anon = await j("GET", "/api/agenda");
   check("anonymous blocked from admin agenda", anon.status === 401, anon.status);
 
-  // 20. Cleanup so repeated runs stay conflict-free
-  await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
-  await j("DELETE", `/api/agenda/slots?sessionId=${sessionId2}`, null, admin);
+  // 20. Unschedule path still works (data itself is dropped by the next reset)
+  const unschedule = await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
+  check("unschedule session", unschedule.status === 200 && unschedule.data?.data?.unscheduled === true, unschedule.status);
+
+  // 21. Guard: the run must not have touched the judged demo event.
+  const demoTouch = await prisma.formConfig.count({
+    where: { eventId: "demo-event", name: "Smoke CFP" },
+  });
+  check("demo-event untouched by smoke", demoTouch === 0, `stray demo rows: ${demoTouch}`);
 
   console.log("IDS", JSON.stringify({ planId, abstractId, formId, sessionId }));
 } catch (e) {
@@ -222,6 +280,7 @@ try {
 } finally {
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
+  await prisma.$disconnect().catch(() => {});
   // Kill ONLY the process tree we spawned (never by image name — see STATE.md incident rule).
   if (process.platform === "win32") {
     spawn("taskkill", ["/PID", String(server.pid), "/T", "/F"], { shell: true, stdio: "ignore" });
