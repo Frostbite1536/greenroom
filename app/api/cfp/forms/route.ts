@@ -4,7 +4,13 @@ import { formConfigInputSchema } from "@/types/api";
 import { requireContext, assertEventScope } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeForm } from "@/lib/api/form-serialize";
-import { findDuplicateFieldKeys } from "@/lib/services/form-config";
+import {
+  answerOptionValues,
+  describeDestructiveChange,
+  findDestructiveFieldChanges,
+  findDuplicateFieldKeys,
+} from "@/lib/services/form-config";
+import { parseFieldOptions } from "@/lib/services/field-visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +106,12 @@ export const POST = handle(async (req) => {
       create: { eventId: input.eventId, ...data },
     });
 
+    // B5 (audit2#1): `FormAnswer` cascades from `FormField`, so the delete
+    // below would silently destroy submitted answers. Refuse the destructive
+    // shape changes first, but only where answers actually exist — an untouched
+    // form stays freely editable.
+    await assertAnswersNotDestroyed(tx, saved.id, input.fields);
+
     const keepKeys = new Set(input.fields.map((f) => f.key));
     await tx.formField.deleteMany({
       where: { formConfigId: saved.id, key: { notIn: [...keepKeys] } },
@@ -152,3 +164,87 @@ export const POST = handle(async (req) => {
 
   return ok(serializeForm(form), input.id ? 200 : 201);
 });
+
+/** Bounded read: enough answers to prove a field is in use and which options it uses. */
+const MAX_ANSWERS_SCANNED = 2000;
+
+/**
+ * Refuse edits that would delete or invalidate answers people already gave
+ * (WAVE1-B5 / audit2#1).
+ *
+ * Only fields that carry answers are protected, so building and reshaping a
+ * form before anyone submits stays completely free. Label, help text, ordering,
+ * required-ness and conditional logic remain editable at any time.
+ */
+async function assertAnswersNotDestroyed(
+  tx: Prisma.TransactionClient,
+  formConfigId: string,
+  incoming: readonly { key: string; type: string; options?: { value: string }[] }[],
+): Promise<void> {
+  const stored = await tx.formField.findMany({
+    where: { formConfigId },
+    select: { id: true, key: true, label: true, type: true, options: true },
+  });
+  if (stored.length === 0) return;
+
+  const changes = findDestructiveFieldChanges(
+    stored.map((field) => ({
+      key: field.key,
+      type: field.type,
+      options: parseFieldOptions(field.options),
+    })),
+    incoming,
+  );
+  if (changes.length === 0) return;
+
+  const affected = new Map(stored.map((field) => [field.key, field]));
+  const affectedIds = changes
+    .map((change) => affected.get(change.key)?.id)
+    .filter((id): id is string => Boolean(id));
+
+  const answers = await tx.formAnswer.findMany({
+    where: { formFieldId: { in: affectedIds } },
+    select: { formFieldId: true, value: true },
+    take: MAX_ANSWERS_SCANNED,
+  });
+  if (answers.length === 0) return;
+
+  const answersByFieldId = new Map<string, unknown[]>();
+  for (const answer of answers) {
+    const bucket = answersByFieldId.get(answer.formFieldId) ?? [];
+    bucket.push(answer.value);
+    answersByFieldId.set(answer.formFieldId, bucket);
+  }
+
+  const fieldErrors: Record<string, string[]> = {};
+  for (const change of changes) {
+    const field = affected.get(change.key);
+    if (!field) continue;
+    const values = answersByFieldId.get(field.id) ?? [];
+    if (values.length === 0) continue;
+
+    if (change.kind === "optionsRemoved") {
+      // Only refuse when a removed option was actually chosen by someone.
+      const used = new Set(values.flatMap((value) => answerOptionValues(value)));
+      const stillUsed = change.removed.filter((value) => used.has(value));
+      if (stillUsed.length === 0) continue;
+      (fieldErrors[change.key] ??= []).push(
+        describeDestructiveChange({ ...change, removed: stillUsed }, field.label, values.length),
+      );
+      continue;
+    }
+
+    (fieldErrors[change.key] ??= []).push(
+      describeDestructiveChange(change, field.label, values.length),
+    );
+  }
+
+  if (Object.keys(fieldErrors).length > 0) {
+    throw new ApiError(
+      409,
+      "FIELD_IN_USE",
+      "Some questions have already been answered, so they can't be removed or changed that way.",
+      fieldErrors,
+    );
+  }
+}
