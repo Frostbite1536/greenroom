@@ -162,6 +162,7 @@ export async function upsertAirtableTable(
     const response = await fetcher(`https://api.airtable.com/v0/${encodeURIComponent(config.baseId)}/${encodeURIComponent(table)}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(10_000),
       body: JSON.stringify({
         records: batch,
         typecast: true,

@@ -15,10 +15,12 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`. |
-   | `RESEND_API_KEY` / `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable real integrations when present. |
+   | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a verified Resend sender and keep mocks on otherwise. |
+   | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
    | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
    | `GREENROOM_API_KEY` | optional | Enables the server-only, read-only `/api/v1/*` surface; leave unset to disable it (503). |
+   | `SESSION_SECRET` | production required | Server-only random value (minimum 32 characters) used to sign and expire auth cookies. The app fails closed without it in production. |
 
 4. First deploy checklist:
    - `/login` renders and the three persona buttons work.
@@ -29,7 +31,7 @@ Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **
 - Schema is applied with `prisma db push` (see architect). Do not run destructive
   migrations against the shared Neon DB without coordination.
 - Env validation lives in `lib/env.ts` (`getServerEnv`, `useMockIntegrations`,
-  `isDemoResetAllowed`, `getV1ApiKey`).
+  `isDemoResetAllowed`, `getV1ApiKey`, `getResendFrom`).
 - API-key REST setup, endpoint contracts, and curl examples are in
   [`docs/API.md`](API.md). Do not expose `GREENROOM_API_KEY` to browser code.
 

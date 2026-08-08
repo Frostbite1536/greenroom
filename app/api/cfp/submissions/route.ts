@@ -5,6 +5,7 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
 import { validateSubmission, type FormSpec } from "@/lib/services/form-validation";
+import { ensureSpeakerMemberships } from "@/lib/services/speaker-membership";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 export const dynamic = "force-dynamic";
@@ -119,6 +120,11 @@ export const POST = handle(async (req) => {
       ),
     );
     const primaryUser = speakerUsers[input.speakers.indexOf(primary)];
+
+    // A public CFP submission is a trusted server-side event boundary, unlike
+    // a browser session cookie. Ensure its speakers can later sign in to their
+    // portal without allowing a cookie to manufacture membership or a role.
+    await ensureSpeakerMemberships(tx, form.eventId, speakerUsers.map((speakerUser) => speakerUser.id));
 
     if (input.abstractId) {
       const existing = await tx.abstract.findUnique({ where: { id: input.abstractId } });

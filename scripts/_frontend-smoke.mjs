@@ -11,6 +11,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
@@ -26,11 +27,10 @@ if (probe) {
   process.exit(1);
 }
 
-const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
 const ev = { id: EVENT_ID, name: "Scratch Frontend", slug: EVENT_ID };
 const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom.demo" }, event: ev, role: "ADMIN" };
 const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom.demo" }, event: ev, role: "EVALUATOR" };
-const cookie = (s) => `sb_session=${enc(s)}`;
+const cookie = cookieForSession;
 
 async function req(method, path, body, sess) {
   const res = await fetch(BASE + path, {
@@ -182,7 +182,10 @@ const check = (name, pass, detail = "") => {
   console.log(`${pass ? "  ok  " : " FAIL "} ${name}${detail && !pass ? ` — ${detail}` : ""}`);
 };
 
-const server = spawn("npx", ["next", "start", "-p", PORT], { cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"] });
+const server = spawn("npx", ["next", "start", "-p", PORT], {
+  cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
+  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET },
+});
 console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 
 /**

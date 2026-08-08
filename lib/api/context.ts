@@ -6,10 +6,10 @@ import { ApiError } from "@/lib/api/http";
 /**
  * Resolved server-side identity for API routes.
  *
- * The demo session (cookie personas) carries an email; per the locked contract
- * we resolve/ensure the backing `User` row by lowercased email — never by the
- * persona id — and ensure an `EventMember` for the active event so every
- * protected read/write is scoped to a membership + role (INV-EVENT-001).
+ * The signed demo session identifies an email and active event, but it never
+ * grants a role by itself. We resolve an existing `User` and `EventMember`
+ * server-side so every protected read/write is scoped to persisted membership
+ * and role (INV-EVENT-001).
  */
 export type ApiContext = {
   userId: string;
@@ -25,24 +25,27 @@ export async function getApiContext(): Promise<ApiContext | null> {
   if (!session) return null;
 
   const email = session.user.email.trim().toLowerCase();
-  const user = await prisma.user.upsert({
+  const user = await prisma.user.findUnique({
     where: { email },
-    update: { name: session.user.name },
-    create: { email, name: session.user.name },
-    select: { id: true, email: true, name: true },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      memberships: {
+        where: { eventId: session.event.id },
+        select: { role: true },
+        take: 1,
+      },
+    },
   });
-
-  await prisma.eventMember.upsert({
-    where: { eventId_userId: { eventId: session.event.id, userId: user.id } },
-    update: { role: session.role },
-    create: { eventId: session.event.id, userId: user.id, role: session.role },
-  });
+  const membership = user?.memberships[0];
+  if (!user || !membership) return null;
 
   return {
     userId: user.id,
     email: user.email,
     name: user.name,
-    role: session.role,
+    role: membership.role,
     eventId: session.event.id,
   };
 }

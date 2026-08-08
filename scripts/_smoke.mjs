@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 /**
  * Backend E2E smoke.
@@ -15,8 +16,7 @@ const SCRATCH_EVENT = {
   slug: "scratch-backend",
 };
 
-// Session cookies are forged to match lib/auth.ts encodeSession. Scratch-only
-// identities (@scratch.test) so demo personas are never touched.
+// Signed scratch-only identities (@scratch.test) so demo personas are never touched.
 const admin = {
   user: { id: "scratch-admin", name: "Scratch Admin", email: "admin@scratch.test" },
   event: SCRATCH_EVENT,
@@ -24,8 +24,7 @@ const admin = {
 };
 const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
 const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
-const enc = (s) => Buffer.from(JSON.stringify(s), "utf8").toString("base64url");
-const cookie = (s) => `sb_session=${enc(s)}`;
+const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -52,7 +51,7 @@ const v1 = async (path) => {
 
 const server = spawn("npx", ["next", "start", "-p", PORT], {
   cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY },
+  env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY, SESSION_SECRET: SMOKE_SESSION_SECRET },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
 let ready = false;
@@ -94,6 +93,18 @@ async function resetScratchEvent() {
       tracks: { create: [{ name: "Scratch Track", color: "#3b82f6", sortOrder: 0 }] },
     },
   });
+  for (const identity of [admin, speaker, evalr]) {
+    const user = await prisma.user.upsert({
+      where: { email: identity.user.email },
+      update: { name: identity.user.name },
+      create: { email: identity.user.email, name: identity.user.name },
+    });
+    await prisma.eventMember.upsert({
+      where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: user.id } },
+      update: { role: identity.role },
+      create: { eventId: SCRATCH_EVENT.id, userId: user.id, role: identity.role },
+    });
+  }
   console.log(`[smoke] scratch event '${SCRATCH_EVENT.id}' reset (demo-event untouched)`);
 }
 
@@ -215,8 +226,7 @@ try {
   check("create plan", plan.status === 201, plan.status);
   const planId = plan.data?.data?.id;
 
-  // 7. Evaluator touches an authed route so context.ts upserts their User +
-  // EventMember rows, then admin resolves the real DB id via /evaluators.
+  // 7. Evaluator has a pre-existing scratch membership; resolve the real DB id.
   await j("GET", "/api/evaluations/plans", null, evalr);
   const eva = await j("GET", "/api/evaluations/evaluators", null, admin);
   const evaluatorId = eva.data?.data?.find((e) => e.email === evalr.user.email.toLowerCase())?.userId;

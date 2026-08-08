@@ -151,6 +151,7 @@ export async function postAcceleventsPush(
       "Content-Type": "application/json",
       ...(config.apiKey ? { Authorization: config.apiKey } : {}),
     },
+    signal: AbortSignal.timeout(10_000),
     body: JSON.stringify(payload),
   });
   if (!response.ok) throw new AcceleventsPushError(response.status);

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { requireContext } from "@/lib/api/context";
 import { isDemoResetAllowed } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { seedDemo } from "@/lib/demo/seed";
@@ -25,16 +25,16 @@ export async function POST() {
     return fail("RESET_DISABLED", "Demo reset is disabled. Set ALLOW_DEMO_RESET=true to enable it.", 403);
   }
 
-  const session = await getSession();
-  if (!session || session.role !== "ADMIN") {
+  try {
+    await requireContext(["ADMIN"]);
+  } catch {
     return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
   }
 
   try {
     const summary = await seedDemo(prisma);
     return NextResponse.json<ApiResponse<typeof summary>>({ ok: true, data: summary });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error during reset.";
-    return fail("RESET_FAILED", message, 500);
+  } catch {
+    return fail("RESET_FAILED", "Demo reset could not be completed.", 500);
   }
 }

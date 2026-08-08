@@ -16,27 +16,10 @@ if (!BASE) {
   process.exit(2);
 }
 
-// Must match lib/auth.ts DEMO_PERSONAS.
-const PERSONAS = {
-  ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo", home: "/admin/forms" },
-  EVALUATOR: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo", home: "/admin/evaluations" },
-  SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo", home: "/portal" },
-};
-
 const results = [];
 function check(name, pass, detail = "") {
   results.push({ name, pass });
   console.log(`${pass ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
-}
-
-function cookieFor(role) {
-  const p = PERSONAS[role];
-  const session = {
-    user: { id: p.id, name: p.name, email: p.email },
-    event: { id: "demo-event", name: "Greenroom Demo", slug: "forward-2026" },
-    role,
-  };
-  return `sb_session=${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`;
 }
 
 function isSsoWall(res, body) {
@@ -81,14 +64,8 @@ console.log(`Verifying ${BASE}\n`);
   check("/login renders for a logged-out visitor", res.status === 200 && html.includes("Greenroom"), `status ${res.status}`);
 }
 
-// 2. All three personas land on their home page.
-for (const [role, p] of Object.entries(PERSONAS)) {
-  const res = await fetch(`${BASE}${p.home}`, { headers: { cookie: cookieFor(role) } });
-  const html = await res.text();
-  check(`persona ${role} loads ${p.home}`, res.status === 200 && html.includes(p.name), `status ${res.status}`);
-}
-
-// 3. Public routes work with NO session.
+// 2. Public routes work with NO session. Authenticated personas are covered by
+// local smoke runs because production cookies cannot and must not be forged.
 {
   const res = await fetch(`${BASE}/embed/schedule`);
   check("/embed/schedule renders logged out", res.status === 200, `status ${res.status}`);
@@ -100,18 +77,18 @@ if (formId) {
   check("/cfp/[formId] renders logged out", false, "no published form found in the database");
 }
 
-// 4. Demo reset must be REFUSED in production (ALLOW_DEMO_RESET unset).
+// 3. Demo reset must be REFUSED in production (ALLOW_DEMO_RESET unset).
 {
-  const res = await fetch(`${BASE}/api/admin/reset`, { method: "POST", headers: { cookie: cookieFor("ADMIN") } });
+  const res = await fetch(`${BASE}/api/admin/reset`, { method: "POST" });
   const body = await res.json().catch(() => null);
   check(
-    "/api/admin/reset is refused in production (even as ADMIN)",
+    "/api/admin/reset is refused in production",
     res.status === 403 && body?.error?.code === "RESET_DISABLED",
     `status ${res.status} code ${body?.error?.code}`,
   );
 }
 
-// 5. Calendar export works publicly (golden path step 7).
+// 4. Calendar export works publicly (golden path step 7).
 {
   const res = await fetch(`${BASE}/api/comms/calendar?eventId=demo-event`);
   const text = await res.text();

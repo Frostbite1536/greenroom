@@ -10,6 +10,7 @@ import {
   type DemoSession,
   type PersonaKey,
 } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 const HOME_BY_ROLE: Record<DemoSession["role"], string> = {
   ADMIN: "/admin/forms",
@@ -24,6 +25,7 @@ async function establish(session: DemoSession): Promise<never> {
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 7,
+    secure: process.env.NODE_ENV === "production",
   });
   redirect(HOME_BY_ROLE[session.role]);
 }
@@ -37,16 +39,21 @@ export async function loginAsPersona(formData: FormData): Promise<void> {
 export async function loginWithEmail(formData: FormData): Promise<void> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) redirect("/login");
-  const name = email
-    .split("@")[0]
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1))
-    .join(" ");
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      memberships: { where: { eventId: DEMO_EVENT.id }, select: { role: true }, take: 1 },
+    },
+  });
+  const membership = user?.memberships[0];
+  if (!user || !membership) redirect("/login");
   await establish({
-    user: { id: `email:${email}`, name: name || email, email },
+    user: { id: user.id, name: user.name, email: user.email },
     event: DEMO_EVENT,
-    role: "SPEAKER",
+    role: membership.role,
   });
 }
 

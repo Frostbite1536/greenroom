@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
-import { useMockIntegrations } from "@/lib/env";
+import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import {
   buildSpeakerCalendarInvite,
   reminderRequestSchema,
@@ -79,7 +79,8 @@ export const POST = handle(async (req) => {
   }
   if (recipients.length === 0) throw new ApiError(422, "NO_ELIGIBLE_RECIPIENTS", "This event has no eligible speakers.");
 
-  const isMock = useMockIntegrations() || !process.env.RESEND_API_KEY;
+  const resendFrom = getResendFrom();
+  const isMock = useMockIntegrations() || !process.env.RESEND_API_KEY || !resendFrom;
   const appUrl = process.env.APP_URL;
   let sent = 0;
   let failed = 0;
@@ -126,8 +127,9 @@ export const POST = handle(async (req) => {
           "Content-Type": "application/json",
           "Idempotency-Key": `greenroom-reminder-${dispatch.id}`,
         },
+        signal: AbortSignal.timeout(10_000),
         body: JSON.stringify({
-          from: process.env.RESEND_FROM ?? "Greenroom <onboarding@resend.dev>",
+          from: resendFrom,
           to: [recipient.email],
           subject: rendered.subject,
           html: rendered.html,

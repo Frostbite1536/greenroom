@@ -12,6 +12,7 @@
  */
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
+import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 const PORT_CLOSED = Number(process.env.OPS_SMOKE_PORT ?? 3230);
 const PORT_OPEN = PORT_CLOSED + 1;
@@ -35,14 +36,14 @@ const PERSONAS = {
   SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
 };
 
-/** Mirrors lib/auth.ts encodeSession (base64url JSON). */
+/** Mirrors the signed cookie contract using local smoke-only signing material. */
 function cookieFor(role) {
   const session = {
     user: PERSONAS[role],
     event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
     role,
   };
-  return `sb_session=${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`;
+  return cookieForSession(session);
 }
 
 /** A login-as-any-email SPEAKER session (no seeded task assignments). */
@@ -52,7 +53,7 @@ function cookieForEmail(email) {
     event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" },
     role: "SPEAKER",
   };
-  return `sb_session=${Buffer.from(JSON.stringify(session), "utf8").toString("base64url")}`;
+  return cookieForSession(session);
 }
 
 async function waitForServer(port, proc) {
@@ -81,7 +82,7 @@ function killTree(proc) {
 
 async function withServer(port, extraEnv, fn) {
   const proc = spawn("npx", ["next", "start", "-p", String(port)], {
-    env: { ...process.env, ...extraEnv },
+    env: { ...process.env, ...extraEnv, SESSION_SECRET: SMOKE_SESSION_SECRET },
     stdio: "ignore",
     shell: process.platform === "win32",
     detached: process.platform !== "win32",

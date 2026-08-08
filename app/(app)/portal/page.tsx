@@ -1,4 +1,5 @@
 import { requireSession } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { ProfileForm, type PortalProfile } from "./profile-form";
@@ -18,6 +19,7 @@ function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | n
 export default async function PortalPage() {
   const session = await requireSession();
   const user = await resolveSessionUser(session);
+  if (!user) redirect("/login");
   const eventId = session.event.id;
 
   // One round trip per concern, issued in parallel to avoid a request waterfall.
