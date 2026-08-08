@@ -328,6 +328,49 @@ try {
   check("builder Save added the new field", (save.data?.data?.fields ?? []).some((f) => f.key === "brand_new_q"));
   check("builder Save removed the deleted field", !(save.data?.data?.fields ?? []).some((f) => f.key === "workshop_prereqs"));
 
+  // --- mutation 1b: create a brand-new form (B3, what NewFormDialog posts) ---
+  const createdPayload = {
+    eventId: EVENT_ID,
+    name: "Scratch New Form",
+    slug: "scratch-new-form",
+    welcomeText: "Submit your proposal for Scratch New Form.",
+    thankYouText: "Thanks for your submission! The program team will follow up by email.",
+    minSpeakers: 1,
+    maxSpeakers: 2,
+    maxBioLength: 1000,
+    published: false,
+    fields: [
+      { key: "audience_level", label: "Audience level", type: "SELECT", required: true, sortOrder: 0, options: [{ label: "Beginner", value: "beginner" }, { label: "Intermediate", value: "intermediate" }, { label: "Advanced", value: "advanced" }] },
+      { key: "learning_objectives", label: "What will attendees learn?", helpText: "Three concrete takeaways.", type: "LONG_TEXT", required: true, sortOrder: 1 },
+    ],
+  };
+  const created = await req("POST", "/api/cfp/forms", createdPayload, admin);
+  check("create new form → 201", created.status === 201, `${created.status} ${JSON.stringify(created.data?.error ?? "")}`);
+  check("new form starts unpublished", created.data?.data?.published === false);
+  check("new form carries the starter questions", (created.data?.data?.fields ?? []).length === 2);
+
+  const newFormId = created.data?.data?.id;
+  const builderPage = await req("GET", `/admin/forms/${newFormId}`, null, admin);
+  check("new form opens in the builder → 200", builderPage.status === 200, `got ${builderPage.status}`);
+  check("builder surfaces the new form's public URL", builderPage.text.includes(`/cfp/${newFormId}`));
+
+  const listAfterCreate = await req("GET", "/admin/forms", null, admin);
+  check("forms list shows the new form", listAfterCreate.text.includes("Scratch New Form"));
+  check("forms list offers the New form action", listAfterCreate.text.includes("New form"));
+
+  // Unpublished forms must stay invisible publicly until the builder publishes.
+  const unpublishedPublic = await req("GET", `/cfp/${newFormId}`, null, null);
+  check("unpublished new form is not public yet → 404", unpublishedPublic.status === 404, `got ${unpublishedPublic.status}`);
+
+  // A duplicate slug must not silently create a second form.
+  const duplicate = await req("POST", "/api/cfp/forms", createdPayload, admin);
+  check("duplicate slug is rejected", duplicate.status >= 400,
+    `got ${duplicate.status} ${duplicate.data?.error?.code ?? ""}`);
+  // Documented so the dialog's fallback copy stays honest: the API surfaces the
+  // unique (eventId, slug) violation as a generic error, so NewFormDialog
+  // pre-checks slugs client-side. Backend: a 409 FORM_SLUG_TAKEN would be nicer.
+  console.log(`  note duplicate-slug response: ${duplicate.status} ${duplicate.data?.error?.code ?? "?"}`);
+
   // --- mutation 2: CFP draft then submit ---
   const draft = await req("POST", "/api/cfp/submissions", {
     formConfigId: fx.form.id,

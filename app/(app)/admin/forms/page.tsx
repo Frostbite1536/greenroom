@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { ExternalLink, FileText, Plus } from "lucide-react";
+import { ExternalLink, FileText } from "lucide-react";
 import "@/components/feature.css";
 import { EmptyState, PageHeader, Pill } from "@/components/ui";
+import { NewFormDialog } from "@/components/new-form-dialog";
 import { getFormsList } from "@/lib/data/reads";
 
 export const metadata = { title: "Submission Forms" };
@@ -16,7 +17,7 @@ function windowLabel(form: { closesAt: string | null; isOpen: boolean; published
 }
 
 export default async function FormsPage() {
-  const { forms } = await getFormsList();
+  const { eventId, forms } = await getFormsList();
   const published = forms.filter((f) => f.published).length;
   const totalSubs = forms.reduce((n, f) => n + f.submissionCount, 0);
 
@@ -26,13 +27,7 @@ export default async function FormsPage() {
         eyebrow="Collect & review"
         title="Submission Forms"
         description="Collect abstract, session, and participant information with conditional logic and category-based routing."
-        actions={
-          forms.length > 0 ? (
-            <Link className="primary-button" href={`/admin/forms/${forms[0].id}`} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-              <Plus size={16} aria-hidden="true" /> Edit a form
-            </Link>
-          ) : undefined
-        }
+        actions={<NewFormDialog eventId={eventId} existingSlugs={forms.map((f) => f.slug)} />}
       />
 
       <div className="metric-grid">
@@ -44,7 +39,7 @@ export default async function FormsPage() {
       <div className="card">
         {forms.length === 0 ? (
           <EmptyState icon={<FileText size={22} />} title="No forms yet">
-            Create a CFP form to start collecting proposals.
+            Use <strong>New form</strong> above to start collecting proposals.
           </EmptyState>
         ) : (
           <div className="form-list" style={{ padding: 12 }}>

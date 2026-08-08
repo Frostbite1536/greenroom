@@ -213,6 +213,20 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .seg button:first-child { border-left: none; }
 .seg button.active { background: var(--soft); color: var(--brand-strong); font-weight: 600; }
 
+/* ---- Modal dialog ---- */
+.app-dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 24px 26px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 18px 48px rgba(16, 24, 22, 0.22);
+}
+.app-dialog::backdrop { background: rgba(16, 24, 22, 0.42); }
+.app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
+.app-dialog .conflict-banner { font-size: 12.5px; }
+
 /* ---- Embed snippets ---- */
 .embed-snippet-list { display: grid; gap: 16px; }
 .embed-snippet { padding: 20px 22px; display: grid; gap: 14px; }
