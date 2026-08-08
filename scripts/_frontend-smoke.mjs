@@ -258,6 +258,16 @@ try {
   const embedPage = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
   check("embed shows scheduled session", embedPage.text.includes("Scratch Session A"));
 
+  // Calendar downloads remain public: whole event with no session, or one
+  // scheduled session when its affordance is used in the embed.
+  const eventCalendar = await req("GET", `/api/comms/calendar?eventId=${EVENT_ID}`, null, null);
+  check("public event calendar export → 200", eventCalendar.status === 200, `got ${eventCalendar.status}`);
+  check("public event calendar export has scheduled session", eventCalendar.text.includes("SUMMARY:Scratch Session A"));
+
+  const sessionCalendar = await req("GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${fx.sessionA.id}`, null, null);
+  check("public session calendar export → 200", sessionCalendar.status === 200, `got ${sessionCalendar.status}`);
+  check("public session calendar export has one event", (sessionCalendar.text.match(/BEGIN:VEVENT/g) ?? []).length === 1);
+
   // --- mutation 1: builder Save ---
   const savePayload = {
     eventId: EVENT_ID,
