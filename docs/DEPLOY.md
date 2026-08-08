@@ -2,6 +2,13 @@
 
 ## Stack
 Next.js 16 (App Router, Turbopack) + Prisma 6 + Neon Postgres. Deploy target: **Vercel + Neon**.
+Requires **Node.js 20.9+**.
+
+## From-scratch install
+The clean-database install path (clone → `npm install` → `db:push` → `db:seed` →
+running app, ~4 minutes) is rehearsed and timed in
+[`judging/INSTALL-REHEARSAL.md`](judging/INSTALL-REHEARSAL.md), including the
+golden-path verification harness `scripts/install-rehearsal.mjs`.
 
 ## Vercel setup
 1. Import the repo into Vercel; framework auto-detects **Next.js**.
