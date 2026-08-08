@@ -249,7 +249,7 @@ function AbstractDrawer({
     setError(null);
     // `sessionId` is the W2 backend addition; until it ships, fall back to the
     // linkage this page already read server-side. Either way the check holds.
-    const res = await apiPost<{ sessionId?: string | null }>("/api/evaluations/decisions", {
+    const res = await apiPost<{ sessionId?: string | null; session?: { id: string } | null }>("/api/evaluations/decisions", {
       abstractId: abstract.id,
       decision,
     });
@@ -258,7 +258,7 @@ function AbstractDrawer({
       setError(res.error.message);
       return;
     }
-    const linkedSessionId = res.data?.sessionId ?? abstract.sessionId;
+    const linkedSessionId = res.data?.sessionId ?? res.data?.session?.id ?? abstract.sessionId;
     setChanging(false);
     if (decision === "REJECTED" && linkedSessionId) {
       onProgrammeWarning({ title: abstract.title, state: state === "none" ? "created" : state });
