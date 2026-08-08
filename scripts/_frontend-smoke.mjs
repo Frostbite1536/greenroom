@@ -445,8 +445,13 @@ try {
   check("unauthenticated admin page → 307 /login", noSession.status === 307, `got ${noSession.status}`);
   check("redirect points at /login", (noSession.headers.get("location") ?? "").includes("/login"), noSession.headers.get("location") ?? "none");
 
+  // The signed session's role claim is NOT authoritative: getResolvedSession()
+  // re-resolves the persisted EventMember role by email. So test with a user
+  // whose DB membership is SPEAKER (sofia) — even a forged ADMIN claim in the
+  // cookie must not grant access to an admin page.
+  const speakerSess = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "ADMIN" };
   const wrongRole = await fetch(`${BASE}/admin/agenda`, {
-    headers: { cookie: cookie({ ...admin, role: "SPEAKER" }) },
+    headers: { cookie: cookie(speakerSess) },
     redirect: "manual",
   });
   check("speaker role blocked from /admin/agenda → 307", wrongRole.status === 307, `got ${wrongRole.status}`);
