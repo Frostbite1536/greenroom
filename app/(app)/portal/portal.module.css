@@ -1,0 +1,273 @@
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #e6e8ef;
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.card + .card {
+  margin-top: 20px;
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.cardHead h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.cardHead p {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 0.85rem;
+}
+
+.taskList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e6e8ef;
+  border-radius: 10px;
+  background: #fbfbfd;
+}
+
+.taskDone {
+  background: #f2fbf5;
+  border-color: #bfe6cd;
+}
+
+.taskBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.taskTitle {
+  font-weight: 600;
+  font-size: 0.92rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.taskMeta {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.pill {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.pillRequired {
+  background: #fff3e6;
+  color: #a35b06;
+  border-color: #f2d3ae;
+}
+
+.pillForm {
+  background: #eef2ff;
+  color: #4338ca;
+  border-color: #c9d2fb;
+}
+
+.pillDone {
+  background: #e6f6ec;
+  color: #1c7a41;
+  border-color: #bfe6cd;
+}
+
+.toggle {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  border: 1.5px solid #c3c8d4;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.toggle:checked {
+  background: #1c7a41;
+  border-color: #1c7a41;
+}
+
+.toggle:checked::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 10px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.toggle:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.toggle:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.progressTrack {
+  height: 8px;
+  border-radius: 999px;
+  background: #eceef4;
+  overflow: hidden;
+  margin-top: 10px;
+}
+
+.progressFill {
+  height: 100%;
+  background: #1c7a41;
+  border-radius: 999px;
+  transition: width 200ms ease;
+}
+
+.sessionItem {
+  padding: 12px 14px;
+  border: 1px solid #e6e8ef;
+  border-radius: 10px;
+  background: #fbfbfd;
+}
+
+.sessionItem + .sessionItem {
+  margin-top: 10px;
+}
+
+.sessionTitle {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.sessionMeta {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field span {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 4px;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid #d7dae3;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.88rem;
+  background: #fff;
+}
+
+.field textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid #4f46e5;
+  outline-offset: 1px;
+  border-color: #4f46e5;
+}
+
+.formActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.saveNote {
+  font-size: 0.82rem;
+  color: #1c7a41;
+}
+
+.saveError {
+  font-size: 0.82rem;
+  color: #b42318;
+}
+
+.empty {
+  color: #6b7280;
+  font-size: 0.86rem;
+  margin: 0;
+}
+
+.resourceLink {
+  display: block;
+  font-size: 0.88rem;
+  color: #4338ca;
+  text-decoration: none;
+  padding: 8px 0;
+  border-bottom: 1px solid #eceef4;
+}
+
+.resourceLink:last-child {
+  border-bottom: none;
+}
+
+.resourceLink:hover {
+  text-decoration: underline;
+}
+
+.resourceSummary {
+  display: block;
+  color: #6b7280;
+  font-size: 0.8rem;
+  margin-top: 2px;
+}

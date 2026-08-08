@@ -1,4 +1,4 @@
-import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 /**
  * Deterministic, idempotent demo seed for Greenroom.
@@ -87,37 +87,72 @@ function slugifyEmail(name: string, i: number): string {
   return `${base}.${i}@speakers.demo`;
 }
 
+/**
+ * Advisory-lock key for the demo seed. Any arbitrary constant works; every
+ * seeding process just has to agree on it.
+ */
+const SEED_LOCK_KEY = 8_675_309;
+
+/**
+ * Seed the demo data.
+ *
+ * Runs as a **single transaction** holding a Postgres advisory lock, which fixes
+ * two real failures observed during the sprint:
+ *
+ * 1. **Concurrent seeds deadlocked (40P01).** Two seeds both bulk-delete and
+ *    re-insert identical unique keys, so they interleave and deadlock. The
+ *    `pg_advisory_xact_lock` makes a second concurrent seed *wait* for the first
+ *    to finish instead of racing it. The lock is transaction-scoped, so it is
+ *    released automatically on commit *or* rollback — a crashed seed cannot
+ *    wedge the lock.
+ * 2. **A failed seed left the DB half-wiped.** Delete and rebuild used to be
+ *    separate transactions, so an interrupted run destroyed the demo data
+ *    without replacing it. Now the whole thing commits or rolls back as a unit.
+ *
+ * The timeout is generous because a full seed issues several hundred statements.
+ */
 export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
+  return prisma.$transaction(
+    async (tx) => {
+      // Serialize against any other seeding process before touching a row.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SEED_LOCK_KEY}::bigint)`;
+      return seedWithin(tx);
+    },
+    { maxWait: 60_000, timeout: 300_000 },
+  );
+}
+
+async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   const eventId = DEMO_EVENT.id;
 
   // --- 1. Reset all event-scoped data (idempotent reseed) --------------------
-  await prisma.$transaction([
-    prisma.emailDispatch.deleteMany({ where: { template: { eventId } } }),
-    prisma.reviewScore.deleteMany({ where: { abstract: { eventId } } }),
-    prisma.reviewAssignment.deleteMany({ where: { abstract: { eventId } } }),
-    prisma.formAnswer.deleteMany({ where: { abstract: { eventId } } }),
-    prisma.abstractSpeaker.deleteMany({ where: { abstract: { eventId } } }),
-    prisma.speakerTask.deleteMany({ where: { task: { eventId } } }),
-    prisma.scheduleSlot.deleteMany({ where: { eventId } }),
-    prisma.sessionSpeaker.deleteMany({ where: { session: { eventId } } }),
-    prisma.session.deleteMany({ where: { eventId } }),
-    prisma.abstract.deleteMany({ where: { eventId } }),
-    prisma.formField.deleteMany({ where: { formConfig: { eventId } } }),
-    prisma.onboardingTask.deleteMany({ where: { eventId } }),
-    prisma.formConfig.deleteMany({ where: { eventId } }),
-    prisma.evaluationPlan.deleteMany({ where: { eventId } }),
-    prisma.category.deleteMany({ where: { eventId } }),
-    prisma.track.deleteMany({ where: { eventId } }),
-    prisma.room.deleteMany({ where: { eventId } }),
-    prisma.resourceWiki.deleteMany({ where: { eventId } }),
-    prisma.emailTemplate.deleteMany({ where: { eventId } }),
-    prisma.eventMember.deleteMany({ where: { eventId } }),
-  ]);
+  // Sequential deletes: we are already inside one transaction, and child rows
+  // must go before their parents.
+  await db.emailDispatch.deleteMany({ where: { template: { eventId } } });
+  await db.reviewScore.deleteMany({ where: { abstract: { eventId } } });
+  await db.reviewAssignment.deleteMany({ where: { abstract: { eventId } } });
+  await db.formAnswer.deleteMany({ where: { abstract: { eventId } } });
+  await db.abstractSpeaker.deleteMany({ where: { abstract: { eventId } } });
+  await db.speakerTask.deleteMany({ where: { task: { eventId } } });
+  await db.scheduleSlot.deleteMany({ where: { eventId } });
+  await db.sessionSpeaker.deleteMany({ where: { session: { eventId } } });
+  await db.session.deleteMany({ where: { eventId } });
+  await db.abstract.deleteMany({ where: { eventId } });
+  await db.formField.deleteMany({ where: { formConfig: { eventId } } });
+  await db.onboardingTask.deleteMany({ where: { eventId } });
+  await db.formConfig.deleteMany({ where: { eventId } });
+  await db.evaluationPlan.deleteMany({ where: { eventId } });
+  await db.category.deleteMany({ where: { eventId } });
+  await db.track.deleteMany({ where: { eventId } });
+  await db.room.deleteMany({ where: { eventId } });
+  await db.resourceWiki.deleteMany({ where: { eventId } });
+  await db.emailTemplate.deleteMany({ where: { eventId } });
+  await db.eventMember.deleteMany({ where: { eventId } });
 
   // --- 2. Event --------------------------------------------------------------
   const startsAt = new Date("2026-05-12T00:00:00.000Z");
   const endsAt = new Date("2026-05-14T00:00:00.000Z");
-  await prisma.event.upsert({
+  await db.event.upsert({
     where: { id: eventId },
     update: { name: DEMO_EVENT.name, slug: DEMO_EVENT.slug, timezone: DEMO_EVENT.timezone, startsAt, endsAt },
     create: { id: eventId, name: DEMO_EVENT.name, slug: DEMO_EVENT.slug, timezone: DEMO_EVENT.timezone, startsAt, endsAt },
@@ -126,7 +161,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   // --- 3. Persona + evaluator + speaker users --------------------------------
   async function upsertUser(email: string, name: string): Promise<string> {
     const lower = email.toLowerCase();
-    const user = await prisma.user.upsert({
+    const user = await db.user.upsert({
       where: { email: lower },
       update: { name },
       create: { email: lower, name },
@@ -160,43 +195,50 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
     ...evaluatorIds.map((userId) => ({ eventId, userId, role: "EVALUATOR" as const })),
     ...speakerUsers.map((s) => ({ eventId, userId: s.id, role: "SPEAKER" as const })),
   ];
-  await prisma.eventMember.createMany({ data: memberships, skipDuplicates: true });
+  await db.eventMember.createMany({ data: memberships, skipDuplicates: true });
 
-  // --- 5. Speaker profiles (upsert; global) ----------------------------------
+  // --- 5. Speaker profiles ----------------------------------------------------
+  // `SpeakerProfile` is global (keyed by userId), so it is not covered by the
+  // event-scoped wipe above. Reset the demo fields explicitly on update as well
+  // as create, otherwise edits made through the portal survive a reseed and the
+  // demo drifts (observed: a smoke-test job title persisting across seeds).
   for (const s of speakerUsers) {
-    await prisma.speakerProfile.upsert({
+    const demoProfile = {
+      bio: `${s.name} is a practitioner and frequent conference speaker.`,
+      company: "Acme Labs",
+      jobTitle: "Staff Engineer",
+      headshotUrl: null,
+      slideDeckUrl: null,
+      socialLinks: Prisma.DbNull,
+    };
+    await db.speakerProfile.upsert({
       where: { userId: s.id },
-      update: {},
-      create: {
-        userId: s.id,
-        bio: `${s.name} is a practitioner and frequent conference speaker.`,
-        company: "Acme Labs",
-        jobTitle: "Staff Engineer",
-      },
+      update: demoProfile,
+      create: { userId: s.id, ...demoProfile },
     });
   }
 
   // --- 6. Categories, tracks, rooms -----------------------------------------
   const categoryIds: Record<string, string> = {};
   for (const [i, c] of CATEGORIES.entries()) {
-    const row = await prisma.category.create({
+    const row = await db.category.create({
       data: { eventId, name: c.name, defaultTeamKey: c.teamKey, sortOrder: i },
     });
     categoryIds[c.key] = row.id;
   }
   const trackIds: Record<string, string> = {};
   for (const [i, t] of TRACKS.entries()) {
-    const row = await prisma.track.create({ data: { eventId, name: t.name, color: t.color, sortOrder: i } });
+    const row = await db.track.create({ data: { eventId, name: t.name, color: t.color, sortOrder: i } });
     trackIds[t.key] = row.id;
   }
   const roomIds: Record<string, string> = {};
   for (const [i, r] of ROOMS.entries()) {
-    const row = await prisma.room.create({ data: { eventId, name: r.name, capacity: r.capacity, sortOrder: i } });
+    const row = await db.room.create({ data: { eventId, name: r.name, capacity: r.capacity, sortOrder: i } });
     roomIds[r.key] = row.id;
   }
 
   // --- 7. CFP form + a task form --------------------------------------------
-  const cfp = await prisma.formConfig.create({
+  const cfp = await db.formConfig.create({
     data: {
       eventId,
       name: "2026 Call for Speakers",
@@ -225,7 +267,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   });
   const fieldByKey = Object.fromEntries(cfp.fields.map((f) => [f.key, f]));
 
-  const avForm = await prisma.formConfig.create({
+  const avForm = await db.formConfig.create({
     data: {
       eventId,
       name: "A/V & Logistics",
@@ -274,7 +316,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
       const submittedAt = isSubmitted ? new Date(2026, 1, 1 + (idx % 20), 9, 0, 0) : null;
       const decidedAt = isDecided ? new Date(2026, 2, 10 + (idx % 10), 12, 0, 0) : null;
 
-      const created = await prisma.abstract.create({
+      const created = await db.abstract.create({
         data: {
           eventId,
           formConfigId: cfp.id,
@@ -308,7 +350,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   }
 
   // --- 9. Evaluation plan, assignments, scores ------------------------------
-  const plan = await prisma.evaluationPlan.create({
+  const plan = await db.evaluationPlan.create({
     data: { eventId, name: "Round 1 — Program Committee", ordinal: 1, isBlind: false, rubric: RUBRIC,
       startsAt: new Date("2026-03-02T00:00:00.000Z"), endsAt: new Date("2026-03-20T00:00:00.000Z") },
   });
@@ -318,7 +360,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
     const teamKey = CATEGORIES.find((c) => c.key === a.categoryKey)?.teamKey ?? null;
     const decided = a.status !== "UNDER_REVIEW";
     for (const evalId of evaluatorIds) {
-      await prisma.reviewAssignment.create({
+      await db.reviewAssignment.create({
         data: {
           planId: plan.id, abstractId: a.id, evaluatorId: evalId, teamKey,
           status: decided ? "COMPLETED" : "IN_PROGRESS",
@@ -330,7 +372,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
         const base = a.status === "ACCEPTED" ? 4 : 2;
         for (const [ri, key] of RUBRIC_KEYS.entries()) {
           const score = Math.min(5, Math.max(1, base + ((ri + evaluatorIds.indexOf(evalId)) % 2)));
-          await prisma.reviewScore.create({
+          await db.reviewScore.create({
             data: { planId: plan.id, abstractId: a.id, evaluatorId: evalId, rubricKey: key, score,
               comment: ri === 0 ? (a.status === "ACCEPTED" ? "Strong fit, clear takeaways." : "Interesting but needs sharper focus.") : null },
           });
@@ -343,7 +385,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   const accepted = abstracts.filter((a) => a.status === "ACCEPTED");
   const sessions: { id: string; title: string; durationMinutes: number; primarySpeakerId: string }[] = [];
   for (const a of accepted) {
-    const s = await prisma.session.create({
+    const s = await db.session.create({
       data: {
         eventId, sourceAbstractId: a.id, title: a.title,
         description: "Confirmed session converted from an accepted abstract.",
@@ -353,7 +395,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
     });
     sessions.push({ id: s.id, title: a.title, durationMinutes: a.durationMinutes, primarySpeakerId: a.primarySpeakerId });
   }
-  const keynote = await prisma.session.create({
+  const keynote = await db.session.create({
     data: {
       eventId, title: "Opening Keynote: The Next Decade of Developer Experience",
       description: "Invited keynote (guaranteed session, no source abstract).",
@@ -378,7 +420,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
     const hour = startHours[slotIdx % startHours.length];
     const startsAtSlot = new Date(`${day}T${String(hour).padStart(2, "0")}:00:00.000Z`);
     const endsAtSlot = new Date(startsAtSlot.getTime() + s.durationMinutes * 60_000);
-    await prisma.scheduleSlot.create({
+    await db.scheduleSlot.create({
       data: { eventId, sessionId: s.id, roomId: roomOrder[roomI], trackId: trackOrder[roomI], startsAt: startsAtSlot, endsAt: endsAtSlot },
     });
     slotIdx++;
@@ -387,7 +429,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   if (sessions.length > 10) {
     const conflictStart = new Date(`${day1}T09:00:00.000Z`);
     const conflicting = sessions[10];
-    await prisma.scheduleSlot.create({
+    await db.scheduleSlot.create({
       data: {
         eventId, sessionId: conflicting.id, roomId: roomOrder[0], trackId: trackOrder[0],
         startsAt: conflictStart, endsAt: new Date(conflictStart.getTime() + conflicting.durationMinutes * 60_000),
@@ -405,7 +447,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
   ];
   const tasks = [];
   for (const [i, t] of taskDefs.entries()) {
-    const row = await prisma.onboardingTask.create({
+    const row = await db.onboardingTask.create({
       data: { eventId, title: t.title, required: t.required, formConfigId: t.formConfigId, sortOrder: i,
         dueAt: new Date("2026-04-15T00:00:00.000Z"),
         description: t.formConfigId ? "Fill out the linked form to complete this task." : undefined },
@@ -422,7 +464,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
       const status = userId === speakerPrimaryId
         ? (i < 3 ? "COMPLETED" : "TODO")
         : taskStatuses[(i + sessionSpeakerIds.indexOf(userId)) % taskStatuses.length];
-      await prisma.speakerTask.create({
+      await db.speakerTask.create({
         data: {
           taskId: task.id, userId, status,
           completedAt: status === "COMPLETED" ? new Date("2026-04-01T00:00:00.000Z") : null,
@@ -444,7 +486,7 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
       htmlBody: "<p>Hi {{speakerName}},</p><p><strong>{{talkTitle}}</strong> is scheduled for {{slotTime}} in {{roomName}}. A calendar invite is attached.</p>" },
   ];
   for (const t of templates) {
-    await prisma.emailTemplate.create({ data: { eventId, ...t } });
+    await db.emailTemplate.create({ data: { eventId, ...t } });
   }
 
   const resources = [
@@ -454,17 +496,17 @@ export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
       htmlContent: "<h2>Venue</h2><p>Moscone West, San Francisco.</p><p>Nearest transit: Powell St BART.</p>" },
   ];
   for (const r of resources) {
-    await prisma.resourceWiki.create({ data: { eventId, ...r } });
+    await db.resourceWiki.create({ data: { eventId, ...r } });
   }
 
   // --- 14. Summary -----------------------------------------------------------
   const [userCount, abstractCount, sessionCount, slotCount, taskCount, speakerTaskCount] = await Promise.all([
-    prisma.user.count(),
-    prisma.abstract.count({ where: { eventId } }),
-    prisma.session.count({ where: { eventId } }),
-    prisma.scheduleSlot.count({ where: { eventId } }),
-    prisma.onboardingTask.count({ where: { eventId } }),
-    prisma.speakerTask.count({ where: { task: { eventId } } }),
+    db.user.count(),
+    db.abstract.count({ where: { eventId } }),
+    db.session.count({ where: { eventId } }),
+    db.scheduleSlot.count({ where: { eventId } }),
+    db.onboardingTask.count({ where: { eventId } }),
+    db.speakerTask.count({ where: { task: { eventId } } }),
   ]);
 
   return {
