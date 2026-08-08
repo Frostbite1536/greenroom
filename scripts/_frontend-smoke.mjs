@@ -681,6 +681,27 @@ try {
       where: { planId: fx.plan.id, abstractId: fx.acceptedAbstract.id },
     })) === 1);
 
+  // --- F3 (frontend half): blind rounds must hide identity on /admin/abstracts
+  // Not just visually: the names and emails must never reach the client payload.
+  const beforeBlind = await req("GET", "/admin/abstracts", null, evaluator);
+  check("non-blind round: evaluator sees speaker names",
+    beforeBlind.text.includes("Sofia Marques"));
+
+  await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: true } });
+  const blindEvaluator = await req("GET", "/admin/abstracts", null, evaluator);
+  check("blind round: evaluator page withholds the speaker name",
+    !blindEvaluator.text.includes("Sofia Marques"));
+  check("blind round: evaluator page withholds the speaker email",
+    !blindEvaluator.text.includes("sofia@greenroom.demo"));
+  check("blind round: evaluator is told why",
+    blindEvaluator.text.includes("blind round"));
+
+  // Admins run the process and must still see everything.
+  const blindAdmin = await req("GET", "/admin/abstracts", null, admin);
+  check("blind round: admin still sees speaker names",
+    blindAdmin.text.includes("Sofia Marques"));
+  await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: false } });
+
   // A speaker can withdraw mid-review (W1), and scoring one is refused 409.
   // The evaluator queue must say so rather than offering a form that will fail.
   // Target the row the page opens on (first not-yet-scored assignment), so both
