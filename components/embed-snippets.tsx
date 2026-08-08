@@ -28,14 +28,15 @@ function useCopy() {
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
-  async function copy(key: string, text: string, node?: HTMLTextAreaElement | null) {
+  async function copy(key: string, text: string, node?: HTMLInputElement | HTMLTextAreaElement | null) {
     if (timer.current) clearTimeout(timer.current);
     setFailed(null);
     try {
       if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
       await navigator.clipboard.writeText(text);
       setCopied(key);
-    } catch {
+    } catch (error) {
+      console.warn("Clipboard copy failed", error);
       node?.focus();
       node?.select();
       setCopied(null);
@@ -53,6 +54,7 @@ function useCopy() {
 export function EmbedSnippets({ snippets }: { snippets: EmbedSnippet[] }) {
   const { copied, failed, copy } = useCopy();
   const areas = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const urlInputs = useRef<Record<string, HTMLInputElement | null>>({});
 
   return (
     <div className="embed-snippet-list">
@@ -78,16 +80,29 @@ export function EmbedSnippets({ snippets }: { snippets: EmbedSnippet[] }) {
             <div className="stack embed-snippet-field">
               <span className="field-label" id={`embed-${item.key}-label`}>Public URL</span>
               <div className="row">
-                <input className="text-input" readOnly value={item.url} aria-labelledby={`embed-${item.key}-label`} />
+                <input
+                  className="text-input"
+                  readOnly
+                  value={item.url}
+                  aria-labelledby={`embed-${item.key}-label`}
+                  ref={(node) => {
+                    urlInputs.current[item.key] = node;
+                  }}
+                />
                 <button
                   type="button"
                   className="ghost-button"
-                  onClick={() => copy(`${item.key}-url`, item.url)}
+                  onClick={() => copy(`${item.key}-url`, item.url, urlInputs.current[item.key])}
                 >
                   {copied === `${item.key}-url` ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
                   {copied === `${item.key}-url` ? "Copied" : "Copy URL"}
                 </button>
               </div>
+              {failed === `${item.key}-url` ? (
+                <span className="hint" role="status" aria-live="polite">
+                  Clipboard blocked by the browser — the URL is selected, press Ctrl/Cmd + C.
+                </span>
+              ) : null}
             </div>
 
             <div className="stack embed-snippet-field">
