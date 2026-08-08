@@ -53,9 +53,9 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
   return (
     <div className="card">
       <div style={{ padding: "6px 8px 0" }}>
-        <div className="tabs" role="tablist" aria-label="Abstract status">
+        <div className="tabs" role="group" aria-label="Abstract status">
           {TABS.map((t) => (
-            <button key={t.key} role="tab" aria-selected={tab === t.key} className="tab" onClick={() => setTab(t.key)}>
+            <button key={t.key} aria-pressed={tab === t.key} className="tab" onClick={() => setTab(t.key)}>
               {t.label} <span className="count">{counts[t.key] ?? 0}</span>
             </button>
           ))}
@@ -96,13 +96,14 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                 <th>Speakers</th>
                 <th>Reviews</th>
                 <th>Score</th>
+                <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
               {rows.map((a) => {
                 const meta = STATUS_META[a.status];
                 return (
-                  <tr key={a.id} onClick={() => setSelectedId(a.id)} style={{ cursor: "pointer" }}>
+                  <tr key={a.id}>
                     <td>
                       <Pill tone={meta.tone}>{meta.label}</Pill>
                       {a.hasSession ? <div className="cell-sub">Session created</div> : null}
@@ -128,6 +129,7 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                         <span className="muted">—</span>
                       )}
                     </td>
+                    <td><button type="button" className="link-button" onClick={() => setSelectedId(a.id)}>View</button></td>
                   </tr>
                 );
               })}
@@ -153,6 +155,7 @@ function AbstractDrawer({ abstract, onClose }: { abstract: AbstractRow; onClose:
   const canConvert = abstract.status === "ACCEPTED" && !abstract.hasSession;
 
   async function decide(decision: "ACCEPTED" | "REJECTED") {
+    if (decision === "REJECTED" && !window.confirm(`Decline “${abstract.title}”? This changes the submission decision.`)) return;
     setBusy(decision === "ACCEPTED" ? "accept" : "reject");
     setError(null);
     const res = await apiPost("/api/evaluations/decisions", { abstractId: abstract.id, decision });

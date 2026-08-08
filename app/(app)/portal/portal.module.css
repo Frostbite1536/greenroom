@@ -168,6 +168,10 @@
   transition: width 200ms ease;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .progressFill { transition: none; }
+}
+
 .sessionItem {
   padding: 12px 14px;
   border: 1px solid #e6e8ef;

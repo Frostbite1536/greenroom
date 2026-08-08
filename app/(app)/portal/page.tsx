@@ -7,10 +7,10 @@ import styles from "./portal.module.css";
 
 export const dynamic = "force-dynamic";
 
-function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | null): string {
+function formatSlot(startsAt: Date | null, endsAt: Date | null, room: string | null, timezone: string): string {
   if (!startsAt || !endsAt) return "Not scheduled yet";
-  const day = startsAt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
-  const opts = { hour: "numeric", minute: "2-digit", timeZone: "UTC" } as const;
+  const day = startsAt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: timezone });
+  const opts = { hour: "numeric", minute: "2-digit", timeZone: timezone } as const;
   const window = `${startsAt.toLocaleTimeString(undefined, opts)} – ${endsAt.toLocaleTimeString(undefined, opts)}`;
   return room ? `${day}, ${window} · ${room}` : `${day}, ${window}`;
 }
@@ -21,7 +21,7 @@ export default async function PortalPage() {
   const eventId = session.event.id;
 
   // One round trip per concern, issued in parallel to avoid a request waterfall.
-  const [profile, speakerTasks, sessionSpeakers, abstracts, resources] = await Promise.all([
+  const [profile, speakerTasks, sessionSpeakers, abstracts, resources, event] = await Promise.all([
     prisma.speakerProfile.findUnique({
       where: { userId: user.id },
       select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true },
@@ -58,7 +58,9 @@ export default async function PortalPage() {
       select: { id: true, slug: true, title: true, summary: true },
       orderBy: { title: "asc" },
     }),
+    prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
   ]);
+  const timezone = event?.timezone ?? "UTC";
 
   const tasks: PortalTask[] = speakerTasks.map((row) => ({
     taskId: row.task.id,
@@ -131,9 +133,10 @@ export default async function PortalPage() {
                   </p>
                   <p className={styles.sessionMeta}>
                     {formatSlot(
-                      s.scheduleSlot?.startsAt ?? null,
-                      s.scheduleSlot?.endsAt ?? null,
-                      s.scheduleSlot?.room.name ?? null,
+                        s.scheduleSlot?.startsAt ?? null,
+                        s.scheduleSlot?.endsAt ?? null,
+                        s.scheduleSlot?.room.name ?? null,
+                        timezone,
                     )}
                   </p>
                 </div>

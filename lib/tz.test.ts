@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { zonedToUtcIso } from "./tz";
+import { zonedParts, zonedToUtcIso } from "./tz";
 
 const LOS_ANGELES = "America/Los_Angeles";
 
@@ -11,4 +11,9 @@ test("converts the seeded Los Angeles event boundary and agenda time to UTC", ()
 
 test("uses the daylight-saving offset after Los Angeles spring-forward", () => {
   assert.equal(zonedToUtcIso("2026-03-08", "09:00", LOS_ANGELES), "2026-03-08T16:00:00.000Z");
+});
+
+test("round-trips an event-local deadline date", () => {
+  const deadline = zonedToUtcIso("2026-05-12", "23:59", LOS_ANGELES);
+  assert.equal(zonedParts(deadline, LOS_ANGELES).dateKey, "2026-05-12");
 });

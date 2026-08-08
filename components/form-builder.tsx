@@ -19,6 +19,7 @@ import type { BuilderForm, FieldView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
 import { isFieldVisible, type AnswerMap } from "@/lib/form-logic";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
+import { zonedParts, zonedToUtcIso } from "@/lib/tz";
 import { Switch } from "@/components/ui";
 
 type Step = "welcome" | "fields" | "settings";
@@ -78,7 +79,7 @@ function toDraft(form: BuilderForm) {
 
 type Draft = ReturnType<typeof toDraft>;
 
-export function FormBuilder({ form: initial, eventId }: { form: BuilderForm; eventId: string }) {
+export function FormBuilder({ form: initial, eventId, timezone }: { form: BuilderForm; eventId: string; timezone: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [draft, setDraft] = useState<Draft>(() => toDraft(initial));
@@ -273,7 +274,7 @@ export function FormBuilder({ form: initial, eventId }: { form: BuilderForm; eve
               move={move}
             />
           )}
-          {step === "settings" && <SettingsStep draft={draft} patch={patch} errors={fieldErrors} />}
+          {step === "settings" && <SettingsStep draft={draft} patch={patch} errors={fieldErrors} timezone={timezone} />}
         </div>
 
         <aside className="builder-preview" aria-label="Live preview">
@@ -508,9 +509,10 @@ function LogicEditor({
   );
 }
 
-function SettingsStep({ draft, patch, errors }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: Record<string, string> }) {
+function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: Record<string, string>; timezone: string }) {
   const toIso = (date: string, endOfDay: boolean) =>
-    date ? new Date(`${date}T${endOfDay ? "23:59" : "00:00"}:00Z`).toISOString() : null;
+    date ? zonedToUtcIso(date, endOfDay ? "23:59" : "00:00", timezone) : null;
+  const dateKey = (iso: string | null) => (iso ? zonedParts(iso, timezone).dateKey : "");
 
   return (
     <div className="stack" style={{ gap: 18 }}>
@@ -518,11 +520,11 @@ function SettingsStep({ draft, patch, errors }: { draft: Draft; patch: (p: Parti
       <div className="grid-2">
         <label className="stack">
           <span className="field-label">Opens at</span>
-          <input type="date" className="text-input" value={draft.opensAt?.slice(0, 10) ?? ""} onChange={(e) => patch({ opensAt: toIso(e.target.value, false) })} />
+          <input type="date" className="text-input" value={dateKey(draft.opensAt)} onChange={(e) => patch({ opensAt: toIso(e.target.value, false) })} />
         </label>
         <label className="stack">
           <span className="field-label">Closes at</span>
-          <input type="date" className="text-input" value={draft.closesAt?.slice(0, 10) ?? ""} aria-invalid={!!errors.closesAt} onChange={(e) => patch({ closesAt: toIso(e.target.value, true) })} />
+          <input type="date" className="text-input" value={dateKey(draft.closesAt)} aria-invalid={!!errors.closesAt} onChange={(e) => patch({ closesAt: toIso(e.target.value, true) })} />
           {errors.closesAt ? <span className="field-error">{errors.closesAt}</span> : null}
         </label>
       </div>

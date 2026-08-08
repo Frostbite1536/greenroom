@@ -20,6 +20,7 @@
  * `lib/api-client.ts`) so validation and invariants stay server-enforced.
  */
 import type { AbstractStatus, FormFieldType, UserRole } from "@prisma/client";
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
@@ -155,16 +156,20 @@ export type BuilderForm = Omit<ReturnType<typeof serializeForm>, "fields"> & {
 
 export async function getFormForBuilder(
   formId: string,
-): Promise<{ eventId: string; form: BuilderForm } | null> {
+): Promise<{ eventId: string; timezone: string; form: BuilderForm } | null> {
   const ctx = await pageContext(["ADMIN"]);
-  const form = await prisma.formConfig.findFirst({
-    where: { id: formId, eventId: ctx.eventId },
-    include: { fields: true },
-  });
+  const [form, event] = await Promise.all([
+    prisma.formConfig.findFirst({
+      where: { id: formId, eventId: ctx.eventId },
+      include: { fields: true },
+    }),
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+  ]);
   if (!form) return null;
   const serialized = serializeForm(form);
   return {
     eventId: ctx.eventId,
+    timezone: event?.timezone ?? "UTC",
     form: { ...serialized, fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField) },
   };
 }
@@ -489,7 +494,7 @@ export type PublicFormView = Omit<ReturnType<typeof serializePublicForm>, "field
  * that endpoint requires ADMIN/EVALUATOR; the submitter needs to pick one for
  * category-based review routing to work.
  */
-export async function getPublicForm(formId: string): Promise<PublicFormView | null> {
+export const getPublicForm = cache(async function getPublicForm(formId: string): Promise<PublicFormView | null> {
   const form = await prisma.formConfig.findFirst({
     where: { published: true, OR: [{ id: formId }, { slug: formId }] },
     include: { fields: true, event: { select: { name: true } } },
@@ -509,7 +514,7 @@ export async function getPublicForm(formId: string): Promise<PublicFormView | nu
     categories,
     eventName: form.event.name,
   };
-}
+});
 
 export type PublicAgendaSession = {
   slotId: string;
@@ -529,7 +534,7 @@ export type PublicAgenda = {
   sessions: PublicAgendaSession[];
 };
 
-export async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
+export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },
     select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
@@ -582,4 +587,4 @@ export async function getPublicAgenda(eventParam = "forward-2026"): Promise<Publ
       speakers: slot.session.speakers.map((s) => s.user.name),
     })),
   };
-}
+});
