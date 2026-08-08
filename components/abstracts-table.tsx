@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarPlus, FileStack, Search, Star, X } from "lucide-react";
+import { AlertTriangle, CalendarPlus, FileStack, Search, Star, X } from "lucide-react";
 import type { AbstractRow } from "@/lib/data/reads";
 import { apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
@@ -15,6 +16,29 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
   REJECTED: { label: "Declined", tone: "bad" },
   WITHDRAWN: { label: "Withdrawn", tone: "neutral" },
 };
+
+/**
+ * How far a proposal has travelled towards the public programme. Deliberately
+ * phrased the way an event producer would say it, not after the data model:
+ * "talk" not "Session", "programme" not "ScheduleSlot".
+ */
+type ProgrammeState = "none" | "created" | "scheduled";
+
+function programmeState(a: Pick<AbstractRow, "hasSession" | "sessionScheduled">): ProgrammeState {
+  if (!a.hasSession) return "none";
+  return a.sessionScheduled ? "scheduled" : "created";
+}
+
+/**
+ * A declined or withdrawn proposal whose talk is still on the programme.
+ * INV-DOMAIN-001 keeps the confirmed talk as the record of truth, so nothing is
+ * deleted automatically — which means the admin has to be told.
+ */
+function isProgrammeMismatch(a: Pick<AbstractRow, "hasSession" | "status">): boolean {
+  return a.hasSession && (a.status === "REJECTED" || a.status === "WITHDRAWN");
+}
+
+type ProgrammeWarning = { title: string; state: ProgrammeState };
 
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
@@ -29,6 +53,9 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
   const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Lifted out of the drawer on purpose: the drawer closes on a backdrop click,
+  // and this consequence is too easy to miss if it disappears with it.
+  const [warning, setWarning] = useState<ProgrammeWarning | null>(null);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { ALL: abstracts.length };
@@ -52,6 +79,24 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
 
   return (
     <div className="card">
+      {warning ? (
+        <div style={{ padding: 12 }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>“{warning.title}” is still on the programme.</strong>{" "}
+              {warning.state === "scheduled"
+                ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
+                : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
+              <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
+                <Link className="ghost-button" href="/admin/agenda">Open agenda builder</Link>
+                <button type="button" className="link-button" onClick={() => setWarning(null)}>Dismiss</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div style={{ padding: "6px 8px 0" }}>
         <div className="tabs" role="group" aria-label="Abstract status">
           {TABS.map((t) => (
@@ -106,7 +151,15 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                   <tr key={a.id}>
                     <td>
                       <Pill tone={meta.tone}>{meta.label}</Pill>
-                      {a.hasSession ? <div className="cell-sub">Session created</div> : null}
+                      {isProgrammeMismatch(a) ? (
+                        <div className="cell-sub programme-alert">
+                          <AlertTriangle size={11} aria-hidden="true" /> Still on the programme
+                        </div>
+                      ) : a.sessionScheduled ? (
+                        <div className="cell-sub">On the programme</div>
+                      ) : a.hasSession ? (
+                        <div className="cell-sub">Talk created</div>
+                      ) : null}
                     </td>
                     <td>
                       <div className="cell-title">{a.title}</div>
@@ -138,33 +191,82 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
         </div>
       )}
 
-      {selected ? <AbstractDrawer abstract={selected} onClose={() => setSelectedId(null)} /> : null}
+      {selected ? (
+        <AbstractDrawer
+          abstract={selected}
+          onClose={() => setSelectedId(null)}
+          onProgrammeWarning={setWarning}
+        />
+      ) : null}
     </div>
   );
 }
 
-function AbstractDrawer({ abstract, onClose }: { abstract: AbstractRow; onClose: () => void }) {
+function AbstractDrawer({
+  abstract,
+  onClose,
+  onProgrammeWarning,
+}: {
+  abstract: AbstractRow;
+  onClose: () => void;
+  onProgrammeWarning: (warning: ProgrammeWarning) => void;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<null | "accept" | "reject" | "convert">(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [changing, setChanging] = useState(false);
 
   const meta = STATUS_META[abstract.status];
-  const canDecide = abstract.status === "UNDER_REVIEW" || abstract.status === "SUBMITTED";
+  const state = programmeState(abstract);
+  const undecided = abstract.status === "UNDER_REVIEW" || abstract.status === "SUBMITTED";
+  // A decision is reversible: programmes change, speakers drop out. Hiding the
+  // reversal was a dead end, and it is also the only route by which a decision
+  // can affect an already-scheduled talk.
+  const isDecided = abstract.status === "ACCEPTED" || abstract.status === "REJECTED";
+  const canDecide = undecided || (isDecided && changing);
   const canConvert = abstract.status === "ACCEPTED" && !abstract.hasSession;
 
+  const PROGRAMME_LABEL: Record<ProgrammeState, string> = {
+    none: "No talk created yet",
+    created: "Talk created, not scheduled",
+    scheduled: "On the programme",
+  };
+
   async function decide(decision: "ACCEPTED" | "REJECTED") {
-    if (decision === "REJECTED" && !window.confirm(`Decline “${abstract.title}”? This changes the submission decision.`)) return;
+    if (decision === "REJECTED") {
+      // Spell out the consequence BEFORE the click, not only after it.
+      const consequence =
+        state === "scheduled"
+          ? `\n\nThis talk is on the schedule. Declining will not take it off the programme — you will also need to unschedule it in the agenda builder.`
+          : state === "created"
+            ? `\n\nA talk has already been created from this proposal. Declining will not delete it.`
+            : "";
+      if (!window.confirm(`Decline “${abstract.title}”?${consequence}`)) return;
+    }
     setBusy(decision === "ACCEPTED" ? "accept" : "reject");
     setError(null);
-    const res = await apiPost("/api/evaluations/decisions", { abstractId: abstract.id, decision });
+    // `sessionId` is the W2 backend addition; until it ships, fall back to the
+    // linkage this page already read server-side. Either way the check holds.
+    const res = await apiPost<{ sessionId?: string | null }>("/api/evaluations/decisions", {
+      abstractId: abstract.id,
+      decision,
+    });
     setBusy(null);
     if (!res.ok) {
       setError(res.error.message);
       return;
     }
-    setNotice(decision === "ACCEPTED" ? "Accepted." : "Declined.");
+    const linkedSessionId = res.data?.sessionId ?? abstract.sessionId;
+    setChanging(false);
+    if (decision === "REJECTED" && linkedSessionId) {
+      onProgrammeWarning({ title: abstract.title, state: state === "none" ? "created" : state });
+      setNotice(null);
+      onClose();
+    } else {
+      setNotice(decision === "ACCEPTED" ? "Accepted." : "Declined.");
+    }
     startTransition(() => router.refresh());
   }
 
@@ -216,7 +318,31 @@ function AbstractDrawer({ abstract, onClose }: { abstract: AbstractRow; onClose:
           <div className="kv"><span>Reviews</span><span>{abstract.reviewsTotal > 0 ? `${abstract.reviewsComplete}/${abstract.reviewsTotal} complete` : "Not assigned"}</span></div>
           <div className="kv"><span>Avg score</span><span>{abstract.avgScore !== null ? abstract.avgScore.toFixed(2) : "Not scored"}</span></div>
           <div className="kv"><span>Submitted</span><span>{abstract.submittedAt ? new Date(abstract.submittedAt).toLocaleString() : "—"}</span></div>
+          <div className="kv">
+            <span>Programme</span>
+            <span className={isProgrammeMismatch(abstract) ? "programme-alert" : undefined}>
+              {isProgrammeMismatch(abstract) ? (
+                <>
+                  <AlertTriangle size={12} aria-hidden="true" /> Still on the programme
+                </>
+              ) : (
+                PROGRAMME_LABEL[state]
+              )}
+            </span>
+          </div>
         </div>
+
+        {isProgrammeMismatch(abstract) ? (
+          <p className="hint" style={{ marginTop: 10 }}>
+            {abstract.status === "WITHDRAWN"
+              ? "This proposal was withdrawn, but its talk is still on the programme. "
+              : "This proposal was declined, but its talk is still on the programme. "}
+            <Link href="/admin/agenda">Open the agenda builder</Link> to take it off the schedule
+            {abstract.status === "REJECTED"
+              ? ", or change the decision back to accepted if it should run after all."
+              : "."}
+          </p>
+        ) : null}
 
         {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
         {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
@@ -232,12 +358,26 @@ function AbstractDrawer({ abstract, onClose }: { abstract: AbstractRow; onClose:
               </button>
             </>
           )}
+          {isDecided && !changing && (
+            <button className="ghost-button" disabled={busy !== null || pending} onClick={() => setChanging(true)}>
+              Change decision
+            </button>
+          )}
+          {isDecided && changing && (
+            <button className="link-button" disabled={busy !== null || pending} onClick={() => setChanging(false)}>
+              Keep “{meta.label.toLowerCase()}”
+            </button>
+          )}
           {canConvert && (
             <button className="primary-button" disabled={busy !== null || pending} onClick={convert} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
               <CalendarPlus size={16} /> {busy === "convert" ? "Creating…" : "Create session"}
             </button>
           )}
-          {abstract.hasSession ? <span className="hint">Session exists — schedule it in the agenda builder.</span> : null}
+          {abstract.sessionScheduled ? (
+            <span className="hint">This talk is on the schedule — change it in the agenda builder.</span>
+          ) : abstract.hasSession ? (
+            <span className="hint">Talk created — schedule it in the agenda builder.</span>
+          ) : null}
         </div>
       </div>
     </div>

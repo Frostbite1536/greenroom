@@ -119,6 +119,9 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .cfp-field { display: grid; gap: 6px; margin-bottom: 18px; }
 .cfp-field .req { color: var(--accent); }
 .field-error { color: #a3372a; font-size: 12px; margin: 0; }
+/* A declined/withdrawn proposal whose talk is still on the public programme.
+   #a3372a on white is 6.4:1, so the icon is not the only signal. */
+.programme-alert { color: #a3372a; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
 .cfp-actions { display: flex; gap: 10px; margin-top: 8px; }
 .speaker-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; margin-bottom: 10px; }
 .cfp-success { text-align: center; display: grid; gap: 10px; padding: 20px 0; }

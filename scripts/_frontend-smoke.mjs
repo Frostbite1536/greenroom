@@ -443,6 +443,56 @@ try {
   }, admin);
   check("convert is idempotent (created:false)", convertAgain.data?.data?.created === false);
 
+  // --- W2: the admin table must surface a talk left on the programme ---
+  // Walks the exact sequence the notice exists for: converted -> scheduled ->
+  // decision reversed. INV-DOMAIN-001 means nothing is auto-deleted, so the
+  // only safeguard is that the admin can SEE it.
+  const convertedAbstractId = submit.data?.data?.id;
+  const convertedSessionId = convert.data?.data?.sessionId;
+
+  const afterConvert = await req("GET", "/admin/abstracts", null, admin);
+  check("abstracts table shows an unscheduled talk as 'Talk created'",
+    afterConvert.text.includes("Talk created"));
+
+  const placeConverted = await req("POST", "/api/agenda/slots", {
+    eventId: EVENT_ID,
+    sessionId: convertedSessionId,
+    roomId: fx.roomB.id,
+    trackId: fx.track.id,
+    startsAt: `${fx.dayKey}T22:00:00.000Z`,
+    endsAt: `${fx.dayKey}T22:30:00.000Z`,
+  }, admin);
+  check("converted session schedules cleanly → 200", placeConverted.status === 200,
+    `${placeConverted.status} ${JSON.stringify(placeConverted.data?.error ?? "")}`);
+
+  const afterSchedule = await req("GET", "/admin/abstracts", null, admin);
+  check("abstracts table shows a scheduled talk as 'On the programme'",
+    afterSchedule.text.includes("On the programme"));
+  // Non-vacuity guard: the warning must be absent while the decision still
+  // matches the programme, otherwise the assertion below proves nothing.
+  check("no 'Still on the programme' warning while the talk is accepted",
+    !afterSchedule.text.includes("Still on the programme"));
+
+  // The drawer's 'Change decision' path depends on this being allowed at all.
+  const reverse = await req("POST", "/api/evaluations/decisions", {
+    abstractId: convertedAbstractId, decision: "REJECTED",
+  }, admin);
+  check("a decision on an ACCEPTED abstract is allowed → 200", reverse.status === 200,
+    `${reverse.status} ${JSON.stringify(reverse.data?.error ?? "")}`);
+  check("reversed decision does NOT delete the talk (INV-DOMAIN-001)",
+    (await prisma.session.count({ where: { id: convertedSessionId } })) === 1);
+
+  const afterReverse = await req("GET", "/admin/abstracts", null, admin);
+  check("declined-but-scheduled abstract is flagged 'Still on the programme'",
+    afterReverse.text.includes("Still on the programme"));
+
+  // Restore ACCEPTED so later checks see the pipeline in its expected state.
+  const restore = await req("POST", "/api/evaluations/decisions", {
+    abstractId: convertedAbstractId, decision: "ACCEPTED",
+  }, admin);
+  check("decision can be changed back → 200", restore.status === 200, `got ${restore.status}`);
+  await req("DELETE", `/api/agenda/slots?sessionId=${convertedSessionId}`, null, admin);
+
   // --- mutation 4: score submission ---
   const score = await req("POST", "/api/evaluations/scores", {
     planId: fx.plan.id,
