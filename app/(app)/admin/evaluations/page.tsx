@@ -1,5 +1,25 @@
-import { PagePlaceholder } from "@/components/page-placeholder";
+import "@/components/feature.css";
+import { PageHeader } from "@/components/ui";
+import { EvaluationWorkspace } from "@/components/evaluation-workspace";
+import { EVALUATION_PLAN } from "@/lib/fixtures";
+
+export const metadata = { title: "Evaluation · Sessionboard" };
 
 export default function EvaluationsPage() {
-  return <PagePlaceholder eyebrow="Committee workflow" title="Evaluation plans" description="Create review plans, assign abstracts to evaluator teams, and score every proposal against a consistent rubric." metrics={[{ label: "Assigned", value: "94" }, { label: "Completed", value: "61%" }, { label: "Needs review", value: "37" }]} nextSteps={["Create plan and rubric management.", "Add team and evaluator assignments.", "Build a fast, keyboard-friendly scoring queue."]} />;
+  const plan = EVALUATION_PLAN;
+  return (
+    <section className="page-stack" style={{ width: "min(1280px, 100%)" }}>
+      <PageHeader
+        eyebrow="Collect & review"
+        title="Evaluation"
+        description="Score abstracts against your rubric. Assignments are routed to review teams by category."
+      />
+      <div className="metric-grid">
+        <div className="metric"><span>Round</span><strong>{plan.name.split(" — ")[0]}</strong></div>
+        <div className="metric"><span>Rubric criteria</span><strong>{plan.rubric.length}</strong></div>
+        <div className="metric"><span>Completed</span><strong>{plan.completedCount}/{plan.assignedCount}</strong></div>
+      </div>
+      <EvaluationWorkspace />
+    </section>
+  );
 }

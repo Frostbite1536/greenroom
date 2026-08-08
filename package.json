@@ -9,7 +9,12 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run build",
     "db:generate": "prisma generate",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "tsx --test \"lib/**/*.test.ts\""
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.1",

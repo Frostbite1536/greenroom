@@ -1,9 +1,42 @@
 import { notFound } from "next/navigation";
-import { PagePlaceholder } from "@/components/page-placeholder";
+import "@/components/feature.css";
+import { CfpForm, CfpBrand } from "@/components/cfp-form";
+import { EVENT_META, getForm } from "@/lib/fixtures";
 
-export default async function PublicCfpPage({ params }: { params: Promise<{ formId: string }> }) {
+export const metadata = { title: "Submit a proposal · Sessionboard" };
+
+export default async function PublicCfpPage({
+  params,
+}: {
+  params: Promise<{ formId: string }>;
+}) {
   const { formId } = await params;
-  if (!formId) notFound();
+  const form = getForm(formId);
+  if (!form) notFound();
 
-  return <PagePlaceholder eyebrow="Forward 2026 CFP" title="Submit an abstract" description="Share your proposal and speaker details. You can save a draft before the submission window closes." metrics={[{ label: "Form", value: formId }, { label: "Speakers", value: "1–4" }, { label: "Status", value: "Open" }]} nextSteps={["Render configured standard and custom fields.", "Evaluate conditional visibility locally.", "Save drafts and validate speaker limits on submit."]} />;
+  const now = Date.now();
+  const closed =
+    !form.published ||
+    (form.opensAt && now < new Date(form.opensAt).getTime()) ||
+    (form.closesAt && now > new Date(form.closesAt).getTime());
+
+  return (
+    <main className="cfp-page">
+      <div className="cfp-shell">
+        <CfpBrand eventName={EVENT_META.name} />
+        {closed ? (
+          <div className="cfp-card">
+            <h2 style={{ marginTop: 0 }}>Submissions are closed</h2>
+            <p className="muted">
+              This call for speakers is not currently accepting submissions
+              {form.closesAt ? ` (closed ${new Date(form.closesAt).toLocaleDateString()})` : ""}. Please check back later.
+            </p>
+          </div>
+        ) : (
+          <CfpForm form={form} />
+        )}
+        <p className="hint" style={{ textAlign: "center" }}>Powered by Sessionboard · {EVENT_META.name}</p>
+      </div>
+    </main>
+  );
 }
