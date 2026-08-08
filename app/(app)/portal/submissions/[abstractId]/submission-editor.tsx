@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, Lock } from "lucide-react";
+import { ArrowLeft, Check, Lock, Plus, X } from "lucide-react";
 import { FieldControl, type RenderField } from "@/components/field-renderer";
 import { isFieldVisible, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
-import { submissionErrorMessage, submissionStatusView } from "@/lib/portal/submission-status";
+import { editScopeNotice, submissionErrorMessage, submissionStatusView } from "@/lib/portal/submission-status";
 import styles from "../../portal.module.css";
 
 /**
@@ -56,6 +56,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   const [durationMinutes, setDurationMinutes] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [answers, setAnswers] = useState<AnswerMap>({});
+  const [speakers, setSpeakers] = useState<Speaker[]>([]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -69,6 +70,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
     setDurationMinutes(data.submission.durationMinutes ? String(data.submission.durationMinutes) : "");
     setCategoryId(data.submission.categoryId ?? "");
     setAnswers({ ...data.answersByKey });
+    setSpeakers(data.submission.speakers.map((speaker) => ({ ...speaker })));
   }
 
   useEffect(() => {
@@ -111,6 +113,26 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   const { submission, form } = loaded;
   const view = submissionStatusView(submission.status);
   const readOnly = !submission.canEdit;
+  // The backend allows roster edits right up until the talk becomes a session.
+  const rosterEditable = !readOnly && !submission.speakersLocked;
+
+  function updateSpeaker(index: number, patch: Partial<Speaker>) {
+    setSpeakers((current) => current.map((speaker, i) => (i === index ? { ...speaker, ...patch } : speaker)));
+  }
+
+  function makePrimary(index: number) {
+    // Exactly one primary: the contract refuses a roster with none or several.
+    setSpeakers((current) => current.map((speaker, i) => ({ ...speaker, isPrimary: i === index })));
+  }
+
+  function removeSpeaker(index: number) {
+    setSpeakers((current) => {
+      const next = current.filter((_, i) => i !== index);
+      return next.some((speaker) => speaker.isPrimary) || next.length === 0
+        ? next
+        : next.map((speaker, i) => ({ ...speaker, isPrimary: i === 0 }));
+    });
+  }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -138,6 +160,9 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
           // Only the questions currently on screen are sent; the backend merges
           // by key, so untouched answers stay exactly as they were.
           answers: Object.fromEntries(visibleFields.map((field) => [field.key, answers[field.key] ?? null])),
+          // Omitted entirely when the roster is locked, so a converted talk's
+          // confirmed line-up can never be touched from here (409 SPEAKERS_LOCKED).
+          ...(rosterEditable ? { speakers } : {}),
         }),
       });
       const body = await res.json();
@@ -165,6 +190,8 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
             {form.name} · <span className={`pill ${view.tone}`}>{view.label}</span>
           </p>
           <p className={styles.sessionMeta}>{view.detail}</p>
+          {/* Honest about what an edit actually changes once a talk is scheduled. */}
+          <p className={styles.sessionMeta}>{editScopeNotice(submission.speakersLocked)}</p>
         </div>
       </div>
 
@@ -235,20 +262,74 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
 
       <div className={styles.field}>
         <span className="field-label">Speakers</span>
-        <ul className={styles.taskList}>
-          {submission.speakers.map((speaker) => (
-            <li className={styles.sessionItem} key={speaker.email}>
-              <div className={styles.sessionTitle}>{speaker.name}{speaker.isPrimary ? " · main contact" : ""}</div>
-              <p className={styles.sessionMeta}>{speaker.email}</p>
-            </li>
-          ))}
-        </ul>
-        {submission.speakersLocked ? (
-          <p className="hint">
-            Your talk is on the program, so the speaker list is fixed here. Contact the program team to change who&apos;s presenting.
-          </p>
+        {rosterEditable ? (
+          <>
+            <p className="hint">
+              Everyone listed here can edit this proposal. The main contact is who we reply to.
+            </p>
+            {speakers.map((speaker, index) => (
+              <div className={styles.sessionItem} key={index}>
+                <div className={styles.field}>
+                  <label className="field-label" htmlFor={`speaker-name-${index}`}>Name</label>
+                  <input
+                    className="text-input" id={`speaker-name-${index}`} value={speaker.name}
+                    onChange={(e) => updateSpeaker(index, { name: e.target.value })}
+                  />
+                </div>
+                <div className={styles.field}>
+                  <label className="field-label" htmlFor={`speaker-email-${index}`}>Email</label>
+                  <input
+                    className="text-input" id={`speaker-email-${index}`} type="email" value={speaker.email}
+                    onChange={(e) => updateSpeaker(index, { email: e.target.value })}
+                  />
+                </div>
+                <div className="row wrap">
+                  <label className={styles.sessionMeta}>
+                    <input
+                      type="radio" name="primary-speaker" checked={speaker.isPrimary}
+                      onChange={() => makePrimary(index)}
+                    />{" "}
+                    Main contact
+                  </label>
+                  {speakers.length > 1 ? (
+                    <button
+                      className="icon-button" type="button" onClick={() => removeSpeaker(index)}
+                      aria-label={`Remove ${speaker.name || "this speaker"}`}
+                    >
+                      <X size={15} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            {speakers.length < (form.maxSpeakers ?? 1) ? (
+              <button
+                className="ghost-button" type="button"
+                onClick={() => setSpeakers((current) => [...current, { name: "", email: "", isPrimary: current.length === 0 }])}
+              >
+                <Plus size={15} aria-hidden="true" /> Add a co-speaker
+              </button>
+            ) : (
+              <p className="hint">This form allows up to {form.maxSpeakers} speakers.</p>
+            )}
+            {fieldErrors.speakers ? <p className={styles.saveError}>{fieldErrors.speakers.join(" ")}</p> : null}
+          </>
         ) : (
-          <p className="hint">Contact the program team to add or remove a speaker.</p>
+          <>
+            <ul className={styles.taskList}>
+              {submission.speakers.map((speaker) => (
+                <li className={styles.sessionItem} key={speaker.email}>
+                  <div className={styles.sessionTitle}>{speaker.name}{speaker.isPrimary ? " · main contact" : ""}</div>
+                  <p className={styles.sessionMeta}>{speaker.email}</p>
+                </li>
+              ))}
+            </ul>
+            <p className="hint">
+              {submission.speakersLocked
+                ? "Your talk is on the programme, so the line-up is fixed here. Contact the programme team to change who's presenting."
+                : "This proposal can no longer be edited."}
+            </p>
+          </>
         )}
       </div>
 

@@ -125,11 +125,13 @@ occupied. Let the conflict message appear.*
 
 *Change a word in the description and save; show the confirmation.*
 
-> "That updates what attendees will read. The one thing they can't change here is
-> who's presenting — the talk is already on the schedule, so the speaker list is
-> fixed and it tells them to contact the programme team. That's deliberate: a
-> speaker quietly rewriting the line-up after you've built the agenda is a
-> problem, not a feature."
+> "That updates their proposal record, and the page says so plainly: because this
+> talk is already on the programme, the public listing is the confirmed session,
+> so the team applies anything that matters. The one thing they can't change here
+> is who's presenting — once a talk is scheduled the line-up is fixed and it tells
+> them to contact the programme team. Before it's scheduled they can edit the
+> co-speaker list themselves. That's deliberate: a speaker quietly rewriting the
+> line-up after you've built the agenda is a problem, not a feature."
 
 *Then navigate to* `/admin/speakers` *(type the URL) as the admin persona.*
 
