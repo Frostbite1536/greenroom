@@ -1,0 +1,47 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { submissionErrorMessage, submissionStatusView } from "./submission-status";
+
+const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"];
+
+test("every status reads as plain English, never as a raw code", () => {
+  for (const status of ALL) {
+    const view = submissionStatusView(status);
+    assert.ok(view.label.length > 0 && view.detail.length > 0, status);
+    assert.doesNotMatch(view.label, /[A-Z]{2,}|_/, `label leaks a code: ${view.label}`);
+    assert.doesNotMatch(view.detail, /\b[A-Z][A-Z_]{3,}\b/, `detail leaks a code: ${view.detail}`);
+  }
+  assert.equal(submissionStatusView("UNDER_REVIEW").label, "In review");
+});
+
+test("editability matches the backend contract: terminal outcomes are read-only", () => {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED"]) {
+    assert.equal(submissionStatusView(status).editable, true, status);
+  }
+  for (const status of ["REJECTED", "WITHDRAWN"]) {
+    assert.equal(submissionStatusView(status).editable, false, status);
+  }
+});
+
+test("an unknown status degrades to neutral copy instead of crashing", () => {
+  const view = submissionStatusView("SOMETHING_NEW");
+  assert.equal(view.editable, false);
+  assert.doesNotMatch(view.detail, /SOMETHING_NEW/);
+});
+
+test("error codes become sentences a speaker can act on", () => {
+  const locked = submissionErrorMessage("SPEAKERS_LOCKED");
+  assert.match(locked, /program team/);
+  assert.doesNotMatch(locked, /SPEAKERS_LOCKED/);
+
+  for (const code of ["UNAUTHENTICATED", "NOT_YOUR_SUBMISSION", "ABSTRACT_NOT_FOUND", "ABSTRACT_LOCKED", "FIELD_ERRORS", "TOO_MANY_SPEAKERS", "NO_PRIMARY_SPEAKER", "INVALID_CATEGORY", "NETWORK_ERROR"]) {
+    const message = submissionErrorMessage(code);
+    assert.doesNotMatch(message, /\b[A-Z][A-Z_]{3,}\b/, `${code} leaked into UI copy: ${message}`);
+  }
+});
+
+test("an unknown code prefers the server's prose but never echoes a bare code", () => {
+  assert.equal(submissionErrorMessage("WHATEVER", "The form is closed for new proposals."), "The form is closed for new proposals.");
+  assert.doesNotMatch(submissionErrorMessage("WHATEVER", "SOME_CODE"), /SOME_CODE/);
+  assert.doesNotMatch(submissionErrorMessage("WHATEVER"), /WHATEVER/);
+});

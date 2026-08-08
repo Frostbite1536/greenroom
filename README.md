@@ -29,10 +29,14 @@ public embeds for your event site.
 
 ## Quickstart
 
+**Prerequisites:** Node.js **20.9+** (Next 16 requires it) and a Postgres
+database you can point at — a free [Neon](https://neon.tech) project works and is
+what the hosted demo uses.
+
 ```bash
 npm install
 cp .env.example .env       # set DATABASE_URL (Postgres, e.g. Neon)
-npm run db:push            # apply the Prisma schema
+npm run db:push            # apply the Prisma schema (also generates Prisma Client)
 npm run db:seed            # deterministic demo data (event, forms, 40 abstracts, schedule)
 npm run dev
 ```
@@ -42,6 +46,11 @@ Evaluator / Speaker) are available for the fixed seeded demo personas.
 
 Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
 `sofia@greenroom.demo` (speaker).
+
+`DATABASE_URL` is the only variable you must set; everything else defaults
+safely (external integrations mocked, demo reset disabled, public REST API off).
+This path is rehearsed end-to-end from a clean clone and empty database in
+[`docs/judging/INSTALL-REHEARSAL.md`](docs/judging/INSTALL-REHEARSAL.md).
 
 ## Deployed demo
 
