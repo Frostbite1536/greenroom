@@ -79,21 +79,26 @@ async function assertServerUsesAssertedDatabase() {
   const { PrismaClient } = createRequire(import.meta.url)("@prisma/client");
   const prisma = new PrismaClient();
   const sentinelSlug = `rehearsal-sentinel-${Date.now()}`;
+  // `process.exit` would skip async cleanup, so record the outcome and exit
+  // only after the sentinel row is removed and the client disconnected.
+  let mismatch = null;
   try {
     await prisma.formConfig.create({
       data: { eventId: EVENT.id, name: "Rehearsal sentinel", slug: sentinelSlug, published: true },
     });
     const probe = await fetch(`${BASE}/api/cfp/public/${sentinelSlug}`);
-    if (probe.status !== 200) {
-      console.error(
-        `Sentinel probe failed (HTTP ${probe.status}): the server at ${BASE} is NOT backed by\n` +
-          "the database this harness verified. Refusing to run — no writes were sent through the server.",
-      );
-      process.exit(2);
-    }
+    if (probe.status !== 200) mismatch = probe.status;
   } finally {
     await prisma.formConfig.deleteMany({ where: { eventId: EVENT.id, slug: sentinelSlug } });
     await prisma.$disconnect();
+  }
+  if (mismatch !== null) {
+    console.error(
+      `Sentinel probe failed (HTTP ${mismatch}): the server at ${BASE} is NOT backed by\n` +
+        "the database this harness verified. Refusing to run — no writes were sent through the server\n" +
+        "and the sentinel row was removed.",
+    );
+    process.exit(2);
   }
   console.log("PASS  sentinel: server and harness share the asserted disposable database");
 }
