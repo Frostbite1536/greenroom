@@ -242,6 +242,12 @@ export type AbstractRow = {
   categoryName: string | null;
   formName: string;
   speakers: { name: string; email: string; isPrimary: boolean }[];
+  /**
+   * True when this row's speakers were withheld because the caller is an
+   * evaluator and the proposal is covered by a blind round. `speakers` is empty
+   * in that case — the identity is never sent to the client, not just hidden.
+   */
+  identityHidden: boolean;
   submittedAt: string | null;
   reviewsComplete: number;
   reviewsTotal: number;
@@ -347,6 +353,23 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
 
+  /**
+   * Blind review has to mean something on this page too, not only in the scoring
+   * queue: an evaluator could otherwise read every speaker's name and email
+   * here and defeat the blind round entirely (audit1 #2). A proposal counts as
+   * blind-covered when any blind plan holds an assignment for it. Admins run the
+   * process and are unaffected.
+   */
+  const blindCovered = new Set<string>();
+  if (ctx.role === "EVALUATOR") {
+    const rows = await prisma.reviewAssignment.findMany({
+      where: { plan: { eventId: ctx.eventId, isBlind: true } },
+      select: { abstractId: true },
+      distinct: ["abstractId"],
+    });
+    for (const row of rows) blindCovered.add(row.abstractId);
+  }
+
   // Over the bound: drop the overflow row and report honestly instead of
   // rendering a silently-partial answer list.
   const answerIndex = indexAdminAnswers(answerRows, ADMIN_ANSWER_LIMIT);
@@ -365,11 +388,14 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         durationMinutes: a.durationMinutes,
         categoryName: a.category?.name ?? null,
         formName: a.formConfig.name,
-        speakers: a.speakers.map((s) => ({
-          name: s.user.name,
-          email: s.user.email,
-          isPrimary: s.isPrimary,
-        })),
+        speakers: blindCovered.has(a.id)
+          ? []
+          : a.speakers.map((s) => ({
+              name: s.user.name,
+              email: s.user.email,
+              isPrimary: s.isPrimary,
+            })),
+        identityHidden: blindCovered.has(a.id),
         submittedAt: a.submittedAt?.toISOString() ?? null,
         reviewsComplete: reviewProgress.reviewsComplete,
         reviewsTotal: reviewProgress.reviewsTotal,
