@@ -22,7 +22,7 @@ foreach ($tab in $tabs) {
   @(
     "`$env:SPRINT_COORDINATION_DIR = '$($env:SPRINT_COORDINATION_DIR)'"
     "Set-Location '$($tab.Dir)'"
-    "pi --provider anthropic --model claude-opus-4-8 --name '$($tab.Title)' '$($tab.Prompt)'"
+    "pi --provider anthropic --model claude-opus-5 --name '$($tab.Title)' '$($tab.Prompt)'"
   ) | Set-Content -Path $launcher -Encoding UTF8
 
   $wtArgs = "-w 0 new-tab --title `"$($tab.Title)`" -d `"$($tab.Dir)`" powershell.exe -NoExit -ExecutionPolicy Bypass -File `"$launcher`""
