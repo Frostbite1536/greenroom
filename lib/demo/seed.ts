@@ -245,8 +245,10 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
       slug: "call-for-speakers",
       welcomeText: "We're building Forward 2026 with the community. Pitch your talk below.",
       thankYouText: "Thanks for submitting! You'll hear from the program team within three weeks.",
-      opensAt: new Date("2026-01-05T00:00:00.000Z"),
-      closesAt: new Date("2026-03-01T00:00:00.000Z"),
+      // Relative to seed time so the CFP is always open when the demo runs
+      // (requests/frontend-seed-cfp-window-closed.md — a fixed window went stale).
+      opensAt: new Date(Date.now() - 30 * 86400000),
+      closesAt: new Date(Date.now() + 60 * 86400000),
       submissionLimit: 3,
       minSpeakers: 1,
       maxSpeakers: 4,
