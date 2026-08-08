@@ -3,6 +3,7 @@ import { reviewScoreInputSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { parseRubric, validateScores } from "@/lib/services/rubric";
+import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +30,19 @@ export const POST = handle(async (req) => {
         evaluatorId: ctx.userId,
       },
     },
+    include: { abstract: { select: { status: true } } },
   });
   if (!assignment) {
     throw new ApiError(403, "NOT_ASSIGNED", "You are not assigned to review this abstract.");
+  }
+  // Speakers can withdraw mid-review (W1), so scoring must stop at that point
+  // rather than recording an opinion on a proposal that no longer stands.
+  if (assignment.abstract.status === "WITHDRAWN") {
+    throw new ApiError(
+      409,
+      "ABSTRACT_WITHDRAWN",
+      "The speaker withdrew this proposal, so it no longer needs a review.",
+    );
   }
 
   const rubric = parseRubric(plan.rubric);
@@ -41,6 +52,21 @@ export const POST = handle(async (req) => {
   }
 
   await prisma.$transaction(async (tx) => {
+    // Same per-abstract advisory lock as withdraw/decisions/convert: the
+    // pre-transaction WITHDRAWN check can go stale against a concurrent
+    // withdrawal, so re-check under the lock before persisting scores.
+    await lockAbstractForWrite(tx, input.abstractId);
+    const fresh = await tx.abstract.findUniqueOrThrow({
+      where: { id: input.abstractId },
+      select: { status: true },
+    });
+    if (fresh.status === "WITHDRAWN") {
+      throw new ApiError(
+        409,
+        "ABSTRACT_WITHDRAWN",
+        "The speaker withdrew this proposal, so it no longer needs a review.",
+      );
+    }
     for (const entry of input.scores) {
       await tx.reviewScore.upsert({
         where: {

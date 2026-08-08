@@ -11,6 +11,12 @@ export const dynamic = "force-dynamic";
  * POST /api/evaluations/decisions — accept or reject an abstract (admin).
  * Records `decidedAt`; conversion to a schedulable Session is a separate,
  * explicit step (`/api/evaluations/convert`) per INV-DOMAIN-001.
+ *
+ * Reversing a decision deliberately does NOT delete the Session built from the
+ * abstract: the session is the confirmed record, and silently pulling a talk
+ * that is already on the public schedule would be worse than leaving it. The
+ * response therefore reports the linked session (W2) so the admin UI can say
+ * "this talk is still on the programme — unschedule it too".
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -34,9 +40,33 @@ export const POST = handle(async (req) => {
     return tx.abstract.update({
       where: { id: input.abstractId },
       data: { status: input.decision, decidedAt: new Date() },
-      include: { category: true, speakers: { include: { user: true } } },
+      include: {
+        category: true,
+        speakers: { include: { user: true } },
+        session: {
+          select: {
+            id: true,
+            title: true,
+            scheduleSlot: {
+              select: { startsAt: true, room: { select: { name: true } } },
+            },
+          },
+        },
+      },
     });
   });
 
-  return ok(serializeAbstract(updated));
+  return ok({
+    ...serializeAbstract(updated),
+    // Additive key: existing clients that ignore it are unaffected.
+    session: updated.session
+      ? {
+          id: updated.session.id,
+          title: updated.session.title,
+          isScheduled: Boolean(updated.session.scheduleSlot),
+          scheduledAt: updated.session.scheduleSlot?.startsAt.toISOString() ?? null,
+          roomName: updated.session.scheduleSlot?.room.name ?? null,
+        }
+      : null,
+  });
 });
