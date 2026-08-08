@@ -4,9 +4,9 @@ A lightweight Pi + Git worktree workspace for a 48-hour SaaS replication sprint.
 
 ## Workflow
 
-1. Start Pi in the root and reveal the target SaaS to the Architect.
-2. Have the Architect lock only the contracts needed for the golden path.
-3. Run `./launch-agents.sh` from Git Bash (or `./launch-agents.ps1` from PowerShell).
+1. Start Pi manually in the root and reveal the target SaaS to the Architect.
+2. Have the Architect lock only the contracts needed for the golden path and commit the foundation.
+3. Confirm the Architect commit is on `main`, then run `./launch-agents.sh` from Git Bash (or `./launch-agents.ps1` from PowerShell).
 4. Workers implement non-overlapping vertical areas in their worktrees.
 5. Workers commit small slices and write status to the external coordination directory.
 6. The Architect merges one branch at a time, runs checks, and keeps `main` demoable.

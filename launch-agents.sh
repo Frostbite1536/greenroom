@@ -21,9 +21,9 @@ launch() {
   fi
 }
 
-launch "Sprint Architect" "$ROOT" "Run /architect after the target brief is available. First inspect the sprint documentation and coordination state."
-launch "Sprint Backend" "$ROOT/.worktrees/backend" "You are the backend worker. Wait for contract lock, then use /backend."
-launch "Sprint Frontend" "$ROOT/.worktrees/frontend" "You are the frontend worker. Wait for contract lock, then use /frontend."
-launch "Sprint Ops" "$ROOT/.worktrees/ops" "You are the ops worker. Wait for contract lock, then use /ops."
+launch "Sprint Backend" "$ROOT/.worktrees/backend" "You are the backend worker. The Architect has locked the foundation. Read the coordination state, then use /backend."
+launch "Sprint Frontend" "$ROOT/.worktrees/frontend" "You are the frontend worker. The Architect has locked the foundation. Read the coordination state, then use /frontend."
+launch "Sprint Ops" "$ROOT/.worktrees/ops" "You are the ops worker. The Architect has locked the foundation. Read the coordination state, then use /ops."
 
 echo "Coordination: $SPRINT_COORDINATION_DIR"
+echo "Architect is intentionally not launched by this script; start it manually in the root first."

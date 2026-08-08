@@ -18,8 +18,16 @@ mkdir -p .worktrees
 
 create_worktree() {
   local role="$1" branch="$2" path=".worktrees/$1"
-  if [ -e "$path/.git" ] || git worktree list --porcelain | grep -Fq "worktree $ROOT/$path"; then
-    echo "$role worktree already exists"
+  if [ -e "$path/.git" ]; then
+    if [ -n "$(git -C "$path" status --porcelain)" ]; then
+      echo "$role worktree has uncommitted changes; refusing to sync it to main." >&2
+      exit 1
+    fi
+    git -C "$path" merge --ff-only main
+    echo "$role worktree synced to main"
+  elif git worktree list --porcelain | grep -Fq "worktree $ROOT/$path"; then
+    echo "$role worktree is registered at an unexpected path representation; inspect 'git worktree list'." >&2
+    exit 1
   elif git show-ref --verify --quiet "refs/heads/$branch"; then
     git worktree add "$path" "$branch"
   else
