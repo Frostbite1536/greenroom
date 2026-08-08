@@ -20,7 +20,7 @@ export type IcsEvent = {
   organizerEmail?: string | null;
 };
 
-const PRODID = "-//Sessionboard Clone//Program Manager//EN";
+const PRODID = "-//Greenroom//Program Manager//EN";
 
 /** RFC 5545 §3.3.5 UTC date-time: 19980118T230000Z */
 export function formatIcsDate(date: Date): string {

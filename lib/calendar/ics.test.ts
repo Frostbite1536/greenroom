@@ -69,13 +69,13 @@ test("omits optional properties when absent", () => {
 
 test("includes optional properties when present", () => {
   const ics = buildIcsCalendar(
-    [{ ...baseEvent, location: "Hall A", description: "A talk", url: "https://x.test/s/1", organizerName: "Maya Chen", organizerEmail: "maya@sessionboard.demo" }],
+    [{ ...baseEvent, location: "Hall A", description: "A talk", url: "https://x.test/s/1", organizerName: "Maya Chen", organizerEmail: "maya@greenroom.demo" }],
     { now: NOW },
   );
   assert.ok(ics.includes("LOCATION:Hall A"));
   assert.ok(ics.includes("DESCRIPTION:A talk"));
   assert.ok(ics.includes("URL:https://x.test/s/1"));
-  assert.ok(ics.includes("ORGANIZER;CN=Maya Chen:mailto:maya@sessionboard.demo"));
+  assert.ok(ics.includes("ORGANIZER;CN=Maya Chen:mailto:maya@greenroom.demo"));
 });
 
 test("supports METHOD:REQUEST for emailed invitations", () => {

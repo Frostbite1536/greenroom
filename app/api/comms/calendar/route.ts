@@ -54,7 +54,7 @@ export async function GET(request: Request) {
   const appUrl = process.env.APP_URL?.replace(/\/$/, "");
 
   const events: IcsEvent[] = sessions.map((s) => ({
-    uid: `${s.id}@sessionboard`,
+    uid: `${s.id}@greenroom`,
     title: s.title,
     description: s.description,
     location: s.scheduleSlot!.room.name,
