@@ -25,3 +25,4 @@ Thumbs.db
 # Local agent state
 .claude.local.md
 .superdesign/
+.vercel/
