@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CsvImportError,
   coerceCsvAnswer,
+  csvAbstractImportIdentityKey,
   mapCsvRows,
   parseCsv,
   validateImportedAnswers,
@@ -36,6 +37,30 @@ test("parseCsv preserves embedded quoted newlines and physical row diagnostics",
   assert.deepEqual(
     parseCsv('Title,Notes\nTalk,"First\nSecond"\nNext,Done').rows.map((row) => row.rowNumber),
     [2, 4],
+  );
+});
+
+test("parseCsv rejects quotes outside RFC-style field boundaries with physical rows", () => {
+  assert.throws(
+    () => parseCsv('Title,Speaker\nTalk"quoted",Ada'),
+    (error: unknown) => error instanceof CsvImportError && /unexpected quote.*row 2/i.test(error.message),
+  );
+  assert.throws(
+    () => parseCsv('Title,Speaker\n"Talk" trailing,Ada'),
+    (error: unknown) => error instanceof CsvImportError && /after a closing quote.*row 2/i.test(error.message),
+  );
+});
+
+test("CSV import identity keys normalize retries without delimiter collisions", () => {
+  const normalized = csvAbstractImportIdentityKey({
+    eventId: "event-1", formConfigId: "form-1", speakerEmail: " ADA@Example.test ", title: " My Talk ",
+  });
+  assert.equal(normalized, csvAbstractImportIdentityKey({
+    eventId: "event-1", formConfigId: "form-1", speakerEmail: "ada@example.test", title: "my talk",
+  }));
+  assert.notEqual(
+    csvAbstractImportIdentityKey({ eventId: "event-1", formConfigId: "form-1\u0000extra", speakerEmail: "ada@example.test", title: "my talk" }),
+    normalized,
   );
 });
 

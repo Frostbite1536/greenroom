@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import {
   authorizeV1Request,
   getV1PaginationMeta,
+  handleV1,
   parseV1ListQuery,
   v1Error,
   v1ListResponse,
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /** GET /api/v1/schedule?event=<slug|id>&limit=50&offset=0 */
-export async function GET(req: Request): Promise<Response> {
+export const GET = handleV1(async (req: Request): Promise<Response> => {
   const authorization = authorizeV1Request(req.headers);
   if (!authorization.ok) return v1Error(authorization.error);
 
@@ -65,4 +66,4 @@ export async function GET(req: Request): Promise<Response> {
     event,
     getV1PaginationMeta(query.value, total),
   );
-}
+});

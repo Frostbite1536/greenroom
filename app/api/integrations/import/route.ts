@@ -5,6 +5,7 @@ import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import {
   CsvImportError,
+  csvAbstractImportIdentityKey,
   coerceCsvAnswer,
   mapCsvRows,
   parseCsv,
@@ -28,6 +29,20 @@ type PreparedAbstract = {
   categoryId: string | null;
   answers: Record<string, FormAnswerValue>;
 };
+
+/**
+ * The schema intentionally allows same-title public submissions, so no unique
+ * constraint can enforce this import-only identity. A transaction-scoped
+ * Postgres advisory lock serializes concurrent import retries for the same key.
+ */
+async function lockAbstractImportIdentity(
+  tx: Prisma.TransactionClient,
+  item: PreparedAbstract,
+  eventId: string,
+): Promise<void> {
+  const identity = csvAbstractImportIdentityKey({ eventId, ...item });
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${identity}, 0))`;
+}
 
 function stringValue(value: string, field: string, maxLength: number): string {
   const trimmed = value.trim();
@@ -168,7 +183,17 @@ export const POST = handle(async (req) => {
       let created = 0;
       let updated = 0;
       let skipped = 0;
-      for (const item of prepared) {
+      // Every concurrent batch obtains advisory locks in the same order, which
+      // prevents two overlapping CSVs from deadlocking on identities A/B.
+      const preparedInLockOrder = [...prepared].sort((left, right) =>
+        csvAbstractImportIdentityKey({ eventId: ctx.eventId, ...left }).localeCompare(
+          csvAbstractImportIdentityKey({ eventId: ctx.eventId, ...right }),
+        ),
+      );
+      for (const item of preparedInLockOrder) {
+        // Lock before the identity read so concurrent retries cannot both
+        // observe a missing row and create duplicate abstracts.
+        await lockAbstractImportIdentity(tx, item, ctx.eventId);
         const speaker = await tx.user.upsert({
           where: { email: item.speakerEmail },
           update: { name: item.speakerName },
@@ -180,7 +205,7 @@ export const POST = handle(async (req) => {
             eventId: ctx.eventId,
             formConfigId: item.formConfigId,
             submitterId: speaker.id,
-            title: item.title,
+            title: { equals: item.title, mode: "insensitive" },
           },
           select: { id: true, status: true },
           take: 2,

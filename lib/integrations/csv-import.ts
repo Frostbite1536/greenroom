@@ -31,6 +31,21 @@ export type CsvFormField = {
 
 export class CsvImportError extends Error {}
 
+/** Stable advisory-lock key for one import identity; JSON prevents delimiter collisions. */
+export function csvAbstractImportIdentityKey(input: {
+  eventId: string;
+  formConfigId: string;
+  speakerEmail: string;
+  title: string;
+}): string {
+  return JSON.stringify([
+    input.eventId,
+    input.formConfigId,
+    input.speakerEmail.trim().toLowerCase(),
+    input.title.trim().toLowerCase(),
+  ]);
+}
+
 const REQUIRED_ABSTRACT_TARGETS = [
   "title",
   "speakerEmail",
@@ -60,12 +75,16 @@ function parseCsvRecords(payload: string): RawCsvRow[] {
   let current = "";
   let inQuotes = false;
   let quoteStartRow = 1;
+  let fieldStart = true;
+  let afterClosingQuote = false;
 
   const finishRecord = () => {
     values.push(current);
     rows.push({ rowNumber: recordStartRow, values });
     values = [];
     current = "";
+    fieldStart = true;
+    afterClosingQuote = false;
   };
 
   for (let index = 0; index < payload.length; index++) {
@@ -78,6 +97,7 @@ function parseCsvRecords(payload: string): RawCsvRow[] {
         index++;
       } else if (character === '"') {
         inQuotes = false;
+        afterClosingQuote = true;
       } else if (character === "\r" || character === "\n") {
         current += "\n";
         if (character === "\r" && next === "\n") index++;
@@ -85,12 +105,30 @@ function parseCsvRecords(payload: string): RawCsvRow[] {
       } else {
         current += character;
       }
+    } else if (afterClosingQuote) {
+      if (character === ",") {
+        values.push(current);
+        current = "";
+        fieldStart = true;
+        afterClosingQuote = false;
+      } else if (character === "\r" || character === "\n") {
+        finishRecord();
+        if (character === "\r" && next === "\n") index++;
+        rowNumber++;
+        recordStartRow = rowNumber;
+      } else {
+        throw new CsvImportError(`CSV has an unexpected character after a closing quote on row ${rowNumber}.`);
+      }
     } else if (character === '"') {
+      if (!fieldStart) {
+        throw new CsvImportError(`CSV has an unexpected quote in an unquoted value on row ${rowNumber}.`);
+      }
       inQuotes = true;
       quoteStartRow = rowNumber;
     } else if (character === ",") {
       values.push(current);
       current = "";
+      fieldStart = true;
     } else if (character === "\r" || character === "\n") {
       finishRecord();
       if (character === "\r" && next === "\n") index++;
@@ -98,6 +136,7 @@ function parseCsvRecords(payload: string): RawCsvRow[] {
       recordStartRow = rowNumber;
     } else {
       current += character;
+      fieldStart = false;
     }
   }
 

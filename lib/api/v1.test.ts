@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   authorizeV1Request,
   getV1PaginationMeta,
+  handleV1,
   keysMatch,
   parseV1ListQuery,
 } from "@/lib/api/v1";
@@ -52,6 +53,20 @@ test("v1 query requires an event and bounds offset pagination", () => {
     getV1PaginationMeta({ event: "event-1", limit: 2, offset: 2 }, 5),
     { limit: 2, offset: 2, total: 5, hasMore: true, nextOffset: 4 },
   );
+});
+
+test("v1 handler preserves the versioned error envelope for unexpected failures", async () => {
+  const route = handleV1(async () => {
+    throw new Error("database connection details must not reach clients");
+  });
+  const response = await route(new Request("http://localhost/api/v1/submissions"));
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    version: "v1",
+    data: null,
+    error: { code: "INTERNAL_ERROR", message: "Something went wrong." },
+    meta: null,
+  });
 });
 
 test("v1 serializers expose scoped public records without review data", () => {

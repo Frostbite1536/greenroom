@@ -143,6 +143,28 @@ export function v1Error(error: V1Failure): Response {
   );
 }
 
+/**
+ * Keep unforeseen route failures inside the v1 contract without logging request
+ * details, API keys, or database messages that may contain sensitive values.
+ */
+export function handleV1(
+  fn: (req: Request) => Promise<Response>,
+): (req: Request) => Promise<Response> {
+  return async (req) => {
+    try {
+      return await fn(req);
+    } catch (error) {
+      const name = error instanceof Error ? error.name : typeof error;
+      console.error(`[api:v1] unexpected request failure (${name})`);
+      return v1Error({
+        status: 500,
+        code: "INTERNAL_ERROR",
+        message: "Something went wrong.",
+      });
+    }
+  };
+}
+
 export function v1ListResponse<T>(
   data: T[],
   event: V1EventMeta,

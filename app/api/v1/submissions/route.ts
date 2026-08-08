@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import {
   authorizeV1Request,
   getV1PaginationMeta,
+  handleV1,
   parseV1ListQuery,
   v1Error,
   v1ListResponse,
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /** GET /api/v1/submissions?event=<slug|id>&limit=50&offset=0 */
-export async function GET(req: Request): Promise<Response> {
+export const GET = handleV1(async (req: Request): Promise<Response> => {
   // Keep this check before parsing or querying so an untrusted request cannot
   // probe events or cause any database work without a configured valid key.
   const authorization = authorizeV1Request(req.headers);
@@ -66,4 +67,4 @@ export async function GET(req: Request): Promise<Response> {
     event,
     getV1PaginationMeta(query.value, total),
   );
-}
+});
