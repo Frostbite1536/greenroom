@@ -15,6 +15,8 @@ import type { EvaluationSetupView, SetupPlan } from "@/lib/data/reads";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EVALUATION_SETUP_STATUS_LABELS } from "@/lib/evaluation-setup-status";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
+import { reviewerInviteLifecycleText } from "@/lib/reviewer-invite-ui";
+import { ReviewerInviteForm, ReviewerInviteResend } from "@/components/reviewer-invite-controls";
 import { EmptyState, Pill, Switch } from "@/components/ui";
 
 /** Sensible opening rubric so a brand-new event is one click, not a blank form. */
@@ -106,7 +108,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   if (view.plans.length === 0) {
     return (
       <>
-        <div className="card">
+        <div className="card setup-section">
           <EmptyState icon={<ClipboardCheck size={22} />} title="No review round yet">
             A review round holds your scoring rubric and decides who reviews what. Create one to
             start assigning proposals to your review team.
@@ -116,6 +118,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
               Create the first round
             </button>
           </div>
+          <ReviewerInviteForm headingLevel="h3" />
         </div>
         {creating ? (
           <RoundDialog
@@ -187,21 +190,30 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
           </div>
 
           {view.evaluators.length === 0 ? (
-            <EmptyState icon={<UserPlus size={22} />} title="Nobody can review yet">
-              Add people to this event as evaluators, then come back to assign proposals. Reviewers
-              sign in with the Evaluator persona from the login screen.
-            </EmptyState>
+            <>
+              <EmptyState icon={<UserPlus size={22} />} title="Nobody can review yet">
+                Invite a reviewer to this event, then come back to assign proposals. Their review
+                workspace is ready after they accept the invitation.
+              </EmptyState>
+              <ReviewerInviteForm headingLevel="h3" />
+            </>
           ) : view.abstracts.length === 0 ? (
-            <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals to review yet">
-              Proposals appear here as soon as speakers submit them.{" "}
-              <Link href="/admin/forms">Check your CFP form is published</Link> and its window is
-              open.
-            </EmptyState>
+            <>
+              <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals to review yet">
+                Proposals appear here as soon as speakers submit them.{" "}
+                <Link href="/admin/forms">Check your CFP form is published</Link> and its window is
+                open.
+              </EmptyState>
+              <ReviewerInviteForm headingLevel="h3" />
+            </>
           ) : assignableAbstracts.length === 0 ? (
-            <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals ready for review">
-              Every submitted proposal has reached a decision or been withdrawn. Historical
-              coverage remains visible below.
-            </EmptyState>
+            <>
+              <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals ready for review">
+                Every submitted proposal has reached a decision or been withdrawn. Historical
+                coverage remains visible below.
+              </EmptyState>
+              <ReviewerInviteForm headingLevel="h3" />
+            </>
           ) : (
             <>
               {view.routingUnconfigured ? (
@@ -300,26 +312,36 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                   <div className="assign-toolbar">
                     <h3 id="pick-reviewers">Reviewers</h3>
                   </div>
+                  <ReviewerInviteForm />
                   <div className="pick-list">
-                    {view.evaluators.map((e) => (
-                      <label className="pick-row" key={e.userId}>
-                        <input
-                          type="checkbox"
-                          name="reviewerIds"
-                          checked={reviewers.has(e.userId)}
-                          onChange={() => toggle(reviewers, e.userId, setReviewers)}
-                        />
-                        <span style={{ minWidth: 0, flex: 1 }}>
-                          <span className="cell-title">{e.name}</span>
-                          <span className="cell-sub">
-                            {e.role === "ADMIN" ? "Admin" : "Evaluator"} ·{" "}
-                            {(e.loadByPlan[plan.id] ?? 0) === 0
-                              ? "nothing active"
-                              : `${e.loadByPlan[plan.id]} active in this round`}
-                          </span>
-                        </span>
-                      </label>
-                    ))}
+                    {view.evaluators.map((e) => {
+                      const inviteStatus = reviewerInviteLifecycleText(e.invite);
+                      const activeLoad = (e.loadByPlan[plan.id] ?? 0) === 0
+                        ? "nothing active"
+                        : `${e.loadByPlan[plan.id]} active in this round`;
+                      return (
+                        <div className="reviewer-pick-row" key={e.userId}>
+                          <label className="reviewer-pick-label">
+                            <input
+                              type="checkbox"
+                              name="reviewerIds"
+                              checked={reviewers.has(e.userId)}
+                              onChange={() => toggle(reviewers, e.userId, setReviewers)}
+                            />
+                            <span style={{ minWidth: 0, flex: 1 }}>
+                              <span className="cell-title">{e.name}</span>
+                              <span className="cell-sub">
+                                {e.email} · {e.role === "ADMIN" ? "Admin" : "Evaluator"} · access ready
+                              </span>
+                              <span className="cell-sub">
+                                {inviteStatus ? `${inviteStatus} · ${activeLoad}` : activeLoad}
+                              </span>
+                            </span>
+                          </label>
+                          <ReviewerInviteResend reviewer={e} />
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <label className="stack" style={{ marginTop: 12 }}>
@@ -666,10 +688,14 @@ export function SetupSummary({ view, plan }: { view: EvaluationSetupView; plan: 
   const needing = plan
     ? view.abstracts.filter((a) => a.assignable && (a.assignedByPlan[plan.id] ?? 0) === 0).length
     : view.abstracts.filter((a) => a.assignable).length;
+  const pendingInvites = view.evaluators.filter((e) => e.invite?.state === "pending").length;
   return (
     <div className="metric-grid">
       <div className="metric"><span>Rounds</span><strong>{view.plans.length}</strong></div>
-      <div className="metric"><span>Reviewers</span><strong>{view.evaluators.length}</strong></div>
+      <div className="metric">
+        <span>{pendingInvites === 0 ? "Reviewers" : "Reviewers (including invitations)"}</span>
+        <strong>{view.evaluators.length}</strong>
+      </div>
       <div className="metric">
         <span>Proposals needing a reviewer</span>
         <strong>{needing}</strong>
