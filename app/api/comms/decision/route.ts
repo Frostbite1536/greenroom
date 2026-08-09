@@ -47,7 +47,11 @@ export const POST = handle(async (req) => {
       status: true,
       event: { select: { name: true } },
       submitter: { select: { name: true, email: true } },
-      speakers: { select: { user: { select: { name: true, email: true } } }, take: 25 },
+      speakers: {
+        select: { user: { select: { name: true, email: true } } },
+        orderBy: { user: { email: "asc" } },
+        take: 25,
+      },
     },
   });
   if (!abstract || abstract.eventId !== ctx.eventId) {
@@ -66,7 +70,7 @@ export const POST = handle(async (req) => {
     ? await prisma.reviewScore.findMany({
         where: { abstractId: abstract.id, comment: { not: null } },
         select: { comment: true },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: FEEDBACK_LIMIT + 1,
       })
     : [];

@@ -108,7 +108,7 @@ export type DispatchInput = {
  */
 export function logicalEmailIdempotencyKey(input: DispatchInput, from?: string): string {
   const variables = Object.fromEntries(
-    Object.entries(input.variables ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+    Object.entries(input.variables ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0),
   );
   const logicalMessage = JSON.stringify({
     v: 1,
