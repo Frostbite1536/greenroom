@@ -30,6 +30,7 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.match(route, /sendWindowCount/);
   assert.match(route, /canReserveReviewerInviteSend/);
   assert.match(route, /sendPlan\.kind === "active"/);
+  assert.match(route, /sendPlan\.kind === "retry"/);
   assert.match(route, /reviewerInviteResendAvailableAt\(invite\?\.lastSentAt \?\? null\)/);
   assert.match(route, /tx\.reviewerInvite\.create\(/);
   assert.match(route, /tx\.reviewerInvite\.update\(/);
@@ -38,6 +39,14 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.doesNotMatch(route, /UPDATE "ReviewerInvite"/);
   assert.match(route, /variables:\s*\{ kind: "reviewer_invite", eventName:/);
   assert.doesNotMatch(route, /variables:\s*\{[^}]*inviteUrl/);
+
+  const service = source("lib/services/reviewer-invite.ts");
+  assert.match(service, /greenroom:reviewer-invite:nonce:v1/);
+  assert.match(
+    service,
+    /console\.warn\("\[reviewer-invite\] invalid configured APP_URL", error instanceof Error \? error\.name : "unknown"\)/,
+  );
+  assert.doesNotMatch(service, /console\.warn\([^\n]*process\.env\.APP_URL/);
 });
 
 test("reviewer invite acceptance is POST-only, no-store, structurally verifies before DB, and consumes after membership lock", () => {
@@ -53,6 +62,7 @@ test("reviewer invite acceptance is POST-only, no-store, structurally verifies b
   assert.ok(route.indexOf("lockExistingEventMembersForShare") < route.indexOf('FOR UPDATE'));
   assert.match(route, /"INVITE_NOT_FOUND"/);
   assert.match(route, /NextResponse\.redirect\(`\$\{appUrl\}\/admin\/evaluations`, 303\)/);
+  assert.match(route, /\[reviewer-invite\] accept body rejected/);
   assert.doesNotMatch(route, /new URL\("\/admin\/evaluations", req\.url\)/);
   assert.match(route, /httpOnly: true/);
   assert.match(route, /sameSite: "lax"/);

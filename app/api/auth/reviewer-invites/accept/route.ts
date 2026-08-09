@@ -40,6 +40,9 @@ const accept = handle(async (req) => {
   try {
     body = await parseBoundedJson(req, REVIEWER_INVITE_JSON_MAX_BYTES);
   } catch {
+    // Never log the request body or bearer: malformed and missing tokens are
+    // deliberately indistinguishable at this public boundary.
+    console.warn("[reviewer-invite] accept body rejected");
     throw inviteNotFound();
   }
   const parsed = reviewerInviteAcceptSchema.safeParse(body);

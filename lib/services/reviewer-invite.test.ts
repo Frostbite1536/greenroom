@@ -28,6 +28,14 @@ test("reviewer invite tokens are signed, bounded, expiring, and carry no persist
   assert.equal(verifyReviewerInviteToken("x".repeat(513), secret, now), null);
 });
 
+test("a still-valid invite derives the same bearer for recovery without storing its nonce", () => {
+  const input = { inviteId: "invite-recovery", version: 4, expiresAt };
+  const first = createReviewerInviteToken(input, secret);
+  assert.equal(createReviewerInviteToken(input, secret), first);
+  assert.notEqual(createReviewerInviteToken({ ...input, version: 5 }, secret), first);
+  assert.notEqual(createReviewerInviteToken(input, `${secret}-other`), first);
+});
+
 test("invite delivery state distinguishes a pending token from consumed or expired versions", () => {
   assert.equal(isReviewerInvitePending({ expiresAt, acceptedVersion: null, tokenVersion: 1 }, now), true);
   assert.equal(isReviewerInvitePending({ expiresAt, acceptedVersion: 1, tokenVersion: 1 }, now), false);
@@ -60,7 +68,7 @@ test("invite sends are idempotent until explicit renewal, then cooldown and hour
       now: new Date(now.getTime() + REVIEWER_INVITE_RESEND_COOLDOWN_MS),
       windowStart: reviewerInviteWindowStart(now),
     }),
-    { kind: "send", tokenVersion: 5, sendWindowCount: 8 },
+    { kind: "retry", tokenVersion: 4, sendWindowCount: 8 },
   );
   assert.deepEqual(
     planReviewerInviteSend({ ...active, expiresAt: now }, { resend: false, now, windowStart: reviewerInviteWindowStart(now) }),
@@ -68,6 +76,21 @@ test("invite sends are idempotent until explicit renewal, then cooldown and hour
   );
   assert.equal(canReserveReviewerInviteSend(19), true);
   assert.equal(canReserveReviewerInviteSend(20), false);
+});
+
+test("explicit retry of a pending or failed delivery preserves the still-valid invite version", () => {
+  const existing = {
+    tokenVersion: 4,
+    expiresAt,
+    acceptedVersion: null,
+    lastSentAt: new Date(now.getTime() - REVIEWER_INVITE_RESEND_COOLDOWN_MS),
+    sendWindowStart: reviewerInviteWindowStart(now),
+    sendWindowCount: 7,
+  };
+  assert.deepEqual(
+    planReviewerInviteSend(existing, { resend: true, now, windowStart: reviewerInviteWindowStart(now) }),
+    { kind: "retry", tokenVersion: 4, sendWindowCount: 8 },
+  );
 });
 
 test("an accepted evaluator is already active unless an explicit resend renews access", () => {

@@ -187,7 +187,7 @@ export const POST = handle(async (req) => {
     `;
     if (!canReserveReviewerInviteSend(Number(countRows[0]?.count ?? 0))) throw rateLimited();
 
-    const expiresAt = reviewerInviteExpiry(now);
+    const expiresAt = sendPlan.kind === "retry" ? existing!.expiresAt : reviewerInviteExpiry(now);
     const { tokenVersion, sendWindowCount } = sendPlan;
     const invite: InviteRow = existing
       ? await tx.reviewerInvite.update({

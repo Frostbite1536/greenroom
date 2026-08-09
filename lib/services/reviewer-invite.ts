@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { getServerSigningSecret } from "@/lib/server-signing";
 
@@ -37,6 +37,17 @@ function tokenSignature(message: string, secret: string): string {
   return createHmac("sha256", secret).update(message).digest("base64url");
 }
 
+/**
+ * A server-secret-derived 256-bit nonce keeps a pending invite reproducible
+ * from its persisted id/version/expiry without storing any bearer material.
+ * The nonce domain is intentionally distinct from the token signature domain.
+ */
+function tokenNonce(input: { inviteId: string; version: number; exp: number }, secret: string): string {
+  return createHmac("sha256", secret)
+    .update(`greenroom:reviewer-invite:nonce:v1:${input.inviteId}:${input.version}:${input.exp}`)
+    .digest("base64url");
+}
+
 function alignedExpiry(now: Date, ttlMs = REVIEWER_INVITE_TOKEN_TTL_MS): Date {
   return new Date((Math.floor(now.getTime() / 1000) + Math.floor(ttlMs / 1000)) * 1000);
 }
@@ -46,7 +57,7 @@ export function createReviewerInviteToken(
   secret: string,
 ): string {
   const exp = Math.floor(input.expiresAt.getTime() / 1000);
-  const nonce = input.nonce ?? randomBytes(32).toString("base64url");
+  const nonce = input.nonce ?? tokenNonce({ inviteId: input.inviteId, version: input.version, exp }, secret);
   if (!NONCE_RE.test(nonce) || !Number.isSafeInteger(input.version) || input.version < 1 || exp < 1) {
     throw new Error("Reviewer invite token input is invalid.");
   }
@@ -109,7 +120,9 @@ export function trustedReviewerInviteAppUrl(): string | null {
       if (parsed.protocol === "https:" || (process.env.NODE_ENV !== "production" && parsed.protocol === "http:")) {
         return parsed.origin;
       }
-    } catch {
+    } catch (error) {
+      // The exception name is safe diagnostic context; never log APP_URL itself.
+      console.warn("[reviewer-invite] invalid configured APP_URL", error instanceof Error ? error.name : "unknown");
       // A malformed setting is not a request-time authority fallback.
     }
   }
@@ -156,6 +169,7 @@ export type ReviewerInviteSendPlan =
   | { kind: "active" }
   | { kind: "pending" }
   | { kind: "cooldown" }
+  | { kind: "retry"; tokenVersion: number; sendWindowCount: number }
   | { kind: "send"; tokenVersion: number; sendWindowCount: number };
 
 /** Pure lifecycle choice shared by the route and idempotency/cooldown tests. */
@@ -164,7 +178,18 @@ export function planReviewerInviteSend(
   input: { resend: boolean; now: Date; windowStart: Date },
 ): ReviewerInviteSendPlan {
   if (existing && existing.acceptedVersion === existing.tokenVersion && !input.resend) return { kind: "active" };
-  if (existing && isReviewerInvitePending(existing, input.now) && !input.resend) return { kind: "pending" };
+  const sameWindow = existing?.sendWindowStart?.getTime() === input.windowStart.getTime();
+  const sendWindowCount = sameWindow ? (existing?.sendWindowCount ?? 0) + 1 : 1;
+  if (existing && isReviewerInvitePending(existing, input.now)) {
+    if (!input.resend) return { kind: "pending" };
+    if (
+      existing.lastSentAt &&
+      input.now.getTime() - existing.lastSentAt.getTime() < REVIEWER_INVITE_RESEND_COOLDOWN_MS
+    ) return { kind: "cooldown" };
+    // Delivery may have completed after the worker died but before state could
+    // be recorded. Reuse the still-valid bearer instead of revoking that link.
+    return { kind: "retry", tokenVersion: existing.tokenVersion, sendWindowCount };
+  }
   if (
     existing &&
     input.resend &&
@@ -174,9 +199,7 @@ export function planReviewerInviteSend(
   return {
     kind: "send",
     tokenVersion: (existing?.tokenVersion ?? 0) + 1,
-    sendWindowCount: existing?.sendWindowStart?.getTime() === input.windowStart.getTime()
-      ? existing.sendWindowCount + 1
-      : 1,
+    sendWindowCount,
   };
 }
 
