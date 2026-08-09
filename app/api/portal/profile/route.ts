@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
@@ -31,7 +32,13 @@ export async function PATCH(request: Request) {
 
   const user = await resolveSessionUser(session);
   if (!user) return fail("UNAUTHORIZED", "Sign in to update your speaker profile.", 401);
-  const data = parsed.data;
+  // `undefined` remains omitted for a true PATCH. A supplied empty value has
+  // already been normalized by the schema to `null`; Prisma needs its explicit
+  // database-null sentinel for the optional JSON column.
+  const { socialLinks, ...textFields } = parsed.data;
+  const data = socialLinks === undefined
+    ? textFields
+    : { ...textFields, socialLinks: socialLinks === null ? Prisma.DbNull : socialLinks };
 
   const profile = await prisma.speakerProfile.upsert({
     where: { userId: user.id },

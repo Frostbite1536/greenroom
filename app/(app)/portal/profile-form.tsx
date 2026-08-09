@@ -2,15 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { profileFormValues, profilePatch, type PortalProfile } from "@/lib/portal/profile";
 import styles from "./portal.module.css";
 
-export type PortalProfile = {
-  bio: string;
-  company: string;
-  jobTitle: string;
-  headshotUrl: string;
-  slideDeckUrl: string;
-};
+export type { PortalProfile } from "@/lib/portal/profile";
 
 const MAX_BIO = 3000;
 
@@ -33,13 +28,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
     setError(null);
     setSaved(false);
 
-    // Only send non-empty values: the shared contract validates urls strictly,
-    // and an empty string is not a valid url.
-    const payload: Record<string, string> = {};
-    for (const [key, value] of Object.entries(form)) {
-      const trimmed = value.trim();
-      if (trimmed) payload[key] = trimmed;
-    }
+    const payload = profilePatch(profile, form);
 
     try {
       const res = await fetch("/api/portal/profile", {
@@ -53,6 +42,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
         const first = fieldErrors ? Object.entries(fieldErrors)[0] : undefined;
         setError(first ? `${first[0]}: ${first[1][0]}` : (body?.error?.message ?? "Could not save your profile."));
       } else {
+        setForm(profileFormValues(body.data));
         setSaved(true);
         startTransition(() => router.refresh());
       }
@@ -63,8 +53,11 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
     }
   }
 
+  const dirty = Object.keys(profilePatch(profile, form)).length > 0;
+
   return (
     <form onSubmit={onSubmit}>
+      <p className={styles.taskMeta}>Clear a field, then save, to remove its value. Unchanged fields are preserved.</p>
       <label className={styles.field}>
         <span>Job title</span>
         <input value={form.jobTitle} onChange={(e) => update("jobTitle", e.target.value)} maxLength={160} />
@@ -105,7 +98,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
       </label>
 
       <div className={styles.formActions}>
-        <button className="primary-button" type="submit" disabled={saving}>
+        <button className="primary-button" type="submit" disabled={saving || !dirty}>
           {saving ? "Saving…" : "Save profile"}
         </button>
         {saved ? <span className={styles.saveNote} role="status">Saved</span> : null}
