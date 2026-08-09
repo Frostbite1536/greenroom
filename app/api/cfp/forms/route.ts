@@ -5,10 +5,12 @@ import { requireContext, assertEventScope } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeForm } from "@/lib/api/form-serialize";
 import {
+  answerOptionValues,
   describeDestructiveChange,
   findDestructiveFieldChanges,
   findDuplicateFieldKeys,
   findUsedRemovedOptions,
+  hasAnswerValue,
 } from "@/lib/services/form-config";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { lockFormFieldsForShapeWrite } from "@/lib/services/form-field-lock";
@@ -217,8 +219,6 @@ async function assertAnswersNotDestroyed(
   const answerCountByFieldId = new Map(
     counts.map((row) => [row.formFieldId, row._count._all]),
   );
-  if (answerCountByFieldId.size === 0) return;
-
   const removedByFieldId = new Map<string, ReadonlySet<string>>();
   for (const change of changes) {
     if (change.kind !== "optionsRemoved") continue;
@@ -242,26 +242,88 @@ async function assertAnswersNotDestroyed(
     ANSWER_SCAN_PAGE_SIZE,
   );
 
+  // O3 task-form answers live in SpeakerTask.responses JSON rather than the
+  // FormAnswer table. Scan every assignment linked to this form while the
+  // field-shape lock is held; O3 answer writers take a conflicting key-share
+  // lock, so this evidence cannot race with a response save.
+  const affectedKeys = new Set(changes.map((change) => change.key));
+  const removedByKey = new Map<string, Set<string>>();
+  for (const change of changes) {
+    if (change.kind === "optionsRemoved") removedByKey.set(change.key, new Set(change.removed));
+  }
+  const taskAnswerCountByKey = new Map<string, number>();
+  const taskUsedRemovedByKey = new Map<string, Set<string>>();
+  let afterTask: { taskId: string; userId: string } | null = null;
+
+  while (true) {
+    const page: Array<{ taskId: string; userId: string; responses: unknown }> = await tx.speakerTask.findMany({
+      where: { task: { formConfigId } },
+      orderBy: [{ taskId: "asc" }, { userId: "asc" }],
+      ...(afterTask
+        ? { cursor: { taskId_userId: afterTask }, skip: 1 }
+        : {}),
+      take: ANSWER_SCAN_PAGE_SIZE,
+      select: { taskId: true, userId: true, responses: true },
+    });
+
+    for (const assignment of page) {
+      if (!assignment.responses || typeof assignment.responses !== "object" || Array.isArray(assignment.responses)) continue;
+      for (const [key, value] of Object.entries(assignment.responses)) {
+        if (!affectedKeys.has(key) || !hasAnswerValue(value)) continue;
+        taskAnswerCountByKey.set(key, (taskAnswerCountByKey.get(key) ?? 0) + 1);
+        const candidates = removedByKey.get(key);
+        if (!candidates) continue;
+        const used = taskUsedRemovedByKey.get(key) ?? new Set<string>();
+        for (const option of answerOptionValues(value)) {
+          if (candidates.has(option)) used.add(option);
+        }
+        if (used.size > 0) taskUsedRemovedByKey.set(key, used);
+      }
+    }
+
+    if (page.length < ANSWER_SCAN_PAGE_SIZE) break;
+    const last: { taskId: string; userId: string; responses: unknown } | undefined = page[page.length - 1];
+    const next: { taskId: string; userId: string } | null = last
+      ? { taskId: last.taskId, userId: last.userId }
+      : null;
+    if (!next || (afterTask && next.taskId === afterTask.taskId && next.userId === afterTask.userId)) {
+      throw new Error("Task-answer scan cursor did not advance.");
+    }
+    afterTask = next;
+  }
+
   const fieldErrors: Record<string, string[]> = {};
   for (const change of changes) {
     const field = affected.get(change.key);
     if (!field) continue;
-    const answerCount = answerCountByFieldId.get(field.id) ?? 0;
+    const taskAnswerCount = taskAnswerCountByKey.get(change.key) ?? 0;
+    const answerCount = (answerCountByFieldId.get(field.id) ?? 0) + taskAnswerCount;
     if (answerCount === 0) continue;
 
     if (change.kind === "optionsRemoved") {
       // Only refuse when a removed option was actually chosen by someone.
       const used = usedRemoved.get(field.id) ?? new Set<string>();
-      const stillUsed = change.removed.filter((value) => used.has(value));
+      const taskUsed = taskUsedRemovedByKey.get(change.key) ?? new Set<string>();
+      const stillUsed = change.removed.filter((value) => used.has(value) || taskUsed.has(value));
       if (stillUsed.length === 0) continue;
       (fieldErrors[change.key] ??= []).push(
-        describeDestructiveChange({ ...change, removed: stillUsed }, field.label, answerCount),
+        describeDestructiveChange(
+          { ...change, removed: stillUsed },
+          field.label,
+          answerCount,
+          taskAnswerCount > 0 ? "saved response" : "submission",
+        ),
       );
       continue;
     }
 
     (fieldErrors[change.key] ??= []).push(
-      describeDestructiveChange(change, field.label, answerCount),
+      describeDestructiveChange(
+        change,
+        field.label,
+        answerCount,
+        taskAnswerCount > 0 ? "saved response" : "submission",
+      ),
     );
   }
 

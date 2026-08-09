@@ -272,6 +272,70 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   });
   const fieldByKey = Object.fromEntries(cfp.fields.map((f) => [f.key, f]));
 
+  // Task forms the director named as must-haves. They are ordinary FormConfigs
+  // so they render, validate and store through exactly the same machinery as
+  // the CFP form; `published: false` keeps them off the public /cfp routes
+  // while remaining fully usable inside a task.
+  const hotelForm = await db.formConfig.create({
+    data: {
+      eventId,
+      name: "Hotel stay",
+      slug: "hotel-stay",
+      welcomeText: "We hold a block of speaker rooms — tell us what you need.",
+      thankYouText: "Thanks — the travel team will confirm your booking by email.",
+      minSpeakers: 1,
+      maxSpeakers: 1,
+      maxBioLength: 1000,
+      published: false,
+      fields: {
+        create: [
+          { key: "needs_hotel", label: "Do you need a hotel room?", type: "SELECT", required: true, sortOrder: 0,
+            helpText: "We cover two nights for speakers travelling from outside the Bay Area.",
+            options: [{ label: "Yes, please book a room", value: "yes" }, { label: "No, I'll arrange my own", value: "no" }] },
+          { key: "check_in", label: "Check-in date", type: "SHORT_TEXT", required: true, sortOrder: 1,
+            helpText: "For example: 11 May 2026.",
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] } },
+          { key: "check_out", label: "Check-out date", type: "SHORT_TEXT", required: true, sortOrder: 2,
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] } },
+          { key: "room_preference", label: "Room preference", type: "SELECT", required: false, sortOrder: 3,
+            options: [{ label: "No preference", value: "any" }, { label: "Quiet floor", value: "quiet" }, { label: "Accessible room", value: "accessible" }],
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] } },
+          { key: "hotel_notes", label: "Anything else we should know?", type: "LONG_TEXT", required: false, sortOrder: 4 },
+        ],
+      },
+    },
+  });
+
+  const flightForm = await db.formConfig.create({
+    data: {
+      eventId,
+      name: "Flight reimbursement",
+      slug: "flight-reimbursement",
+      welcomeText: "Send us your travel costs and we'll reimburse them after the event.",
+      thankYouText: "Got it — finance will process this within 30 days of the event.",
+      minSpeakers: 1,
+      maxSpeakers: 1,
+      maxBioLength: 1000,
+      published: false,
+      fields: {
+        create: [
+          { key: "claiming_travel", label: "Are you claiming travel costs?", type: "SELECT", required: true, sortOrder: 0,
+            options: [{ label: "Yes", value: "yes" }, { label: "No, my employer covers it", value: "no" }] },
+          { key: "departure_city", label: "Departure city", type: "SHORT_TEXT", required: true, sortOrder: 1,
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
+          { key: "amount", label: "Total amount (USD)", type: "NUMBER", required: true, sortOrder: 2,
+            helpText: "Economy fares up to $800 are reimbursed in full.",
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
+          { key: "receipt_url", label: "Link to your receipt", type: "URL", required: true, sortOrder: 3,
+            helpText: "A shared link to a PDF or photo is fine.",
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
+          { key: "payee_email", label: "Where should we send confirmation?", type: "SHORT_TEXT", required: true, sortOrder: 4,
+            conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
+        ],
+      },
+    },
+  });
+
   const avForm = await db.formConfig.create({
     data: {
       eventId,
@@ -442,38 +506,61 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
     });
   }
 
-  // --- 12. Onboarding tasks (incl. a form-in-task) + per-speaker status ------
+  // --- 12. Onboarding tasks (incl. form-in-task) + per-speaker status --------
+  // Hotel stay and flight reimbursement are the director's named must-have
+  // examples (requirements delta #2, answer 5): both are FORMS a speaker fills
+  // in, not checkboxes, because the programme team needs the answers.
   const taskDefs = [
-    { title: "Complete your speaker profile", required: true, formConfigId: null as string | null },
-    { title: "Upload a headshot", required: true, formConfigId: null },
-    { title: "Submit A/V & logistics form", required: true, formConfigId: avForm.id },
-    { title: "Confirm session details", required: true, formConfigId: null },
-    { title: "Upload your slide deck", required: false, formConfigId: null },
+    { title: "Complete your speaker profile", required: true, formConfigId: null as string | null, dueDate: "2026-04-17",
+      description: "Add your bio, company and headshot so we can publish your session." },
+    { title: "Tell us about your hotel stay", required: true, formConfigId: hotelForm.id, dueDate: "2026-04-24",
+      description: "We book speaker rooms as a block — tell us which nights you need." },
+    { title: "Claim your flight reimbursement", required: true, formConfigId: flightForm.id, dueDate: "2026-05-01",
+      description: "Send us your travel costs and where to pay them." },
+    { title: "Submit A/V & logistics form", required: true, formConfigId: avForm.id, dueDate: "2026-05-04",
+      description: "Shirt size, A/V needs and arrival details for the stage crew." },
+    { title: "Confirm your session details", required: true, formConfigId: null, dueDate: "2026-05-06",
+      description: "Review the public schedule and tell the programme team about any corrections." },
+    { title: "Upload your slide deck", required: false, formConfigId: null, dueDate: "2026-05-11",
+      description: "Optional, but it helps the crew test your slides in advance." },
   ];
   const tasks = [];
   for (const [i, t] of taskDefs.entries()) {
     const row = await db.onboardingTask.create({
       data: { eventId, title: t.title, required: t.required, formConfigId: t.formConfigId, sortOrder: i,
-        dueAt: new Date("2026-04-15T00:00:00.000Z"),
-        description: t.formConfigId ? "Fill out the linked form to complete this task." : undefined },
+        dueAt: new Date(zonedToUtcIso(t.dueDate, "23:59", DEMO_EVENT.timezone)),
+        description: t.description },
     });
     tasks.push(row);
   }
 
   // Assign tasks to every confirmed session speaker.
   const sessionSpeakerIds = Array.from(new Set(sessions.map((s) => s.primarySpeakerId)));
-  const taskStatuses = ["COMPLETED", "COMPLETED", "IN_PROGRESS", "TODO", "TODO"] as const;
+  const taskStatuses = ["COMPLETED", "COMPLETED", "IN_PROGRESS", "TODO", "TODO", "TODO"] as const;
+
+  // Answers must match each form's own field keys, otherwise a "completed"
+  // task would render an empty form when a judge opens it.
+  const seededResponses: Record<string, Record<string, unknown>> = {
+    [avForm.id]: { shirt_size: "m", av_needs: "Wireless lav mic", arrival_date: "2026-05-11" },
+    [hotelForm.id]: { needs_hotel: "yes", check_in: "11 May 2026", check_out: "13 May 2026", room_preference: "quiet", hotel_notes: "" },
+    [flightForm.id]: { claiming_travel: "yes", departure_city: "Lisbon", amount: 720, receipt_url: "https://example.com/receipt.pdf", payee_email: "sofia@greenroom.demo" },
+  };
+
   for (const userId of sessionSpeakerIds) {
     for (const [i, task] of tasks.entries()) {
-      // Sofia (speakerPrimaryId) gets exactly 3/5 complete to match the portal summary.
+      // Sofia (speakerPrimaryId) is the demo speaker: profile, hotel form and
+      // A/V form done, flight reimbursement still owed — so the portal shows a
+      // completed task form to review AND an outstanding one to fill in.
       const status = userId === speakerPrimaryId
-        ? (i < 3 ? "COMPLETED" : "TODO")
+        ? (i === 0 || i === 1 || i === 3 ? "COMPLETED" : "TODO")
         : taskStatuses[(i + sessionSpeakerIds.indexOf(userId)) % taskStatuses.length];
       await db.speakerTask.create({
         data: {
           taskId: task.id, userId, status,
           completedAt: status === "COMPLETED" ? new Date("2026-04-01T00:00:00.000Z") : null,
-          responses: task.formConfigId && status === "COMPLETED" ? { shirt_size: "m", av_needs: "Wireless lav mic", arrival_date: "2026-05-11" } : undefined,
+          responses: task.formConfigId && status === "COMPLETED"
+            ? (seededResponses[task.formConfigId] as never)
+            : undefined,
         },
       });
     }
@@ -519,7 +606,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
     categories: CATEGORIES.length,
     tracks: TRACKS.length,
     rooms: ROOMS.length,
-    forms: 2,
+    forms: 4,
     abstracts: abstractCount,
     sessions: sessionCount,
     scheduleSlots: slotCount,

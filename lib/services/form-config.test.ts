@@ -6,6 +6,7 @@ import {
   findDestructiveFieldChanges,
   findDuplicateFieldKeys,
   findUsedRemovedOptions,
+  hasAnswerValue,
 } from "@/lib/services/form-config";
 
 test("findDuplicateFieldKeys returns nothing for distinct keys", () => {
@@ -88,6 +89,11 @@ test("answerOptionValues reads single and multi answers, ignoring other shapes",
   assert.deepEqual(answerOptionValues(null), []);
   assert.deepEqual(answerOptionValues(42), []);
   assert.deepEqual(answerOptionValues(["ai", 7]), ["ai"]);
+});
+
+test("task answer protection distinguishes cleared values from real answers", () => {
+  for (const value of ["yes", ["ai"], 0, 42, false, true]) assert.equal(hasAnswerValue(value), true);
+  for (const value of ["", [], null, undefined, {}]) assert.equal(hasAnswerValue(value), false);
 });
 
 test("removed-option evidence is exhaustive beyond the former 2,000-answer boundary", async () => {

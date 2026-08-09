@@ -214,7 +214,9 @@ export const speakerProfileUpdateSchema = z.object({
 
 export const speakerTaskUpdateSchema = z.object({
   taskId: idSchema,
-  status: z.enum(["TODO", "IN_PROGRESS", "COMPLETED", "WAIVED"]),
+  // Waivers are an organiser decision. A speaker may work on or complete an
+  // assignment, but cannot mark their own required task as waived.
+  status: z.enum(["TODO", "IN_PROGRESS", "COMPLETED"]),
   artifactUrl: z.string().url().optional(),
   notes: z.string().max(1000).optional(),
 });
