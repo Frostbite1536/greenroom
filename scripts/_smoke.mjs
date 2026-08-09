@@ -921,6 +921,42 @@ try {
   check("O3 completed task form becomes reviewable from the portal",
     taskPortal.status === 200 && String(taskPortal.data).includes("Review your answers"), taskPortal.status);
 
+  // C13: a profile PATCH is a true delta. Omitted values survive, while an
+  // explicit null (or whitespace from a non-UI caller) clears only that field.
+  const c13SeedProfile = await j("PATCH", "/api/portal/profile", {
+    bio: "Scratch speaker bio",
+    company: "Scratch Labs",
+    jobTitle: "Staff Engineer",
+    headshotUrl: "https://images.example.test/scratch.png",
+    slideDeckUrl: "https://slides.example.test/scratch.pdf",
+  }, speaker);
+  const c13PartialProfile = await j("PATCH", "/api/portal/profile", {
+    jobTitle: "Principal Engineer",
+  }, speaker);
+  const c13ClearProfile = await j("PATCH", "/api/portal/profile", {
+    company: null,
+    headshotUrl: "   ",
+    slideDeckUrl: null,
+    socialLinks: {},
+  }, speaker);
+  const c13StoredProfile = await prisma.speakerProfile.findUnique({
+    where: { userId: taskSpeaker.id },
+    select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true, socialLinks: true },
+  });
+  check(
+    "C13 profile PATCH preserves omissions and persists explicit clears as null",
+    c13SeedProfile.status === 200 &&
+      c13PartialProfile.status === 200 && c13PartialProfile.data?.data?.company === "Scratch Labs" &&
+      c13ClearProfile.status === 200 &&
+      c13StoredProfile?.bio === "Scratch speaker bio" &&
+      c13StoredProfile?.jobTitle === "Principal Engineer" &&
+      c13StoredProfile?.company === null &&
+      c13StoredProfile?.headshotUrl === null &&
+      c13StoredProfile?.slideDeckUrl === null &&
+      c13StoredProfile?.socialLinks === null,
+    c13ClearProfile.status,
+  );
+
   // 12. Agenda: rooms come from the builder read
   const agenda = await j("GET", "/api/agenda", null, admin);
   check("agenda read exposes rooms + backlog", agenda.status === 200 && agenda.data?.data?.rooms?.length > 0, agenda.data?.data?.rooms?.length);
