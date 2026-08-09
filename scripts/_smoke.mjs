@@ -383,7 +383,84 @@ try {
   const rateBucketsAfterCleanup = await prisma.$queryRaw`
     SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
   `;
-  check("S20 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
+  check("S19 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
+
+  // S20: the event-wide bucket applies to every public intent. Establish the
+  // durable count with distinct, smoke-isolated IPs, then set only the scratch
+  // bucket to its documented limit so a final HTTP attempt proves the 429
+  // boundary without sending 121 real requests.
+  const s20EventRateCoreBefore = await publicCoreCounts();
+  const s20EventRateAttempts = [];
+  for (let index = 0; index < 3; index++) {
+    s20EventRateAttempts.push(await j("POST", "/api/cfp/submissions", {
+      formConfigId: s19ClosedForm.id, title: `S20 rotating-IP draft ${index}`,
+      speakers: [{ email: `s20-event-rate-${index}@scratch.test`, name: "Rate", isPrimary: true }],
+      answers: {}, intent: "saveDraft",
+    }));
+  }
+  const s20EventBucket = await prisma.$queryRaw`
+    SELECT "id", "count"::int AS "count"
+    FROM "PublicSubmissionRateBucket"
+    WHERE "eventId" = ${SCRATCH_EVENT.id} AND "scope" = 'public_write_event_1h'
+  `;
+  const s20IpBuckets = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS "count"
+    FROM "PublicSubmissionRateBucket"
+    WHERE "eventId" = ${SCRATCH_EVENT.id} AND "scope" = 'public_write_ip_10m'
+  `;
+  if (s20EventBucket[0]) {
+    await prisma.$executeRaw`
+      UPDATE "PublicSubmissionRateBucket"
+      SET "count" = 120, "updatedAt" = ${new Date()}
+      WHERE "id" = ${s20EventBucket[0].id}
+    `;
+  }
+  const s20EventLimited = await j("POST", "/api/cfp/submissions", {
+    formConfigId: s19ClosedForm.id, title: "S20 event ceiling",
+    speakers: [{ email: "s20-event-rate-limited@scratch.test", name: "Rate", isPrimary: true }],
+    answers: {}, intent: "saveDraft",
+  });
+  const s20EventRateCoreAfter = await publicCoreCounts();
+  check(
+    "S20 rotating-IP invalid drafts durably reach the all-intent event ceiling without core writes",
+    s20EventRateAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FORM_CLOSED") &&
+      s20EventBucket[0]?.count === 3 && s20IpBuckets[0]?.count === 3 &&
+      s20EventLimited.status === 429 && s20EventLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      JSON.stringify(s20EventRateCoreAfter) === JSON.stringify(s20EventRateCoreBefore),
+    `${s20EventRateAttempts.map((attempt) => attempt.status).join(",")}/${s20EventBucket[0]?.count}/${s20IpBuckets[0]?.count}/${s20EventLimited.status}`,
+  );
+  await prisma.$executeRaw`
+    DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  const s20RateBucketsAfterCleanup = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  check("S20 scratch event-rate buckets are explicitly cleaned after the isolated ceiling assertion", s20RateBucketsAfterCleanup[0]?.count === 0, s20RateBucketsAfterCleanup[0]?.count);
+
+  // S20: seed only scratch drafts to exercise the exact filtered envelope.
+  // The historical dates also prove NULL submittedAt drafts sort after real
+  // submissions; they cannot crowd the newest submitted page.
+  const s20ListSubmitter = await prisma.user.findUniqueOrThrow({
+    where: { email: admin.user.email }, select: { id: true },
+  });
+  await prisma.abstract.createMany({
+    data: Array.from({ length: 101 }, (_, index) => ({
+      eventId: SCRATCH_EVENT.id,
+      formConfigId: formId,
+      submitterId: s20ListSubmitter.id,
+      title: `S20 bounded draft ${String(index).padStart(3, "0")}`,
+      status: "DRAFT",
+      createdAt: new Date("2000-01-01T00:00:00.000Z"),
+    })),
+  });
+  const s20BoundedList = await j("GET", `/api/cfp/submissions?status=DRAFT&formConfigId=${formId}`, null, admin);
+  check(
+    "S20 filtered abstract GET returns a capped, honest envelope",
+    s20BoundedList.status === 200 && s20BoundedList.data?.data?.abstracts?.length === 100 &&
+      s20BoundedList.data?.data?.total === 101 && s20BoundedList.data?.data?.hasMore === true &&
+      s20BoundedList.data?.data?.abstracts?.every((item) => item.title.startsWith("S20 bounded draft ")),
+    `${s20BoundedList.status}/${s20BoundedList.data?.data?.abstracts?.length}/${s20BoundedList.data?.data?.total}/${s20BoundedList.data?.data?.hasMore}`,
+  );
 
   // M5: active-event settings are admin-only and use event-local calendar
   // dates, never the browser's timezone. Rooms are scoped server-side too.
@@ -700,7 +777,7 @@ try {
 
   // 5. Admin lists abstracts
   const list = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, admin);
-  check("admin lists submitted abstracts", list.status === 200 && list.data?.data?.some(a => a.id === abstractId));
+  check("admin lists submitted abstracts", list.status === 200 && list.data?.data?.abstracts?.some((item) => item.id === abstractId));
 
   // 6. Create evaluation plan
   const plan = await j("POST", "/api/evaluations/plans", {
@@ -1032,7 +1109,7 @@ try {
   });
 
   const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
-  const reviewedAbstract = reviewedList.data?.data?.find((item) => item.id === abstractId);
+  const reviewedAbstract = reviewedList.data?.data?.abstracts?.find((item) => item.id === abstractId);
   check(
     "abstract list includes completed review progress and average score",
     reviewedList.status === 200 &&

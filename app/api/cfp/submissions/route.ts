@@ -2,7 +2,13 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { abstractStatusSchema, publicAbstractUpsertSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
-import { ApiError, fail, fromZod, handle, ok } from "@/lib/api/http";
+import { ApiError, fromZod, handle, ok } from "@/lib/api/http";
+import {
+  ADMIN_ABSTRACT_LIST_TAKE,
+  adminAbstractListOrderBy,
+  adminAbstractListWhere,
+  toAdminAbstractListEnvelope,
+} from "@/lib/api/admin-abstract-list";
 import { parseBoundedJson } from "@/lib/api/bounded-json";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
 import { notifyAbstractSubmitted } from "@/lib/comms/notify-service";
@@ -21,9 +27,10 @@ import { enforcePublicSubmissionRateLimit, publicClientIp } from "@/lib/services
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/cfp/submissions — list abstracts for the caller's event (admin).
- * Supports `?status=` (comma-separated) and `?formConfigId=` filters. Powers
- * the abstracts pipeline table and evaluation assignment picker.
+ * GET /api/cfp/submissions — bounded list for the caller's event (admin or
+ * evaluator). Supports `?status=` (comma-separated) and `?formConfigId=`.
+ * The explicit envelope prevents a large event from silently exhausting an
+ * operator read while preserving an honest filtered total for the UI.
  */
 export const GET = handle(async (req) => {
   const ctx = await requireContext(["ADMIN", "EVALUATOR"]);
@@ -39,24 +46,25 @@ export const GET = handle(async (req) => {
         .map((s) => abstractStatusSchema.parse(s))
     : undefined;
 
-  const abstracts = await prisma.abstract.findMany({
-    where: {
-      eventId: ctx.eventId,
-      ...(statuses ? { status: { in: statuses } } : {}),
-      ...(formConfigId ? { formConfigId } : {}),
-    },
-    include: {
-      category: true,
-      speakers: { include: { user: true } },
-      answers: true,
-      // Prisma fetches these relation sets for the whole result, rather than
-      // issuing a query per serialized abstract.
-      reviewAssignments: { select: { status: true } },
-      reviewScores: { select: { score: true } },
-    },
-    orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
-  });
-  return ok(abstracts.map(serializeAbstract));
+  const where = adminAbstractListWhere({ eventId: ctx.eventId, statuses, formConfigId });
+  const [abstracts, total] = await prisma.$transaction([
+    prisma.abstract.findMany({
+      where,
+      // Every included relation is bounded by this cap-plus-one parent query;
+      // no unbounded event-wide relation fetch is possible through this route.
+      take: ADMIN_ABSTRACT_LIST_TAKE,
+      include: {
+        category: true,
+        speakers: { include: { user: true } },
+        answers: true,
+        reviewAssignments: { select: { status: true } },
+        reviewScores: { select: { score: true } },
+      },
+      orderBy: adminAbstractListOrderBy,
+    }),
+    prisma.abstract.count({ where }),
+  ]);
+  return ok(toAdminAbstractListEnvelope(abstracts.map(serializeAbstract), total));
 });
 
 /**
