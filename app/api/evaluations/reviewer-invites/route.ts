@@ -14,6 +14,7 @@ import {
   lockReviewerInviteEventHour,
   planReviewerInviteSend,
   reviewerInviteExpiry,
+  reviewerInviteResendAvailableAt,
   reviewerInviteUrl,
   reviewerInviteSigningSecret,
   reviewerInviteWindowStart,
@@ -73,6 +74,7 @@ function inviteView(invite: InviteRow | null, state: "pending" | "invited" | "ac
     state,
     access: "active" as const,
     expiresAt: invite?.expiresAt ?? null,
+    resendAvailableAt: reviewerInviteResendAvailableAt(invite?.lastSentAt ?? null),
     delivery: delivery ?? (invite ? invite.lastDeliveryState.toLowerCase() : "not_sent"),
   };
 }

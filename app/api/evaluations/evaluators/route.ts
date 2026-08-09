@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { handle, ok } from "@/lib/api/http";
 import { OPERATOR_QUERY_LIMITS, assertEventQueryBound } from "@/lib/api/query-limits";
-import { isReviewerInvitePending } from "@/lib/services/reviewer-invite";
+import { isReviewerInvitePending, reviewerInviteResendAvailableAt } from "@/lib/services/reviewer-invite";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +60,7 @@ export const GET = handle(async () => {
               state: isReviewerInvitePending(invite) ? "pending" : invite.acceptedVersion === invite.tokenVersion ? "accepted" : "expired",
               expiresAt: invite.expiresAt,
               lastSentAt: invite.lastSentAt,
+              resendAvailableAt: reviewerInviteResendAvailableAt(invite.lastSentAt),
               delivery: invite.lastDeliveryState.toLowerCase(),
             }
           : null,

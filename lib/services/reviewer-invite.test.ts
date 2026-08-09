@@ -7,6 +7,7 @@ import {
   isReviewerInvitePending,
   planReviewerInviteSend,
   reviewerInviteEventHourLockKey,
+  reviewerInviteResendAvailableAt,
   trustedReviewerInviteAppUrl,
   reviewerInviteWindowStart,
   verifyReviewerInviteToken,
@@ -32,6 +33,14 @@ test("invite delivery state distinguishes a pending token from consumed or expir
   assert.equal(isReviewerInvitePending({ expiresAt, acceptedVersion: 1, tokenVersion: 1 }, now), false);
   assert.equal(isReviewerInvitePending({ expiresAt: now, acceptedVersion: null, tokenVersion: 1 }, now), false);
   assert.equal(REVIEWER_INVITE_RESEND_COOLDOWN_MS, 600_000);
+});
+
+test("resend availability is an absolute timestamp while the server remains authoritative", () => {
+  assert.equal(reviewerInviteResendAvailableAt(null), null);
+  assert.deepEqual(
+    reviewerInviteResendAvailableAt(now),
+    new Date(now.getTime() + REVIEWER_INVITE_RESEND_COOLDOWN_MS),
+  );
 });
 
 test("invite sends are idempotent until explicit renewal, then cooldown and hour counters apply", () => {

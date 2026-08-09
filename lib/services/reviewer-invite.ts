@@ -128,6 +128,13 @@ export function reviewerInviteExpiry(now = new Date()): Date {
   return alignedExpiry(now);
 }
 
+/** Informational only; the invite route remains authoritative via its 429 gate. */
+export function reviewerInviteResendAvailableAt(lastSentAt: Date | null): Date | null {
+  return lastSentAt
+    ? new Date(lastSentAt.getTime() + REVIEWER_INVITE_RESEND_COOLDOWN_MS)
+    : null;
+}
+
 export function isReviewerInvitePending(input: {
   expiresAt: Date;
   acceptedVersion: number | null;

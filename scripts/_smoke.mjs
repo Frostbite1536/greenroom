@@ -1290,7 +1290,7 @@ try {
   }, admin);
   const c17User = await prisma.user.findUnique({ where: { email: c17Email }, select: { id: true, name: true } });
   const c17InviteRows = await prisma.$queryRaw`
-    SELECT "id", "tokenVersion", "expiresAt", "acceptedVersion", "sendWindowCount", "lastDeliveryState"
+    SELECT "id", "tokenVersion", "expiresAt", "acceptedVersion", "lastSentAt", "sendWindowCount", "lastDeliveryState"
     FROM "ReviewerInvite" WHERE "eventId" = ${SCRATCH_EVENT.id} AND "userId" = ${c17User?.id ?? "missing"}
   `;
   const c17StoredInvite = c17InviteRows[0];
@@ -1299,6 +1299,8 @@ try {
     "C17 first invite creates only EVALUATOR access and returns bounded mock delivery without a bearer",
     c17Invite.status === 200 && c17Invite.data?.data?.state === "invited" &&
       c17Invite.data?.data?.delivery === "mocked" && c17Invite.data?.data?.access === "active" &&
+      !!c17StoredInvite?.lastSentAt &&
+      c17Invite.data?.data?.resendAvailableAt === new Date(c17StoredInvite.lastSentAt.getTime() + 600_000).toISOString() &&
       !Object.hasOwn(c17Invite.data?.data ?? {}, "token") && !!c17User && c17User.name === "Fresh Reviewer" &&
       c17StoredInvite?.tokenVersion === 1 && c17StoredInvite?.sendWindowCount === 1 &&
       c17StoredInvite?.lastDeliveryState === "MOCKED" &&
@@ -1315,6 +1317,7 @@ try {
   check(
     "C17 valid pending invites are idempotent and preserve the existing global User name",
     c17NoResend.status === 200 && c17NoResend.data?.data?.state === "pending" &&
+      c17NoResend.data?.data?.resendAvailableAt === c17Invite.data?.data?.resendAvailableAt &&
       (await prisma.user.findUnique({ where: { email: c17Email }, select: { name: true } }))?.name === "Fresh Reviewer" &&
       await prisma.emailDispatch.count({ where: { recipient: c17Email } }) === c17DispatchCountBeforeIdempotent &&
       c17AfterNoResend[0]?.tokenVersion === 1 && c17AfterNoResend[0]?.sendWindowCount === 1,

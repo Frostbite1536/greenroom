@@ -30,6 +30,7 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.match(route, /sendWindowCount/);
   assert.match(route, /canReserveReviewerInviteSend/);
   assert.match(route, /sendPlan\.kind === "active"/);
+  assert.match(route, /reviewerInviteResendAvailableAt\(invite\?\.lastSentAt \?\? null\)/);
   assert.match(route, /tx\.reviewerInvite\.create\(/);
   assert.match(route, /tx\.reviewerInvite\.update\(/);
   assert.match(route, /prisma\.reviewerInvite\.updateMany\(/);
@@ -62,5 +63,6 @@ test("reviewer setup projection is bounded and does not include a bearer token",
   assert.match(route, /take: OPERATOR_QUERY_LIMITS\.reviewerSetupMembers \+ 1/);
   assert.match(route, /assertEventQueryBound\(members, OPERATOR_QUERY_LIMITS\.reviewerSetupMembers/);
   assert.match(route, /lastDeliveryState/);
+  assert.match(route, /resendAvailableAt: reviewerInviteResendAvailableAt\(invite\.lastSentAt\)/);
   assert.doesNotMatch(route, /draftCapability|inviteToken|token:\s/);
 });
