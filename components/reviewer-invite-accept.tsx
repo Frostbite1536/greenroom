@@ -35,7 +35,11 @@ function isExpectedReviewerRedirect(response: Response): boolean {
     return finalUrl.origin === window.location.origin
       && finalUrl.pathname === "/admin/evaluations"
       && finalUrl.search === "";
-  } catch {
+  } catch (error) {
+    console.error(
+      "Reviewer invite redirect validation failed",
+      error instanceof Error ? error.name : "unknown",
+    );
     return false;
   }
 }

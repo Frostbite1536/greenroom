@@ -79,7 +79,10 @@ async function postManual(path, body, sess) {
   });
   const text = await res.text();
   let data;
-  try { data = JSON.parse(text); } catch { data = text; }
+  try { data = JSON.parse(text); } catch (error) {
+    console.warn("[smoke] postManual JSON parse failed", error instanceof Error ? error.name : "unknown");
+    data = text;
+  }
   return { status: res.status, data, location: res.headers.get("location") ?? "", headers: res.headers };
 }
 

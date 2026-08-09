@@ -20,8 +20,19 @@ test("reviewer invite acceptance strips a sensitive fragment before body-only fe
 
 test("reviewer invite diagnostics have bounded labels and never interpolate bearer material", () => {
   const accept = source("components/reviewer-invite-accept.tsx");
+  const smoke = source("scripts/_frontend-smoke.mjs");
   assert.match(accept, /console\.error\("Reviewer invite history strip failed", error\);/);
   assert.match(accept, /console\.error\("Reviewer invite acceptance request failed", error\);/);
+  assert.match(
+    accept,
+    /console\.error\(\s*"Reviewer invite redirect validation failed",\s*error instanceof Error \? error\.name : "unknown",\s*\);/,
+  );
+  assert.match(
+    smoke,
+    /console\.warn\("\[smoke\] postManual JSON parse failed", error instanceof Error \? error\.name : "unknown"\);/,
+  );
+  assert.doesNotMatch(accept, /Reviewer invite redirect validation failed",\s*(?:response|finalUrl|token|body|error\.message)/);
+  assert.doesNotMatch(smoke, /postManual JSON parse failed",\s*(?:text|path|body|token|res|error\.message)/);
   assert.doesNotMatch(accept, /console\.error\([^;]*(?:token|window\.location|response\.url|body)/);
 });
 
