@@ -122,6 +122,13 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 /* A declined/withdrawn proposal whose talk is still on the public programme.
    #a3372a on white is 6.4:1, so the icon is not the only signal. */
 .programme-alert { color: #a3372a; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+
+/* ---- Submitted CFP answers (admin drawer) ---- */
+.answer-list { margin: 0; display: grid; gap: 10px; }
+.answer-item { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.answer-item:last-child { border-bottom: none; padding-bottom: 0; }
+.answer-item dt { font-size: 12px; font-weight: 600; color: var(--muted); }
+.answer-item dd { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cfp-actions { display: flex; gap: 10px; margin-top: 8px; }
 .speaker-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; margin-bottom: 10px; }
 .cfp-success { text-align: center; display: grid; gap: 10px; padding: 20px 0; }

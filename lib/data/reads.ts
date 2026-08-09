@@ -27,6 +27,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
+import { parseFieldOptions } from "@/lib/services/field-visibility";
 import {
   buildPublicSpeakers,
   PUBLIC_SPEAKER_LIMITS,
@@ -183,6 +184,54 @@ export async function getFormForBuilder(
 
 // ---- Abstracts pipeline ---------------------------------------------------
 
+export type AnswerRow = {
+  fieldId: string;
+  label: string;
+  type: FormFieldType;
+  options: FieldOption[] | null;
+  value: unknown;
+};
+
+/**
+ * One page read will materialize at most this many stored answers across the
+ * whole event. ~40 abstracts x 125 fields; real CFP forms carry well under 30
+ * questions, so this is a guard against a pathological event, not a normal cap.
+ */
+const ADMIN_ANSWER_LIMIT = 5_000;
+
+type StoredAnswerProjection = {
+  abstractId: string;
+  value: unknown;
+  formField: {
+    id: string;
+    label: string;
+    type: FormFieldType;
+    options: unknown;
+  };
+};
+
+/** Build an all-or-nothing event answer index so no proposal is silently partial. */
+export function indexAdminAnswers(
+  rows: readonly StoredAnswerProjection[],
+  limit = ADMIN_ANSWER_LIMIT,
+): { unavailable: boolean; byAbstract: Map<string, AnswerRow[]> } {
+  if (rows.length > limit) return { unavailable: true, byAbstract: new Map() };
+
+  const byAbstract = new Map<string, AnswerRow[]>();
+  for (const row of rows) {
+    const list = byAbstract.get(row.abstractId) ?? [];
+    list.push({
+      fieldId: row.formField.id,
+      label: row.formField.label,
+      type: row.formField.type,
+      options: parseFieldOptions(row.formField.options),
+      value: row.value,
+    });
+    byAbstract.set(row.abstractId, list);
+  }
+  return { unavailable: false, byAbstract };
+}
+
 export type AbstractRow = {
   id: string;
   title: string;
@@ -197,6 +246,16 @@ export type AbstractRow = {
   reviewsComplete: number;
   reviewsTotal: number;
   avgScore: number | null;
+  /** Custom CFP answers, in form order. Empty when the form had no extra questions. */
+  answers: AnswerRow[];
+  /** True when answers are intentionally withheld from evaluator-facing reads. */
+  answersHidden: boolean;
+  /**
+   * True when this event has more stored answers than one page read will
+   * materialize, so this row's answers were not loaded. Surfaced in the UI
+   * rather than silently showing an empty section.
+   */
+  answersUnavailable: boolean;
   hasSession: boolean;
   /** The confirmed talk created from this proposal, if conversion has happened. */
   sessionId: string | null;
@@ -224,7 +283,29 @@ export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup
 export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
 
-  const [abstracts, assignmentGroups, scoreRows] = await Promise.all([
+  // Custom answers can contain self-identifying free text. Until the C15 blind
+  // boundary can apply assignment-scoped field policy, only event admins may
+  // receive this payload. An empty result for an evaluator must not be confused
+  // with a proposal that genuinely has no saved answers.
+  const answerRowsPromise: Promise<StoredAnswerProjection[]> =
+    ctx.role === "ADMIN"
+      ? prisma.formAnswer.findMany({
+          where: { abstract: { eventId: ctx.eventId } },
+          orderBy: [
+            { abstractId: "asc" },
+            { formField: { sortOrder: "asc" } },
+            { formFieldId: "asc" },
+          ],
+          take: ADMIN_ANSWER_LIMIT + 1,
+          select: {
+            abstractId: true,
+            value: true,
+            formField: { select: { id: true, label: true, type: true, options: true } },
+          },
+        })
+      : Promise.resolve([]);
+
+  const [abstracts, assignmentGroups, scoreRows, answerRows] = await Promise.all([
     prisma.abstract.findMany({
       where: { eventId: ctx.eventId },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
@@ -258,10 +339,17 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
       where: { abstract: { eventId: ctx.eventId } },
       _avg: { score: true },
     }),
+    // One bounded admin-only read for the whole event beats a per-drawer query;
+    // deterministic ordering makes the all-or-nothing cutoff reproducible.
+    answerRowsPromise,
   ]);
 
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
+
+  // Over the bound: drop the overflow row and report honestly instead of
+  // rendering a silently-partial answer list.
+  const answerIndex = indexAdminAnswers(answerRows, ADMIN_ANSWER_LIMIT);
 
   return {
     eventId: ctx.eventId,
@@ -286,6 +374,9 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         reviewsComplete: reviewProgress.reviewsComplete,
         reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
+        answers: answerIndex.byAbstract.get(a.id) ?? [],
+        answersHidden: ctx.role !== "ADMIN",
+        answersUnavailable: answerIndex.unavailable,
         hasSession: a.session !== null,
         sessionId: a.session?.id ?? null,
         sessionScheduled: a.session?.scheduleSlot != null,
