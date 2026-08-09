@@ -1,6 +1,14 @@
 import type { Prisma } from "@prisma/client";
 
 export type FormFieldSnapshot = { id: string; updatedAt: Date };
+export type LockedFormField = FormFieldSnapshot & {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  options: unknown;
+  conditionalLogic: unknown;
+};
 
 /** Exact shape/version comparison used after an answer writer obtains locks. */
 export function formFieldSnapshotsMatch(
@@ -54,4 +62,21 @@ export async function lockFormFieldsForAnswerWrite(
     }
   }
   return true;
+}
+
+/**
+ * Public writes validate against the locked current field rows rather than a
+ * pre-transaction snapshot. Call only after the FormConfig parent lock.
+ */
+export async function lockCurrentFormFieldsForAnswerWrite(
+  tx: Prisma.TransactionClient,
+  formConfigId: string,
+): Promise<LockedFormField[]> {
+  return tx.$queryRaw<LockedFormField[]>`
+    SELECT "id", "updatedAt", "key", "label", "type", "required", "options", "conditionalLogic"
+    FROM "FormField"
+    WHERE "formConfigId" = ${formConfigId}
+    ORDER BY "id"
+    FOR KEY SHARE
+  `;
 }

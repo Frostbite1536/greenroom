@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
+import { normalizeEmailSubject } from "@/lib/comms/subject";
 
 /**
  * One audited path for every email Greenroom sends.
@@ -52,7 +53,7 @@ export function canDeliverEmail(config: { mocked: boolean; from?: string; apiKey
 }
 
 /** POST one message to Resend. Never throws — failures come back as an outcome. */
-export async function deliverEmail(message: EmailMessage, config: DeliveryConfig): Promise<DeliveryOutcome> {
+async function deliverNormalizedEmail(message: EmailMessage, config: DeliveryConfig): Promise<DeliveryOutcome> {
   if (!canDeliverEmail(config)) return { status: "mocked" };
   const fetcher = config.fetcher ?? fetch;
   try {
@@ -91,6 +92,11 @@ export async function deliverEmail(message: EmailMessage, config: DeliveryConfig
       error: (error instanceof Error ? error.message : "Email provider request failed.").slice(0, 500),
     };
   }
+}
+
+/** Direct callers retain the same safe provider boundary as dispatches. */
+export async function deliverEmail(message: EmailMessage, config: DeliveryConfig): Promise<DeliveryOutcome> {
+  return deliverNormalizedEmail({ ...message, subject: normalizeEmailSubject(message.subject) }, config);
 }
 
 export type DispatchInput = {
@@ -134,24 +140,25 @@ export async function dispatchEmail(
   db: Pick<PrismaClient, "emailDispatch">,
   input: DispatchInput,
 ): Promise<DeliveryOutcome & { dispatchId: string }> {
+  const normalizedInput = { ...input, message: { ...input.message, subject: normalizeEmailSubject(input.message.subject) } };
   const dispatch = await db.emailDispatch.create({
     data: {
-      templateId: input.templateId,
-      senderId: input.senderId ?? null,
-      recipient: input.message.to,
-      variables: (input.variables ?? {}) as never,
+      templateId: normalizedInput.templateId,
+      senderId: normalizedInput.senderId ?? null,
+      recipient: normalizedInput.message.to,
+      variables: (normalizedInput.variables ?? {}) as never,
       status: "queued",
     },
     select: { id: true },
   });
 
   const from = getResendFrom();
-  const outcome = await deliverEmail(input.message, {
+  const outcome = await deliverNormalizedEmail(normalizedInput.message, {
     mocked: useMockIntegrations(),
     from,
     apiKey: process.env.RESEND_API_KEY,
-    idempotencyKey: logicalEmailIdempotencyKey(input, from),
-    fetcher: input.fetcher,
+    idempotencyKey: logicalEmailIdempotencyKey(normalizedInput, from),
+    fetcher: normalizedInput.fetcher,
   });
 
   await db.emailDispatch.update({

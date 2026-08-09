@@ -82,3 +82,12 @@ test("the update schema refuses empty content and oversized bodies", () => {
   const parsed = emailTemplateUpdateSchema.safeParse({ subject: "Hi", htmlBody: "<p>x</p>", key: "renamed" });
   assert.equal(parsed.success && "key" in parsed.data, false);
 });
+
+test("template subjects are normalized before persistence or preview", () => {
+  const parsed = emailTemplateUpdateSchema.safeParse({
+    subject: " Hello\r\nBcc:\u0000 nope@example.test ",
+    htmlBody: "<p>ok</p>",
+  });
+  assert.equal(parsed.success, true);
+  if (parsed.success) assert.equal(parsed.data.subject, "Hello Bcc: nope@example.test");
+});

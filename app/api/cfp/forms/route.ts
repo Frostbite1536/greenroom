@@ -14,6 +14,7 @@ import {
 } from "@/lib/services/form-config";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { lockFormFieldsForShapeWrite } from "@/lib/services/form-field-lock";
+import { lockFormConfigForShapeWrite } from "@/lib/services/form-config-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -70,8 +71,10 @@ export const POST = handle(async (req) => {
   } satisfies Prisma.FormConfigUncheckedUpdateInput;
 
   const runWrite = () => prisma.$transaction(async (tx) => {
+    // Keep the parent-before-fields order shared with public answer writers.
+    // Creates have no stored parent row to lock and retain their old path.
     if (input.id) {
-      const existing = await tx.formConfig.findUnique({ where: { id: input.id } });
+      const existing = await lockFormConfigForShapeWrite(tx, input.id);
       if (!existing || existing.eventId !== ctx.eventId) {
         throw new ApiError(404, "FORM_NOT_FOUND", "Form not found.");
       }

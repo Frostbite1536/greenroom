@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { normalizeEmailSubject } from "@/lib/comms/subject";
 import { formatEventDateTime } from "@/lib/tz";
 
 const idSchema = z.string().trim().min(1).max(191);
@@ -159,7 +160,7 @@ export function renderEmailTemplate(
 ): RenderedEmail {
   const safeHtml = sanitizeHtml(template.htmlBody);
   return {
-    subject: renderText(template.subject, variables),
+    subject: normalizeEmailSubject(renderText(template.subject, variables)),
     html: safeHtml.replace(/{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g, (_match, key: string) => escapeHtml(variables[key] ?? "")),
   };
 }

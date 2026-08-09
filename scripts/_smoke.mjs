@@ -45,16 +45,31 @@ if (occupiedPort) {
 // not have one configured. It exercises the optional v1 read surface without
 // changing any shared environment or touching the judged event.
 const V1_API_KEY = process.env.GREENROOM_API_KEY || "scratch-v1-api-key-for-local-only-0001";
-const j = async (method, path, body, sess) => {
+let publicSubmissionIpSequence = 1;
+function isolatedPublicSubmissionHeaders(method, path) {
+  if (method !== "POST" || path !== "/api/cfp/submissions") return {};
+  const sequence = publicSubmissionIpSequence++;
+  // A valid single-address Vercel header keeps independent smoke examples from
+  // sharing the production-safe `unknown` IP throttle bucket.
+  return { "x-vercel-forwarded-for": `198.18.${Math.floor(sequence / 250)}.${(sequence % 250) + 1}` };
+}
+
+const j = async (method, path, body, sess, extraHeaders = {}) => {
   const res = await fetch(BASE + path, {
     method,
-    headers: { "content-type": "application/json", ...(sess ? { cookie: cookie(sess) } : {}) },
+    headers: {
+      "content-type": "application/json",
+      ...isolatedPublicSubmissionHeaders(method, path),
+      ...extraHeaders,
+      ...(sess ? { cookie: cookie(sess) } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 };
+
 const v1 = async (path) => {
   const res = await fetch(BASE + path, { headers: { authorization: `Bearer ${V1_API_KEY}` } });
   const text = await res.text();
@@ -242,6 +257,134 @@ try {
       JSON.stringify(["AI", "Community", "Systems"]),
   );
 
+  // S19/S20 — public writes are bounded before parsing, strict at the schema
+  // boundary, and rate-limited in a short transaction that commits before a
+  // later business-validation refusal. Keep these headers/rate rows isolated
+  // from the rest of this long-lived scratch smoke.
+  const publicCoreCounts = async () => ({
+    users: await prisma.user.count(),
+    abstracts: await prisma.abstract.count({ where: { eventId: SCRATCH_EVENT.id } }),
+    dispatches: await prisma.emailDispatch.count(),
+  });
+  const oversizeBefore = await publicCoreCounts();
+  // This is intentionally just over the app-owned 128 KiB limit: sufficiently
+  // small for a deterministic local request, but rejected before JSON.parse or
+  // any rate/business write.
+  const oversizeResponse = await fetch(BASE + "/api/cfp/submissions", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-vercel-forwarded-for": "198.51.100.90" },
+    body: JSON.stringify({ padding: "x".repeat(128 * 1024) }),
+  });
+  const oversize = { status: oversizeResponse.status, data: await oversizeResponse.json() };
+  const oversizeAfter = await publicCoreCounts();
+  check(
+    "S19 app-owned 128 KiB rejection is 413 before parsing or writing core rows",
+    oversize.status === 413 && oversize.data?.error?.code === "REQUEST_TOO_LARGE" &&
+      JSON.stringify(oversizeAfter) === JSON.stringify(oversizeBefore),
+    `${oversize.status} ${JSON.stringify(oversize.data)}`,
+  );
+
+  const strictBefore = await publicCoreCounts();
+  const strictNested = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 strict nested object",
+    speakers: [{ email: "s19-strict@scratch.test", name: "Strict", isPrimary: true, ignored: true }],
+    answers: {}, intent: "saveDraft",
+  });
+  const boundedAnswerKey = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 bounded answer key",
+    speakers: [{ email: "s19-bounded@scratch.test", name: "Bounded", isPrimary: true }],
+    answers: { ["k".repeat(121)]: "too long" }, intent: "saveDraft",
+  });
+  const duplicateSpeaker = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 duplicate speaker",
+    speakers: [
+      { email: "s19-duplicate@scratch.test", name: "Primary", isPrimary: true },
+      { email: " S19-DUPLICATE@SCRATCH.TEST ", name: "Duplicate", isPrimary: false },
+    ],
+    answers: {}, intent: "saveDraft",
+  });
+  const strictAfter = await publicCoreCounts();
+  check(
+    "S19 public schema rejects strict extras, bounded keys, and duplicate normalized speakers before core writes",
+    strictNested.status === 422 && boundedAnswerKey.status === 422 && duplicateSpeaker.status === 422 &&
+      JSON.stringify(strictAfter) === JSON.stringify(strictBefore),
+    `${strictNested.status}/${boundedAnswerKey.status}/${duplicateSpeaker.status}`,
+  );
+
+  const s19UnpublishedForm = await prisma.formConfig.create({
+    data: {
+      eventId: SCRATCH_EVENT.id, name: "S19 Unpublished", slug: `s19-unpublished-${Date.now()}`,
+      published: false,
+    },
+  });
+  const s19ClosedForm = await prisma.formConfig.create({
+    data: {
+      eventId: SCRATCH_EVENT.id, name: "S19 Closed", slug: `s19-closed-${Date.now()}`,
+      published: true, closesAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const s19WindowAttempt = (formConfigId, intent, email) => j("POST", "/api/cfp/submissions", {
+    formConfigId, title: `S19 ${intent} window refusal`,
+    speakers: [{ email, name: "Window", isPrimary: true }],
+    answers: { title_note: "window", consent: true }, intent,
+  });
+  const [unpublishedDraft, unpublishedSubmit, closedDraft, s19ClosedSubmit] = await Promise.all([
+    s19WindowAttempt(s19UnpublishedForm.id, "saveDraft", "s19-unpublished-draft@scratch.test"),
+    s19WindowAttempt(s19UnpublishedForm.id, "submit", "s19-unpublished-submit@scratch.test"),
+    s19WindowAttempt(s19ClosedForm.id, "saveDraft", "s19-closed-draft@scratch.test"),
+    s19WindowAttempt(s19ClosedForm.id, "submit", "s19-closed-submit@scratch.test"),
+  ]);
+  check(
+    "S19 both public drafts and submits require a published, open form",
+    unpublishedDraft.status === 422 && unpublishedDraft.data?.error?.code === "FORM_UNPUBLISHED" &&
+      unpublishedSubmit.status === 422 && unpublishedSubmit.data?.error?.code === "FORM_UNPUBLISHED" &&
+      closedDraft.status === 422 && closedDraft.data?.error?.code === "FORM_CLOSED" &&
+      s19ClosedSubmit.status === 422 && s19ClosedSubmit.data?.error?.code === "FORM_CLOSED",
+    `${unpublishedDraft.status}/${unpublishedSubmit.status}/${closedDraft.status}/${s19ClosedSubmit.status}`,
+  );
+
+  const rateTestIp = "198.51.100.91";
+  const rateTestHeaders = { "x-vercel-forwarded-for": rateTestIp };
+  const rateEmails = Array.from({ length: 21 }, (_, index) => `s19-rate-${index}@scratch.test`);
+  const rateCoreBefore = await publicCoreCounts();
+  const rateInvalidAttempts = [];
+  for (let index = 0; index < 20; index++) {
+    rateInvalidAttempts.push(await j("POST", "/api/cfp/submissions", {
+      formConfigId: formId, title: `S19 rate business-invalid ${index}`,
+      speakers: [{ email: rateEmails[index], name: "Rate", isPrimary: true }],
+      answers: {}, intent: "submit",
+    }, undefined, rateTestHeaders));
+  }
+  const rateBucketBeforeLimit = await prisma.$queryRaw`
+    SELECT COALESCE(MAX("count"), 0)::int AS "count"
+    FROM "PublicSubmissionRateBucket"
+    WHERE "eventId" = ${SCRATCH_EVENT.id} AND "scope" = 'public_write_ip_10m'
+  `;
+  const rateLimited = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S19 rate limited after invalid attempts",
+    speakers: [{ email: rateEmails[20], name: "Rate", isPrimary: true }],
+    answers: {}, intent: "submit",
+  }, undefined, rateTestHeaders);
+  const rateCoreAfter = await publicCoreCounts();
+  check(
+    "S20 known-form business-invalid attempts durably consume the independent IP bucket and the next write is 429 without core writes",
+    rateInvalidAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FIELD_ERRORS") &&
+      rateBucketBeforeLimit[0]?.count === 20 &&
+      rateLimited.status === 429 && rateLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      JSON.stringify(rateCoreAfter) === JSON.stringify(rateCoreBefore),
+    `${rateInvalidAttempts.map((attempt) => attempt.status).join(",")}/${rateBucketBeforeLimit[0]?.count}/${rateLimited.status}`,
+  );
+  await prisma.$executeRaw`
+    DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  const rateBucketsAfterCleanup = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  check("S20 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
+
   // M5: active-event settings are admin-only and use event-local calendar
   // dates, never the browser's timezone. Rooms are scoped server-side too.
   const settingsAnonymous = await j("GET", "/api/admin/settings");
@@ -398,63 +541,52 @@ try {
     speakers: [{ email: "b2@scratch.test", name: "B2 Speaker", isPrimary: true }],
     intent: "submit",
   };
-  const b2Hidden = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "beginner" },
+  let b2SubmissionSequence = 0;
+  const b2Submit = (body) => j("POST", "/api/cfp/submissions", {
+    ...b2Base,
+    ...body,
+    // Every example is an independent anonymous attempt. Keep fixture-only
+    // identities apart so S20's real per-primary submit ceiling does not turn
+    // later content-validation cases into rate-limit cases.
+    speakers: [{ email: `b2-${++b2SubmissionSequence}@scratch.test`, name: "B2 Speaker", isPrimary: true }],
   });
+  const b2Hidden = await b2Submit({ answers: { title_note: "n", consent: true, audience: "beginner" } });
   check("B2 a required field that was never shown does not block submission",
     b2Hidden.status === 201, `${b2Hidden.status} ${JSON.stringify(b2Hidden.data?.error?.fieldErrors ?? {})}`);
 
-  const b2Revealed = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced" },
-  });
+  const b2Revealed = await b2Submit({ answers: { title_note: "n", consent: true, audience: "advanced" } });
   check("B2 the same field is required once its condition is met",
     b2Revealed.status === 422 && !!b2Revealed.data?.error?.fieldErrors?.workshop_needs,
     b2Revealed.data?.error?.code);
 
-  const b2Answered = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced", workshop_needs: "Two power sockets" },
-  });
+  const b2Answered = await b2Submit({ answers: { title_note: "n", consent: true, audience: "advanced", workshop_needs: "Two power sockets" } });
   check("B2 answering the revealed field submits cleanly", b2Answered.status === 201, b2Answered.status);
 
-  const b2BadOption = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "smuggled-option" },
-  });
+  const b2BadOption = await b2Submit({ answers: { title_note: "n", consent: true, audience: "smuggled-option" } });
   check("B2 a select answer outside the options is refused",
     b2BadOption.status === 422 && !!b2BadOption.data?.error?.fieldErrors?.audience, b2BadOption.data?.error?.code);
 
-  const b2BadMulti = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, topics: ["ai", "quantum"] },
-  });
+  const b2BadMulti = await b2Submit({ answers: { title_note: "n", consent: true, topics: ["ai", "quantum"] } });
   check("B2 a multi-select answer outside the options is refused",
     b2BadMulti.status === 422 && !!b2BadMulti.data?.error?.fieldErrors?.topics, b2BadMulti.data?.error?.code);
 
-  const b2BadNumber = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, rating: "not a number" },
-  });
+  const b2BadNumber = await b2Submit({ answers: { title_note: "n", consent: true, rating: "not a number" } });
   check("B2 a non-numeric answer to a number field is refused",
     b2BadNumber.status === 422 && !!b2BadNumber.data?.error?.fieldErrors?.rating, b2BadNumber.data?.error?.code);
 
-  const b2BadUrl = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, website: "definitely not a url" },
-  });
+  const b2BadUrl = await b2Submit({ answers: { title_note: "n", consent: true, website: "definitely not a url" } });
   check("B2 an invalid URL answer is refused",
     b2BadUrl.status === 422 && !!b2BadUrl.data?.error?.fieldErrors?.website, b2BadUrl.data?.error?.code);
 
-  const b2UnsafeUrl = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, website: "javascript:alert(1)" },
-  });
+  const b2UnsafeUrl = await b2Submit({ answers: { title_note: "n", consent: true, website: "javascript:alert(1)" } });
   check("B2 a non-HTTP URL scheme is refused",
     b2UnsafeUrl.status === 422 && !!b2UnsafeUrl.data?.error?.fieldErrors?.website, b2UnsafeUrl.data?.error?.code);
 
-  const b2Unticked = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: false },
-  });
+  const b2Unticked = await b2Submit({ answers: { title_note: "n", consent: false } });
   check("B2 a required checkbox must be ticked, not merely answered",
     b2Unticked.status === 422 && !!b2Unticked.data?.error?.fieldErrors?.consent, b2Unticked.data?.error?.code);
 
-  const b2WrongType = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: "yes" },
-  });
+  const b2WrongType = await b2Submit({ answers: { title_note: "n", consent: "yes" } });
   check("B2 a checkbox answered with a string is refused",
     b2WrongType.status === 422 && !!b2WrongType.data?.error?.fieldErrors?.consent, b2WrongType.data?.error?.code);
 
@@ -556,9 +688,9 @@ try {
     orderBy: { recipient: "asc" },
   });
   check(
-    "O2 legacy template fallback records receipt, co-speaker notice, and admin alert",
+    "S19 public submit records exactly one receipt for its primary submitter",
     JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
-      JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
+      JSON.stringify(["spk@x.com"]),
     JSON.stringify(submissionDispatches.map((row) => row.recipient)),
   );
   check(
@@ -1501,15 +1633,15 @@ try {
   }, speaker);
   check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
 
-  // Regression guard: the public, unauthenticated path must NOT have gained the
-  // ability to overwrite a submitted/accepted abstract.
+  // Regression guard: an anonymous edit remains refused. The S20 window gate
+  // now correctly wins once a form is closed, before the draft-status check.
   const publicOverwrite = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, abstractId: r1Id, title: "Anonymous overwrite",
     speakers: [{ email: "attacker@scratch.test", name: "Attacker", isPrimary: true }],
     answers: {}, intent: "saveDraft",
   });
-  check("R1 public path still refuses to edit a non-DRAFT abstract",
-    publicOverwrite.status === 409 && publicOverwrite.data?.error?.code === "ABSTRACT_LOCKED",
+  check("R1 public path still refuses an anonymous edit after the form closes",
+    publicOverwrite.status === 422 && publicOverwrite.data?.error?.code === "FORM_CLOSED",
     publicOverwrite.data?.error?.code);
 
   // 22. W1 — speaker self-withdraw, and the states it makes reachable for the

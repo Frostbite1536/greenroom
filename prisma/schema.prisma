@@ -77,6 +77,7 @@ model Event {
   resources       ResourceWiki[]
   emailTemplates  EmailTemplate[]
   imports         ImportJob[]
+  publicSubmissionRateBuckets PublicSubmissionRateBucket[]
 
   @@index([startsAt])
 }
@@ -249,6 +250,25 @@ model FormAnswer {
 
   @@unique([abstractId, formFieldId])
   @@index([formFieldId])
+}
+
+/** Durable, HMAC-fingerprinted public CFP write throttles. */
+model PublicSubmissionRateBucket {
+  id          String   @id @default(cuid())
+  eventId     String
+  scope       String
+  fingerprint String
+  windowStart DateTime
+  count       Int      @default(0)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, scope, fingerprint, windowStart])
+  @@index([expiresAt])
+  @@index([eventId, scope, windowStart])
 }
 
 model EvaluationPlan {
