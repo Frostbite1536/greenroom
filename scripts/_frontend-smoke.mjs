@@ -1055,6 +1055,7 @@ try {
   // the oldest draft is a valid direct-link target but outside the newest page.
   const S20_CAP = 100;
   const S20_DRAFT_COUNT = 110;
+  const S20_FLOOD_ANSWER_COUNT = 5_001;
   const s20Stamp = Date.now() + 7 * 86400000;
   const s20SubmittedId = "s20-submitted-boundary";
   const s20FloodedId = "s20-draft-flooded";
@@ -1129,7 +1130,7 @@ try {
     data: { abstractId: s20SubmittedId, formFieldId: normalAnswerField.id, value: "S20 normal answer value" },
   });
   await prisma.formField.createMany({
-    data: Array.from({ length: 5_001 }, (_, index) => ({
+    data: Array.from({ length: S20_FLOOD_ANSWER_COUNT }, (_, index) => ({
       formConfigId: fx.form.id,
       key: `s20-flood-answer-${index}`,
       label: `S20 flood answer ${index}`,
@@ -1139,8 +1140,13 @@ try {
   });
   const floodFields = await prisma.formField.findMany({
     where: { formConfigId: fx.form.id, key: { startsWith: "s20-flood-answer-" } },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    take: S20_FLOOD_ANSWER_COUNT + 1,
     select: { id: true },
   });
+  if (floodFields.length !== S20_FLOOD_ANSWER_COUNT) {
+    throw new Error(`S20 flood fixture expected exactly ${S20_FLOOD_ANSWER_COUNT} fields; refusing a partial or unbounded answer allocation`);
+  }
   await prisma.formAnswer.createMany({
     data: floodFields.map((field, index) => ({
       abstractId: s20FloodedId,

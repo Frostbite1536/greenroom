@@ -412,6 +412,17 @@ export function summarizeAdminAbstractMetrics(groups: readonly AbstractStatusCou
   return { total, accepted, pending };
 }
 
+/** Keep a malformed aggregate value out of the RSC payload and score display. */
+export function toFiniteAverageScore(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  try {
+    const score = Number(value);
+    return Number.isFinite(score) ? score : null;
+  } catch {
+    return null;
+  }
+}
+
 export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup[]) {
   const progressByAbstract = new Map<string, { reviewsTotal: number; reviewsComplete: number }>();
   for (const group of groups) {
@@ -612,7 +623,7 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
       submittedAt: a.submittedAt?.toISOString() ?? null,
       reviewsComplete: reviewProgress.reviewsComplete,
       reviewsTotal: reviewProgress.reviewsTotal,
-      avgScore: avg === null || avg === undefined ? null : Number(avg),
+      avgScore: toFiniteAverageScore(avg),
       answers: answerIndex.byAbstract.get(a.id) ?? [],
       answersHidden: ctx.role !== "ADMIN",
       answersUnavailable: answerIndex.unavailableAbstractIds.has(a.id),

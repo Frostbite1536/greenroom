@@ -7,6 +7,7 @@ import {
   indexOrganizerReviewComments,
   planAdminAnswerRead,
   summarizeAdminAbstractMetrics,
+  toFiniteAverageScore,
 } from "./reads";
 import { ApiError } from "@/lib/api/http";
 
@@ -88,6 +89,14 @@ test("admin abstract metrics stay global rather than reflecting a bounded table 
     ]),
     { total: 109, pending: 20, accepted: 9 },
   );
+});
+
+test("average score projection retains finite values and rejects null or non-finite values", () => {
+  assert.equal(toFiniteAverageScore(3.5), 3.5);
+  assert.equal(toFiniteAverageScore(null), null);
+  assert.equal(toFiniteAverageScore(undefined), null);
+  assert.equal(toFiniteAverageScore(Number.NaN), null);
+  assert.equal(toFiniteAverageScore(Number.POSITIVE_INFINITY), null);
 });
 
 test("admin abstract parent snapshot contract uses repeatable read isolation", () => {
