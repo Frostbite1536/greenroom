@@ -407,12 +407,15 @@ try {
   check("B5 setup: restore the full field set", b5Restore.status === 200, b5Restore.status);
 
   // O2: the shared delivery path requires a template row for its dispatch FK.
+  // Use the legacy accepted key here to prove an already-running event keeps
+  // sending during the short code-deploy -> coordinated-reseed interval. The
+  // dedicated cfp-submitted key is preferred once the new seed is applied.
   // The server is forced into mock mode above, so these checks cannot reach
   // Resend even if the local shell happens to carry live credentials.
   const commsTemplate = await prisma.emailTemplate.create({
     data: {
       eventId: SCRATCH_EVENT.id,
-      key: "cfp-submitted",
+      key: "cfp-accepted",
       subject: "Scratch decision",
       htmlBody: "<p>Scratch only</p>",
       trigger: "manual",
@@ -441,7 +444,7 @@ try {
     orderBy: { recipient: "asc" },
   });
   check(
-    "O2 submit records receipt, co-speaker notice, and admin alert",
+    "O2 legacy template fallback records receipt, co-speaker notice, and admin alert",
     JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
       JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
     JSON.stringify(submissionDispatches.map((row) => row.recipient)),
