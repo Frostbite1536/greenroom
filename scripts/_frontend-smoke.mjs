@@ -21,6 +21,9 @@ const SECOND_EVALUATOR_EMAIL = "second-evaluator@scratch.test";
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
 const FRESH_EVENT_ID = "scratch-frontend-fresh";
+// S20 also needs an event-scoping boundary target. It is created only by this
+// scratch fixture and deleted with the other disposable events.
+const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 
@@ -56,7 +59,7 @@ async function req(method, path, body, sess) {
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
-  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
+  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID] } } });
   await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
 
   const now = Date.now();
@@ -240,7 +243,7 @@ let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
-      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
+      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID] } } });
       await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
@@ -1045,6 +1048,177 @@ try {
   check("withdrawn assignment does not keep round progress incomplete",
     withdrawnSetup.text.includes(`${completedAssignmentCount}/${activeAssignmentCount} reviews done`));
   await prisma.abstract.update({ where: { id: setupAbstract.id }, data: { status: "UNDER_REVIEW" } });
+
+  // --- S20: bounded abstracts RSC read ------------------------------------
+  // Create the overflow directly in scratch rather than slowly driving public
+  // writes. The submitted proposal must outrank every NULL submittedAt draft;
+  // the oldest draft is a valid direct-link target but outside the newest page.
+  const S20_CAP = 100;
+  const S20_DRAFT_COUNT = 110;
+  const S20_FLOOD_ANSWER_COUNT = 5_001;
+  const s20Stamp = Date.now() + 7 * 86400000;
+  const s20SubmittedId = "s20-submitted-boundary";
+  const s20FloodedId = "s20-draft-flooded";
+  const s20OlderId = `s20-draft-${String(S20_DRAFT_COUNT - 1).padStart(3, "0")}`;
+  const s20CrossEventId = "s20-cross-event-proposal";
+  await prisma.abstract.create({
+    data: {
+      id: s20SubmittedId,
+      eventId: EVENT_ID,
+      formConfigId: fx.form.id,
+      submitterId: fx.users.speaker,
+      title: "S20 submitted boundary proposal",
+      status: "SUBMITTED",
+      submittedAt: new Date(s20Stamp),
+      createdAt: new Date(s20Stamp),
+      updatedAt: new Date(s20Stamp),
+    },
+  });
+  await prisma.abstract.createMany({
+    data: Array.from({ length: S20_DRAFT_COUNT }, (_, index) => {
+      const id = index === 0 ? s20FloodedId : `s20-draft-${String(index).padStart(3, "0")}`;
+      const createdAt = new Date(s20Stamp - (index + 1) * 1000);
+      return {
+        id,
+        eventId: EVENT_ID,
+        formConfigId: fx.form.id,
+        submitterId: fx.users.speaker,
+        title: index === 0 ? "S20 flooded draft proposal" : `S20 draft ${String(index).padStart(3, "0")}`,
+        status: "DRAFT",
+        createdAt,
+        updatedAt: createdAt,
+      };
+    }),
+  });
+  const s20OtherEvent = await prisma.event.create({
+    data: {
+      id: S20_OTHER_EVENT_ID,
+      name: "Scratch Frontend S20 Boundary",
+      slug: S20_OTHER_EVENT_ID,
+      timezone: "UTC",
+    },
+  });
+  const s20OtherForm = await prisma.formConfig.create({
+    data: {
+      eventId: s20OtherEvent.id,
+      name: "S20 boundary form",
+      slug: "s20-boundary-form",
+    },
+  });
+  await prisma.abstract.create({
+    data: {
+      id: s20CrossEventId,
+      eventId: s20OtherEvent.id,
+      formConfigId: s20OtherForm.id,
+      submitterId: fx.users.speaker,
+      title: "S20 cross-event proposal",
+      status: "SUBMITTED",
+      submittedAt: new Date(s20Stamp + 1),
+    },
+  });
+
+  const normalAnswerField = await prisma.formField.create({
+    data: {
+      formConfigId: fx.form.id,
+      key: "s20-retained-answer",
+      label: "S20 retained normal answer",
+      type: "SHORT_TEXT",
+      sortOrder: 10_000,
+    },
+  });
+  await prisma.formAnswer.create({
+    data: { abstractId: s20SubmittedId, formFieldId: normalAnswerField.id, value: "S20 normal answer value" },
+  });
+  await prisma.formField.createMany({
+    data: Array.from({ length: S20_FLOOD_ANSWER_COUNT }, (_, index) => ({
+      formConfigId: fx.form.id,
+      key: `s20-flood-answer-${index}`,
+      label: `S20 flood answer ${index}`,
+      type: "SHORT_TEXT",
+      sortOrder: 10_001 + index,
+    })),
+  });
+  const floodFields = await prisma.formField.findMany({
+    where: { formConfigId: fx.form.id, key: { startsWith: "s20-flood-answer-" } },
+    orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
+    take: S20_FLOOD_ANSWER_COUNT + 1,
+    select: { id: true },
+  });
+  if (floodFields.length !== S20_FLOOD_ANSWER_COUNT) {
+    throw new Error(`S20 flood fixture expected exactly ${S20_FLOOD_ANSWER_COUNT} fields; refusing a partial or unbounded answer allocation`);
+  }
+  await prisma.formAnswer.createMany({
+    data: floodFields.map((field, index) => ({
+      abstractId: s20FloodedId,
+      formFieldId: field.id,
+      value: `flood-${index}`,
+    })),
+  });
+  await prisma.reviewScore.create({
+    data: {
+      planId: fx.plan.id,
+      abstractId: s20OlderId,
+      evaluatorId: fx.users.evaluator,
+      rubricKey: "relevance",
+      score: 3,
+      comment: "S20 older scoped review note",
+    },
+  });
+
+  const s20StatusGroups = await prisma.abstract.groupBy({
+    by: ["status"],
+    where: { eventId: EVENT_ID },
+    _count: { _all: true },
+  });
+  const s20Total = s20StatusGroups.reduce((total, group) => total + group._count._all, 0);
+  const s20Accepted = s20StatusGroups.find((group) => group.status === "ACCEPTED")?._count._all ?? 0;
+  const s20Pending = s20StatusGroups
+    .filter((group) => ["SUBMITTED", "UNDER_REVIEW", "MAYBE"].includes(group.status))
+    .reduce((total, group) => total + group._count._all, 0);
+  const s20Page = await req("GET", "/admin/abstracts", null, admin);
+  const s20PageText = renderedText(s20Page.text) ?? "";
+  const s20Table = s20Page.text.slice(s20Page.text.indexOf("<tbody>"), s20Page.text.indexOf("</tbody>") + "</tbody>".length);
+  const s20OlderDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(s20OlderId)}`, null, admin);
+  const s20OlderNotes = renderedText(reviewNotesSection(s20OlderDrawer.text)) ?? "";
+  const s20FloodedDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(s20FloodedId)}`, null, admin);
+  const s20NormalDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(s20SubmittedId)}`, null, admin);
+  const s20CrossEventDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(s20CrossEventId)}`, null, admin);
+  const s20UnknownDrawer = await req("GET", "/admin/abstracts?abstractId=s20-missing-proposal", null, admin);
+  check("S20 table renders exactly the newest bounded collection",
+    s20Page.status === 200
+    && (s20Table.match(/<tr/g) ?? []).length === S20_CAP
+    && s20Page.text.includes("S20 submitted boundary proposal")
+    && !s20Page.text.includes(`S20 draft ${String(S20_DRAFT_COUNT - 1).padStart(3, "0")}`));
+  check("S20 reports global counts and an honest bounded-order notice",
+    s20PageText.includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`)
+    && s20PageText.includes("Submitted proposals are ordered newest first; drafts follow.")
+    && s20PageText.includes("Tabs and search cover only these loaded proposals.")
+    && new RegExp(`Total\\s*${s20Total}`).test(s20PageText)
+    && new RegExp(`Pending review\\s*${s20Pending}`).test(s20PageText)
+    && new RegExp(`Accepted\\s*${s20Accepted}`).test(s20PageText));
+  check("S20 keeps an older event-scoped proposal reachable by direct link",
+    s20OlderDrawer.status === 200
+    && s20OlderDrawer.text.includes(`S20 draft ${String(S20_DRAFT_COUNT - 1).padStart(3, "0")}`)
+    && (renderedText(s20OlderDrawer.text) ?? "").includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`));
+  const hasSelectedDecisionControls = (html) => /role="dialog"/.test(html)
+    || /<button[^>]*>Accept<\/button>/.test(html)
+    || /<button[^>]*>Maybe<\/button>/.test(html)
+    || /<button[^>]*>Decline<\/button>/.test(html);
+  check("S20 omits cross-event and unknown deep-link drawers",
+    s20CrossEventDrawer.status === 200
+    && s20UnknownDrawer.status === 200
+    && !s20CrossEventDrawer.text.includes("S20 cross-event proposal")
+    && !hasSelectedDecisionControls(s20CrossEventDrawer.text)
+    && !hasSelectedDecisionControls(s20UnknownDrawer.text));
+  check("S20 scopes organizer notes to materialized abstracts",
+    !s20Page.text.includes("S20 older scoped review note")
+    && s20OlderNotes.includes("S20 older scoped review note"));
+  check("S20 isolates one flooded proposal's answers",
+    s20FloodedDrawer.text.includes("This proposal has too many answers to load safely in this view. Its answers are unavailable rather than partially shown.")
+    && !s20FloodedDrawer.text.includes("S20 flood answer 0")
+    && s20NormalDrawer.text.includes("S20 retained normal answer")
+    && s20NormalDrawer.text.includes("S20 normal answer value")
+    && !s20NormalDrawer.text.includes("Its answers are unavailable rather than partially shown."));
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts

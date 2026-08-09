@@ -27,6 +27,12 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import {
+  ADMIN_ABSTRACT_LIST_TAKE,
+  adminAbstractListOrderBy,
+  adminAbstractListWhere,
+  toAdminAbstractListEnvelope,
+} from "@/lib/api/admin-abstract-list";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
@@ -213,6 +219,11 @@ type StoredAnswerProjection = {
   };
 };
 
+type AnswerCountGroup = {
+  abstractId: string;
+  _count: { _all: number };
+};
+
 /** A de-identified evaluator note available only to an organizer projection. */
 export type OrganizerReviewComment = {
   /** One text normally; multiple strings preserve divergent legacy criteria honestly. */
@@ -263,26 +274,77 @@ export function indexOrganizerReviewComments(
   return byAbstract;
 }
 
-/** Build an all-or-nothing event answer index so no proposal is silently partial. */
+/**
+ * Give each materialized proposal an all-or-nothing share of the page's answer
+ * budget. A proposal that cannot fit is marked unavailable, while later small
+ * proposals can still use the remaining budget. This keeps one answer flood
+ * from blanking unrelated proposal drawers.
+ */
+export function planAdminAnswerRead(
+  abstractIds: readonly string[],
+  counts: readonly AnswerCountGroup[],
+  limit = ADMIN_ANSWER_LIMIT,
+): {
+  queryAbstractIds: string[];
+  expectedAnswerCounts: Map<string, number>;
+  unavailableAbstractIds: Set<string>;
+} {
+  const countByAbstract = new Map(counts.map((count) => [count.abstractId, count._count._all]));
+  const queryAbstractIds: string[] = [];
+  const expectedAnswerCounts = new Map<string, number>();
+  const unavailableAbstractIds = new Set<string>();
+  let remaining = limit;
+
+  for (const abstractId of abstractIds) {
+    const answerCount = countByAbstract.get(abstractId) ?? 0;
+    if (answerCount <= remaining) {
+      queryAbstractIds.push(abstractId);
+      expectedAnswerCounts.set(abstractId, answerCount);
+      remaining -= answerCount;
+    } else if (answerCount > 0) {
+      unavailableAbstractIds.add(abstractId);
+    }
+  }
+
+  return { queryAbstractIds, expectedAnswerCounts, unavailableAbstractIds };
+}
+
+/** Build an answer index without ever exposing a partial proposal. */
 export function indexAdminAnswers(
   rows: readonly StoredAnswerProjection[],
-  limit = ADMIN_ANSWER_LIMIT,
-): { unavailable: boolean; byAbstract: Map<string, AnswerRow[]> } {
-  if (rows.length > limit) return { unavailable: true, byAbstract: new Map() };
+  expectedAnswerCounts: ReadonlyMap<string, number>,
+  unavailableAbstractIds: ReadonlySet<string> = new Set(),
+): { unavailableAbstractIds: Set<string>; byAbstract: Map<string, AnswerRow[]> } {
+  const unavailable = new Set(unavailableAbstractIds);
+  const rowsByAbstract = new Map<string, StoredAnswerProjection[]>();
+  for (const row of rows) {
+    const group = rowsByAbstract.get(row.abstractId) ?? [];
+    group.push(row);
+    rowsByAbstract.set(row.abstractId, group);
+  }
+
+  // A concurrent answer write can make the bounded row query contain one more
+  // answer than the count plan. Compare each proposal independently, so only
+  // the changing/truncated proposal is withheld; unaffected exact sets remain
+  // available and no proposal is rendered partially.
+  for (const [abstractId, expectedCount] of expectedAnswerCounts) {
+    if ((rowsByAbstract.get(abstractId)?.length ?? 0) !== expectedCount) {
+      unavailable.add(abstractId);
+    }
+  }
 
   const byAbstract = new Map<string, AnswerRow[]>();
-  for (const row of rows) {
-    const list = byAbstract.get(row.abstractId) ?? [];
-    list.push({
+  for (const [abstractId, abstractRows] of rowsByAbstract) {
+    if (unavailable.has(abstractId)) continue;
+    byAbstract.set(abstractId, abstractRows.map((row) => ({
       fieldId: row.formField.id,
       label: row.formField.label,
       type: row.formField.type,
       options: parseFieldOptions(row.formField.options),
       value: row.value,
-    });
-    byAbstract.set(row.abstractId, list);
+    })));
   }
-  return { unavailable: false, byAbstract };
+  return { unavailableAbstractIds: unavailable, byAbstract };
 }
 
 export type AbstractRow = {
@@ -330,6 +392,37 @@ type AssignmentProgressGroup = {
   _count: { _all: number };
 };
 
+type AbstractStatusCountGroup = {
+  status: AbstractStatus;
+  _count: { _all: number };
+};
+
+export function summarizeAdminAbstractMetrics(groups: readonly AbstractStatusCountGroup[]) {
+  let total = 0;
+  let accepted = 0;
+  let pending = 0;
+  for (const group of groups) {
+    const count = group._count._all;
+    total += count;
+    if (group.status === "ACCEPTED") accepted += count;
+    if (group.status === "SUBMITTED" || group.status === "UNDER_REVIEW" || group.status === "MAYBE") {
+      pending += count;
+    }
+  }
+  return { total, accepted, pending };
+}
+
+/** Keep a malformed aggregate value out of the RSC payload and score display. */
+export function toFiniteAverageScore(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  try {
+    const score = Number(value);
+    return Number.isFinite(score) ? score : null;
+  } catch {
+    return null;
+  }
+}
+
 export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup[]) {
   const progressByAbstract = new Map<string, { reviewsTotal: number; reviewsComplete: number }>();
   for (const group of groups) {
@@ -341,145 +434,216 @@ export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup
   return progressByAbstract;
 }
 
-export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
-  const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+export type AdminAbstractsView = {
+  eventId: string;
+  /** The newest bounded page only; client tabs/search intentionally apply here. */
+  abstracts: AbstractRow[];
+  /** An older, event-scoped deep-link target rendered only in its drawer. */
+  selectedAbstract: AbstractRow | null;
+  total: number;
+  hasMore: boolean;
+  metrics: { total: number; accepted: number; pending: number };
+};
 
-  // Custom answers can contain self-identifying free text. Until the C15 blind
-  // boundary can apply assignment-scoped field policy, only event admins may
-  // receive this payload. An empty result for an evaluator must not be confused
-  // with a proposal that genuinely has no saved answers.
-  const answerRowsPromise: Promise<StoredAnswerProjection[]> =
-    ctx.role === "ADMIN"
-      ? prisma.formAnswer.findMany({
-          where: { abstract: { eventId: ctx.eventId } },
-          orderBy: [
-            { abstractId: "asc" },
-            { formField: { sortOrder: "asc" } },
-            { formFieldId: "asc" },
-          ],
-          take: ADMIN_ANSWER_LIMIT + 1,
-          select: {
-            abstractId: true,
-            value: true,
-            formField: { select: { id: true, label: true, type: true, options: true } },
-          },
-        })
-      : Promise.resolve([]);
+const adminAbstractSelect = {
+  id: true,
+  title: true,
+  abstract: true,
+  status: true,
+  format: true,
+  durationMinutes: true,
+  submittedAt: true,
+  category: { select: { name: true } },
+  formConfig: { select: { name: true } },
+  speakers: {
+    // Email is not rendered on this surface, so it never enters the RSC
+    // payload for either admins or evaluators.
+    select: { isPrimary: true, user: { select: { name: true } } },
+  },
+  // `scheduleSlot` tells the admin table whether the confirmed talk is
+  // actually on the public programme, which is what makes a reversed
+  // decision consequential (INV-DOMAIN-001: we never auto-delete it).
+  session: { select: { id: true, scheduleSlot: { select: { id: true } } } },
+} satisfies Prisma.AbstractSelect;
+
+// The bounded parent page, its global metrics, and any selected deep-link row
+// must describe one database moment. Child collections intentionally run after
+// this short snapshot because they are scoped by its at-most-101 known IDs.
+export const ADMIN_ABSTRACT_SNAPSHOT_OPTIONS = {
+  isolationLevel: "RepeatableRead",
+} as const;
+
+export async function getAdminAbstracts(requestedAbstractId?: string | null): Promise<AdminAbstractsView> {
+  const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+  const parentWhere = adminAbstractListWhere({ eventId: ctx.eventId });
+
+  // The parent page, its global summary, and one optional deep link start
+  // together inside one short snapshot. That prevents an overflow indicator
+  // from describing a different event state than the table it accompanies.
+  const { parentRows, statusGroups, requestedAbstract } = await prisma.$transaction(async (tx) => {
+    const [parentRows, statusGroups, requestedAbstract] = await Promise.all([
+      tx.abstract.findMany({
+        where: parentWhere,
+        orderBy: adminAbstractListOrderBy,
+        take: ADMIN_ABSTRACT_LIST_TAKE,
+        select: adminAbstractSelect,
+      }),
+      tx.abstract.groupBy({
+        by: ["status"],
+        where: parentWhere,
+        _count: { _all: true },
+      }),
+      requestedAbstractId
+        ? tx.abstract.findFirst({
+            where: { ...parentWhere, id: requestedAbstractId },
+            select: adminAbstractSelect,
+          })
+        : Promise.resolve(null),
+    ]);
+    return { parentRows, statusGroups, requestedAbstract };
+  }, ADMIN_ABSTRACT_SNAPSHOT_OPTIONS);
+
+  const metrics = summarizeAdminAbstractMetrics(statusGroups);
+  const newest = toAdminAbstractListEnvelope(parentRows, metrics.total);
+  const newestIds = newest.abstracts.map((abstract) => abstract.id);
+  const selectedParent = requestedAbstract && !newestIds.includes(requestedAbstract.id)
+    ? requestedAbstract
+    : null;
+  // A selected older proposal is materialized only for its drawer. It never
+  // changes the newest-page list, its tab counts, or the overflow notice.
+  const materializedAbstracts = selectedParent
+    ? [...newest.abstracts, selectedParent]
+    : newest.abstracts;
+  const materializedIds = materializedAbstracts.map((abstract) => abstract.id);
+
+  if (materializedIds.length === 0) {
+    return {
+      eventId: ctx.eventId,
+      abstracts: [],
+      selectedAbstract: null,
+      total: newest.total,
+      hasMore: newest.hasMore,
+      metrics,
+    };
+  }
+
+  const childWhere = { abstractId: { in: materializedIds } };
+  // Child collections are deliberately scoped to the at-most-100 newest rows
+  // plus the one event-scoped drawer target. Nothing below scans a flooded
+  // event-wide answer/review/assignment collection.
+  const answerCountsPromise = ctx.role === "ADMIN"
+    ? prisma.formAnswer.groupBy({
+        by: ["abstractId"],
+        where: childWhere,
+        _count: { _all: true },
+      })
+    : Promise.resolve([]);
+  const assignmentGroupsPromise = prisma.reviewAssignment.groupBy({
+    by: ["abstractId", "status"],
+    where: childWhere,
+    _count: { _all: true },
+  });
+  const scoreRowsPromise = prisma.reviewScore.groupBy({
+    by: ["abstractId"],
+    where: childWhere,
+    _avg: { score: true },
+  });
   const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> =
     ctx.role === "ADMIN"
       ? prisma.reviewScore.findMany({
-          where: { abstract: { eventId: ctx.eventId }, comment: { not: null } },
+          where: { ...childWhere, comment: { not: null } },
           orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
           take: OPERATOR_QUERY_LIMITS.adminReviewComments + 1,
           select: { abstractId: true, evaluatorId: true, rubricKey: true, comment: true },
         })
       : Promise.resolve([]);
+  const blindRowsPromise = ctx.role === "EVALUATOR"
+    ? prisma.reviewAssignment.findMany({
+        where: { ...childWhere, plan: { eventId: ctx.eventId, isBlind: true } },
+        select: { abstractId: true },
+        distinct: ["abstractId"],
+      })
+    : Promise.resolve([]);
 
-  const [abstracts, assignmentGroups, scoreRows, answerRows, reviewCommentRows] = await Promise.all([
-    prisma.abstract.findMany({
-      where: { eventId: ctx.eventId },
-      orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
-      select: {
-        id: true,
-        title: true,
-        abstract: true,
-        status: true,
-        format: true,
-        durationMinutes: true,
-        submittedAt: true,
-        category: { select: { name: true } },
-        formConfig: { select: { name: true } },
-        speakers: {
-          // Email is not rendered on this surface, so it never enters the RSC
-          // payload for either admins or evaluators.
-          select: { isPrimary: true, user: { select: { name: true } } },
+  const answerPlan = planAdminAnswerRead(materializedIds, await answerCountsPromise);
+  const answerRowsPromise: Promise<StoredAnswerProjection[]> = ctx.role === "ADMIN" && answerPlan.queryAbstractIds.length > 0
+    ? prisma.formAnswer.findMany({
+        where: { abstractId: { in: answerPlan.queryAbstractIds } },
+        orderBy: [
+          { abstractId: "asc" },
+          { formField: { sortOrder: "asc" } },
+          { formFieldId: "asc" },
+        ],
+        take: ADMIN_ANSWER_LIMIT + 1,
+        select: {
+          abstractId: true,
+          value: true,
+          formField: { select: { id: true, label: true, type: true, options: true } },
         },
-        // `scheduleSlot` tells the admin table whether the confirmed talk is
-        // actually on the public programme, which is what makes a reversed
-        // decision consequential (INV-DOMAIN-001: we never auto-delete it).
-        session: { select: { id: true, scheduleSlot: { select: { id: true } } } },
-      },
-    }),
-    // Review progress without a per-row query.
-    prisma.reviewAssignment.groupBy({
-      by: ["abstractId", "status"],
-      where: { abstract: { eventId: ctx.eventId } },
-      _count: { _all: true },
-    }),
-    prisma.reviewScore.groupBy({
-      by: ["abstractId"],
-      where: { abstract: { eventId: ctx.eventId } },
-      _avg: { score: true },
-    }),
-    // One bounded admin-only read for the whole event beats a per-drawer query;
-    // deterministic ordering makes the all-or-nothing cutoff reproducible.
-    answerRowsPromise,
-    // Organizer feedback is a distinct admin-only projection. Evaluators keep
-    // their caller-scoped `myComment` in getEvaluationQueue instead.
+      })
+    : Promise.resolve([]);
+
+  const [assignmentGroups, scoreRows, reviewCommentRows, blindRows, answerRows] = await Promise.all([
+    assignmentGroupsPromise,
+    scoreRowsPromise,
     reviewCommentRowsPromise,
+    blindRowsPromise,
+    answerRowsPromise,
   ]);
 
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
-
-  /**
-   * Blind review has to mean something on this page too, not only in the scoring
-   * queue: an evaluator could otherwise read every speaker's name here and
-   * defeat the blind round entirely (audit1 #2). A proposal counts as
-   * blind-covered when any blind plan holds an assignment for it. Admins run the
-   * process and are unaffected.
-   */
-  const blindCovered = new Set<string>();
-  if (ctx.role === "EVALUATOR") {
-    const rows = await prisma.reviewAssignment.findMany({
-      where: { plan: { eventId: ctx.eventId, isBlind: true } },
-      select: { abstractId: true },
-      distinct: ["abstractId"],
-    });
-    for (const row of rows) blindCovered.add(row.abstractId);
-  }
-
-  // Over the bound: drop the overflow row and report honestly instead of
-  // rendering a silently-partial answer list.
-  const answerIndex = indexAdminAnswers(answerRows, ADMIN_ANSWER_LIMIT);
+  const blindCovered = new Set(blindRows.map((row) => row.abstractId));
+  const answerIndex = indexAdminAnswers(
+    answerRows,
+    answerPlan.expectedAnswerCounts,
+    answerPlan.unavailableAbstractIds,
+  );
   const reviewCommentsByAbstract = indexOrganizerReviewComments(ctx.role, reviewCommentRows);
+
+  const rowsById = new Map(materializedAbstracts.map((a) => {
+    const reviewProgress = assignmentProgressByAbstract.get(a.id) ?? { reviewsTotal: 0, reviewsComplete: 0 };
+    const avg = avgByAbstract.get(a.id);
+    const row: AbstractRow = {
+      id: a.id,
+      title: a.title,
+      abstract: a.abstract,
+      status: a.status,
+      format: a.format,
+      durationMinutes: a.durationMinutes,
+      categoryName: a.category?.name ?? null,
+      formName: a.formConfig.name,
+      speakers: blindCovered.has(a.id)
+        ? []
+        : a.speakers.map((s) => ({
+            name: s.user.name,
+            isPrimary: s.isPrimary,
+          })),
+      identityHidden: blindCovered.has(a.id),
+      submittedAt: a.submittedAt?.toISOString() ?? null,
+      reviewsComplete: reviewProgress.reviewsComplete,
+      reviewsTotal: reviewProgress.reviewsTotal,
+      avgScore: toFiniteAverageScore(avg),
+      answers: answerIndex.byAbstract.get(a.id) ?? [],
+      answersHidden: ctx.role !== "ADMIN",
+      answersUnavailable: answerIndex.unavailableAbstractIds.has(a.id),
+      ...(reviewCommentsByAbstract
+        ? { reviewComments: reviewCommentsByAbstract.get(a.id) ?? [] }
+        : {}),
+      hasSession: a.session !== null,
+      sessionId: a.session?.id ?? null,
+      sessionScheduled: a.session?.scheduleSlot != null,
+    };
+    return [a.id, row] as const;
+  }));
 
   return {
     eventId: ctx.eventId,
-    abstracts: abstracts.map((a) => {
-      const reviewProgress = assignmentProgressByAbstract.get(a.id) ?? { reviewsTotal: 0, reviewsComplete: 0 };
-      const avg = avgByAbstract.get(a.id);
-      return {
-        id: a.id,
-        title: a.title,
-        abstract: a.abstract,
-        status: a.status,
-        format: a.format,
-        durationMinutes: a.durationMinutes,
-        categoryName: a.category?.name ?? null,
-        formName: a.formConfig.name,
-        speakers: blindCovered.has(a.id)
-          ? []
-          : a.speakers.map((s) => ({
-              name: s.user.name,
-              isPrimary: s.isPrimary,
-            })),
-        identityHidden: blindCovered.has(a.id),
-        submittedAt: a.submittedAt?.toISOString() ?? null,
-        reviewsComplete: reviewProgress.reviewsComplete,
-        reviewsTotal: reviewProgress.reviewsTotal,
-        avgScore: avg === null || avg === undefined ? null : Number(avg),
-        answers: answerIndex.byAbstract.get(a.id) ?? [],
-        answersHidden: ctx.role !== "ADMIN",
-        answersUnavailable: answerIndex.unavailable,
-        ...(reviewCommentsByAbstract
-          ? { reviewComments: reviewCommentsByAbstract.get(a.id) ?? [] }
-          : {}),
-        hasSession: a.session !== null,
-        sessionId: a.session?.id ?? null,
-        sessionScheduled: a.session?.scheduleSlot != null,
-      };
-    }),
+    abstracts: newestIds.map((id) => rowsById.get(id)!),
+    selectedAbstract: selectedParent ? rowsById.get(selectedParent.id)! : null,
+    total: newest.total,
+    hasMore: newest.hasMore,
+    metrics,
   };
 }
 

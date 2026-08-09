@@ -59,12 +59,19 @@ const TABS: { key: string; label: string }[] = [
 
 export function AbstractsTable({
   abstracts,
+  initialSelectedAbstract = null,
   initialSelectedId = null,
   initialChanging = false,
+  total = abstracts.length,
+  hasMore = false,
 }: {
   abstracts: AbstractRow[];
+  /** A valid older deep-link target, intentionally separate from the newest table page. */
+  initialSelectedAbstract?: AbstractRow | null;
   initialSelectedId?: string | null;
   initialChanging?: boolean;
+  total?: number;
+  hasMore?: boolean;
 }) {
   const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
@@ -91,7 +98,9 @@ export function AbstractsTable({
       );
   }, [abstracts, tab, q]);
 
-  const selected = abstracts.find((a) => a.id === selectedId) ?? null;
+  const selected = abstracts.find((a) => a.id === selectedId)
+    ?? (selectedId === initialSelectedAbstract?.id ? initialSelectedAbstract : null);
+  const loadedLabel = "loaded proposals";
 
   return (
     <div className="card">
@@ -114,14 +123,27 @@ export function AbstractsTable({
       ) : null}
 
       <div style={{ padding: "6px 8px 0" }}>
-        <div className="tabs" role="group" aria-label="Abstract status">
+        <div className="tabs" role="group" aria-label={`Status filter for ${loadedLabel}`}>
           {TABS.map((t) => (
-            <button key={t.key} aria-pressed={tab === t.key} className="tab" onClick={() => setTab(t.key)}>
+            <button
+              key={t.key}
+              aria-pressed={tab === t.key}
+              aria-label={`${t.label}: ${counts[t.key] ?? 0} ${loadedLabel}`}
+              className="tab"
+              onClick={() => setTab(t.key)}
+            >
               {t.label} <span className="count">{counts[t.key] ?? 0}</span>
             </button>
           ))}
         </div>
       </div>
+
+      {hasMore ? (
+        <p className="abstract-overflow-notice" role="status">
+          <strong>Showing first {abstracts.length} of {total} proposals.</strong>{" "}
+          Submitted proposals are ordered newest first; drafts follow. Tabs and search cover only these loaded proposals. Older proposals remain stored; use a known direct proposal link or a narrower API status or form filter.
+        </p>
+      ) : null}
 
       <div className="table-toolbar">
         <span className="row" style={{ gap: 8, flex: 1, minWidth: 180 }}>
@@ -135,7 +157,7 @@ export function AbstractsTable({
             aria-label="Search abstracts"
           />
         </span>
-        <span className="hint">{rows.length} of {abstracts.length}</span>
+        <span className="hint">{rows.length} of {abstracts.length} {loadedLabel}</span>
       </div>
 
       {abstracts.length === 0 ? (
@@ -500,7 +522,7 @@ function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
         </p>
       ) : abstract.answersUnavailable ? (
         <p className="hint">
-          This event stores too many answers to load safely in this view. No partial answer set is shown.
+          This proposal has too many answers to load safely in this view. Its answers are unavailable rather than partially shown.
         </p>
       ) : abstract.answers.length === 0 ? (
         <p className="hint">

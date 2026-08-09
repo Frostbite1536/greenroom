@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { indexAdminAnswers, indexAssignmentProgress, indexOrganizerReviewComments } from "./reads";
+import {
+  ADMIN_ABSTRACT_SNAPSHOT_OPTIONS,
+  indexAdminAnswers,
+  indexAssignmentProgress,
+  indexOrganizerReviewComments,
+  planAdminAnswerRead,
+  summarizeAdminAbstractMetrics,
+  toFiniteAverageScore,
+} from "./reads";
 import { ApiError } from "@/lib/api/http";
 
 test("indexes review progress by abstract without dropping partial assignments", () => {
@@ -15,20 +23,84 @@ test("indexes review progress by abstract without dropping partial assignments",
   assert.equal(progress.get("missing"), undefined);
 });
 
-test("admin answer indexing is all-or-nothing at the event bound", () => {
+test("admin answer allocation isolates one answer flood and retains later complete proposals", () => {
   const row = (abstractId: string, id: string) => ({
     abstractId,
     value: "saved",
     formField: { id, label: id, type: "SHORT_TEXT" as const, options: null },
   });
 
-  const complete = indexAdminAnswers([row("a", "f1"), row("b", "f2")], 2);
-  assert.equal(complete.unavailable, false);
-  assert.equal(complete.byAbstract.get("a")?.length, 1);
+  const plan = planAdminAnswerRead(
+    ["normal-first", "flooded", "normal-later"],
+    [
+      { abstractId: "normal-first", _count: { _all: 1 } },
+      { abstractId: "flooded", _count: { _all: 5 } },
+      { abstractId: "normal-later", _count: { _all: 1 } },
+    ],
+    3,
+  );
+  assert.deepEqual(plan.queryAbstractIds, ["normal-first", "normal-later"]);
+  assert.deepEqual([...plan.unavailableAbstractIds], ["flooded"]);
 
-  const overBound = indexAdminAnswers([row("a", "f1"), row("a", "f2"), row("b", "f3")], 2);
-  assert.equal(overBound.unavailable, true);
-  assert.equal(overBound.byAbstract.size, 0, "must not expose a partial proposal at the cutoff");
+  const indexed = indexAdminAnswers(
+    [row("normal-first", "f1"), row("normal-later", "f2")],
+    plan.expectedAnswerCounts,
+    plan.unavailableAbstractIds,
+  );
+  assert.equal(indexed.byAbstract.get("normal-first")?.length, 1);
+  assert.equal(indexed.byAbstract.get("normal-later")?.length, 1);
+  assert.equal(indexed.byAbstract.has("flooded"), false);
+  assert.equal(indexed.unavailableAbstractIds.has("flooded"), true);
+});
+
+test("a concurrent answer change withholds only that proposal, not its exact peers", () => {
+  const row = (abstractId: string, id: string) => ({
+    abstractId,
+    value: "saved",
+    formField: { id, label: id, type: "SHORT_TEXT" as const, options: null },
+  });
+  const plan = planAdminAnswerRead(
+    ["changed", "stable"],
+    [
+      { abstractId: "changed", _count: { _all: 1 } },
+      { abstractId: "stable", _count: { _all: 1 } },
+    ],
+    3,
+  );
+  const indexed = indexAdminAnswers(
+    [row("changed", "first"), row("changed", "concurrent-extra"), row("stable", "only")],
+    plan.expectedAnswerCounts,
+  );
+
+  assert.equal(indexed.unavailableAbstractIds.has("changed"), true);
+  assert.equal(indexed.byAbstract.has("changed"), false);
+  assert.equal(indexed.unavailableAbstractIds.has("stable"), false);
+  assert.equal(indexed.byAbstract.get("stable")?.[0]?.fieldId, "only");
+});
+
+test("admin abstract metrics stay global rather than reflecting a bounded table page", () => {
+  assert.deepEqual(
+    summarizeAdminAbstractMetrics([
+      { status: "DRAFT", _count: { _all: 80 } },
+      { status: "SUBMITTED", _count: { _all: 12 } },
+      { status: "UNDER_REVIEW", _count: { _all: 6 } },
+      { status: "MAYBE", _count: { _all: 2 } },
+      { status: "ACCEPTED", _count: { _all: 9 } },
+    ]),
+    { total: 109, pending: 20, accepted: 9 },
+  );
+});
+
+test("average score projection retains finite values and rejects null or non-finite values", () => {
+  assert.equal(toFiniteAverageScore(3.5), 3.5);
+  assert.equal(toFiniteAverageScore(null), null);
+  assert.equal(toFiniteAverageScore(undefined), null);
+  assert.equal(toFiniteAverageScore(Number.NaN), null);
+  assert.equal(toFiniteAverageScore(Number.POSITIVE_INFINITY), null);
+});
+
+test("admin abstract parent snapshot contract uses repeatable read isolation", () => {
+  assert.deepEqual(ADMIN_ABSTRACT_SNAPSHOT_OPTIONS, { isolationLevel: "RepeatableRead" });
 });
 
 test("organizer review comments are one de-identified entry per review and admin-only", () => {
