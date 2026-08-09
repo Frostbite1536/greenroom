@@ -1966,6 +1966,40 @@ try {
       s1OtherTemplateAfterPatch?.subject === "Other template",
     s1CrossEventTemplate.status,
   );
+  const s18Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: `s18-trigger-${Date.now().toString(36)}`,
+      subject: "Scheduled session",
+      htmlBody: "<p>Your session is scheduled.</p>",
+      trigger: "session.scheduled",
+    },
+  });
+  const s18OmittedTrigger = await j("PATCH", `/api/comms/templates/${s18Template.id}`, {
+    subject: "Updated scheduled session",
+    htmlBody: "<p>Your session has been updated.</p>",
+  }, admin);
+  const s18AfterOmission = await prisma.emailTemplate.findUnique({
+    where: { id: s18Template.id },
+    select: { trigger: true },
+  });
+  check(
+    "S18 omitting an optional template trigger preserves the stored safety trigger",
+    s18OmittedTrigger.status === 200 &&
+      s18OmittedTrigger.data?.data?.template?.trigger === "session.scheduled" &&
+      s18AfterOmission?.trigger === "session.scheduled",
+    s18OmittedTrigger.status,
+  );
+  const s18ClearTrigger = await j("PATCH", `/api/comms/templates/${s18Template.id}`, {
+    subject: "Updated scheduled session",
+    htmlBody: "<p>Your session has been updated.</p>",
+    trigger: "   ",
+  }, admin);
+  check(
+    "S18 an explicit blank template trigger deliberately clears it",
+    s18ClearTrigger.status === 200 && s18ClearTrigger.data?.data?.template?.trigger === null,
+    s18ClearTrigger.status,
+  );
   const strandedEvaluatorQueue = await fetch(`${BASE}/admin/evaluations`, {
     headers: { cookie: cookie(evalr) },
   });
@@ -2346,6 +2380,63 @@ try {
   const taskPortal = await j("GET", "/portal", null, speaker);
   check("O3 completed task form becomes reviewable from the portal",
     taskPortal.status === 200 && String(taskPortal.data).includes("Review your answers"), taskPortal.status);
+
+  const [s15TaskFormBeforeDelete, s15TaskResponseBeforeDelete] = await Promise.all([
+    prisma.formConfig.findUnique({ where: { id: taskFormId }, select: { id: true, fields: { select: { id: true } } } }),
+    prisma.speakerTask.findUnique({
+      where: { taskId_userId: { taskId: taskTemplate.id, userId: taskSpeaker.id } },
+      select: { responses: true, status: true },
+    }),
+  ]);
+  const s15TaskFormDelete = await j("DELETE", `/api/cfp/forms/${taskFormId}`, null, admin);
+  const [s15TaskFormAfterDelete, s15TaskAfterDelete, s15TaskResponseAfterDelete] = await Promise.all([
+    prisma.formConfig.findUnique({ where: { id: taskFormId }, select: { id: true, fields: { select: { id: true } } } }),
+    prisma.onboardingTask.findUnique({ where: { id: taskTemplate.id }, select: { formConfigId: true } }),
+    prisma.speakerTask.findUnique({
+      where: { taskId_userId: { taskId: taskTemplate.id, userId: taskSpeaker.id } },
+      select: { responses: true, status: true },
+    }),
+  ]);
+  check(
+    "S15 linked task assignments and responses refuse form deletion without severing history",
+    s15TaskFormDelete.status === 409 &&
+      s15TaskFormDelete.data?.error?.code === "FORM_HAS_ABSTRACTS" &&
+      s15TaskFormAfterDelete?.id === s15TaskFormBeforeDelete?.id &&
+      s15TaskFormAfterDelete?.fields.length === s15TaskFormBeforeDelete?.fields.length &&
+      s15TaskAfterDelete?.formConfigId === taskFormId &&
+      JSON.stringify(s15TaskResponseAfterDelete) === JSON.stringify(s15TaskResponseBeforeDelete),
+    s15TaskFormDelete.status,
+  );
+
+  const s15LinkedUnusedForm = await prisma.formConfig.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      name: "S15 linked unused form",
+      slug: `s15-linked-unused-${Date.now().toString(36)}`,
+      fields: { create: [{ key: "note", label: "Note", type: "SHORT_TEXT", required: false, sortOrder: 0 }] },
+    },
+    select: { id: true },
+  });
+  const s15LinkedUnusedTask = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: `S15 linked unused task ${Date.now().toString(36)}`,
+      formConfigId: s15LinkedUnusedForm.id,
+    },
+    select: { id: true },
+  });
+  const s15LinkedUnusedDelete = await j("DELETE", `/api/cfp/forms/${s15LinkedUnusedForm.id}`, null, admin);
+  const s15LinkedUnusedAfterDelete = await prisma.onboardingTask.findUnique({
+    where: { id: s15LinkedUnusedTask.id },
+    select: { formConfigId: true },
+  });
+  check(
+    "S15 any linked task blocks form deletion before it can be detached",
+    s15LinkedUnusedDelete.status === 409 &&
+      s15LinkedUnusedDelete.data?.error?.code === "FORM_HAS_ABSTRACTS" &&
+      s15LinkedUnusedAfterDelete?.formConfigId === s15LinkedUnusedForm.id,
+    s15LinkedUnusedDelete.status,
+  );
 
   // C13: a profile PATCH is a true delta. Omitted values survive, while an
   // explicit null (or whitespace from a non-UI caller) clears only that field.

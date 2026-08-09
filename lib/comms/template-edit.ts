@@ -72,6 +72,16 @@ export const emailTemplateUpdateSchema = z.object({
 export type EmailTemplateUpdate = z.infer<typeof emailTemplateUpdateSchema>;
 
 /**
+ * Make the optional trigger a true PATCH field. A missing key preserves the
+ * stored safety trigger; explicit null or blank text deliberately clears it.
+ */
+export function templateTriggerPatch(trigger: string | null | undefined): { trigger?: string | null } {
+  if (trigger === undefined) return {};
+  const normalized = trigger?.trim();
+  return { trigger: normalized ? normalized : null };
+}
+
+/**
  * Sanitize a submitted body and report whether anything was removed.
  *
  * Storing the sanitized value keeps INV-HTML-001 true at rest as well as on
