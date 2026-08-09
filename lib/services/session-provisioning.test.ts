@@ -6,6 +6,7 @@ import {
   DEFAULT_SESSION_MINUTES,
   planTaskAssignments,
   resolveSessionDuration,
+  TASK_ASSIGNMENT_PAGE_SIZE,
 } from "@/lib/services/session-provisioning";
 
 test("an explicit duration wins over the proposal", () => {
@@ -56,24 +57,40 @@ test("the plan is stable across retries", () => {
   assert.deepEqual(once, twice);
 });
 
-test("task assignment never silently truncates a large event checklist", async () => {
-  const tasks = Array.from({ length: 101 }, (_, index) => ({ id: `task-${index}` }));
+test("task assignment pages through a large checklist without truncating it", async () => {
+  const tasks = Array.from({ length: 101 }, (_, index) => ({
+    id: `task-${index.toString().padStart(3, "0")}`,
+  }));
+  const speakers = [{ userId: "speaker-a" }, { userId: "speaker-b" }];
+  const inserts: { taskId: string; userId: string }[][] = [];
   const tx = {
     onboardingTask: {
-      findMany: async (args: Record<string, unknown>) => {
-        assert.equal("take" in args, false);
-        return tasks;
+      findMany: async (args: { where: { id?: { gt: string } }; take: number }) => {
+        assert.equal(args.take, TASK_ASSIGNMENT_PAGE_SIZE);
+        const start = args.where.id
+          ? tasks.findIndex((task) => task.id === args.where.id?.gt) + 1
+          : 0;
+        return tasks.slice(start, start + args.take);
       },
     },
     sessionSpeaker: {
-      findMany: async () => [{ userId: "speaker-a" }, { userId: "speaker-b" }],
+      findMany: async (args: { where: { userId?: { gt: string } }; take: number }) => {
+        assert.equal(args.take, TASK_ASSIGNMENT_PAGE_SIZE);
+        const start = args.where.userId
+          ? speakers.findIndex((speaker) => speaker.userId === args.where.userId?.gt) + 1
+          : 0;
+        return speakers.slice(start, start + args.take);
+      },
     },
     speakerTask: {
-      createMany: async ({ data }: { data: { taskId: string; userId: string }[] }) => ({
-        count: data.length,
-      }),
+      createMany: async ({ data }: { data: { taskId: string; userId: string }[] }) => {
+        inserts.push(data);
+        return { count: data.length };
+      },
     },
   } as unknown as Prisma.TransactionClient;
 
   assert.equal(await assignOnboardingTasks(tx, "event-1", "session-1"), 202);
+  assert.deepEqual(inserts.map((batch) => batch.length), [100, 100, 2]);
+  assert.equal(new Set(inserts.flat().map(({ taskId, userId }) => `${taskId}:${userId}`)).size, 202);
 });

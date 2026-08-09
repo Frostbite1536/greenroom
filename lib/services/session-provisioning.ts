@@ -17,6 +17,9 @@ import type { Prisma } from "@prisma/client";
 /** Fallback length for an auto-created session when the proposal never stated one. */
 export const DEFAULT_SESSION_MINUTES = 30;
 
+/** Bounds each reconciliation read and insert without omitting any assignments. */
+export const TASK_ASSIGNMENT_PAGE_SIZE = 50;
+
 /**
  * Session length: what the caller asked for, else what the speaker proposed,
  * else the house default. Accepting a talk must never fail merely because the
@@ -108,27 +111,49 @@ export async function assignOnboardingTasks(
   eventId: string,
   sessionId: string,
 ): Promise<number> {
-  const [tasks, speakers] = await Promise.all([
-    tx.onboardingTask.findMany({
-      where: { eventId },
+  let tasksAfter: string | undefined;
+  let assigned = 0;
+
+  do {
+    const tasks = await tx.onboardingTask.findMany({
+      where: { eventId, ...(tasksAfter ? { id: { gt: tasksAfter } } : {}) },
       select: { id: true },
-      orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-    }),
-    // The confirmed session's roster is authoritative for a talk that is on the
-    // programme, and it is what the portal reads.
-    tx.sessionSpeaker.findMany({ where: { sessionId }, select: { userId: true } }),
-  ]);
+      orderBy: { id: "asc" },
+      take: TASK_ASSIGNMENT_PAGE_SIZE,
+    });
+    if (tasks.length === 0) break;
 
-  const pairs = planTaskAssignments(
-    tasks.map((task) => task.id),
-    speakers.map((speaker) => speaker.userId),
-  );
-  if (pairs.length === 0) return 0;
+    let speakersAfter: string | undefined;
+    do {
+      // The confirmed session's roster is authoritative for a talk that is on
+      // the programme, and it is what the portal reads.
+      const speakers = await tx.sessionSpeaker.findMany({
+        where: {
+          sessionId,
+          ...(speakersAfter ? { userId: { gt: speakersAfter } } : {}),
+        },
+        select: { userId: true },
+        orderBy: { userId: "asc" },
+        take: TASK_ASSIGNMENT_PAGE_SIZE,
+      });
+      if (speakers.length === 0) break;
 
-  // `skipDuplicates` on the composite primary key makes this safe to re-run and
-  // safe against a concurrent accept for the same talk.
-  const result = await tx.speakerTask.createMany({ data: pairs, skipDuplicates: true });
-  return result.count;
+      const pairs = planTaskAssignments(
+        tasks.map((task) => task.id),
+        speakers.map((speaker) => speaker.userId),
+      );
+      // `skipDuplicates` on the composite primary key makes this safe to re-run
+      // and safe against concurrent retries. Each insert is bounded to
+      // PAGE_SIZE² rows while the loops reconcile every page.
+      const result = await tx.speakerTask.createMany({ data: pairs, skipDuplicates: true });
+      assigned += result.count;
+      speakersAfter = speakers.at(-1)?.userId;
+    } while (speakersAfter);
+
+    tasksAfter = tasks.at(-1)?.id;
+  } while (tasksAfter);
+
+  return assigned;
 }
 
 /**
