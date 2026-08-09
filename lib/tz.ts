@@ -33,6 +33,29 @@ export function tzOffsetMinutes(date: Date, timeZone: string): number {
   return Math.round((asUtc - date.getTime()) / 60000);
 }
 
+type DateTimeFormatFactory = (
+  locales?: string | string[],
+  options?: Intl.DateTimeFormatOptions,
+) => Intl.DateTimeFormat;
+
+/**
+ * Validate an IANA identifier without logging ordinary invalid user input.
+ * ECMA-402 specifies RangeError for an invalid time zone; other formatter
+ * failures are operational faults and must not be mistaken for bad input.
+ */
+export function isIanaTimeZone(
+  value: string,
+  createFormatter: DateTimeFormatFactory = Intl.DateTimeFormat,
+): boolean {
+  try {
+    createFormatter("en-US", { timeZone: value });
+    return true;
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
+  }
+}
+
 export type ZonedParts = { dateKey: string; hour: number; minute: number; minutesOfDay: number };
 
 /** Break a UTC ISO string into event-local calendar parts. */
@@ -74,6 +97,30 @@ export function formatTime(iso: string, timeZone: string): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(iso));
+}
+
+/**
+ * Render an instant as a complete, stable event-local deadline or appointment.
+ *
+ * Dates reach both server-rendered pages and small client islands. Pinning both
+ * the locale and the stored IANA zone prevents either the server's locale or a
+ * remote speaker's browser zone from changing the actual date or time shown.
+ */
+export function formatEventDateTime(value: Date | string | null | undefined, timeZone: string): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
 }
 
 export function formatDayLabel(dateKey: string, timeZone: string): string {

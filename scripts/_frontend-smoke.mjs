@@ -554,11 +554,85 @@ try {
   check("no 'Still on the programme' warning while the talk is accepted",
     !afterSchedule.text.includes("Still on the programme"));
 
-  // The drawer's 'Change decision' path depends on this being allowed at all.
+  // M4: MAYBE is a pre-confirmation review state. It never provisions a
+  // Session, but it remains available for an unconfirmed proposal.
+  const maybeSubmit = await req("POST", "/api/cfp/submissions", {
+    formConfigId: fx.form.id,
+    title: "Scratch: Maybe before confirmation",
+    abstract: "A proposal deliberately held for more review.",
+    format: "Talk",
+    durationMinutes: 30,
+    categoryId: fx.category.id,
+    speakers: [{ email: "maybe.speaker@example.com", name: "Maybe Speaker", isPrimary: true }],
+    answers: { audience_level: "beginner", learning_objectives: "One more review pass." },
+    intent: "submit",
+  }, null);
+  const maybeAbstractId = maybeSubmit.data?.data?.id;
+  check("M4 creates an unconfirmed proposal for Maybe", maybeSubmit.status === 201 && Boolean(maybeAbstractId),
+    `${maybeSubmit.status} ${JSON.stringify(maybeSubmit.data?.error ?? "")}`);
+  const maybe = await req("POST", "/api/evaluations/decisions", {
+    abstractId: maybeAbstractId, decision: "MAYBE",
+  }, admin);
+  check("maybe decision → 200", maybe.status === 200,
+    `${maybe.status} ${JSON.stringify(maybe.data?.error ?? "")}`);
+  check("unconfirmed maybe remains non-final and creates no talk",
+    maybe.data?.data?.status === "MAYBE"
+    && maybe.data?.data?.decidedAt === null
+    && maybe.data?.data?.sessionCreated === false
+    && maybe.data?.data?.tasksAssigned === 0
+    && maybe.data?.data?.session === null,
+    JSON.stringify(maybe.data?.data ?? {}));
+  check("unconfirmed maybe never provisions a session",
+    (await prisma.session.count({ where: { sourceAbstractId: maybeAbstractId } })) === 0);
+
+  const afterMaybe = await req("GET", "/admin/abstracts", null, admin);
+  check("pipeline renders a Maybe status pill",
+    /class="pill warn">Maybe<\/span>/.test(afterMaybe.text));
+  check("Maybe status filter exposes its pressed state",
+    /aria-pressed="false"[^>]*>Maybe(?:<!-- -->)? <span class="count">1<\/span>/.test(afterMaybe.text));
+  check("unconfirmed maybe is not presented as a programme mismatch",
+    !afterMaybe.text.includes("Still on the programme"));
+
+  // A confirmed Session is programme truth: the API blocks MAYBE and the UI
+  // exposes the same unavailable action state to assistive technology.
+  const confirmedMaybe = await req("POST", "/api/evaluations/decisions", {
+    abstractId: convertedAbstractId, decision: "MAYBE",
+  }, admin);
+  check("confirmed proposal refuses Maybe → 409 MAYBE_NOT_AVAILABLE",
+    confirmedMaybe.status === 409 && confirmedMaybe.data?.error?.code === "MAYBE_NOT_AVAILABLE",
+    `${confirmedMaybe.status} ${JSON.stringify(confirmedMaybe.data?.error ?? "")}`);
+  check("confirmed proposal UI has no Maybe action",
+    afterMaybe.text.includes("Maybe is unavailable because this talk is confirmed."));
+
+  // The table's accessible row text is useful, but the decision controls live
+  // in a client drawer. Open its server-rendered deep-link states so this
+  // smoke proves the confirmed drawer itself retains the legal choices only.
+  const confirmedDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin);
+  const confirmedDecisionDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}&mode=decide`, null, admin);
+  const drawerButtons = (html) => {
+    const drawerIndex = html.indexOf('role="dialog"');
+    if (drawerIndex === -1) return [];
+    const drawer = html.slice(drawerIndex);
+    return [...drawer.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
+      .map((match) => match[1].replace(/<[^>]+>/g, "").replace(/&[^;]+;/g, "").trim());
+  };
+  const normalDrawerButtons = drawerButtons(confirmedDrawer.text);
+  const decisionDrawerButtons = drawerButtons(confirmedDecisionDrawer.text);
+  check("confirmed proposal drawer renders its normal change-decision control",
+    confirmedDrawer.status === 200 && normalDrawerButtons.includes("Change decision"));
+  check("confirmed proposal decision drawer keeps Accept and Decline but omits Maybe",
+    confirmedDecisionDrawer.status === 200
+    && decisionDrawerButtons.includes("Accept")
+    && decisionDrawerButtons.includes("Decline")
+    && !decisionDrawerButtons.includes("Maybe"),
+    JSON.stringify(decisionDrawerButtons));
+
+  // The W2 safeguard remains for the final decision that can legally change a
+  // confirmed proposal: declining it does not delete the existing Session.
   const reverse = await req("POST", "/api/evaluations/decisions", {
     abstractId: convertedAbstractId, decision: "REJECTED",
   }, admin);
-  check("a decision on an ACCEPTED abstract is allowed → 200", reverse.status === 200,
+  check("a confirmed proposal can later be declined → 200", reverse.status === 200,
     `${reverse.status} ${JSON.stringify(reverse.data?.error ?? "")}`);
   check("reversed decision does NOT delete the talk (INV-DOMAIN-001)",
     (await prisma.session.count({ where: { id: convertedSessionId } })) === 1);

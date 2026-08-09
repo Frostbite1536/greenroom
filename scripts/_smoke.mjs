@@ -15,6 +15,11 @@ const SCRATCH_EVENT = {
   name: "Backend Scratch Event",
   slug: "scratch-backend",
 };
+const OTHER_SCRATCH_EVENT = {
+  id: "scratch-backend-other",
+  name: "Other Backend Scratch Event",
+  slug: "scratch-backend-other",
+};
 
 // Signed scratch-only identities (@scratch.test) so demo personas are never touched.
 const admin = {
@@ -133,7 +138,7 @@ async function resetScratchEvent() {
   if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
     throw new Error("Refusing to run: smoke must never target the demo event.");
   }
-  await prisma.event.deleteMany({ where: { id: SCRATCH_EVENT.id } });
+  await prisma.event.deleteMany({ where: { id: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } } });
   await prisma.event.create({
     data: {
       ...SCRATCH_EVENT,
@@ -152,6 +157,13 @@ async function resetScratchEvent() {
           { title: "Scratch task: send headshot", required: false, sortOrder: 1 },
         ],
       },
+    },
+  });
+  await prisma.event.create({
+    data: {
+      ...OTHER_SCRATCH_EVENT,
+      timezone: "UTC",
+      rooms: { create: [{ name: "Other Scratch Room", sortOrder: 0 }] },
     },
   });
   for (const identity of [admin, speaker, evalr]) {
@@ -229,6 +241,84 @@ try {
     JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
       JSON.stringify(["AI", "Community", "Systems"]),
   );
+
+  // M5: active-event settings are admin-only and use event-local calendar
+  // dates, never the browser's timezone. Rooms are scoped server-side too.
+  const settingsAnonymous = await j("GET", "/api/admin/settings");
+  check("M5 settings require sign-in", settingsAnonymous.status === 401, settingsAnonymous.status);
+  const settingsSpeaker = await j("GET", "/api/admin/settings", null, speaker);
+  check("M5 settings refuse speakers", settingsSpeaker.status === 403, settingsSpeaker.status);
+  const settings = await j("GET", "/api/admin/settings", null, admin);
+  check("M5 settings returns only the active event plus rooms, tracks, and categories",
+    settings.status === 200 &&
+      settings.data?.data?.event?.id === SCRATCH_EVENT.id &&
+      settings.data?.data?.event?.timezone === "UTC" &&
+      settings.data?.data?.rooms?.length === 2 &&
+      settings.data?.data?.tracks?.[0]?.name === "Scratch Track" &&
+      JSON.stringify(settings.data?.data?.categories?.map((category) => category.name)) ===
+        JSON.stringify(["AI", "Community", "Systems"]),
+    JSON.stringify(settings.data?.data));
+  const badSettingsZone = await j("PATCH", "/api/admin/settings", { timezone: "Mars/Olympus_Mons" }, admin);
+  check("M5 invalid IANA timezone is refused", badSettingsZone.status === 422, badSettingsZone.status);
+  const badSettingsRange = await j("PATCH", "/api/admin/settings", {
+    startsOn: "2026-05-14", endsOn: "2026-05-12",
+  }, admin);
+  check("M5 event date range is ordered server-side", badSettingsRange.status === 422, badSettingsRange.status);
+  const forgedSettingsEvent = await j("PATCH", "/api/admin/settings", {
+    eventId: "demo-event", name: "Forged event update",
+  }, admin);
+  check("M5 settings derives event scope from the session, not a request id", forgedSettingsEvent.status === 422, forgedSettingsEvent.status);
+  const datedSettings = await j("PATCH", "/api/admin/settings", {
+    name: "Settings Scratch Event", timezone: "America/Los_Angeles", startsOn: "2026-05-12", endsOn: "2026-05-14",
+  }, admin);
+  check("M5 settings stores and serializes event-local dates",
+    datedSettings.status === 200 &&
+      datedSettings.data?.data?.event?.name === "Settings Scratch Event" &&
+      datedSettings.data?.data?.event?.timezone === "America/Los_Angeles" &&
+      datedSettings.data?.data?.event?.startsOn === "2026-05-12" &&
+      datedSettings.data?.data?.event?.endsOn === "2026-05-14",
+    JSON.stringify(datedSettings.data?.data));
+  const timezoneOnly = await j("PATCH", "/api/admin/settings", { timezone: "America/New_York" }, admin);
+  check("M5 timezone-only settings update preserves local event dates",
+    timezoneOnly.status === 200 &&
+      timezoneOnly.data?.data?.event?.timezone === "America/New_York" &&
+      timezoneOnly.data?.data?.event?.startsOn === "2026-05-12" &&
+      timezoneOnly.data?.data?.event?.endsOn === "2026-05-14",
+    JSON.stringify(timezoneOnly.data?.data));
+
+  const roomsBefore = await j("GET", "/api/admin/settings/rooms", null, admin);
+  check("M5 room read is event-scoped and stable", roomsBefore.status === 200 && roomsBefore.data?.data?.rooms?.length === 2, roomsBefore.status);
+  const roomSpeaker = await j("POST", "/api/admin/settings/rooms", { name: "No speaker room" }, speaker);
+  check("M5 room writes refuse speakers", roomSpeaker.status === 403, roomSpeaker.status);
+  const newRoom = await j("POST", "/api/admin/settings/rooms", {
+    name: "Settings Room", capacity: 42, sortOrder: 8,
+  }, admin);
+  const settingsRoomId = newRoom.data?.data?.room?.id;
+  check("M5 admin creates an event-scoped room", newRoom.status === 201 && !!settingsRoomId, newRoom.status);
+  const duplicateRoom = await j("POST", "/api/admin/settings/rooms", {
+    name: "Settings Room", capacity: 42,
+  }, admin);
+  check("M5 duplicate room names are refused", duplicateRoom.status === 409 && duplicateRoom.data?.error?.code === "ROOM_NAME_TAKEN", duplicateRoom.status);
+  const invalidRoom = await j("POST", "/api/admin/settings/rooms", { name: "Bad Room", capacity: 0 }, admin);
+  check("M5 invalid room capacity is refused", invalidRoom.status === 422, invalidRoom.status);
+  const updatedRoom = await j("PATCH", "/api/admin/settings/rooms", {
+    id: settingsRoomId, capacity: null, sortOrder: 9,
+  }, admin);
+  check("M5 admin updates the active event room", updatedRoom.status === 200 && updatedRoom.data?.data?.room?.capacity === null && updatedRoom.data?.data?.room?.sortOrder === 9, updatedRoom.status);
+  const otherRoom = await prisma.room.findFirstOrThrow({ where: { eventId: OTHER_SCRATCH_EVENT.id }, select: { id: true } });
+  const crossEventRoom = await j("PATCH", "/api/admin/settings/rooms", { id: otherRoom.id, name: "Nope" }, admin);
+  check("M5 room updates cannot target another event", crossEventRoom.status === 404 && crossEventRoom.data?.error?.code === "ROOM_NOT_FOUND", crossEventRoom.status);
+  const crossEventRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${otherRoom.id}`, null, admin);
+  const otherRoomAfterCrossEventDelete = await prisma.room.findUnique({ where: { id: otherRoom.id }, select: { id: true } });
+  check("M5 room deletion cannot target another event", crossEventRoomDelete.status === 404 && crossEventRoomDelete.data?.error?.code === "ROOM_NOT_FOUND" && otherRoomAfterCrossEventDelete?.id === otherRoom.id, crossEventRoomDelete.status);
+  const unusedRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${settingsRoomId}`, null, admin);
+  const deletedRoom = await prisma.room.findUnique({ where: { id: settingsRoomId }, select: { id: true } });
+  check("M5 admin deletes an unused event-scoped room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId && !deletedRoom, unusedRoomDelete.status);
+
+  const m5Category = await j("POST", "/api/cfp/categories", {
+    eventId: SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
+  }, admin);
+  check("M5 retains the existing admin category create path", m5Category.status === 201 && !!m5Category.data?.data?.id, m5Category.status);
 
   const importPayload = {
     eventId: SCRATCH_EVENT.id,
@@ -579,13 +669,39 @@ try {
       reviewedAbstract?.avgScore === 5,
   );
 
-  // 10. Convert before acceptance must fail (INV-DOMAIN-001)
-  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
-  check("convert before acceptance refused", early.status === 409, early.data?.error?.code);
+  // M4: MAYBE is a non-final, evaluable decision state. It creates neither a
+  // Session nor tasks, and only an event admin may set it.
+  const anonymousMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" });
+  check("M4 anonymous callers cannot set MAYBE",
+    anonymousMaybe.status === 401 && anonymousMaybe.data?.error?.code === "UNAUTHENTICATED", anonymousMaybe.status);
+  const evaluatorMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, evalr);
+  check("M4 evaluators cannot set MAYBE",
+    evaluatorMaybe.status === 403, evaluatorMaybe.status);
+  const maybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 MAYBE is serialized as a non-final decision with no session",
+    maybe.status === 200 &&
+      maybe.data?.data?.status === "MAYBE" &&
+      maybe.data?.data?.decidedAt === null &&
+      maybe.data?.data?.session === null &&
+      maybe.data?.data?.sessionCreated === false &&
+      maybe.data?.data?.tasksAssigned === 0,
+    JSON.stringify(maybe.data?.data));
+  check("M4 MAYBE never provisions a session or task assignment",
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 0 &&
+      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === 0);
+  const maybeScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: "worth a closer look" }], complete: true,
+  }, evalr);
+  check("M4 an existing evaluator can still score a MAYBE proposal",
+    maybeScore.status === 200 && maybeScore.data?.data?.complete === true, maybeScore.status);
 
-  // 11. Accept, then convert to a Session
+  // 10. Convert before acceptance (including MAYBE) must fail (INV-DOMAIN-001)
+  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("M4 MAYBE cannot convert into a session", early.status === 409, early.data?.error?.code);
+
+  // 11. A MAYBE proposal remains decidable: accepting it provisions the Session.
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
-  check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
+  check("M4 MAYBE can later be accepted", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
@@ -604,11 +720,11 @@ try {
     includeFeedback: true,
   }, admin);
   check(
-    "O2 decision preview includes comments but never scores or reviewer identities",
+    "O2 decision preview includes the latest comments but never scores or reviewer identities",
     decisionPreview.status === 200 &&
       decisionPreview.data?.data?.preview === true &&
       decisionPreview.data?.data?.feedbackCount === 1 &&
-      decisionPreview.data?.data?.html?.includes("strong") &&
+      decisionPreview.data?.data?.html?.includes("worth a closer look") &&
       !decisionPreview.data?.data?.html?.includes("5/5") &&
       !/reviewer|evaluator/i.test(decisionPreview.data?.data?.html ?? ""),
     decisionPreview.status,
@@ -820,6 +936,20 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("place session on schedule", place.status === 200 && !!place.data?.data?.slot?.id, place.status);
+  const scheduledRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${roomA}`, null, admin);
+  const scheduledSlotAfterDeleteRefusal = await prisma.scheduleSlot.findUnique({
+    where: { id: place.data?.data?.slot?.id },
+    select: { id: true, roomId: true },
+  });
+  const scheduledRoomAfterDeleteRefusal = await prisma.room.findUnique({ where: { id: roomA }, select: { id: true } });
+  check(
+    "M5 refuses in-use room deletion without cascading its schedule slot",
+    scheduledRoomDelete.status === 409 &&
+      scheduledRoomDelete.data?.error?.code === "ROOM_IN_USE" &&
+      scheduledRoomAfterDeleteRefusal?.id === roomA &&
+      scheduledSlotAfterDeleteRefusal?.roomId === roomA,
+    scheduledRoomDelete.status,
+  );
 
   // 14. Room conflict: a second session in the same room at the same time
   const sub2 = await j("POST", "/api/cfp/submissions", {
@@ -869,6 +999,54 @@ try {
   // 18. Public embed shows placed sessions with a null session
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
+
+  // C12: one real task deadline is rendered in the event timezone and the
+  // invitation path remains forced-mock. This is scratch-only and deliberately
+  // runs while the speaker has a fully scheduled session above.
+  await prisma.event.update({ where: { id: SCRATCH_EVENT.id }, data: { timezone: "America/Los_Angeles" } });
+  const c12Task = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "C12 scratch deadline",
+      required: true,
+      dueAt: new Date("2026-05-02T06:59:00.000Z"),
+      sortOrder: 99,
+    },
+  });
+  // The scheduled session above belongs to the submitted primary speaker, not
+  // the signed scratch account used for portal authorization checks.
+  const c12Speaker = await prisma.user.findUniqueOrThrow({ where: { email: "spk@x.com" } });
+  await prisma.speakerTask.create({ data: { taskId: c12Task.id, userId: c12Speaker.id, status: "TODO" } });
+  const c12Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "c12-task-reminder",
+      subject: "Deadline {{dueDate}}",
+      htmlBody: "<p>{{talkTitle}} at {{slotTime}} in {{roomName}}. {{calendarInviteNote}}</p>",
+      trigger: "task.reminder",
+    },
+  });
+  const c12Reminder = await j("POST", "/api/comms/reminders", {
+    eventId: SCRATCH_EVENT.id,
+    templateKey: c12Template.key,
+    recipientUserIds: [c12Speaker.id],
+    includeCalendarInvite: true,
+  }, admin);
+  const c12Dispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c12Template.id, recipient: c12Speaker.email },
+    select: { status: true, providerId: true, variables: true },
+  });
+  const c12Variables = c12Dispatch?.variables;
+  check(
+    "C12 reminder uses the task deadline and event timezone in forced mock mode",
+    c12Reminder.status === 200 &&
+      c12Dispatch?.status === "mocked" &&
+      c12Dispatch.providerId?.startsWith("mock:") &&
+      c12Variables?.dueDate === "Fri, May 1, 2026, 11:59 PM PDT" &&
+      typeof c12Variables?.slotTime === "string" && c12Variables.slotTime.endsWith("PDT") &&
+      c12Variables.calendarInviteNote === "A calendar invite is attached.",
+    c12Reminder.status,
+  );
 
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
   // the intended read models (no reviewer data or unplaced sessions).
@@ -1143,6 +1321,43 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
+
+  const m4FixtureLimit = 100;
+  const m4TaskIds = (await prisma.onboardingTask.findMany({
+    where: { eventId: SCRATCH_EVENT.id }, select: { id: true }, take: m4FixtureLimit + 1,
+  })).map((task) => task.id);
+  const m4SpeakerIds = (await prisma.sessionSpeaker.findMany({
+    where: { sessionId }, select: { userId: true }, take: m4FixtureLimit + 1,
+  })).map((speakerRow) => speakerRow.userId);
+  if (m4TaskIds.length > m4FixtureLimit || m4SpeakerIds.length > m4FixtureLimit) {
+    throw new Error(`M4 scratch fixture exceeds its ${m4FixtureLimit}-row bound`);
+  }
+  const m4CohortWhere = { taskId: { in: m4TaskIds }, userId: { in: m4SpeakerIds } };
+  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: m4CohortWhere });
+  const expectedM4Backfill = (m4TaskIds.length * m4SpeakerIds.length) - m4TasksBeforeMaybe;
+
+  // MAYBE is a pre-confirmation state. Refusing it once a Session exists keeps
+  // every public programme consumer on one status and preserves the Session.
+  const scheduledMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 a confirmed Session cannot return to MAYBE",
+    scheduledMaybe.status === 409 && scheduledMaybe.data?.error?.code === "MAYBE_NOT_AVAILABLE",
+    scheduledMaybe.data?.error?.code);
+  check("M4 the refused MAYBE transition preserves accepted programme truth and its task cohort",
+    (await prisma.abstract.findUnique({ where: { id: abstractId }, select: { status: true } }))?.status === "ACCEPTED" &&
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) === m4TasksBeforeMaybe);
+  const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
+  check("M4 re-accepting still avoids duplicate Session provisioning and reconciles missing tasks",
+    restoredAccepted.status === 200 &&
+      restoredAccepted.data?.data?.status === "ACCEPTED" &&
+      typeof restoredAccepted.data?.data?.decidedAt === "string" &&
+      restoredAccepted.data?.data?.session?.id === sessionId &&
+      restoredAccepted.data?.data?.sessionCreated === false &&
+      restoredAccepted.data?.data?.tasksAssigned === expectedM4Backfill &&
+      await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) ===
+        m4TasksBeforeMaybe + expectedM4Backfill,
+    JSON.stringify(restoredAccepted.data?.data));
 
   const reversed = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "REJECTED" }, admin);
   check("W2 reversing a decision reports the still-scheduled session",

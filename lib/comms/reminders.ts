@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { formatEventDateTime } from "@/lib/tz";
 
 const idSchema = z.string().trim().min(1).max(191);
 
@@ -36,6 +37,8 @@ export type EligibleSpeaker = {
   name: string;
   email: string;
   openTasks: number;
+  /** Due dates for the currently open tasks, kept event-scoped by the route. */
+  openTaskDueDates: Date[];
   sessions: ReminderSession[];
 };
 
@@ -49,6 +52,67 @@ export function orderReminderSessions(sessions: ReminderSession[]): ReminderSess
     if (leftStart !== rightStart) return leftStart - rightStart;
     return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
+}
+
+export type ScheduledReminderSession = ReminderSession & {
+  startsAt: Date;
+  endsAt: Date;
+  roomName: string;
+};
+
+/**
+ * One bounded definition of a scheduled speaker session. It deliberately
+ * matches the calendar attachment contract: a time window and a room are both
+ * required before email may describe a session as scheduled.
+ */
+export function scheduledReminderSessions(sessions: ReminderSession[]): ScheduledReminderSession[] {
+  return orderReminderSessions(sessions).filter((session): session is ScheduledReminderSession =>
+    Boolean(session.startsAt && session.endsAt && session.roomName),
+  );
+}
+
+export function hasScheduledReminderSession(speaker: EligibleSpeaker): boolean {
+  return scheduledReminderSessions(speaker.sessions).length > 0;
+}
+
+function earliestOpenTaskDeadline(speaker: EligibleSpeaker): Date | null {
+  const deadlines = speaker.openTaskDueDates.filter((date) => !Number.isNaN(date.getTime()));
+  if (deadlines.length === 0) return null;
+  return deadlines.reduce((earliest, date) => date.getTime() < earliest.getTime() ? date : earliest);
+}
+
+/**
+ * Runtime fields for a reminder. Schedule-specific values intentionally remain
+ * empty until this speaker has a real scheduled session; callers must use the
+ * same calendar attachment result for the attachment note.
+ */
+export function reminderVariables({
+  recipient,
+  eventName,
+  timeZone,
+  calendarInviteAttached,
+  variables = {},
+}: {
+  recipient: EligibleSpeaker;
+  eventName: string;
+  timeZone: string;
+  calendarInviteAttached: boolean;
+  variables?: Record<string, string>;
+}): Record<string, string> {
+  const scheduled = scheduledReminderSessions(recipient.sessions)[0] ?? null;
+  const dueDate = earliestOpenTaskDeadline(recipient);
+
+  return {
+    ...variables,
+    speakerName: recipient.name,
+    eventName,
+    openTasks: String(recipient.openTasks),
+    dueDate: formatEventDateTime(dueDate, timeZone) ?? "",
+    talkTitle: scheduled?.title ?? "",
+    slotTime: formatEventDateTime(scheduled?.startsAt, timeZone) ?? "",
+    roomName: scheduled?.roomName ?? "",
+    calendarInviteNote: calendarInviteAttached && scheduled ? "A calendar invite is attached." : "",
+  };
 }
 
 /**
@@ -106,10 +170,7 @@ export function buildSpeakerCalendarInvite(
   eventName: string,
   appUrl?: string,
 ): { filename: string; content: string } | null {
-  const scheduled = orderReminderSessions(speaker.sessions)
-    .filter((session): session is ReminderSession & { startsAt: Date; endsAt: Date; roomName: string } =>
-      Boolean(session.startsAt && session.endsAt && session.roomName),
-    );
+  const scheduled = scheduledReminderSessions(speaker.sessions);
   const events: IcsEvent[] = scheduled.map((session) => ({
       uid: `${session.id}@greenroom`,
       title: session.title,
