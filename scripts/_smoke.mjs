@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
+import { observeBeforeDeadline } from "./smoke-deadline.mjs";
 
 /**
  * Backend E2E smoke.
@@ -84,11 +85,12 @@ function publicSubmissionRateFingerprint(domain, value) {
     .digest("hex");
 }
 
-const j = async (method, path, body, sess, extraHeaders = {}) => {
+const j = async (method, path, body, sess, extraHeaders = {}, { signal } = {}) => {
   const res = await fetch(BASE + path, {
     method,
     headers: publicSubmissionHeaders(method, path, extraHeaders, sess),
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
@@ -1922,20 +1924,32 @@ try {
     title: "S16 ordered edit",
   }, speaker);
   const speakerHeldFormLocksBeforeAbstract = await waitForSpeakerFormLocks(s16OrderLockBaseline);
-  const compatiblePublicSubmit = await j("POST", "/api/cfp/submissions", {
+  const compatiblePublicAbort = new AbortController();
+  const compatiblePublicSubmit = j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "S16 concurrent public writer",
     speakers: [{ email: "s16-public@scratch.test", name: "S16 Public", isPrimary: true }],
     answers: { title_note: "public", consent: true }, intent: "submit",
-  });
-  releaseS16AbstractLock();
-  await s16AbstractHolder;
+  }, undefined, {}, { signal: compatiblePublicAbort.signal });
+  let compatiblePublicObservation;
+  try {
+    // If a lock-order regression blocks this public writer, do not leave the
+    // held advisory lock waiting forever. The result still fails honestly.
+    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 5_000);
+  } finally {
+    if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
+    releaseS16AbstractLock();
+    await s16AbstractHolder;
+  }
+  const compatiblePublicResult = compatiblePublicObservation?.value;
   const waitingSpeakerEditResult = await waitingSpeakerEdit;
   check("S16 speaker locks FormConfig and fields before the Abstract advisory lock",
     speakerHeldFormLocksBeforeAbstract && waitingSpeakerEditResult.status === 200,
     waitingSpeakerEditResult.status);
   check("S16 compatible public writer completes while speaker waits on Abstract",
-    compatiblePublicSubmit.status === 201,
-    compatiblePublicSubmit.status);
+    compatiblePublicObservation?.completed && !compatiblePublicObservation.error && compatiblePublicResult?.status === 201,
+    compatiblePublicObservation?.completed
+      ? compatiblePublicObservation.error?.name ?? compatiblePublicResult?.status
+      : "timed out before Abstract release");
 
   // The Session and editability checks are also post-lock facts. A competing
   // programme writer makes this formerly submitted abstract ACCEPTED and links
