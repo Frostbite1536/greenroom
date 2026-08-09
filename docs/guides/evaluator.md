@@ -3,7 +3,8 @@
 For programme committee members and reviewers. Signed in as **Ravi Patel**, an evaluator for
 **Forward 2026**.
 
-Your whole job lives on one page: **Evaluations**.
+Your whole job lives on one page: **Evaluations**. The global **Abstracts** pipeline is for event
+admins; your workspace contains only assignments addressed to you.
 
 ---
 
@@ -24,12 +25,12 @@ the first unscored, reviewable proposal and, after each submitted review, jumps 
 one — so you can work straight down the list without hunting. If a speaker withdraws, that row
 is labelled **Withdrawn**, excluded from progress, and shown without a scoring form.
 
-If the round is **blind**, a "Blind" badge appears and speaker profiles are hidden in your
-queue and on the proposal you are scoring. The same boundary hides identities on your
-proposal list for work covered by a blind plan. Proposal titles and free text can still name a
-speaker, so Greenroom warns rather than promising full anonymity. Custom form answers are
-withheld from evaluators in both blind and non-blind rounds. (Forward 2026's seeded round is
-not blind.)
+If the plan that owns your assignment is **blind**, a "Blind" badge appears and speaker profiles
+are hidden in your queue and on the proposal you are scoring. The server omits those identities
+from the blind assignment/queue response rather than merely concealing them in the browser.
+Proposal titles and free text can still name a speaker, so Greenroom warns rather than promising
+full anonymity. Custom form answers are withheld from evaluators in both blind and non-blind
+rounds. (Forward 2026's seeded round is not blind.)
 
 ---
 
@@ -74,8 +75,8 @@ To remove a saved note, choose **Clear note**, then choose **Update review**.
 **Why is a proposal not in my queue?** Queues are per person. Ask the programme team to assign
 it to you; there is nothing you can do from this page.
 
-**Nothing is in my queue at all.** Either the round has not started or nothing has been
-assigned yet. The page says which.
+**Nothing is in my queue at all.** There are no review assignments for you in the displayed
+round yet.
 
 **Can I see who else scored it?** No. You see your own scores; averages are for the programme
 team.
