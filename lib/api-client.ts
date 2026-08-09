@@ -33,6 +33,26 @@ export async function apiPost<T>(
   }
 }
 
+/** PATCH helper for small, validated updates such as event and room settings. */
+export async function apiPatch<T>(
+  path: string,
+  body: unknown,
+): Promise<ApiResponse<T>> {
+  try {
+    const res = await fetch(path, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return (await res.json()) as ApiResponse<T>;
+  } catch {
+    return {
+      ok: false,
+      error: { code: "NETWORK_ERROR", message: "Could not reach the server. Check your connection and try again." },
+    };
+  }
+}
+
 export async function apiDelete<T>(path: string): Promise<ApiResponse<T>> {
   try {
     const res = await fetch(path, { method: "DELETE" });

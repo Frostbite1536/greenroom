@@ -28,6 +28,7 @@ import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
+import { zonedParts } from "@/lib/tz";
 import {
   buildPublicSpeakers,
   PUBLIC_SPEAKER_LIMITS,
@@ -813,6 +814,70 @@ export async function getEmbedTargets(): Promise<EmbedTargets> {
     }),
   ]);
   return { event, scheduledSessions, publicSpeakers };
+}
+
+// ---- Event settings -------------------------------------------------------
+
+export type EventSettingsView = {
+  event: {
+    id: string;
+    name: string;
+    slug: string;
+    timezone: string;
+    /** Event-calendar dates, not instants in the administrator's browser timezone. */
+    startsOn: string | null;
+    endsOn: string | null;
+  };
+  rooms: { id: string; name: string; capacity: number | null; sortOrder: number }[];
+  tracks: { id: string; name: string; color: string; sortOrder: number }[];
+  categories: {
+    id: string;
+    name: string;
+    description: string | null;
+    defaultTeamKey: string | null;
+    sortOrder: number;
+  }[];
+};
+
+/** The server read mirrors GET /api/admin/settings without an internal HTTP hop. */
+export async function getEventSettings(): Promise<EventSettingsView> {
+  const ctx = await pageContext(["ADMIN"]);
+  const settingsOrder = [{ sortOrder: "asc" as const }, { name: "asc" as const }, { id: "asc" as const }];
+  const [event, rooms, tracks, categories] = await Promise.all([
+    prisma.event.findUniqueOrThrow({
+      where: { id: ctx.eventId },
+      select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
+    }),
+    prisma.room.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: settingsOrder,
+      select: { id: true, name: true, capacity: true, sortOrder: true },
+    }),
+    prisma.track.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: settingsOrder,
+      select: { id: true, name: true, color: true, sortOrder: true },
+    }),
+    prisma.category.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: settingsOrder,
+      select: { id: true, name: true, description: true, defaultTeamKey: true, sortOrder: true },
+    }),
+  ]);
+
+  return {
+    event: {
+      id: event.id,
+      name: event.name,
+      slug: event.slug,
+      timezone: event.timezone,
+      startsOn: event.startsAt ? zonedParts(event.startsAt.toISOString(), event.timezone).dateKey : null,
+      endsOn: event.endsAt ? zonedParts(event.endsAt.toISOString(), event.timezone).dateKey : null,
+    },
+    rooms,
+    tracks,
+    categories,
+  };
 }
 
 // ---- Evaluation setup (admin) ---------------------------------------------
