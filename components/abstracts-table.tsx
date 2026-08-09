@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarPlus, FileStack, Search, Star, X } from "lucide-react";
 import type { AbstractRow } from "@/lib/data/reads";
+import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 
@@ -332,6 +333,8 @@ function AbstractDrawer({
           </div>
         </div>
 
+        <SubmissionAnswers abstract={abstract} />
+
         {isProgrammeMismatch(abstract) ? (
           <p className="hint" style={{ marginTop: 10 }}>
             {abstract.status === "WITHDRAWN"
@@ -381,5 +384,57 @@ function AbstractDrawer({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the speaker actually filled in on the CFP form. Previously missing
+ * entirely, so an admin reviewing a proposal could not see any of the custom
+ * questions their own form asked.
+ */
+function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
+  const answered = abstract.answers.filter((a) => !formatAnswer(a.value, a).empty);
+
+  return (
+    <section style={{ marginTop: 18 }} aria-labelledby="submission-answers-heading">
+      <h3 id="submission-answers-heading" style={{ fontSize: 13, margin: "0 0 8px" }}>
+        Form answers
+        {abstract.answers.length > 0 ? (
+          <span className="hint" style={{ fontWeight: 400 }}> · {answered.length} of {abstract.answers.length} answered</span>
+        ) : null}
+      </h3>
+
+      {abstract.answersUnavailable ? (
+        <p className="hint">
+          This event stores too many answers to load them all on this page. Open the proposal in
+          the CFP form to review it.
+        </p>
+      ) : abstract.answers.length === 0 ? (
+        <p className="hint">
+          This proposal has no extra answers — “{abstract.formName}” only asked for the title,
+          summary and speakers.
+        </p>
+      ) : (
+        <dl className="answer-list">
+          {abstract.answers.map((a) => {
+            const formatted = formatAnswer(a.value, a);
+            return (
+              <div className="answer-item" key={a.fieldId}>
+                <dt>{a.label}</dt>
+                <dd className={formatted.empty ? "muted" : undefined}>
+                  {formatted.isUrl ? (
+                    <a href={formatted.text} target="_blank" rel="noopener noreferrer nofollow">
+                      {formatted.text}
+                    </a>
+                  ) : (
+                    formatted.text
+                  )}
+                </dd>
+              </div>
+            );
+          })}
+        </dl>
+      )}
+    </section>
   );
 }

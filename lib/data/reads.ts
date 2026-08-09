@@ -183,6 +183,21 @@ export async function getFormForBuilder(
 
 // ---- Abstracts pipeline ---------------------------------------------------
 
+export type AnswerRow = {
+  fieldId: string;
+  label: string;
+  type: FormFieldType;
+  options: FieldOption[] | null;
+  value: unknown;
+};
+
+/**
+ * One page read will materialize at most this many stored answers across the
+ * whole event. ~40 abstracts x 125 fields; real CFP forms carry well under 30
+ * questions, so this is a guard against a pathological event, not a normal cap.
+ */
+const ADMIN_ANSWER_LIMIT = 5_000;
+
 export type AbstractRow = {
   id: string;
   title: string;
@@ -197,6 +212,14 @@ export type AbstractRow = {
   reviewsComplete: number;
   reviewsTotal: number;
   avgScore: number | null;
+  /** Custom CFP answers, in form order. Empty when the form had no extra questions. */
+  answers: AnswerRow[];
+  /**
+   * True when this event has more stored answers than one page read will
+   * materialize, so this row's answers were not loaded. Surfaced in the UI
+   * rather than silently showing an empty section.
+   */
+  answersUnavailable: boolean;
   hasSession: boolean;
   /** The confirmed talk created from this proposal, if conversion has happened. */
   sessionId: string | null;
@@ -224,7 +247,7 @@ export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup
 export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
 
-  const [abstracts, assignmentGroups, scoreRows] = await Promise.all([
+  const [abstracts, assignmentGroups, scoreRows, answerRows] = await Promise.all([
     prisma.abstract.findMany({
       where: { eventId: ctx.eventId },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
@@ -258,10 +281,41 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
       where: { abstract: { eventId: ctx.eventId } },
       _avg: { score: true },
     }),
+    // The drawer shows what the speaker actually answered. One bounded query for
+    // the whole event beats a per-abstract read when the drawer opens, and the
+    // deterministic ordering makes the truncation cut reproducible.
+    prisma.formAnswer.findMany({
+      where: { abstract: { eventId: ctx.eventId } },
+      orderBy: [{ abstractId: "asc" }, { formField: { sortOrder: "asc" } }, { formFieldId: "asc" }],
+      take: ADMIN_ANSWER_LIMIT + 1,
+      select: {
+        abstractId: true,
+        value: true,
+        formField: { select: { id: true, label: true, type: true, options: true } },
+      },
+    }),
   ]);
 
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
   const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
+
+  // Over the bound: drop the overflow row and report honestly instead of
+  // rendering a silently-partial answer list.
+  const answersTruncated = answerRows.length > ADMIN_ANSWER_LIMIT;
+  const answersByAbstract = new Map<string, AnswerRow[]>();
+  for (const row of answerRows.slice(0, ADMIN_ANSWER_LIMIT)) {
+    const list = answersByAbstract.get(row.abstractId) ?? [];
+    list.push({
+      fieldId: row.formField.id,
+      label: row.formField.label,
+      type: row.formField.type,
+      options: Array.isArray(row.formField.options)
+        ? (row.formField.options as FieldOption[])
+        : null,
+      value: row.value,
+    });
+    answersByAbstract.set(row.abstractId, list);
+  }
 
   return {
     eventId: ctx.eventId,
@@ -286,6 +340,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         reviewsComplete: reviewProgress.reviewsComplete,
         reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
+        answers: answersByAbstract.get(a.id) ?? [],
+        answersUnavailable: answersTruncated && !answersByAbstract.has(a.id),
         hasSession: a.session !== null,
         sessionId: a.session?.id ?? null,
         sessionScheduled: a.session?.scheduleSlot != null,

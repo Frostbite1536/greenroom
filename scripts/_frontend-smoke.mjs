@@ -455,6 +455,19 @@ try {
   check("abstracts table shows an unscheduled talk as 'Talk created'",
     afterConvert.text.includes("Talk created"));
 
+  // --- F1: the admin drawer must actually carry the speaker's custom answers ---
+  // The drawer is client-rendered on click, so the assertion is that the answer
+  // DATA reaches the client payload at all — that is precisely what was missing.
+  check("admin page ships the submitted long-text answer",
+    afterConvert.text.includes("Three takeaways."));
+  check("admin page ships the custom field labels",
+    afterConvert.text.includes("Audience level") && afterConvert.text.includes("What will attendees learn?"));
+  // Option labels must ship too, or the drawer can only show raw slugs. The
+  // slug->label mapping itself runs client-side and is unit-tested in
+  // lib/answer-display.test.ts.
+  check("admin page ships select option labels for slug resolution",
+    afterConvert.text.includes("Beginner"));
+
   const placeConverted = await req("POST", "/api/agenda/slots", {
     eventId: EVENT_ID,
     sessionId: convertedSessionId,
