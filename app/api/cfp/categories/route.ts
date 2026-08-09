@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { categoryInputSchema } from "@/types/api";
-import { assertEventScope, requireContext } from "@/lib/api/context";
+import { requireContext } from "@/lib/api/context";
 import { handle, ok, parseBody } from "@/lib/api/http";
+import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,6 @@ export const GET = handle(async () => {
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, categoryInputSchema);
-  assertEventScope(ctx, input.eventId);
 
   const data = {
     name: input.name,
@@ -27,10 +27,16 @@ export const POST = handle(async (req) => {
     defaultTeamKey: input.defaultTeamKey ?? null,
     sortOrder: input.sortOrder,
   };
-  const category = await prisma.category.upsert({
-    where: { id: input.id ?? "__new__" },
-    update: data,
-    create: { eventId: input.eventId, ...data },
-  });
+  const category = input.id
+    ? await prisma.$transaction(async (tx) => {
+        // Lock and authorize the stored row, not the caller-controlled body
+        // eventId. This holds the ownership check through the following write.
+        const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
+          SELECT "id", "eventId" FROM "Category" WHERE "id" = ${input.id} FOR UPDATE
+        `;
+        const owned = requireEventOwnedRow(existing, ctx.eventId, "CATEGORY_NOT_FOUND", "Category");
+        return tx.category.update({ where: { id: owned.id }, data });
+      })
+    : await prisma.category.create({ data: { eventId: ctx.eventId, ...data } });
   return ok(category, input.id ? 200 : 201);
 });

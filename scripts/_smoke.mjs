@@ -316,9 +316,31 @@ try {
   check("M5 admin deletes an unused event-scoped room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId && !deletedRoom, unusedRoomDelete.status);
 
   const m5Category = await j("POST", "/api/cfp/categories", {
-    eventId: SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
+    eventId: OTHER_SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
   }, admin);
-  check("M5 retains the existing admin category create path", m5Category.status === 201 && !!m5Category.data?.data?.id, m5Category.status);
+  check("S1 category create derives event scope from the session, never the body",
+    m5Category.status === 201 &&
+      m5Category.data?.data?.eventId === SCRATCH_EVENT.id &&
+      !!m5Category.data?.data?.id,
+    m5Category.status);
+  const otherCategory = await prisma.category.create({
+    data: { eventId: OTHER_SCRATCH_EVENT.id, name: "Other Event Category", sortOrder: 0 },
+  });
+  const crossEventCategory = await j("POST", "/api/cfp/categories", {
+    id: otherCategory.id,
+    eventId: SCRATCH_EVENT.id,
+    name: "Unauthorized category change",
+    sortOrder: 0,
+  }, admin);
+  const otherCategoryAfterCrossEventUpdate = await prisma.category.findUnique({
+    where: { id: otherCategory.id },
+    select: { name: true },
+  });
+  check("S1 category update refuses unknown and cross-event ids without changing the other event",
+    crossEventCategory.status === 404 &&
+      crossEventCategory.data?.error?.code === "CATEGORY_NOT_FOUND" &&
+      otherCategoryAfterCrossEventUpdate?.name === "Other Event Category",
+    crossEventCategory.status);
 
   const importPayload = {
     eventId: SCRATCH_EVENT.id,
@@ -550,11 +572,36 @@ try {
 
   // 6. Create evaluation plan
   const plan = await j("POST", "/api/evaluations/plans", {
-    eventId: SCRATCH_EVENT.id, name: "Round 1 Smoke", ordinal: 1,
+    eventId: OTHER_SCRATCH_EVENT.id, name: "Round 1 Smoke", ordinal: 1,
     rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
   }, admin);
-  check("create plan", plan.status === 201, plan.status);
+  check("S1 plan create derives event scope from the session, never the body",
+    plan.status === 201 && plan.data?.data?.eventId === SCRATCH_EVENT.id, plan.status);
   const planId = plan.data?.data?.id;
+  const otherPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      name: "Other Event Round",
+      ordinal: 1,
+      rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+    },
+  });
+  const crossEventPlan = await j("POST", "/api/evaluations/plans", {
+    id: otherPlan.id,
+    eventId: SCRATCH_EVENT.id,
+    name: "Unauthorized plan change",
+    ordinal: 1,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+  }, admin);
+  const otherPlanAfterCrossEventUpdate = await prisma.evaluationPlan.findUnique({
+    where: { id: otherPlan.id },
+    select: { name: true },
+  });
+  check("S1 plan update refuses unknown and cross-event ids without changing the other event",
+    crossEventPlan.status === 404 &&
+      crossEventPlan.data?.error?.code === "PLAN_NOT_FOUND" &&
+      otherPlanAfterCrossEventUpdate?.name === "Other Event Round",
+    crossEventPlan.status);
 
   // 7. Evaluator has a pre-existing scratch membership; resolve the real DB id.
   await j("GET", "/api/evaluations/plans", null, evalr);
@@ -658,6 +705,51 @@ try {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 5, comment: "strong" }], complete: true,
   }, evalr);
   check("valid score recorded + assignment completed", score.status === 200 && score.data?.data?.complete === true, score.status);
+  const correctedScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  const correctedReviewScore = await prisma.reviewScore.findUnique({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+    select: { score: true, comment: true },
+  });
+  check("C5 score correction with an omitted comment preserves saved feedback",
+    correctedScore.status === 200 && correctedReviewScore?.score?.toString() === "4" && correctedReviewScore.comment === "strong",
+    correctedScore.status);
+  const clearedScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: null }], complete: true,
+  }, evalr);
+  const clearedReviewScore = await prisma.reviewScore.findUnique({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+    select: { comment: true },
+  });
+  check("C5 explicit null deliberately clears saved feedback",
+    clearedScore.status === 200 && clearedReviewScore?.comment === null, clearedScore.status);
+  const blankComment = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: "   " }], complete: true,
+  }, evalr);
+  check("C5 rejects ambiguous blank feedback instead of treating it as a clear",
+    blankComment.status === 422 && blankComment.data?.error?.code === "VALIDATION_ERROR", blankComment.status);
+  const legacyCommentKeys = ["legacy-comment-a", "legacy-comment-b"];
+  await prisma.reviewScore.createMany({
+    data: [
+      { planId, abstractId, evaluatorId, rubricKey: legacyCommentKeys[0], score: 4, comment: "Legacy text one" },
+      { planId, abstractId, evaluatorId, rubricKey: legacyCommentKeys[1], score: 4, comment: "Legacy text two" },
+    ],
+  });
+  const [adminAbstractRead, evaluatorAbstractRead] = await Promise.all([
+    j("GET", "/admin/abstracts", null, admin),
+    j("GET", "/admin/abstracts", null, evalr),
+  ]);
+  check("C5 divergent legacy comments keep the admin read usable without exposing evaluator identity",
+    adminAbstractRead.status === 200 &&
+      !String(adminAbstractRead.data).includes(evaluatorId) &&
+      evaluatorAbstractRead.status === 200 &&
+      !String(evaluatorAbstractRead.data).includes("Legacy text one") &&
+      !String(evaluatorAbstractRead.data).includes(evaluatorId),
+    `${adminAbstractRead.status}/${evaluatorAbstractRead.status}`);
+  await prisma.reviewScore.deleteMany({
+    where: { planId, abstractId, evaluatorId, rubricKey: { in: legacyCommentKeys } },
+  });
 
   const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
   const reviewedAbstract = reviewedList.data?.data?.find((item) => item.id === abstractId);
@@ -666,7 +758,7 @@ try {
     reviewedList.status === 200 &&
       reviewedAbstract?.reviewsComplete === 1 &&
       reviewedAbstract?.reviewsTotal === 1 &&
-      reviewedAbstract?.avgScore === 5,
+      reviewedAbstract?.avgScore === 4,
   );
 
   // M4: MAYBE is a non-final, evaluable decision state. It creates neither a

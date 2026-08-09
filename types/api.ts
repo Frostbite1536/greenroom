@@ -216,7 +216,10 @@ export const reviewScoreInputSchema = z.object({
       z.object({
         rubricKey: z.string().min(1),
         score: z.number(),
-        comment: z.string().max(2000).optional(),
+        // Omission preserves an existing score comment; null clears it. The
+        // route accepts at most one supplied overall comment on the plan's
+        // authoritative first rubric key. Blank text is never a clear signal.
+        comment: z.string().trim().min(1).max(2000).nullable().optional(),
       }),
     )
     .min(1),
