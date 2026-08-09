@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Save } from "lucide-react";
 import { FieldControl, type RenderField } from "@/components/field-renderer";
 import { isFieldVisible, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
 import type { TaskFormField, TaskResponses } from "@/lib/portal/task-form";
+import { formatEventDateTime } from "@/lib/tz";
 import styles from "../../portal.module.css";
 
 /**
@@ -85,9 +86,7 @@ export function TaskForm({
   }
 
   const done = taskStatus === "COMPLETED";
-  const due = dueAt
-    ? new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: timezone }).format(new Date(dueAt))
-    : null;
+  const due = formatEventDateTime(dueAt, timezone);
 
   if (fields.length === 0) {
     return (
