@@ -510,11 +510,37 @@ try {
   check("no 'Still on the programme' warning while the talk is accepted",
     !afterSchedule.text.includes("Still on the programme"));
 
-  // The drawer's 'Change decision' path depends on this being allowed at all.
+  // M4: MAYBE is a deliberate, non-final decision. It does not provision a
+  // second Session, retains an existing one honestly, and can later change.
+  const maybe = await req("POST", "/api/evaluations/decisions", {
+    abstractId: convertedAbstractId, decision: "MAYBE",
+  }, admin);
+  check("maybe decision → 200", maybe.status === 200,
+    `${maybe.status} ${JSON.stringify(maybe.data?.error ?? "")}`);
+  check("maybe remains non-final and keeps the existing talk",
+    maybe.data?.data?.status === "MAYBE"
+    && maybe.data?.data?.decidedAt === null
+    && maybe.data?.data?.sessionCreated === false
+    && maybe.data?.data?.tasksAssigned === 0
+    && maybe.data?.data?.session?.id === convertedSessionId,
+    JSON.stringify(maybe.data?.data ?? {}));
+  check("maybe never creates a second session",
+    (await prisma.session.count({ where: { sourceAbstractId: convertedAbstractId } })) === 1);
+
+  const afterMaybe = await req("GET", "/admin/abstracts", null, admin);
+  check("pipeline renders a Maybe status pill",
+    /class="pill warn">Maybe<\/span>/.test(afterMaybe.text));
+  check("Maybe status filter exposes its pressed state",
+    /aria-pressed="false" class="tab">Maybe <span class="count">1<\/span>/.test(afterMaybe.text));
+  check("maybe-but-scheduled abstract is flagged 'Still on the programme'",
+    afterMaybe.text.includes("Still on the programme"));
+
+  // The drawer's 'Change decision' path depends on a later final decision
+  // being allowed after MAYBE.
   const reverse = await req("POST", "/api/evaluations/decisions", {
     abstractId: convertedAbstractId, decision: "REJECTED",
   }, admin);
-  check("a decision on an ACCEPTED abstract is allowed → 200", reverse.status === 200,
+  check("a final decision after maybe is allowed → 200", reverse.status === 200,
     `${reverse.status} ${JSON.stringify(reverse.data?.error ?? "")}`);
   check("reversed decision does NOT delete the talk (INV-DOMAIN-001)",
     (await prisma.session.count({ where: { id: convertedSessionId } })) === 1);

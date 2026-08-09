@@ -10,7 +10,12 @@ export default async function AbstractsPage() {
   const { abstracts } = await getAdminAbstracts();
 
   const accepted = abstracts.filter((a) => a.status === "ACCEPTED").length;
-  const pending = abstracts.filter((a) => a.status === "SUBMITTED" || a.status === "UNDER_REVIEW").length;
+  // A Maybe is deliberately still under consideration, so it belongs in the
+  // producer's pending-review count until the team accepts or declines it.
+  const pending = abstracts.filter((a) => {
+    const status = String(a.status);
+    return status === "SUBMITTED" || status === "UNDER_REVIEW" || status === "MAYBE";
+  }).length;
 
   return (
     <section className="page-stack">

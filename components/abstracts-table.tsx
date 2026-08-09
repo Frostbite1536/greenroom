@@ -13,6 +13,7 @@ const STATUS_META: Record<string, { label: string; tone: string }> = {
   DRAFT: { label: "Draft", tone: "neutral" },
   SUBMITTED: { label: "Submitted", tone: "info" },
   UNDER_REVIEW: { label: "Under review", tone: "warn" },
+  MAYBE: { label: "Maybe", tone: "warn" },
   ACCEPTED: { label: "Accepted", tone: "good" },
   REJECTED: { label: "Declined", tone: "bad" },
   WITHDRAWN: { label: "Withdrawn", tone: "neutral" },
@@ -31,20 +32,25 @@ function programmeState(a: Pick<AbstractRow, "hasSession" | "sessionScheduled">)
 }
 
 /**
- * A declined or withdrawn proposal whose talk is still on the programme.
+ * A proposal that is no longer accepted but whose talk is still on the
+ * programme. A Maybe is intentionally non-final, but it must not conceal a
+ * talk that an earlier acceptance already created.
  * INV-DOMAIN-001 keeps the confirmed talk as the record of truth, so nothing is
  * deleted automatically — which means the admin has to be told.
  */
 function isProgrammeMismatch(a: Pick<AbstractRow, "hasSession" | "status">): boolean {
-  return a.hasSession && (a.status === "REJECTED" || a.status === "WITHDRAWN");
+  const status = String(a.status);
+  return a.hasSession && (status === "MAYBE" || status === "REJECTED" || status === "WITHDRAWN");
 }
 
-type ProgrammeWarning = { title: string; state: ProgrammeState };
+type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "MAYBE" | "REJECTED" };
+type Decision = "ACCEPTED" | "MAYBE" | "REJECTED";
 
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "SUBMITTED", label: "Submitted" },
   { key: "UNDER_REVIEW", label: "Under review" },
+  { key: "MAYBE", label: "Maybe" },
   { key: "ACCEPTED", label: "Accepted" },
   { key: "REJECTED", label: "Declined" },
   { key: "DRAFT", label: "Drafts" },
@@ -86,9 +92,13 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
             <AlertTriangle size={17} aria-hidden="true" />
             <div>
               <strong>“{warning.title}” is still on the programme.</strong>{" "}
-              {warning.state === "scheduled"
-                ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
-                : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
+              {warning.decision === "MAYBE"
+                ? warning.state === "scheduled"
+                  ? "Marking it maybe does not take the talk off the schedule. Open the agenda builder to remove it if it should not run."
+                  : "A talk had already been created from this proposal. Marking it maybe does not delete it."
+                : warning.state === "scheduled"
+                  ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
+                  : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
               <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
                 <Link className="ghost-button" href="/admin/agenda">Open agenda builder</Link>
                 <button type="button" className="link-button" onClick={() => setWarning(null)}>Dismiss</button>
@@ -222,20 +232,23 @@ function AbstractDrawer({
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [busy, setBusy] = useState<null | "accept" | "reject" | "convert">(null);
+  const [busy, setBusy] = useState<null | "accept" | "maybe" | "reject" | "convert">(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [changing, setChanging] = useState(false);
 
-  const meta = STATUS_META[abstract.status];
+  const status = String(abstract.status);
+  const meta = STATUS_META[status];
   const state = programmeState(abstract);
-  const undecided = abstract.status === "UNDER_REVIEW" || abstract.status === "SUBMITTED";
+  const undecided = status === "UNDER_REVIEW" || status === "SUBMITTED";
   // A decision is reversible: programmes change, speakers drop out. Hiding the
   // reversal was a dead end, and it is also the only route by which a decision
   // can affect an already-scheduled talk.
-  const isDecided = abstract.status === "ACCEPTED" || abstract.status === "REJECTED";
+  const isDecided = status === "ACCEPTED" || status === "MAYBE" || status === "REJECTED";
   const canDecide = undecided || (isDecided && changing);
-  const canConvert = abstract.status === "ACCEPTED" && !abstract.hasSession;
+  // A Maybe remains reviewable rather than becoming a confirmed talk. Only an
+  // acceptance can provision a Session; an earlier one stays visible below.
+  const canConvert = status === "ACCEPTED" && !abstract.hasSession;
 
   const PROGRAMME_LABEL: Record<ProgrammeState, string> = {
     none: "No talk created yet",
@@ -243,18 +256,24 @@ function AbstractDrawer({
     scheduled: "On the programme",
   };
 
-  async function decide(decision: "ACCEPTED" | "REJECTED") {
-    if (decision === "REJECTED") {
+  async function decide(decision: Decision) {
+    if (decision === "REJECTED" || (decision === "MAYBE" && state !== "none")) {
       // Spell out the consequence BEFORE the click, not only after it.
-      const consequence =
+      const existingTalk =
         state === "scheduled"
-          ? `\n\nThis talk is on the schedule. Declining will not take it off the programme — you will also need to unschedule it in the agenda builder.`
+          ? "This talk is on the schedule."
           : state === "created"
-            ? `\n\nA talk has already been created from this proposal. Declining will not delete it.`
+            ? "A talk has already been created from this proposal."
             : "";
-      if (!window.confirm(`Decline “${abstract.title}”?${consequence}`)) return;
+      const consequence = existingTalk
+        ? decision === "MAYBE"
+          ? `\n\n${existingTalk} Marking the proposal as maybe will not delete it.`
+          : `\n\n${existingTalk} Declining will not delete it${state === "scheduled" ? " — you will also need to unschedule it in the agenda builder" : ""}.`
+        : "";
+      const action = decision === "MAYBE" ? "Mark as maybe" : "Decline";
+      if (!window.confirm(`${action} “${abstract.title}”?${consequence}`)) return;
     }
-    setBusy(decision === "ACCEPTED" ? "accept" : "reject");
+    setBusy(decision === "ACCEPTED" ? "accept" : decision === "MAYBE" ? "maybe" : "reject");
     setError(null);
     // `sessionId` is the W2 backend addition; until it ships, fall back to the
     // linkage this page already read server-side. Either way the check holds.
@@ -269,12 +288,16 @@ function AbstractDrawer({
     }
     const linkedSessionId = res.data?.sessionId ?? res.data?.session?.id ?? abstract.sessionId;
     setChanging(false);
-    if (decision === "REJECTED" && linkedSessionId) {
-      onProgrammeWarning({ title: abstract.title, state: state === "none" ? "created" : state });
+    if (decision !== "ACCEPTED" && linkedSessionId) {
+      onProgrammeWarning({
+        title: abstract.title,
+        state: state === "none" ? "created" : state,
+        decision,
+      });
       setNotice(null);
       onClose();
     } else {
-      setNotice(decision === "ACCEPTED" ? "Accepted." : "Declined.");
+      setNotice(decision === "ACCEPTED" ? "Accepted." : decision === "MAYBE" ? "Marked as maybe — it remains in review." : "Declined.");
     }
     startTransition(() => router.refresh());
   }
@@ -349,11 +372,13 @@ function AbstractDrawer({
 
         {isProgrammeMismatch(abstract) ? (
           <p className="hint" style={{ marginTop: 10 }}>
-            {abstract.status === "WITHDRAWN"
+            {status === "WITHDRAWN"
               ? "This proposal was withdrawn, but its talk is still on the programme. "
-              : "This proposal was declined, but its talk is still on the programme. "}
+              : status === "MAYBE"
+                ? "This proposal is marked maybe, but its talk is still on the programme. "
+                : "This proposal was declined, but its talk is still on the programme. "}
             <Link href="/admin/agenda">Open the agenda builder</Link> to take it off the schedule
-            {abstract.status === "REJECTED"
+            {status === "REJECTED" || status === "MAYBE"
               ? ", or change the decision back to accepted if it should run after all."
               : "."}
           </p>
@@ -365,10 +390,13 @@ function AbstractDrawer({
         <div className="row wrap" style={{ marginTop: 16, gap: 8 }}>
           {canDecide && (
             <>
-              <button className="primary-button" disabled={busy !== null || pending} onClick={() => decide("ACCEPTED")}>
+              <button type="button" className="primary-button" disabled={busy !== null || pending} onClick={() => decide("ACCEPTED")}>
                 {busy === "accept" ? "Accepting…" : "Accept"}
               </button>
-              <button className="ghost-button danger-button" disabled={busy !== null || pending} onClick={() => decide("REJECTED")}>
+              <button type="button" className="ghost-button" disabled={busy !== null || pending} onClick={() => decide("MAYBE")}>
+                {busy === "maybe" ? "Marking as maybe…" : "Maybe"}
+              </button>
+              <button type="button" className="ghost-button danger-button" disabled={busy !== null || pending} onClick={() => decide("REJECTED")}>
                 {busy === "reject" ? "Declining…" : "Decline"}
               </button>
             </>
