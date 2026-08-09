@@ -24,6 +24,7 @@ import {
   withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import type { FormAnswerValue } from "@/lib/services/types";
+import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -228,6 +229,17 @@ export function PATCH(req: Request, ctx: Params) {
       // stale between read and write (e.g. an admin rejects or converts this
       // abstract mid-request) and commit an edit against a terminal record.
       await lockAbstractForWrite(tx, existing.id);
+      const formIsCurrent = await lockFormFieldsForAnswerWrite(
+        tx,
+        new Map([[form.id, form.fields]]),
+      );
+      if (!formIsCurrent) {
+        throw new ApiError(
+          409,
+          "FORM_CHANGED",
+          "This form changed while your proposal was being saved. Review the latest questions and try again.",
+        );
+      }
       const fresh = await tx.abstract.findUniqueOrThrow({
         where: { id: existing.id },
         select: {
