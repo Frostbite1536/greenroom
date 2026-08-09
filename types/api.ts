@@ -9,6 +9,7 @@ export const abstractStatusSchema = z.enum([
   "DRAFT",
   "SUBMITTED",
   "UNDER_REVIEW",
+  "MAYBE",
   "ACCEPTED",
   "REJECTED",
   "WITHDRAWN",
@@ -164,7 +165,7 @@ export const reviewScoreInputSchema = z.object({
 
 export const abstractDecisionSchema = z.object({
   abstractId: idSchema,
-  decision: z.enum(["ACCEPTED", "REJECTED"]),
+  decision: z.enum(["ACCEPTED", "MAYBE", "REJECTED"]),
 });
 
 export const abstractToSessionSchema = z.object({

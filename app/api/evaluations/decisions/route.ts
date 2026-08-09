@@ -4,12 +4,17 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import {
+  canAdminDecide,
+  decisionProvisionsSession,
+  decisionTimestamp,
+} from "@/lib/services/abstract-decision";
 import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/evaluations/decisions — accept or reject an abstract (admin).
+ * POST /api/evaluations/decisions — accept, maybe, or reject an abstract (admin).
  *
  * Accepting is the moment a proposal becomes a talk, so it now provisions the
  * whole thing in one locked transaction (WAVE1-B1, director requirement #4):
@@ -39,13 +44,15 @@ export const POST = handle(async (req) => {
     if (!abstract || abstract.eventId !== ctx.eventId) {
       throw new ApiError(404, "ABSTRACT_NOT_FOUND", "Abstract not found.");
     }
-    if (abstract.status === "WITHDRAWN") {
+    if (!canAdminDecide(abstract.status)) {
       throw new ApiError(409, "ABSTRACT_WITHDRAWN", "This abstract has been withdrawn.");
     }
 
     const decided = await tx.abstract.update({
       where: { id: input.abstractId },
-      data: { status: input.decision, decidedAt: new Date() },
+      // MAYBE keeps an abstract in review: it carries no final-decision
+      // timestamp, can be scored/re-decided later, and never provisions.
+      data: { status: input.decision, decidedAt: decisionTimestamp(input.decision, new Date()) },
       include: { speakers: { select: { userId: true, isPrimary: true } }, session: { select: { id: true } } },
     });
 
@@ -54,7 +61,7 @@ export const POST = handle(async (req) => {
     // (INV-DOMAIN-001, W2), and its speakers keep any tasks they are working on
     // for other talks.
     const provisioned =
-      input.decision === "ACCEPTED"
+      decisionProvisionsSession(input.decision)
         ? await provisionAcceptedAbstract(tx, decided)
         : { sessionId: decided.session?.id ?? null, created: false, tasksAssigned: 0 };
 
