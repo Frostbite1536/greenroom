@@ -7,6 +7,7 @@ import {
   canAdminDecide,
   decisionProvisionsSession,
   decisionTimestamp,
+  maybeBlockedByConfirmedSession,
 } from "@/lib/services/abstract-decision";
 
 test("the decision contract accepts approve, maybe, and deny only", () => {
@@ -37,4 +38,11 @@ test("MAYBE clears the final-decision timestamp while final choices stamp it", (
   assert.equal(decisionTimestamp("MAYBE", now), null);
   assert.equal(decisionTimestamp("ACCEPTED", now), now);
   assert.equal(decisionTimestamp("REJECTED", now), now);
+});
+
+test("MAYBE is refused after a Session becomes confirmed", () => {
+  assert.equal(maybeBlockedByConfirmedSession("MAYBE", true), true);
+  assert.equal(maybeBlockedByConfirmedSession("MAYBE", false), false);
+  assert.equal(maybeBlockedByConfirmedSession("ACCEPTED", true), false);
+  assert.equal(maybeBlockedByConfirmedSession("REJECTED", true), false);
 });

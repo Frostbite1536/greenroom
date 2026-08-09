@@ -9,6 +9,14 @@ export function canAdminDecide(status: AbstractStatus): boolean {
   return status !== "WITHDRAWN";
 }
 
+/** MAYBE is a pre-confirmation review state; a linked Session is programme truth. */
+export function maybeBlockedByConfirmedSession(
+  decision: AbstractDecision,
+  hasConfirmedSession: boolean,
+): boolean {
+  return decision === "MAYBE" && hasConfirmedSession;
+}
+
 /** MAYBE is a review state, not a final programme decision. */
 export function decisionTimestamp(decision: AbstractDecision, now: Date): Date | null {
   return decision === "MAYBE" ? null : now;

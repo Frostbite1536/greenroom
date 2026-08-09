@@ -1218,34 +1218,32 @@ try {
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
 
+  const m4FixtureLimit = 100;
   const m4TaskIds = (await prisma.onboardingTask.findMany({
-    where: { eventId: SCRATCH_EVENT.id }, select: { id: true },
+    where: { eventId: SCRATCH_EVENT.id }, select: { id: true }, take: m4FixtureLimit + 1,
   })).map((task) => task.id);
   const m4SpeakerIds = (await prisma.sessionSpeaker.findMany({
-    where: { sessionId }, select: { userId: true },
+    where: { sessionId }, select: { userId: true }, take: m4FixtureLimit + 1,
   })).map((speakerRow) => speakerRow.userId);
+  if (m4TaskIds.length > m4FixtureLimit || m4SpeakerIds.length > m4FixtureLimit) {
+    throw new Error(`M4 scratch fixture exceeds its ${m4FixtureLimit}-row bound`);
+  }
   const m4CohortWhere = { taskId: { in: m4TaskIds }, userId: { in: m4SpeakerIds } };
   const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: m4CohortWhere });
   const expectedM4Backfill = (m4TaskIds.length * m4SpeakerIds.length) - m4TasksBeforeMaybe;
 
-  // A later MAYBE never deletes or re-provisions an already confirmed (and
-  // potentially public) Session. The response keeps the linkage for the UI's
-  // programme warning; re-acceptance stays idempotent afterwards.
+  // MAYBE is a pre-confirmation state. Refusing it once a Session exists keeps
+  // every public programme consumer on one status and preserves the Session.
   const scheduledMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
-  check("M4 ACCEPTED to MAYBE preserves and serializes the scheduled session",
-    scheduledMaybe.status === 200 &&
-      scheduledMaybe.data?.data?.status === "MAYBE" &&
-      scheduledMaybe.data?.data?.decidedAt === null &&
-      scheduledMaybe.data?.data?.session?.id === sessionId &&
-      scheduledMaybe.data?.data?.session?.isScheduled === true &&
-      scheduledMaybe.data?.data?.sessionCreated === false &&
-      scheduledMaybe.data?.data?.tasksAssigned === 0,
-    JSON.stringify(scheduledMaybe.data?.data));
-  check("M4 ACCEPTED to MAYBE leaves the confirmed session and task cohort intact",
+  check("M4 a confirmed Session cannot return to MAYBE",
+    scheduledMaybe.status === 409 && scheduledMaybe.data?.error?.code === "MAYBE_NOT_AVAILABLE",
+    scheduledMaybe.data?.error?.code);
+  check("M4 the refused MAYBE transition preserves accepted programme truth and its task cohort",
+    (await prisma.abstract.findUnique({ where: { id: abstractId }, select: { status: true } }))?.status === "ACCEPTED" &&
     await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
       await prisma.speakerTask.count({ where: m4CohortWhere }) === m4TasksBeforeMaybe);
   const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
-  check("M4 MAYBE can return to ACCEPTED without duplicate Session provisioning and still reconcile missing tasks",
+  check("M4 re-accepting still avoids duplicate Session provisioning and reconciles missing tasks",
     restoredAccepted.status === 200 &&
       restoredAccepted.data?.data?.status === "ACCEPTED" &&
       typeof restoredAccepted.data?.data?.decidedAt === "string" &&

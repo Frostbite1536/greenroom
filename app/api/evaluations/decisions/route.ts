@@ -8,6 +8,7 @@ import {
   canAdminDecide,
   decisionProvisionsSession,
   decisionTimestamp,
+  maybeBlockedByConfirmedSession,
 } from "@/lib/services/abstract-decision";
 import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
@@ -23,11 +24,11 @@ export const dynamic = "force-dynamic";
  * instead of duplicating. `/api/evaluations/convert` remains for legacy
  * accepted abstracts without Sessions and for manual checklist backfill.
  *
- * Reversing a decision deliberately does NOT delete the Session built from the
- * abstract: the session is the confirmed record, and silently pulling a talk
- * that is already on the public schedule would be worse than leaving it. The
- * response therefore reports the linked session (W2) so the admin UI can say
- * "this talk is still on the programme — unschedule it too".
+ * MAYBE is available only before the proposal has a confirmed Session. Once a
+ * Session exists, moving back to a review state would split public programme
+ * truth and would promise withdrawal while the Session guard correctly blocks
+ * it. Existing final-decision reversals still never delete a Session; C10 owns
+ * one publication rule across those legacy consumers.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -40,12 +41,22 @@ export const POST = handle(async (req) => {
   const updated = await prisma.$transaction(async (tx) => {
     await lockAbstractForWrite(tx, input.abstractId);
 
-    const abstract = await tx.abstract.findUnique({ where: { id: input.abstractId } });
+    const abstract = await tx.abstract.findUnique({
+      where: { id: input.abstractId },
+      select: { eventId: true, status: true, session: { select: { id: true } } },
+    });
     if (!abstract || abstract.eventId !== ctx.eventId) {
       throw new ApiError(404, "ABSTRACT_NOT_FOUND", "Abstract not found.");
     }
     if (!canAdminDecide(abstract.status)) {
       throw new ApiError(409, "ABSTRACT_WITHDRAWN", "This abstract has been withdrawn.");
+    }
+    if (maybeBlockedByConfirmedSession(input.decision, Boolean(abstract.session))) {
+      throw new ApiError(
+        409,
+        "MAYBE_NOT_AVAILABLE",
+        "Maybe is only available before a proposal becomes a confirmed Session.",
+      );
     }
 
     const decided = await tx.abstract.update({
