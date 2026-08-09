@@ -71,6 +71,23 @@ test("visibility cascades: a hidden parent's stale answer cannot keep a child al
   assert.deepEqual(visible.map((f) => f.key), ["kind"]);
 });
 
+test("visibility cascades identically when a child depends on a hidden answer being empty", () => {
+  const fields = [
+    field({ key: "kind", type: "SELECT" }),
+    field({
+      key: "followup",
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "kind", operator: "equals", value: "workshop" }] },
+    }),
+    field({
+      key: "no_followup_reason",
+      required: true,
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "followup", operator: "isEmpty" }] },
+    }),
+  ];
+  const visible = resolveVisibleFields(fields, { kind: "talk", followup: "stale answer" });
+  assert.deepEqual(visible.map((f) => f.key), ["kind", "no_followup_reason"]);
+});
+
 test("a circular rule set terminates instead of looping", () => {
   const fields = [
     field({ key: "a", conditionalLogic: { match: "all", rules: [{ fieldKey: "b", operator: "isNotEmpty" }] } }),

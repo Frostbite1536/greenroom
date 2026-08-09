@@ -1,5 +1,4 @@
 import {
-  isFieldVisible,
   isHttpUrl,
   type ConditionalLogic,
   type LogicField,
@@ -21,6 +20,8 @@ import type { FormAnswerValue } from "@/lib/services/types";
  */
 
 export type FieldOption = { label: string; value: string };
+
+export { resolveVisibleFields } from "@/lib/form-logic";
 
 export type VisibilityField = LogicField & {
   label: string;
@@ -69,43 +70,6 @@ function isBlank(value: FormAnswerValue | undefined): boolean {
   if (typeof value === "string") return value.trim().length === 0;
   if (Array.isArray(value)) return value.length === 0;
   return false;
-}
-
-/**
- * Which fields are actually being asked, given the answers so far.
- *
- * Visibility cascades: if a field is hidden, any answer stored against it from
- * an earlier state must not keep a dependent field alive. That is resolved by
- * re-evaluating with hidden answers masked out until the set stops changing.
- * The pass count is bounded by the field count, so a circular rule set settles
- * instead of looping.
- */
-export function resolveVisibleFields<T extends VisibilityField>(
-  fields: readonly T[],
-  answers: Readonly<Record<string, FormAnswerValue>>,
-): T[] {
-  let visibleKeys = new Set(fields.map((field) => field.key));
-
-  for (let pass = 0; pass <= fields.length; pass++) {
-    // Start from the submitted answers so rule evaluation matches the client's
-    // exactly, then mask only the answers of fields that are currently hidden.
-    const effective: Record<string, FormAnswerValue> = { ...answers };
-    for (const field of fields) {
-      if (!visibleKeys.has(field.key)) delete effective[field.key];
-    }
-
-    const next = new Set<string>();
-    for (const field of fields) {
-      if (isFieldVisible(field, effective)) next.add(field.key);
-    }
-
-    const stable =
-      next.size === visibleKeys.size && [...next].every((key) => visibleKeys.has(key));
-    visibleKeys = next;
-    if (stable) break;
-  }
-
-  return fields.filter((field) => visibleKeys.has(field.key));
 }
 
 /**

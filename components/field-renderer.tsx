@@ -1,6 +1,6 @@
 "use client";
 
-import type { AnswerValue } from "@/lib/form-logic";
+import type { AnswerValue, ConditionalLogic } from "@/lib/form-logic";
 
 /** Field shape the control needs, common to builder drafts and API reads. */
 export type RenderField = {
@@ -11,7 +11,7 @@ export type RenderField = {
   type: string;
   required: boolean;
   options?: { label: string; value: string }[] | null;
-  conditionalLogic?: unknown;
+  conditionalLogic?: ConditionalLogic | null;
 };
 
 export function FieldControl({

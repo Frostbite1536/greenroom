@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { Check, Megaphone, Plus, Trash2 } from "lucide-react";
 import type { PublicFormView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
-import { isFieldVisible, validateField, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
+import { resolveVisibleFields, validateField, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 
 type Speaker = { name: string; email: string; isPrimary: boolean };
@@ -36,7 +36,10 @@ export function CfpForm({ form }: { form: PublicFormView }) {
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "draft" | "submit">(null);
 
-  const visibleFields = useMemo(() => form.fields.filter((f) => isFieldVisible(f, answers)), [form.fields, answers]);
+  const visibleFields = useMemo(
+    () => resolveVisibleFields(form.fields, answers),
+    [form.fields, answers],
+  );
 
   function setAnswer(key: string, v: AnswerValue) {
     setAnswers((a) => ({ ...a, [key]: v }));

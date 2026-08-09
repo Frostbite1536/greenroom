@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, Lock } from "lucide-react";
 import { FieldControl, type RenderField } from "@/components/field-renderer";
-import { isFieldVisible, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
+import { resolveVisibleFields, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
 import { submissionErrorMessage, submissionStatusView } from "@/lib/portal/submission-status";
 import styles from "../../portal.module.css";
 
@@ -92,7 +92,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   }, [abstractId]);
 
   const visibleFields = useMemo(
-    () => (loaded?.form.fields ?? []).filter((field) => isFieldVisible(field as never, answers)),
+    () => resolveVisibleFields(loaded?.form.fields ?? [], answers),
     [loaded, answers],
   );
 
