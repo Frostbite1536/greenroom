@@ -134,6 +134,7 @@ test("the update schema accepts responses without weakening the locked task cont
   assert.equal(ok.success, true);
   // Status values still come from the shared schema.
   assert.equal(taskUpdateWithResponsesSchema.safeParse({ taskId: "t", status: "NONSENSE" }).success, false);
+  assert.equal(taskUpdateWithResponsesSchema.safeParse({ taskId: "t", status: "WAIVED" }).success, false);
   // Response keys are constrained. Note the payload is built with JSON.parse,
   // not an object literal: `{"__proto__": x}` as a literal sets the prototype
   // and creates no own key, so a literal would vacuously pass and prove nothing.

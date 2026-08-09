@@ -673,6 +673,13 @@ try {
     emptyTaskComplete.status === 422 && !!emptyTaskComplete.data?.error?.fieldErrors?.needs_hotel,
     emptyTaskComplete.data?.error?.code);
 
+  const selfWaiveTask = await j("PATCH", "/api/portal/tasks", {
+    taskId: taskTemplate.id, status: "WAIVED",
+  }, speaker);
+  check("O3 speakers cannot bypass a required form by waiving their own task",
+    selfWaiveTask.status === 422 && selfWaiveTask.data?.error?.code === "VALIDATION_ERROR",
+    selfWaiveTask.data?.error?.code);
+
   const invalidTaskProgress = await j("PATCH", "/api/portal/tasks", {
     taskId: taskTemplate.id, status: "IN_PROGRESS", responses: { needs_hotel: "maybe" },
   }, speaker);
