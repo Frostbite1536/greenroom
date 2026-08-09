@@ -5,7 +5,12 @@ import Link from "next/link";
 import { ArrowLeft, Check, Lock, Plus, X } from "lucide-react";
 import { FieldControl, type RenderField } from "@/components/field-renderer";
 import { resolveVisibleFields, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
-import { editScopeNotice, submissionErrorMessage, submissionStatusView } from "@/lib/portal/submission-status";
+import {
+  editSavedNotice,
+  editScopeNotice,
+  submissionErrorMessage,
+  submissionStatusView,
+} from "@/lib/portal/submission-status";
 import styles from "../../portal.module.css";
 
 /**
@@ -340,7 +345,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       </div>
 
       {saveError ? <p className={styles.saveError} role="alert">{saveError}</p> : null}
-      {saved ? <p className={styles.saveNote} role="status"><Check size={14} aria-hidden="true" /> Saved. The program team sees your changes right away.</p> : null}
+      {saved ? <p className={styles.saveNote} role="status"><Check size={14} aria-hidden="true" /> {editSavedNotice(submission.speakersLocked)}</p> : null}
 
       <div className={styles.formActions}>
         <Link className="ghost-button" href="/portal"><ArrowLeft size={15} aria-hidden="true" /> Back to your portal</Link>

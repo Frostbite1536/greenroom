@@ -92,6 +92,13 @@ export function editScopeNotice(converted: boolean): string {
     : "Changes here update your proposal directly.";
 }
 
+/** Confirmation copy follows the same Abstract/Session boundary as the editor. */
+export function editSavedNotice(converted: boolean): string {
+  return converted
+    ? "Saved to your proposal. The public schedule listing has not changed."
+    : "Saved. The programme team can see your updated proposal.";
+}
+
 export function submissionErrorMessage(code: string, serverMessage?: string): string {
   switch (code) {
     case "UNAUTHENTICATED":

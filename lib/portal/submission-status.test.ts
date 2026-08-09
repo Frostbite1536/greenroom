@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { editScopeNotice, submissionErrorMessage, submissionStatusView } from "./submission-status";
+import {
+  editSavedNotice,
+  editScopeNotice,
+  submissionErrorMessage,
+  submissionStatusView,
+} from "./submission-status";
 
 const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"];
 
@@ -63,4 +68,10 @@ test("accepted-status copy no longer claims edits reach attendees", () => {
   const accepted = submissionStatusView("ACCEPTED");
   assert.equal(accepted.editable, true);
   assert.doesNotMatch(accepted.detail, /details attendees will see/i);
+});
+
+test("save confirmation preserves the proposal/session boundary", () => {
+  assert.match(editSavedNotice(false), /updated proposal/i);
+  assert.match(editSavedNotice(true), /public schedule listing has not changed/i);
+  assert.doesNotMatch(editSavedNotice(true), /right away/i);
 });
