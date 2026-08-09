@@ -115,7 +115,21 @@ occupied. Let the conflict message appear.*
 > "Speakers get their own workspace: profile completeness, their confirmed
 > sessions, their submissions, and the onboarding tasks you need from them."
 
-*Tick a task off; show the progress update.*
+*Tick a task off; show the progress update. Then open* **Claim your flight
+reimbursement** *— it says* Fill in the form.
+
+> "Some tasks are just a checkbox. The ones that matter are forms — hotel stay,
+> flight reimbursement — because the programme team needs the answers, not a
+> tick."
+
+*Try to tick it off from the portal first: the checkbox is disabled. Open the
+form, choose* **Yes** *for claiming travel, show the conditional questions
+appearing, fill every revealed required field, then choose* **Save and mark
+done**.
+
+> "And it won't let a speaker mark it done while it's empty. That's the whole
+> point — a task list full of ticks that nobody filled in is worse than no task
+> list at all."
 
 *Scroll to* **Your submissions***. Open the accepted proposal — Sofia's is
 "Scaling Vector Search" — via* **Update this proposal***.*

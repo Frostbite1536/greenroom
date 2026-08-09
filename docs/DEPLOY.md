@@ -132,13 +132,23 @@ npm run db:seed          # = tsx prisma/seed.ts
 ```
 
 Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
-3 tracks, 4 rooms, 2 forms, 40 abstracts across every status, an evaluation
-plan with 3 evaluators + scores, 13 sessions (incl. a guaranteed keynote),
-11 schedule slots **with one deliberate room conflict**, 5 onboarding tasks
-(one carries a form), per-speaker task status, 4 email templates, 2 resources.
-Persona users are upserted by email so fixed-persona access survives a reseed.
-The speaker persona (`sofia@greenroom.demo`) owns a confirmed session and is at
-3/5 tasks.
+3 tracks, 4 rooms, **4 forms** (the public CFP plus three used inside tasks),
+40 abstracts across every status, an evaluation plan with 3 evaluators +
+scores, 13 sessions (incl. a guaranteed keynote), 11 schedule slots **with one
+deliberate room conflict**, **6 onboarding tasks (three carry a form:
+hotel stay, flight reimbursement, A/V logistics)**, per-speaker task status,
+4 email templates, 2 resources. Persona users are upserted by email so
+fixed-persona access survives a reseed. The speaker persona
+(`sofia@greenroom.demo`) owns a confirmed session and is at **3/6 tasks** — with
+one completed task form to review and the flight reimbursement still
+outstanding, so both task-form states are demonstrable.
+
+The task forms are `published: false`, so they never appear on public `/cfp`
+routes while remaining fully usable inside a task.
+
+Task deadlines are staggered from April 17 through May 11 in the event's Los
+Angeles timezone, ahead of the May 12 opening day. The hotel and flight
+follow-ups become required only when the speaker asks for that support.
 
 ## Demo reset
 Two ways to rebuild demo data from a clean state:
