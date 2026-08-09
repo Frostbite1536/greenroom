@@ -24,7 +24,13 @@ A form is the page speakers fill in. You control:
   may be;
 - your **questions**. Add short text, long text, a number, a dropdown, a multi-select, a
   tick-box, or a link. Mark the ones you must have as required. Questions can also be shown
-  only when an earlier answer matches, so the form stays short.
+  only when an earlier answer matches, so the form stays short. Greenroom enforces those
+  visibility rules and each question's answer type when a speaker saves.
+
+Once people have answered a question, keep its meaning intact: you can reword its label or
+help text, reorder it, change whether it is required, or adjust its display rule. You cannot
+delete or rename that question, change what kind of answer it takes, or remove an option that
+someone selected. Add a new question instead when the information itself needs to change.
 
 Tracks are handled by the **categories** on the form — one form with several track options is
 usually all you need, and you can always publish more forms later. Each category also decides
