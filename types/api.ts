@@ -285,6 +285,20 @@ export const reviewAssignmentInputSchema = z.object({
   teamKey: z.string().trim().max(120).optional(),
 });
 
+/** Current-event ADMIN input for reviewer provisioning. No authority IDs are accepted. */
+export const reviewerInviteCreateSchema = z
+  .object({
+    email: z.string().trim().toLowerCase().max(254).email(),
+    name: z.string().trim().min(1).max(120),
+    resend: z.boolean().default(false),
+  })
+  .strict();
+
+/** Bearer input stays broad so malformed credentials remain generic 404s. */
+export const reviewerInviteAcceptSchema = z
+  .object({ token: z.unknown().optional() })
+  .strict();
+
 export const reviewScoreInputSchema = z.object({
   planId: idSchema,
   abstractId: idSchema,

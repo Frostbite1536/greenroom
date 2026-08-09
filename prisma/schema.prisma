@@ -54,6 +54,14 @@ enum ImportStatus {
   FAILED
 }
 
+/** Last audited provider result for one reviewer-invite token version. */
+enum ReviewerInviteDeliveryState {
+  PENDING
+  SENT
+  MOCKED
+  FAILED
+}
+
 model Event {
   id        String    @id @default(cuid())
   name      String
@@ -78,6 +86,7 @@ model Event {
   emailTemplates  EmailTemplate[]
   imports         ImportJob[]
   publicSubmissionRateBuckets PublicSubmissionRateBucket[]
+  reviewerInvites             ReviewerInvite[]
 
   @@index([startsAt])
 }
@@ -99,6 +108,7 @@ model User {
   reviewScores       ReviewScore[]
   taskAssignments    SpeakerTask[]
   sentEmails         EmailDispatch[]    @relation("EmailSender")
+  reviewerInvites    ReviewerInvite[]
 }
 
 model EventMember {
@@ -112,6 +122,35 @@ model EventMember {
 
   @@id([eventId, userId])
   @@index([eventId, role])
+}
+
+/**
+ * Renewable event-scoped reviewer access. The bearer nonce is signed but never
+ * stored: only its version and expiry remain after a token rotates.
+ */
+model ReviewerInvite {
+  id                String                      @id @default(cuid())
+  eventId           String
+  userId            String
+  tokenVersion      Int                         @default(1)
+  expiresAt         DateTime
+  acceptedAt        DateTime?
+  acceptedVersion   Int?
+  lastSentAt        DateTime?
+  sendWindowStart   DateTime?
+  sendWindowCount   Int                         @default(0)
+  lastDeliveryState ReviewerInviteDeliveryState @default(PENDING)
+  lastDeliveryAt    DateTime?
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([eventId, expiresAt])
+  @@index([eventId, sendWindowStart])
+  @@index([expiresAt])
 }
 
 model SpeakerProfile {

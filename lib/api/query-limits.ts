@@ -31,6 +31,7 @@ export const OPERATOR_QUERY_LIMITS = {
   adminDecisionAssignments: 5_000,
   adminDecisionScores: 25_000,
   adminReviewComments: 5_000,
+  reviewerSetupMembers: 500,
 } as const;
 
 export function assertEventQueryBound(

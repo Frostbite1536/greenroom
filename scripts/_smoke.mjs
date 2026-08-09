@@ -91,6 +91,25 @@ function publicDraftCapabilityHash(capability) {
     .digest("hex");
 }
 
+function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
+  const exp = Math.floor(new Date(invite.expiresAt).getTime() / 1000);
+  const message = `greenroom:reviewer-invite:v1:${invite.id}:${invite.tokenVersion}:${exp}:${nonce}`;
+  const signature = createHmac("sha256", SMOKE_SESSION_SECRET).update(message).digest("base64url");
+  return `v1.${invite.id}.${invite.tokenVersion}.${exp}.${nonce}.${signature}`;
+}
+
+async function postReviewerInviteAccept(token) {
+  const response = await fetch(`${BASE}/api/auth/reviewer-invites/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+    redirect: "manual",
+  });
+  const text = await response.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  return { status: response.status, data, headers: response.headers };
+}
+
 const j = async (method, path, body, sess, extraHeaders = {}, { signal } = {}) => {
   const res = await fetch(BASE + path, {
     method,
@@ -119,6 +138,7 @@ const server = spawn("npx", ["next", "start", "-p", PORT], {
     GREENROOM_API_KEY: V1_API_KEY,
     MOCK_EXTERNAL_APIS: "true",
     SESSION_SECRET: SMOKE_SESSION_SECRET,
+    APP_URL: `http://127.0.0.1:${PORT}`,
   },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
@@ -156,6 +176,18 @@ function cleanup() {
       await prisma.publicSubmissionRateBucket.deleteMany({
         where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
       });
+      await prisma.$executeRaw`
+        DELETE FROM "ReviewerInvite" WHERE "eventId" IN (${SCRATCH_EVENT.id}, ${OTHER_SCRATCH_EVENT.id})
+      `;
+      const reviewerInviteRows = await prisma.$queryRaw`
+        SELECT COUNT(*)::int AS "count" FROM "ReviewerInvite"
+        WHERE "eventId" IN (${SCRATCH_EVENT.id}, ${OTHER_SCRATCH_EVENT.id})
+      `;
+      check(
+        "scratch-owned reviewer invite rows are cleared at final teardown",
+        reviewerInviteRows[0]?.count === 0,
+        reviewerInviteRows[0]?.count,
+      );
       const remainingRateBuckets = await prisma.publicSubmissionRateBucket.count({
         where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
       });
@@ -1245,6 +1277,100 @@ try {
   const speakerUserId = speakerMembership?.userId;
   check("resolve assignment-role fixtures", !!adminUserId && !!speakerUserId);
 
+  // C17 — admins provision fresh evaluators without rewriting global identity
+  // data. The API intentionally never returns the bearer; this scratch helper
+  // derives a valid token from the persisted version/expiry solely to exercise
+  // the public accept boundary under the forced mock server secret.
+  const c17Email = "fresh-reviewer@scratch.test";
+  const c17Invite = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17Email, name: "Fresh Reviewer", resend: false,
+  }, admin);
+  const c17User = await prisma.user.findUnique({ where: { email: c17Email }, select: { id: true, name: true } });
+  const c17InviteRows = await prisma.$queryRaw`
+    SELECT "id", "tokenVersion", "expiresAt", "acceptedVersion", "sendWindowCount", "lastDeliveryState"
+    FROM "ReviewerInvite" WHERE "eventId" = ${SCRATCH_EVENT.id} AND "userId" = ${c17User?.id ?? "missing"}
+  `;
+  const c17StoredInvite = c17InviteRows[0];
+  const c17DispatchCountBeforeIdempotent = await prisma.emailDispatch.count({ where: { recipient: c17Email } });
+  check(
+    "C17 first invite creates only EVALUATOR access and returns bounded mock delivery without a bearer",
+    c17Invite.status === 200 && c17Invite.data?.data?.state === "invited" &&
+      c17Invite.data?.data?.delivery === "mocked" && c17Invite.data?.data?.access === "active" &&
+      !Object.hasOwn(c17Invite.data?.data ?? {}, "token") && !!c17User && c17User.name === "Fresh Reviewer" &&
+      c17StoredInvite?.tokenVersion === 1 && c17StoredInvite?.sendWindowCount === 1 &&
+      c17StoredInvite?.lastDeliveryState === "MOCKED" &&
+      await prisma.eventMember.findUnique({ where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: c17User.id } } })
+        .then((member) => member?.role === "EVALUATOR"),
+    `${c17Invite.status}/${c17Invite.data?.data?.state}/${c17Invite.data?.data?.delivery}`,
+  );
+  const c17NoResend = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17Email, name: "Attempted Rename", resend: false,
+  }, admin);
+  const c17AfterNoResend = await prisma.$queryRaw`
+    SELECT "tokenVersion", "sendWindowCount" FROM "ReviewerInvite" WHERE "id" = ${c17StoredInvite?.id ?? "missing"}
+  `;
+  check(
+    "C17 valid pending invites are idempotent and preserve the existing global User name",
+    c17NoResend.status === 200 && c17NoResend.data?.data?.state === "pending" &&
+      (await prisma.user.findUnique({ where: { email: c17Email }, select: { name: true } }))?.name === "Fresh Reviewer" &&
+      await prisma.emailDispatch.count({ where: { recipient: c17Email } }) === c17DispatchCountBeforeIdempotent &&
+      c17AfterNoResend[0]?.tokenVersion === 1 && c17AfterNoResend[0]?.sendWindowCount === 1,
+    `${c17NoResend.status}/${c17NoResend.data?.data?.state}`,
+  );
+  const c17Token = reviewerInviteBearer(c17StoredInvite);
+  const [c17AcceptOne, c17AcceptTwo] = await Promise.all([
+    postReviewerInviteAccept(c17Token),
+    postReviewerInviteAccept(c17Token),
+  ]);
+  const c17AcceptStatuses = [c17AcceptOne.status, c17AcceptTwo.status].sort((left, right) => left - right);
+  const c17AfterAccept = await prisma.$queryRaw`
+    SELECT "acceptedVersion", "tokenVersion" FROM "ReviewerInvite" WHERE "id" = ${c17StoredInvite.id}
+  `;
+  const c17Replay = await postReviewerInviteAccept(c17Token);
+  check(
+    "C17 concurrent accept consumes exactly one EVALUATOR invite and sets only the protected session redirect",
+    c17AcceptStatuses.join(",") === "303,404" &&
+      [c17AcceptOne, c17AcceptTwo].some((result) =>
+        result.status === 303 && result.headers.get("cache-control") === "no-store" &&
+        new URL(result.headers.get("location"), BASE).pathname === "/admin/evaluations" &&
+        /HttpOnly/i.test(result.headers.get("set-cookie") ?? "") && /SameSite=Lax/i.test(result.headers.get("set-cookie") ?? ""),
+      ) && c17AfterAccept[0]?.acceptedVersion === c17AfterAccept[0]?.tokenVersion &&
+      c17Replay.status === 404 && c17Replay.data?.error?.code === "INVITE_NOT_FOUND",
+    `${c17AcceptStatuses.join(",")}/${c17Replay.status}`,
+  );
+  const c17Active = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17Email, name: "Attempted Rename", resend: false,
+  }, admin);
+  check(
+    "C17 accepted evaluators are active without silently rotating a fresh bearer",
+    c17Active.status === 200 && c17Active.data?.data?.state === "active" &&
+      await prisma.emailDispatch.count({ where: { recipient: c17Email } }) === c17DispatchCountBeforeIdempotent,
+    `${c17Active.status}/${c17Active.data?.data?.state}`,
+  );
+  const c17SpeakerConflict = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: speaker.user.email, name: "Do Not Change", resend: false,
+  }, admin);
+  check(
+    "C17 current-event speakers cannot be silently upgraded into evaluator access",
+    c17SpeakerConflict.status === 409 && c17SpeakerConflict.data?.error?.code === "REVIEWER_ROLE_CONFLICT",
+    `${c17SpeakerConflict.status}/${c17SpeakerConflict.data?.error?.code}`,
+  );
+  await prisma.$executeRaw`
+    UPDATE "ReviewerInvite" SET "sendWindowStart" = date_trunc('hour', NOW()), "sendWindowCount" = 20
+    WHERE "id" = ${c17StoredInvite.id}
+  `;
+  const c17CappedEmail = "capped-reviewer@scratch.test";
+  const c17Capped = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17CappedEmail, name: "Capped Reviewer", resend: false,
+  }, admin);
+  check(
+    "C17 event-hour cap rejects a new invite atomically without creating identity or membership",
+    c17Capped.status === 429 && c17Capped.data?.error?.code === "INVITE_RATE_LIMITED" &&
+      await prisma.user.count({ where: { email: c17CappedEmail } }) === 0 &&
+      await prisma.eventMember.count({ where: { eventId: SCRATCH_EVENT.id, user: { email: c17CappedEmail } } }) === 0,
+    `${c17Capped.status}/${c17Capped.data?.error?.code}`,
+  );
+
   const assignSpeaker = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [speakerUserId],
   }, admin);
@@ -1428,6 +1554,50 @@ try {
       memberRaceAbstractAfter?.status === "SUBMITTED" && memberRaceAbstractAfter.decidedAt === null &&
       memberRaceAssignmentCount === 0,
     `${memberRaceAssignment.status}/${memberRaceAssignment.data?.error?.code}/${memberRaceAssignmentCount}`,
+  );
+
+  // C17 creates the first runtime EventMember rows. A missing row cannot be
+  // protected by FOR SHARE alone, so S5 waits on the same authority advisory
+  // key while this simulated invite transaction inserts the EVALUATOR row.
+  const missingMemberUser = await prisma.user.upsert({
+    where: { email: "assignment-missing-member@scratch.test" },
+    update: {},
+    create: { email: "assignment-missing-member@scratch.test", name: "Missing Member Race" },
+  });
+  await prisma.eventMember.deleteMany({ where: { eventId: SCRATCH_EVENT.id, userId: missingMemberUser.id } });
+  const missingMemberSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Assignment missing-member race proposal",
+    speakers: [{ email: "assignment-missing-member-speaker@scratch.test", name: "Missing Member Speaker", isPrimary: true }],
+    answers: { title_note: "member insert", consent: true }, intent: "submit",
+  });
+  const missingMemberAbstractId = missingMemberSubmit.data?.data?.id;
+  let signalMissingMemberHeld;
+  let releaseMissingMemberInsert;
+  const missingMemberHeld = new Promise((resolve) => { signalMissingMemberHeld = resolve; });
+  const missingMemberRelease = new Promise((resolve) => { releaseMissingMemberInsert = resolve; });
+  const heldMissingMemberInsert = prisma.$transaction(async (tx) => {
+    const key = `event-member-authority:${SCRATCH_EVENT.id}:${missingMemberUser.id}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.eventMember.create({ data: { eventId: SCRATCH_EVENT.id, userId: missingMemberUser.id, role: "EVALUATOR" } });
+    signalMissingMemberHeld();
+    await missingMemberRelease;
+  }, { timeout: 15_000 });
+  await missingMemberHeld;
+  let missingMemberAssignmentFinished = false;
+  const waitingMissingMemberAssignment = j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [missingMemberAbstractId], evaluatorIds: [missingMemberUser.id],
+  }, admin).finally(() => { missingMemberAssignmentFinished = true; });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const missingMemberWaitedOnAuthority = !missingMemberAssignmentFinished;
+  releaseMissingMemberInsert();
+  await heldMissingMemberInsert;
+  const missingMemberAssignment = await waitingMissingMemberAssignment;
+  check(
+    "S5 missing-member insertion shares C17 authority key, waits, then authorizes only the committed evaluator row",
+    missingMemberSubmit.status === 201 && missingMemberWaitedOnAuthority &&
+      missingMemberAssignment.status === 201 &&
+      await prisma.reviewAssignment.count({ where: { planId, abstractId: missingMemberAbstractId, evaluatorId: missingMemberUser.id } }) === 1,
+    `${missingMemberAssignment.status}/${missingMemberWaitedOnAuthority}`,
   );
 
   // 8. Assign the abstract to the evaluator -> abstract moves to UNDER_REVIEW

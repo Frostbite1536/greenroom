@@ -23,9 +23,15 @@ export const TEMPLATE_VARIABLES = [
   { key: "calendarInviteNote", label: "Calendar invitation note", sample: "A calendar invite is attached." },
   { key: "openTasks", label: "Tasks they still owe", sample: "2" },
   { key: "dueDate", label: "Next task deadline", sample: "Fri, May 1, 2026, 11:59 PM PDT" },
+  { key: "reviewerName", label: "Reviewer's name", sample: "Ravi Patel" },
+  { key: "inviteUrl", label: "Reviewer invite link", sample: "https://greenroom-hq.com/reviewer-invite#invite=…" },
 ] as const;
 
 export const KNOWN_TEMPLATE_VARIABLES: readonly string[] = TEMPLATE_VARIABLES.map((variable) => variable.key);
+
+const REQUIRED_TEMPLATE_VARIABLES: Readonly<Record<string, readonly string[]>> = {
+  "reviewer-invite": ["inviteUrl"],
+};
 
 /** `{{ name }}` with optional inner spacing — same pattern the renderer uses. */
 const PLACEHOLDER = /{{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}/g;
@@ -48,6 +54,12 @@ export function extractTemplateVariables(...texts: string[]): string[] {
  */
 export function unknownTemplateVariables(...texts: string[]): string[] {
   return extractTemplateVariables(...texts).filter((name) => !KNOWN_TEMPLATE_VARIABLES.includes(name));
+}
+
+/** System invite emails must retain their only recovery path when edited. */
+export function missingRequiredTemplateVariables(key: string, ...texts: string[]): string[] {
+  const present = new Set(extractTemplateVariables(...texts));
+  return (REQUIRED_TEMPLATE_VARIABLES[key] ?? []).filter((variable) => !present.has(variable));
 }
 
 export const emailTemplateUpdateSchema = z.object({

@@ -1,8 +1,21 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { handle, ok } from "@/lib/api/http";
+import { OPERATOR_QUERY_LIMITS, assertEventQueryBound } from "@/lib/api/query-limits";
+import { isReviewerInvitePending } from "@/lib/services/reviewer-invite";
 
 export const dynamic = "force-dynamic";
+
+type InviteListRow = {
+  userId: string;
+  tokenVersion: number;
+  expiresAt: Date;
+  acceptedAt: Date | null;
+  acceptedVersion: number | null;
+  lastSentAt: Date | null;
+  lastDeliveryState: "PENDING" | "SENT" | "MOCKED" | "FAILED";
+};
 
 /**
  * GET /api/evaluations/evaluators — event members who can review (admin).
@@ -20,14 +33,37 @@ export const GET = handle(async () => {
     where: { eventId: ctx.eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
     include: { user: { select: { id: true, name: true, email: true } } },
     orderBy: { user: { name: "asc" } },
+    take: OPERATOR_QUERY_LIMITS.reviewerSetupMembers + 1,
   });
+  assertEventQueryBound(members, OPERATOR_QUERY_LIMITS.reviewerSetupMembers, "reviewer setup members");
+  const userIds = members.map((member) => member.userId);
+  const invites = userIds.length === 0
+    ? []
+    : await prisma.$queryRaw<InviteListRow[]>`
+      SELECT "userId", "tokenVersion", "expiresAt", "acceptedAt", "acceptedVersion", "lastSentAt", "lastDeliveryState"
+      FROM "ReviewerInvite"
+      WHERE "eventId" = ${ctx.eventId} AND "userId" IN (${Prisma.join(userIds)})
+    `;
+  const inviteByUserId = new Map(invites.map((invite) => [invite.userId, invite]));
 
   return ok(
-    members.map((m) => ({
-      userId: m.user.id,
-      name: m.user.name,
-      email: m.user.email,
-      role: m.role,
-    })),
+    members.map((m) => {
+      const invite = inviteByUserId.get(m.userId) ?? null;
+      return {
+        userId: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+        role: m.role,
+        access: "active" as const,
+        invite: invite
+          ? {
+              state: isReviewerInvitePending(invite) ? "pending" : invite.acceptedVersion === invite.tokenVersion ? "accepted" : "expired",
+              expiresAt: invite.expiresAt,
+              lastSentAt: invite.lastSentAt,
+              delivery: invite.lastDeliveryState.toLowerCase(),
+            }
+          : null,
+      };
+    }),
   );
 });

@@ -1,5 +1,9 @@
 import { Prisma, type AbstractStatus, type UserRole } from "@prisma/client";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import {
+  lockEventMemberAuthorities,
+  lockExistingEventMembersForShare,
+} from "@/lib/services/event-member-lock";
 
 export type LockedAssignmentPlan = {
   id: string;
@@ -8,12 +12,14 @@ export type LockedAssignmentPlan = {
 
 export type ReviewAssignmentWriteLockDependencies = {
   lockPlan: typeof lockEvaluationPlanForAssignment;
+  lockMemberAuthorities: typeof lockAssignmentEventMemberAuthorities;
   lockMembers: typeof lockTargetEventMembersForAssignment;
   lockAbstract: typeof lockAbstractForWrite;
 };
 
 const productionDependencies: ReviewAssignmentWriteLockDependencies = {
   lockPlan: lockEvaluationPlanForAssignment,
+  lockMemberAuthorities: lockAssignmentEventMemberAuthorities,
   lockMembers: lockTargetEventMembersForAssignment,
   lockAbstract: lockAbstractForWrite,
 };
@@ -52,22 +58,22 @@ export async function lockTargetEventMembersForAssignment(
   eventId: string,
   evaluatorIds: readonly string[],
 ): Promise<void> {
-  const sortedIds = sortAssignmentLockIds(evaluatorIds);
-  if (sortedIds.length === 0) return;
+  await lockExistingEventMembersForShare(tx, eventId, evaluatorIds);
+}
 
-  await tx.$queryRaw`
-    SELECT "userId"
-    FROM "EventMember"
-    WHERE "eventId" = ${eventId}
-      AND "userId" IN (${Prisma.join(sortedIds)})
-    ORDER BY "userId" COLLATE "C"
-    FOR SHARE
-  `;
+/** Shared authority keys must precede the existing-row locks in S5 and C17. */
+export async function lockAssignmentEventMemberAuthorities(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  evaluatorIds: readonly string[],
+): Promise<void> {
+  await lockEventMemberAuthorities(tx, sortAssignmentLockIds(evaluatorIds).map((userId) => ({ eventId, userId })));
 }
 
 /**
  * Route-specific LOCK-ORDER-v1 sequence for assignment writes:
- * EvaluationPlan FOR SHARE → target EventMember FOR SHARE (bytewise user id)
+ * EvaluationPlan FOR SHARE → target EventMember authority advisory keys →
+ * target EventMember FOR SHARE (bytewise user id)
  * → per-Abstract advisory locks (bytewise id). A missing or cross-event plan
  * stops before the later classes, avoiding locks derived from foreign input.
  */
@@ -84,7 +90,9 @@ export async function lockReviewAssignmentWrite(
   const plan = await dependencies.lockPlan(tx, input.planId);
   if (!plan || plan.eventId !== input.eventId) return plan;
 
-  await dependencies.lockMembers(tx, input.eventId, sortAssignmentLockIds(input.evaluatorIds));
+  const evaluatorIds = sortAssignmentLockIds(input.evaluatorIds);
+  await dependencies.lockMemberAuthorities(tx, input.eventId, evaluatorIds);
+  await dependencies.lockMembers(tx, input.eventId, evaluatorIds);
   for (const abstractId of sortAssignmentLockIds(input.abstractIds)) {
     await dependencies.lockAbstract(tx, abstractId);
   }

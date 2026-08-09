@@ -7,6 +7,7 @@ import {
   sanitizeTemplateBody,
   unknownTemplateVariables,
   KNOWN_TEMPLATE_VARIABLES,
+  missingRequiredTemplateVariables,
 } from "./template-edit";
 import { renderEmailTemplate } from "./reminders";
 
@@ -81,6 +82,12 @@ test("the update schema refuses empty content and oversized bodies", () => {
   // `key` is deliberately not editable: reminders address templates by it.
   const parsed = emailTemplateUpdateSchema.safeParse({ subject: "Hi", htmlBody: "<p>x</p>", key: "renamed" });
   assert.equal(parsed.success && "key" in parsed.data, false);
+});
+
+test("reviewer-invite template edits retain the trusted invite URL placeholder", () => {
+  assert.deepEqual(missingRequiredTemplateVariables("reviewer-invite", "Invite", "<p>Open {{inviteUrl}}</p>"), []);
+  assert.deepEqual(missingRequiredTemplateVariables("reviewer-invite", "Invite", "<p>Open your workspace</p>"), ["inviteUrl"]);
+  assert.deepEqual(missingRequiredTemplateVariables("task.reminder", "Invite", "<p>Open your workspace</p>"), []);
 });
 
 test("template subjects are normalized before persistence or preview", () => {
