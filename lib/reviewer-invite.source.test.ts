@@ -45,4 +45,14 @@ test("the approved inline form remains labelled and resend stays outside the rev
   assert.match(controls, /<form className="reviewer-invite"[\s\S]*?autoComplete="name"[\s\S]*?autoComplete="email"/);
   assert.match(controls, /role="status"/);
   assert.match(controls, /role="alert"/);
+  assert.match(controls, /They get reviewer access for this event and can start reviewing after they accept the invitation\./);
+});
+
+test("a stale-page resend cooldown refreshes authoritative availability without a permanent client latch", () => {
+  const controls = source("components/reviewer-invite-controls.tsx");
+  assert.doesNotMatch(controls, /cooldownDenied/);
+  assert.match(
+    controls,
+    /res\.error\.code === "INVITE_RESEND_COOLDOWN"[\s\S]*?startTransition\(\(\) => router\.refresh\(\)\)/,
+  );
 });

@@ -52,7 +52,7 @@ export function ReviewerInviteForm({ headingLevel = "h4" }: { headingLevel?: "h3
   return (
     <form className="reviewer-invite" onSubmit={invite} aria-labelledby="reviewer-invite-title">
       <Heading id="reviewer-invite-title">Invite a reviewer</Heading>
-      <p className="hint">They can be assigned now and start reviewing after they accept the invitation.</p>
+      <p className="hint">They get reviewer access for this event and can start reviewing after they accept the invitation.</p>
       <label className="stack">
         <span className="field-label">Name</span>
         <input
@@ -94,12 +94,10 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [now, setNow] = useState(0);
-  const [cooldownDenied, setCooldownDenied] = useState(false);
   const invite = reviewer.invite;
   const resendAt = invite?.resendAvailableAt ?? null;
 
   useEffect(() => {
-    setCooldownDenied(false);
     if (!resendAt) return;
     const target = Date.parse(resendAt);
     if (!Number.isFinite(target)) return;
@@ -111,7 +109,7 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
   }, [resendAt]);
 
   if (!invite || invite.state === "accepted") return null;
-  const available = !cooldownDenied && canResendReviewerInvite(resendAt, now);
+  const available = canResendReviewerInvite(resendAt, now);
   const cooldownId = `reviewer-resend-${reviewer.userId}`;
 
   async function resend() {
@@ -121,8 +119,10 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
     const res = await sendReviewerInvite({ name: reviewer.name, email: reviewer.email, resend: true });
     setBusy(false);
     if (!res.ok) {
-      if (res.error.code === "INVITE_RESEND_COOLDOWN") setCooldownDenied(true);
       setError(inviteError(res.error.code, res.error.message, res.error.fieldErrors));
+      if (res.error.code === "INVITE_RESEND_COOLDOWN") {
+        startTransition(() => router.refresh());
+      }
       return;
     }
     setNotice(reviewerInvitePostNotice(res.data));
