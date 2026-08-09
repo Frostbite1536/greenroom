@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { getApiContext } from "@/lib/api/context";
-import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { integrationStatus } from "@/lib/operations/status";
@@ -69,9 +69,15 @@ export default async function AdminOperationsPage() {
         _count: { select: { reviewScores: { where: { comment: { not: null } } } } },
       },
       orderBy: [{ decidedAt: "desc" }, { title: "asc" }],
-      take: OPERATOR_QUERY_LIMITS.mirrorSessions,
+      take: OPERATOR_QUERY_LIMITS.decidedAbstracts + 1,
     }),
   ]);
+
+  assertEventQueryBound(
+    decidedAbstracts,
+    OPERATOR_QUERY_LIMITS.decidedAbstracts,
+    "decided proposals available for decision email",
+  );
 
   // One row per speaker; the reminders API is keyed by user, not by session.
   const speakers = [...new Map(speakerRows.map((row) => [row.userId, {

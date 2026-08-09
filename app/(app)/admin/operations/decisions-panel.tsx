@@ -16,6 +16,7 @@ type DecidedAbstract = {
 type Preview = {
   subject: string;
   html: string;
+  previewRecipient: string;
   recipients: string[];
   feedbackCount: number;
   willSend: boolean;
@@ -145,11 +146,14 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
 
           {preview ? (
             <div className={styles.field}>
-              <span className="field-label">Exactly what they will receive</span>
+              <span className="field-label">Preview for {preview.previewRecipient}</span>
               <p className={styles.hintText}>
                 To: {preview.recipients.join(", ")}
                 {preview.willSend ? "" : " · demo mode — this will be recorded, not delivered"}
               </p>
+              {preview.recipients.length > 1 ? (
+                <p className={styles.hintText}>Each recipient gets this message with their own greeting.</p>
+              ) : null}
               <div className={styles.templatePreview}>
                 <strong>{preview.subject}</strong>
                 {/* Server-rendered from escaped/sanitized parts (lib/comms/notifications.ts). */}

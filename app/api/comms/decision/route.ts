@@ -4,8 +4,7 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { dispatchEmail } from "@/lib/comms/send";
 import { buildDecisionEmail } from "@/lib/comms/notifications";
-import { useMockIntegrations } from "@/lib/env";
-import { getResendFrom } from "@/lib/env";
+import { getResendFrom, useMockIntegrations } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,35 +56,47 @@ export const POST = handle(async (req) => {
       "Decide this proposal first — a speaker should not hear from us while it is still under review.",
     );
   }
+  const decision: "ACCEPTED" | "REJECTED" = abstract.status;
 
-  const feedback = input.includeFeedback
-    ? (await prisma.reviewScore.findMany({
+  const feedbackRows = input.includeFeedback
+    ? await prisma.reviewScore.findMany({
         where: { abstractId: abstract.id, comment: { not: null } },
         select: { comment: true },
         orderBy: { createdAt: "asc" },
-        take: FEEDBACK_LIMIT,
-      })).map((row) => ({ comment: row.comment ?? "" }))
+        take: FEEDBACK_LIMIT + 1,
+      })
     : [];
-
-  const mail = buildDecisionEmail({
-    eventName: abstract.event.name,
-    speaker: abstract.submitter,
-    title: abstract.title,
-    decision: abstract.status,
-    personalNote: input.personalNote,
-    feedback,
-  });
+  if (feedbackRows.length > FEEDBACK_LIMIT) {
+    throw new ApiError(
+      422,
+      "FEEDBACK_LIMIT_EXCEEDED",
+      `This proposal has more than ${FEEDBACK_LIMIT} reviewer comments. Send without comments or reduce the feedback first.`,
+    );
+  }
+  const feedback = feedbackRows
+    .map((row) => ({ comment: row.comment?.trim() ?? "" }))
+    .filter((row) => row.comment.length > 0);
 
   // Everyone listed on the proposal hears the outcome, not just the submitter.
   const recipients = [...new Map(
     [abstract.submitter, ...abstract.speakers.map((row) => row.user)].map((person) => [person.email.toLowerCase(), person]),
   ).values()];
+  const buildMailFor = (speaker: (typeof recipients)[number]) => buildDecisionEmail({
+    eventName: abstract.event.name,
+    speaker,
+    title: abstract.title,
+    decision,
+    personalNote: input.personalNote,
+    feedback,
+  });
+  const previewMail = buildMailFor(abstract.submitter);
 
   if (input.preview) {
     return ok({
       preview: true,
-      subject: mail.subject,
-      html: mail.html,
+      subject: previewMail.subject,
+      html: previewMail.html,
+      previewRecipient: abstract.submitter.email,
       recipients: recipients.map((person) => person.email),
       feedbackCount: feedback.length,
       willSend: !useMockIntegrations() && Boolean(process.env.RESEND_API_KEY) && Boolean(getResendFrom()),
@@ -93,7 +104,7 @@ export const POST = handle(async (req) => {
   }
 
   const template = await prisma.emailTemplate.findFirst({
-    where: { eventId: abstract.eventId, key: abstract.status === "ACCEPTED" ? "cfp-accepted" : "cfp-rejected" },
+    where: { eventId: abstract.eventId, key: decision === "ACCEPTED" ? "cfp-accepted" : "cfp-rejected" },
     select: { id: true },
   }) ?? await prisma.emailTemplate.findFirst({
     where: { eventId: abstract.eventId },
@@ -108,11 +119,12 @@ export const POST = handle(async (req) => {
   let mocked = 0;
   let failed = 0;
   for (const person of recipients) {
+    const mail = buildMailFor(person);
     const outcome = await dispatchEmail(prisma, {
       templateId: template.id,
       senderId: ctx.userId,
       message: { to: person.email, subject: mail.subject, html: mail.html },
-      variables: { abstractId: abstract.id, kind: "decision", decision: abstract.status },
+      variables: { abstractId: abstract.id, kind: "decision", decision },
     });
     if (outcome.status === "sent") sent++;
     else if (outcome.status === "mocked") mocked++;
@@ -121,7 +133,7 @@ export const POST = handle(async (req) => {
 
   return ok({
     preview: false,
-    subject: mail.subject,
+    subject: previewMail.subject,
     recipients: recipients.map((person) => person.email),
     feedbackCount: feedback.length,
     sent,

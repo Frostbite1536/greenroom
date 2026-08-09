@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api/http";
 export const OPERATOR_QUERY_LIMITS = {
   mirrorSessions: 2_000,
   acceleventsSessions: 2_000,
+  decidedAbstracts: 2_000,
   sessionSpeakersPerSession: 100,
   reminderSessionSpeakers: 2_000,
   openTasksPerReminderSpeaker: 500,

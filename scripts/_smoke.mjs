@@ -59,7 +59,14 @@ const v1 = async (path) => {
 
 const server = spawn("npx", ["next", "start", "-p", PORT], {
   cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, GREENROOM_API_KEY: V1_API_KEY, SESSION_SECRET: SMOKE_SESSION_SECRET },
+  // Smoke must never reach a real provider, even when the caller's shell is
+  // configured for live integrations.
+  env: {
+    ...process.env,
+    GREENROOM_API_KEY: V1_API_KEY,
+    MOCK_EXTERNAL_APIS: "true",
+    SESSION_SECRET: SMOKE_SESSION_SECRET,
+  },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
 const prisma = new PrismaClient();
@@ -399,6 +406,19 @@ try {
   const b5Restore = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId }, admin);
   check("B5 setup: restore the full field set", b5Restore.status === 200, b5Restore.status);
 
+  // O2: the shared delivery path requires a template row for its dispatch FK.
+  // The server is forced into mock mode above, so these checks cannot reach
+  // Resend even if the local shell happens to carry live credentials.
+  const commsTemplate = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "cfp-accepted",
+      subject: "Scratch decision",
+      htmlBody: "<p>Scratch only</p>",
+      trigger: "manual",
+    },
+  });
+
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My talk", speakers: [{ email: "SPK@x.com", name: "Spk", isPrimary: true }],
@@ -415,6 +435,21 @@ try {
   check("valid submit", sub.status === 201 && sub.data?.data?.status === "SUBMITTED", sub.status);
   const abstractId = sub.data?.data?.id;
   check("co-speaker upserted by email", sub.data?.data?.speakers?.length === 2);
+  const submissionDispatches = await prisma.emailDispatch.findMany({
+    where: { templateId: commsTemplate.id },
+    select: { recipient: true, status: true, providerId: true },
+    orderBy: { recipient: "asc" },
+  });
+  check(
+    "O2 submit records receipt, co-speaker notice, and admin alert",
+    JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
+      JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
+    JSON.stringify(submissionDispatches.map((row) => row.recipient)),
+  );
+  check(
+    "O2 smoke delivery is mocked before any provider call",
+    submissionDispatches.every((row) => row.status === "mocked" && row.providerId?.startsWith("mock:")),
+  );
 
   // 5. Admin lists abstracts
   const list = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, admin);
@@ -481,6 +516,41 @@ try {
   // 11. Accept, then convert to a Session
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
+
+  const decisionPreview = await j("POST", "/api/comms/decision", {
+    abstractId,
+    includeFeedback: true,
+  }, admin);
+  check(
+    "O2 decision preview includes comments but never scores or reviewer identities",
+    decisionPreview.status === 200 &&
+      decisionPreview.data?.data?.preview === true &&
+      decisionPreview.data?.data?.feedbackCount === 1 &&
+      decisionPreview.data?.data?.html?.includes("strong") &&
+      !decisionPreview.data?.data?.html?.includes("5/5") &&
+      !/reviewer|evaluator/i.test(decisionPreview.data?.data?.html ?? ""),
+    decisionPreview.status,
+  );
+  check(
+    "O2 decision preview names every proposal recipient",
+    JSON.stringify([...(decisionPreview.data?.data?.recipients ?? [])].sort()) ===
+      JSON.stringify(["co@x.com", "spk@x.com"]),
+    JSON.stringify(decisionPreview.data?.data?.recipients),
+  );
+
+  const decisionSend = await j("POST", "/api/comms/decision", {
+    abstractId,
+    preview: false,
+    includeFeedback: true,
+  }, admin);
+  check(
+    "O2 decision send records one mocked dispatch per proposal speaker",
+    decisionSend.status === 200 &&
+      decisionSend.data?.data?.sent === 0 &&
+      decisionSend.data?.data?.mocked === 2 &&
+      decisionSend.data?.data?.failed === 0,
+    JSON.stringify(decisionSend.data?.data),
+  );
 
   // B1: accepting is the moment the talk becomes real — session + checklist.
   const sessionId = decision.data?.data?.session?.id;
