@@ -286,6 +286,7 @@ try {
     ["page /cfp/[formId] (public)", `/cfp/${fx.form.id}`, null],
     ["page /embed/schedule (public)", `/embed/schedule?event=${EVENT_ID}`, null],
     ["page /admin/embeds", "/admin/embeds", admin],
+    ["page /admin/settings", "/admin/settings", admin],
   ]) {
     const r = await req("GET", path, null, sess);
     check(`${name} → 200`, r.status === 200, `got ${r.status}`);
@@ -297,6 +298,83 @@ try {
 
   const absPage = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts page shows seeded abstract", absPage.text.includes("Scratch: Agents in Production"));
+
+  // --- M5: event identity and safe room settings --------------------------
+  const settingsPage = await req("GET", "/admin/settings", null, admin);
+  check("settings page explains the event essentials", settingsPage.text.includes("Event details") && settingsPage.text.includes("Tracks &amp; Categories"));
+  check("settings page renders the event name and rooms", settingsPage.text.includes("Scratch Frontend") && settingsPage.text.includes("Hall A"));
+
+  const settingsRead = await req("GET", "/api/admin/settings", null, admin);
+  check("settings API returns only the active event", settingsRead.status === 200 && settingsRead.data?.data?.event?.id === EVENT_ID,
+    `${settingsRead.status} ${JSON.stringify(settingsRead.data?.error ?? "")}`);
+  check("settings API serializes local event dates", typeof settingsRead.data?.data?.event?.startsOn === "string" && typeof settingsRead.data?.data?.event?.endsOn === "string");
+  check("settings API returns stable rooms, tracks, and categories",
+    settingsRead.data?.data?.rooms?.map((room) => room.name).join(",") === "Hall A,Hall B"
+    && settingsRead.data?.data?.tracks?.map((track) => track.name).join(",") === "Mainstage"
+    && settingsRead.data?.data?.categories?.map((category) => category.name).join(",") === "Applied AI");
+
+  const originalSettingsEvent = settingsRead.data?.data?.event;
+  const settingsNameUpdate = await req("PATCH", "/api/admin/settings", {
+    name: "Scratch Frontend Settings",
+  }, admin);
+  check("name-only settings PATCH preserves timezone and local dates",
+    settingsNameUpdate.status === 200
+    && settingsNameUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsNameUpdate.data?.data?.event?.timezone === originalSettingsEvent?.timezone
+    && settingsNameUpdate.data?.data?.event?.startsOn === originalSettingsEvent?.startsOn
+    && settingsNameUpdate.data?.data?.event?.endsOn === originalSettingsEvent?.endsOn,
+    `${settingsNameUpdate.status} ${JSON.stringify(settingsNameUpdate.data?.error ?? "")}`);
+
+  const settingsTimezoneUpdate = await req("PATCH", "/api/admin/settings", {
+    timezone: "America/Denver",
+  }, admin);
+  check("timezone-only settings PATCH preserves concurrent name and local dates",
+    settingsTimezoneUpdate.status === 200
+    && settingsTimezoneUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsTimezoneUpdate.data?.data?.event?.timezone === "America/Denver"
+    && settingsTimezoneUpdate.data?.data?.event?.startsOn === originalSettingsEvent?.startsOn
+    && settingsTimezoneUpdate.data?.data?.event?.endsOn === originalSettingsEvent?.endsOn,
+    `${settingsTimezoneUpdate.status} ${JSON.stringify(settingsTimezoneUpdate.data?.error ?? "")}`);
+
+  const settingsDateUpdate = await req("PATCH", "/api/admin/settings", {
+    startsOn: "2032-05-12", endsOn: "2032-05-14",
+  }, admin);
+  check("paired event-date PATCH preserves concurrent name and timezone",
+    settingsDateUpdate.status === 200
+    && settingsDateUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsDateUpdate.data?.data?.event?.timezone === "America/Denver"
+    && settingsDateUpdate.data?.data?.event?.startsOn === "2032-05-12"
+    && settingsDateUpdate.data?.data?.event?.endsOn === "2032-05-14",
+    `${settingsDateUpdate.status} ${JSON.stringify(settingsDateUpdate.data?.error ?? "")}`);
+
+  const settingsRoom = await req("POST", "/api/admin/settings/rooms", {
+    name: "Settings Studio", capacity: 85,
+  }, admin);
+  const settingsRoomId = settingsRoom.data?.data?.room?.id;
+  check("settings API adds a room", settingsRoom.status === 201 && Boolean(settingsRoomId),
+    `${settingsRoom.status} ${JSON.stringify(settingsRoom.data?.error ?? "")}`);
+
+  const settingsRoomUpdate = await req("PATCH", "/api/admin/settings/rooms", {
+    id: settingsRoomId, name: "Settings Studio West", capacity: 90,
+  }, admin);
+  check("settings API updates a room", settingsRoomUpdate.status === 200 && settingsRoomUpdate.data?.data?.room?.name === "Settings Studio West",
+    `${settingsRoomUpdate.status} ${JSON.stringify(settingsRoomUpdate.data?.error ?? "")}`);
+
+  const usedRoomDelete = await req("DELETE", `/api/admin/settings/rooms?roomId=${fx.roomA.id}`, null, admin);
+  check("settings API refuses to remove a scheduled room with guidance",
+    usedRoomDelete.status === 409
+    && usedRoomDelete.data?.error?.code === "ROOM_IN_USE"
+    && /move or unschedule/i.test(usedRoomDelete.data?.error?.message ?? ""),
+    `${usedRoomDelete.status} ${JSON.stringify(usedRoomDelete.data?.error ?? "")}`);
+  const unusedRoomDelete = await req("DELETE", `/api/admin/settings/rooms?roomId=${settingsRoomId}`, null, admin);
+  check("settings API removes an unused room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId,
+    `${unusedRoomDelete.status} ${JSON.stringify(unusedRoomDelete.data?.error ?? "")}`);
+
+  const settingsCategory = await req("POST", "/api/cfp/categories", {
+    eventId: EVENT_ID, name: "Settings category", description: "Made from event settings", sortOrder: 0,
+  }, admin);
+  check("settings category action uses the existing authorized route", settingsCategory.status === 201 && settingsCategory.data?.data?.name === "Settings category",
+    `${settingsCategory.status} ${JSON.stringify(settingsCategory.data?.error ?? "")}`);
 
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
@@ -683,6 +761,7 @@ try {
   const adminNav = await req("GET", "/admin/forms", null, admin);
   check("admin nav shows agenda builder", adminNav.text.includes("Agenda builder"));
   check("admin nav shows embeds", adminNav.text.includes("/admin/embeds"));
+  check("admin nav shows event settings", adminNav.text.includes("/admin/settings"));
   check("admin nav shows speaker onboarding",
     adminNav.text.includes("/admin/speakers") && adminNav.text.includes("Speaker onboarding"));
 
@@ -690,14 +769,14 @@ try {
   check("speaker portal renders → 200", speakerNav.status === 200, `got ${speakerNav.status}`);
   check("speaker nav hides admin-only links",
     !speakerNav.text.includes("/admin/forms") && !speakerNav.text.includes("/admin/agenda")
-    && !speakerNav.text.includes("/admin/speakers"));
+    && !speakerNav.text.includes("/admin/speakers") && !speakerNav.text.includes("/admin/settings"));
   check("speaker nav keeps portal + public links",
     speakerNav.text.includes("/portal") && speakerNav.text.includes("/embed/schedule"));
 
   const evaluatorNav = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator nav hides CFP forms, agenda and speaker onboarding",
     !evaluatorNav.text.includes("/admin/forms") && !evaluatorNav.text.includes("/admin/agenda")
-    && !evaluatorNav.text.includes("/admin/speakers"));
+    && !evaluatorNav.text.includes("/admin/speakers") && !evaluatorNav.text.includes("/admin/settings"));
   check("evaluator nav keeps evaluations + abstracts",
     evaluatorNav.text.includes("/admin/evaluations") && evaluatorNav.text.includes("/admin/abstracts"));
 
