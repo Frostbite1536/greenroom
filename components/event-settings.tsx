@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, CalendarDays, Plus, Tags, Trash2 } from "lucide-react";
 import type { EventSettingsView } from "@/lib/data/reads";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
-import { planEventSettingsPatch, validateEventDatePair, type EventSettingsDraft } from "@/lib/event-settings-form";
+import {
+  eventSettingsDraft,
+  planEventSettingsPatch,
+  reconcileEventSettingsDraft,
+  validateEventDatePair,
+  type EventSettingsDraft,
+} from "@/lib/event-settings-form";
 import { EmptyState, Pill } from "@/components/ui";
 
 type EventForm = EventSettingsDraft;
@@ -28,15 +34,6 @@ const COMMON_TIME_ZONES = [
   "UTC",
 ];
 
-function eventForm(event: EventSettingsView["event"]): EventForm {
-  return {
-    name: event.name,
-    timezone: event.timezone,
-    startsOn: event.startsOn ?? "",
-    endsOn: event.endsOn ?? "",
-  };
-}
-
 function positiveCapacity(value: string): number | null | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
@@ -47,7 +44,11 @@ function positiveCapacity(value: string): number | null | undefined {
 export function EventSettings({ view }: { view: EventSettingsView }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [event, setEvent] = useState(() => eventForm(view.event));
+  const initialEvent = eventSettingsDraft(view.event);
+  const [event, setEvent] = useState(() => initialEvent);
+  const eventBaselineRef = useRef(initialEvent);
+  const eventDraftRef = useRef(initialEvent);
+  const eventIdRef = useRef(view.event.id);
   const [eventError, setEventError] = useState<EventError | null>(null);
   const [eventNotice, setEventNotice] = useState<string | null>(null);
   const [savingEvent, setSavingEvent] = useState(false);
@@ -63,21 +64,59 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
   const [categoryNotice, setCategoryNotice] = useState<string | null>(null);
   const [savingCategory, setSavingCategory] = useState(false);
 
-  // A successful mutation refreshes the RSC payload. Reset drafts only when
-  // that authoritative event projection changes, never on every render.
-  useEffect(() => setEvent(eventForm(view.event)), [view.event]);
+  const applyAuthoritativeEvent = useCallback((
+    authoritative: EventSettingsView["event"],
+    submittedDraft?: EventForm,
+  ) => {
+    const reconciliation = reconcileEventSettingsDraft(
+      eventBaselineRef.current,
+      eventDraftRef.current,
+      authoritative,
+      submittedDraft,
+    );
+    eventBaselineRef.current = reconciliation.baseline;
+    eventDraftRef.current = reconciliation.draft;
+    setEvent((current) => current.name === reconciliation.draft.name
+      && current.timezone === reconciliation.draft.timezone
+      && current.startsOn === reconciliation.draft.startsOn
+      && current.endsOn === reconciliation.draft.endsOn
+      ? current
+      : reconciliation.draft);
+  }, []);
+
+  // Room/category mutations refresh the whole RSC payload. Depend only on
+  // event scalars, then reconcile that new server truth with the local draft.
+  // A different event is a real scope change, so it intentionally starts clean.
+  useEffect(() => {
+    if (eventIdRef.current !== view.event.id) {
+      const next = eventSettingsDraft(view.event);
+      eventIdRef.current = view.event.id;
+      eventBaselineRef.current = next;
+      eventDraftRef.current = next;
+      setEvent(next);
+      return;
+    }
+    applyAuthoritativeEvent(view.event);
+  }, [applyAuthoritativeEvent, view.event.id, view.event.name, view.event.timezone, view.event.startsOn, view.event.endsOn]);
+
+  function updateEvent(field: keyof EventForm, value: string) {
+    const next = { ...eventDraftRef.current, [field]: value };
+    eventDraftRef.current = next;
+    setEvent(next);
+  }
 
   function refresh() {
     startTransition(() => router.refresh());
   }
 
   async function saveEvent() {
-    const dateError = validateEventDatePair(event.startsOn, event.endsOn);
+    const submittedDraft = eventDraftRef.current;
+    const dateError = validateEventDatePair(submittedDraft.startsOn, submittedDraft.endsOn);
     if (dateError) {
       setEventError({ message: dateError, field: "dates" });
       return;
     }
-    const patch = planEventSettingsPatch(event, view.event);
+    const patch = planEventSettingsPatch(submittedDraft, eventBaselineRef.current);
     if (!patch) {
       setEventError(null);
       setEventNotice("No event details have changed.");
@@ -102,6 +141,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       }
       return;
     }
+    applyAuthoritativeEvent(res.data.event, submittedDraft);
     setEventNotice("Event details saved.");
     refresh();
   }
@@ -234,7 +274,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
               name="event-name"
               autoComplete="organization"
               value={event.name}
-              onChange={(change) => setEvent((current) => ({ ...current, name: change.target.value }))}
+              onChange={(change) => updateEvent("name", change.target.value)}
               aria-invalid={eventError?.field === "name"}
               aria-describedby={eventError?.field === "name" ? "event-settings-error" : undefined}
             />
@@ -255,7 +295,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
               list="event-timezone-options"
               autoComplete="off"
               value={event.timezone}
-              onChange={(change) => setEvent((current) => ({ ...current, timezone: change.target.value }))}
+              onChange={(change) => updateEvent("timezone", change.target.value)}
               aria-invalid={eventError?.field === "timezone"}
               aria-describedby={eventError?.field === "timezone" ? "event-timezone-help event-settings-error" : "event-timezone-help"}
             />
@@ -281,7 +321,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
                   type="date"
                   name="event-starts-on"
                   value={event.startsOn}
-                  onChange={(change) => setEvent((current) => ({ ...current, startsOn: change.target.value }))}
+                  onChange={(change) => updateEvent("startsOn", change.target.value)}
                 />
               </label>
               <label className="stack" htmlFor="event-ends-on">
@@ -292,7 +332,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
                   type="date"
                   name="event-ends-on"
                   value={event.endsOn}
-                  onChange={(change) => setEvent((current) => ({ ...current, endsOn: change.target.value }))}
+                  onChange={(change) => updateEvent("endsOn", change.target.value)}
                 />
               </label>
             </div>

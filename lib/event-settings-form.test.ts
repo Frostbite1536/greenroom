@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { planEventSettingsPatch, validateEventDatePair } from "./event-settings-form";
+import { eventSettingsDraft, planEventSettingsPatch, reconcileEventSettingsDraft, validateEventDatePair } from "./event-settings-form";
 
 const authoritative = {
   name: "Forward 2026",
@@ -41,4 +41,65 @@ test("event settings PATCH always sends dates as a pair", () => {
     planEventSettingsPatch({ ...authoritative, startsOn: "", endsOn: "" }, authoritative),
     { startsOn: null, endsOn: null },
   );
+});
+
+test("settings refresh adopts server truth only for fields this editor did not change", () => {
+  const baseline = eventSettingsDraft(authoritative);
+  const reconciliation = reconcileEventSettingsDraft(
+    baseline,
+    { ...baseline, name: "Local programme name" },
+    {
+      name: "Another admin's name",
+      timezone: "America/New_York",
+      startsOn: "2026-05-13",
+      endsOn: "2026-05-15",
+    },
+  );
+
+  assert.deepEqual(reconciliation.baseline, {
+    name: "Another admin's name",
+    timezone: "America/New_York",
+    startsOn: "2026-05-13",
+    endsOn: "2026-05-15",
+  });
+  assert.deepEqual(reconciliation.draft, {
+    name: "Local programme name",
+    timezone: "America/New_York",
+    startsOn: "2026-05-13",
+    endsOn: "2026-05-15",
+  });
+});
+
+test("settings reconciliation keeps a keystroke made after the submitted snapshot", () => {
+  const baseline = eventSettingsDraft(authoritative);
+  const submitted = { ...baseline, name: "Submitted name" };
+  const response = {
+    ...authoritative,
+    name: "Submitted name",
+  };
+  const reconciliation = reconcileEventSettingsDraft(
+    baseline,
+    { ...baseline, name: "Newer unsaved name" },
+    response,
+    submitted,
+  );
+
+  assert.deepEqual(reconciliation.draft, { ...baseline, name: "Newer unsaved name" });
+  assert.deepEqual(reconciliation.baseline, eventSettingsDraft(response));
+});
+
+test("a successful save adopts server normalization when no newer edit exists", () => {
+  const baseline = eventSettingsDraft(authoritative);
+  const submitted = { ...baseline, name: "  Forward Conference  " };
+  const response = { ...authoritative, name: "Forward Conference" };
+  const reconciliation = reconcileEventSettingsDraft(baseline, submitted, response, submitted);
+
+  assert.equal(reconciliation.draft.name, "Forward Conference");
+  assert.equal(planEventSettingsPatch(reconciliation.draft, reconciliation.baseline), null);
+});
+
+test("an unrelated room or category refresh leaves a dirty event draft intact", () => {
+  const baseline = eventSettingsDraft(authoritative);
+  const draft = { ...baseline, timezone: "Europe/London" };
+  assert.deepEqual(reconcileEventSettingsDraft(baseline, draft, authoritative).draft, draft);
 });
