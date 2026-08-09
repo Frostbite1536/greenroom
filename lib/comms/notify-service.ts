@@ -4,6 +4,7 @@ import {
   buildCoSpeakerNotice,
   buildSubmissionAlert,
   buildSubmissionReceipt,
+  CFP_SUBMITTED_TEMPLATE_KEY,
 } from "@/lib/comms/notifications";
 
 /**
@@ -63,11 +64,26 @@ export async function notifyAbstractSubmitted(
 
     // Notifications hang off the event's own templates so an operator can see
     // every send in one place; without a template there is nothing to log to.
-    const template = await prisma.emailTemplate.findFirst({
-      where: { eventId: abstract.eventId },
-      select: { id: true },
-      orderBy: { key: "asc" },
-    });
+    const template =
+      await prisma.emailTemplate.findUnique({
+        where: {
+          eventId_key: {
+            eventId: abstract.eventId,
+            key: CFP_SUBMITTED_TEMPLATE_KEY,
+          },
+        },
+        select: { id: true },
+      }) ??
+      // Compatibility for an already-running event between this code deploy
+      // and its next coordinated reseed. The rendered submission messages do
+      // not come from this row; it is the required dispatch-log parent only.
+      // Prefer the dedicated key as soon as it exists, but do not silently
+      // suppress receipts while legacy event templates are still in place.
+      await prisma.emailTemplate.findFirst({
+        where: { eventId: abstract.eventId },
+        select: { id: true },
+        orderBy: { key: "asc" },
+      });
     if (!template) return { ...EMPTY, skipped: "no_template" };
 
     const speakers = abstract.speakers.map((row) => row.user);

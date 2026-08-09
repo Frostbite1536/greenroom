@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildSpeakerCalendarInvite,
+  hasScheduledReminderSession,
+  reminderVariables,
   reminderRequestSchema,
   renderEmailTemplate,
   selectEligibleSpeakers,
@@ -14,6 +16,7 @@ const speaker: EligibleSpeaker = {
   name: "Ada <Lovelace>",
   email: "ada@example.test",
   openTasks: 2,
+  openTaskDueDates: [new Date("2026-05-02T06:59:00.000Z")],
   sessions: [{
     id: "session-1",
     title: "Analytical Engines",
@@ -99,4 +102,43 @@ test("calendar invitation bytes are stable when database row order changes", () 
   );
   assert.equal(forward?.content, reversed?.content);
   assert.ok(forward?.content.includes("DTSTAMP:20260421T120000Z"));
+});
+
+test("reminder copy uses the next task deadline and only fills session fields for a real schedule", () => {
+  const scheduled = reminderVariables({
+    recipient: speaker,
+    eventName: "Forward 2026",
+    timeZone: "America/Los_Angeles",
+    calendarInviteAttached: true,
+  });
+  assert.equal(scheduled.dueDate, "Fri, May 1, 2026, 11:59 PM PDT");
+  assert.equal(scheduled.talkTitle, "Analytical Engines");
+  assert.equal(scheduled.slotTime, "Tue, May 12, 2026, 2:00 AM PDT");
+  assert.equal(scheduled.roomName, "Hall A");
+  assert.equal(scheduled.calendarInviteNote, "A calendar invite is attached.");
+
+  const unscheduled = {
+    ...speaker,
+    sessions: [{ ...speaker.sessions[0], startsAt: null, endsAt: null, roomName: null }],
+  };
+  assert.equal(hasScheduledReminderSession(unscheduled), false);
+  assert.equal(buildSpeakerCalendarInvite(unscheduled, "Forward 2026"), null);
+  assert.deepEqual(
+    reminderVariables({
+      recipient: unscheduled,
+      eventName: "Forward 2026",
+      timeZone: "America/Los_Angeles",
+      calendarInviteAttached: false,
+    }),
+    {
+      speakerName: "Ada <Lovelace>",
+      eventName: "Forward 2026",
+      openTasks: "2",
+      dueDate: "Fri, May 1, 2026, 11:59 PM PDT",
+      talkTitle: "",
+      slotTime: "",
+      roomName: "",
+      calendarInviteNote: "",
+    },
+  );
 });

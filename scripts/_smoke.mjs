@@ -407,6 +407,9 @@ try {
   check("B5 setup: restore the full field set", b5Restore.status === 200, b5Restore.status);
 
   // O2: the shared delivery path requires a template row for its dispatch FK.
+  // Use the legacy accepted key here to prove an already-running event keeps
+  // sending during the short code-deploy -> coordinated-reseed interval. The
+  // dedicated cfp-submitted key is preferred once the new seed is applied.
   // The server is forced into mock mode above, so these checks cannot reach
   // Resend even if the local shell happens to carry live credentials.
   const commsTemplate = await prisma.emailTemplate.create({
@@ -441,7 +444,7 @@ try {
     orderBy: { recipient: "asc" },
   });
   check(
-    "O2 submit records receipt, co-speaker notice, and admin alert",
+    "O2 legacy template fallback records receipt, co-speaker notice, and admin alert",
     JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
       JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
     JSON.stringify(submissionDispatches.map((row) => row.recipient)),
@@ -893,6 +896,54 @@ try {
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
 
+  // C12: one real task deadline is rendered in the event timezone and the
+  // invitation path remains forced-mock. This is scratch-only and deliberately
+  // runs while the speaker has a fully scheduled session above.
+  await prisma.event.update({ where: { id: SCRATCH_EVENT.id }, data: { timezone: "America/Los_Angeles" } });
+  const c12Task = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "C12 scratch deadline",
+      required: true,
+      dueAt: new Date("2026-05-02T06:59:00.000Z"),
+      sortOrder: 99,
+    },
+  });
+  // The scheduled session above belongs to the submitted primary speaker, not
+  // the signed scratch account used for portal authorization checks.
+  const c12Speaker = await prisma.user.findUniqueOrThrow({ where: { email: "spk@x.com" } });
+  await prisma.speakerTask.create({ data: { taskId: c12Task.id, userId: c12Speaker.id, status: "TODO" } });
+  const c12Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "c12-task-reminder",
+      subject: "Deadline {{dueDate}}",
+      htmlBody: "<p>{{talkTitle}} at {{slotTime}} in {{roomName}}. {{calendarInviteNote}}</p>",
+      trigger: "task.reminder",
+    },
+  });
+  const c12Reminder = await j("POST", "/api/comms/reminders", {
+    eventId: SCRATCH_EVENT.id,
+    templateKey: c12Template.key,
+    recipientUserIds: [c12Speaker.id],
+    includeCalendarInvite: true,
+  }, admin);
+  const c12Dispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c12Template.id, recipient: c12Speaker.email },
+    select: { status: true, providerId: true, variables: true },
+  });
+  const c12Variables = c12Dispatch?.variables;
+  check(
+    "C12 reminder uses the task deadline and event timezone in forced mock mode",
+    c12Reminder.status === 200 &&
+      c12Dispatch?.status === "mocked" &&
+      c12Dispatch.providerId?.startsWith("mock:") &&
+      c12Variables?.dueDate === "Fri, May 1, 2026, 11:59 PM PDT" &&
+      typeof c12Variables?.slotTime === "string" && c12Variables.slotTime.endsWith("PDT") &&
+      c12Variables.calendarInviteNote === "A calendar invite is attached.",
+    c12Reminder.status,
+  );
+
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
   // the intended read models (no reviewer data or unplaced sessions).
   const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
@@ -1112,8 +1163,9 @@ try {
     wStranger.status === 403 && wStranger.data?.error?.code === "NOT_YOUR_SUBMISSION", wStranger.status);
 
   const wDraw = await j("PATCH", `/api/cfp/submissions/${wId}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 speaker withdraws an UNDER_REVIEW proposal",
-    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN", wDraw.status);
+  check("M6 portal contract: speaker withdraws an UNDER_REVIEW proposal",
+    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN" &&
+    wDraw.data?.data?.submission?.canEdit === false, wDraw.status);
   check("W1 withdrawing does not stamp a programme decision",
     wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
 
@@ -1149,8 +1201,9 @@ try {
     wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN", wQueueRow?.abstract?.status);
 
   const wAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 an accepted, converted talk cannot be self-withdrawn",
-    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED", wAccepted.status);
+  check("M6 accepted/converted talk refusal is an actionable 409",
+    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED" &&
+    /contact the program team/i.test(wAccepted.data?.error?.message ?? ""), wAccepted.status);
 
   // 23. W2 — a decision reports the session it leaves behind, so the admin UI
   // can prompt to unschedule (no auto-deletion: INV-DOMAIN-001).

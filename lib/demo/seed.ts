@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
+import { CFP_SUBMITTED_TEMPLATE_KEY } from "@/lib/comms/notifications";
 import { zonedToUtcIso } from "@/lib/tz";
 
 /**
@@ -16,6 +17,39 @@ export const DEMO_EVENT = {
   slug: "forward-2026",
   timezone: "America/Los_Angeles",
 } as const;
+
+/** Event-local calendar dates; all persisted instants are derived from these. */
+export const DEMO_EVENT_DATES = {
+  startsOn: "2026-05-12",
+  endsOn: "2026-05-14",
+} as const;
+
+/**
+ * Seeded onboarding deadlines deliberately staircase into the May 12–14 event.
+ * The definitive recipient addresses remain an Architect-window decision, so
+ * this schedule contains no speculative delivery address.
+ */
+export const DEMO_TASK_SCHEDULE = [
+  { title: "Complete your speaker profile", form: "none", required: true, dueDate: "2026-04-17", description: "Add your bio, company and headshot so we can publish your session." },
+  { title: "Tell us about your hotel stay", form: "hotel", required: true, dueDate: "2026-04-24", description: "We book speaker rooms as a block — tell us which nights you need." },
+  { title: "Claim your flight reimbursement", form: "flight", required: true, dueDate: "2026-05-01", description: "Send us your travel costs and where to pay them." },
+  { title: "Submit A/V & logistics form", form: "av", required: true, dueDate: "2026-05-04", description: "Shirt size, A/V needs and arrival details for the stage crew." },
+  { title: "Confirm your session details", form: "none", required: true, dueDate: "2026-05-06", description: "Review the public schedule and tell the programme team about any corrections." },
+  { title: "Upload your slide deck", form: "none", required: false, dueDate: "2026-05-11", description: "Optional, but it helps the crew test your slides in advance." },
+] as const;
+
+export const DEMO_EMAIL_TEMPLATES = [
+  { key: CFP_SUBMITTED_TEMPLATE_KEY, subject: "We received your proposal for Forward 2026", trigger: "abstract.submitted",
+    htmlBody: "<p>Hi {{speakerName}},</p><p>Thanks for submitting <strong>{{talkTitle}}</strong> to {{eventName}}. The programme team will be in touch by email.</p>" },
+  { key: "cfp-accepted", subject: "Your talk was accepted for Forward 2026 🎉", trigger: "abstract.accepted",
+    htmlBody: "<p>Hi {{speakerName}},</p><p>Great news — <strong>{{talkTitle}}</strong> was accepted! Please complete your onboarding tasks in the speaker portal.</p>" },
+  { key: "cfp-rejected", subject: "Update on your Forward 2026 submission", trigger: "abstract.rejected",
+    htmlBody: "<p>Hi {{speakerName}},</p><p>Thank you for submitting <strong>{{talkTitle}}</strong>. Unfortunately we couldn't include it this year.</p>" },
+  { key: "task-reminder", subject: "Reminder: finish your speaker tasks", trigger: "task.reminder",
+    htmlBody: "<p>Hi {{speakerName}},</p><p>You have {{openTasks}} onboarding task(s) still open. Please check each task card for its individual deadline.</p>" },
+  { key: "session-scheduled", subject: "Your session is scheduled", trigger: "session.scheduled",
+    htmlBody: "<p>Hi {{speakerName}},</p><p><strong>{{talkTitle}}</strong> is scheduled for {{slotTime}} in {{roomName}}. A calendar invite is attached.</p>" },
+] as const;
 
 // Personas must match lib/auth.ts DEMO_PERSONAS emails.
 const PERSONAS = {
@@ -153,8 +187,8 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   // --- 2. Event --------------------------------------------------------------
   // These are authored as the event's Los Angeles calendar boundaries, then
   // stored as UTC instants so every viewer sees May 12–14 in event time.
-  const startsAt = new Date(zonedToUtcIso("2026-05-12", "00:00", DEMO_EVENT.timezone));
-  const endsAt = new Date(zonedToUtcIso("2026-05-14", "00:00", DEMO_EVENT.timezone));
+  const startsAt = new Date(zonedToUtcIso(DEMO_EVENT_DATES.startsOn, "00:00", DEMO_EVENT.timezone));
+  const endsAt = new Date(zonedToUtcIso(DEMO_EVENT_DATES.endsOn, "23:59", DEMO_EVENT.timezone));
   await db.event.upsert({
     where: { id: eventId },
     update: { name: DEMO_EVENT.name, slug: DEMO_EVENT.slug, timezone: DEMO_EVENT.timezone, startsAt, endsAt },
@@ -510,20 +544,8 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   // Hotel stay and flight reimbursement are the director's named must-have
   // examples (requirements delta #2, answer 5): both are FORMS a speaker fills
   // in, not checkboxes, because the programme team needs the answers.
-  const taskDefs = [
-    { title: "Complete your speaker profile", required: true, formConfigId: null as string | null, dueDate: "2026-04-17",
-      description: "Add your bio, company and headshot so we can publish your session." },
-    { title: "Tell us about your hotel stay", required: true, formConfigId: hotelForm.id, dueDate: "2026-04-24",
-      description: "We book speaker rooms as a block — tell us which nights you need." },
-    { title: "Claim your flight reimbursement", required: true, formConfigId: flightForm.id, dueDate: "2026-05-01",
-      description: "Send us your travel costs and where to pay them." },
-    { title: "Submit A/V & logistics form", required: true, formConfigId: avForm.id, dueDate: "2026-05-04",
-      description: "Shirt size, A/V needs and arrival details for the stage crew." },
-    { title: "Confirm your session details", required: true, formConfigId: null, dueDate: "2026-05-06",
-      description: "Review the public schedule and tell the programme team about any corrections." },
-    { title: "Upload your slide deck", required: false, formConfigId: null, dueDate: "2026-05-11",
-      description: "Optional, but it helps the crew test your slides in advance." },
-  ];
+  const formIds = { none: null, hotel: hotelForm.id, flight: flightForm.id, av: avForm.id } as const;
+  const taskDefs = DEMO_TASK_SCHEDULE.map((task) => ({ ...task, formConfigId: formIds[task.form] }));
   const tasks = [];
   for (const [i, t] of taskDefs.entries()) {
     const row = await db.onboardingTask.create({
@@ -567,17 +589,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   }
 
   // --- 13. Email templates + resource wiki ----------------------------------
-  const templates = [
-    { key: "cfp-accepted", subject: "Your talk was accepted for Forward 2026 🎉", trigger: "abstract.accepted",
-      htmlBody: "<p>Hi {{speakerName}},</p><p>Great news — <strong>{{talkTitle}}</strong> was accepted! Please complete your onboarding tasks in the speaker portal.</p>" },
-    { key: "cfp-rejected", subject: "Update on your Forward 2026 submission", trigger: "abstract.rejected",
-      htmlBody: "<p>Hi {{speakerName}},</p><p>Thank you for submitting <strong>{{talkTitle}}</strong>. Unfortunately we couldn't include it this year.</p>" },
-    { key: "task-reminder", subject: "Reminder: finish your speaker tasks", trigger: "task.reminder",
-      htmlBody: "<p>Hi {{speakerName}},</p><p>You have {{openTasks}} onboarding task(s) still open. Please wrap them up before {{dueDate}}.</p>" },
-    { key: "session-scheduled", subject: "Your session is scheduled", trigger: "session.scheduled",
-      htmlBody: "<p>Hi {{speakerName}},</p><p><strong>{{talkTitle}}</strong> is scheduled for {{slotTime}} in {{roomName}}. A calendar invite is attached.</p>" },
-  ];
-  for (const t of templates) {
+  for (const t of DEMO_EMAIL_TEMPLATES) {
     await db.emailTemplate.create({ data: { eventId, ...t } });
   }
 
@@ -612,7 +624,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
     scheduleSlots: slotCount,
     onboardingTasks: taskCount,
     speakerTasks: speakerTaskCount,
-    emailTemplates: templates.length,
+    emailTemplates: DEMO_EMAIL_TEMPLATES.length,
     resources: resources.length,
   };
 }

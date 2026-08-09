@@ -48,9 +48,11 @@ stateDiagram-v2
 | any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`; acceptance atomically provisions the Session, roster, and task assignments. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
 | `DRAFT`, `SUBMITTED`, `UNDER_REVIEW` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the programme team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a programme decision. |
 
-**Withdrawal has no portal button yet.** W1 shipped the API; the speaker-facing control is
-still to come, so today a speaker asks the programme team to coordinate the withdrawal rather
-than being promised a control that is not on the page.
+**The portal exposes withdrawal only before a terminal decision.** A speaker can choose **Withdraw
+proposal** for a Draft, Submitted, In review, or Maybe abstract and must confirm it first. The
+browser sends the existing status-only PATCH; the server still re-checks ownership, status,
+and Session presence under the abstract lock. Accepted or Session-linked talks show a contact
+the programme-team message instead of a dead control.
 
 **Two honest caveats**, both visible in the code:
 

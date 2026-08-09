@@ -16,11 +16,12 @@ import { sanitizeHtml } from "@/lib/sanitize-html";
 export const TEMPLATE_VARIABLES = [
   { key: "speakerName", label: "Speaker's name", sample: "Sofia Marques" },
   { key: "eventName", label: "Event name", sample: "Forward 2026" },
-  { key: "talkTitle", label: "Their talk", sample: "Scaling Vector Search" },
-  { key: "slotTime", label: "When they're on", sample: "2026-05-12 17:00 UTC" },
-  { key: "roomName", label: "Where they're on", sample: "Hall A" },
+  { key: "talkTitle", label: "Scheduled talk title", sample: "Scaling Vector Search" },
+  { key: "slotTime", label: "Scheduled session time", sample: "Tue, May 12, 2026, 10:00 AM PDT" },
+  { key: "roomName", label: "Scheduled session room", sample: "Hall A" },
+  { key: "calendarInviteNote", label: "Calendar invitation note", sample: "A calendar invite is attached." },
   { key: "openTasks", label: "Tasks they still owe", sample: "2" },
-  { key: "dueDate", label: "Event start date", sample: "2026-05-12" },
+  { key: "dueDate", label: "Next task deadline", sample: "Fri, May 1, 2026, 11:59 PM PDT" },
 ] as const;
 
 export const KNOWN_TEMPLATE_VARIABLES: readonly string[] = TEMPLATE_VARIABLES.map((variable) => variable.key);
