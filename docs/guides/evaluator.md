@@ -6,6 +6,12 @@ For programme committee members and reviewers. Signed in as **Ravi Patel**, an e
 Your whole job lives on one page: **Evaluations**. The global **Abstracts** pipeline is for event
 admins; your workspace contains only assignments addressed to you.
 
+If an administrator invited you, open that public invitation page and choose **Continue** to
+enter this workspace; its one-time link fragment is consumed then. If it says the invitation is
+unavailable, ask the administrator for a new invitation; expired, replayed, or otherwise invalid
+invitations intentionally use the same generic message. For the seeded walkthrough, the fixed
+**Ravi Patel** persona on `/login` remains a demo shortcut.
+
 ---
 
 ## Your queue

@@ -88,6 +88,12 @@ evaluators who should receive them. The page shows coverage for the whole round;
 assigned submitted proposals move to **In review** automatically. Assigning the same pair
 twice is harmless.
 
+To add someone new, enter their name and email under **Invite a reviewer**. They are an eligible
+reviewer for this event straight away, so you can assign proposals while their invitation is
+pending. The reviewer row shows whether the invitation is pending, accepted, or expired; use
+**Resend invitation** when it becomes available if they still need it. An accepted reviewer opens
+the invitation page and chooses **Continue** to enter their review workspace.
+
 If a proposal's category has a review team attached, assignments are routed to that team by
 default — you do not have to remember who covers what.
 
