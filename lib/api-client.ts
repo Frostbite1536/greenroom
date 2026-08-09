@@ -45,7 +45,8 @@ export async function apiPatch<T>(
       body: JSON.stringify(body),
     });
     return (await res.json()) as ApiResponse<T>;
-  } catch {
+  } catch (error) {
+    console.error("API request failed", { method: "PATCH", path, error });
     return {
       ok: false,
       error: { code: "NETWORK_ERROR", message: "Could not reach the server. Check your connection and try again." },
