@@ -2684,7 +2684,7 @@ try {
   try {
     // If a lock-order regression blocks this public writer, do not leave the
     // held advisory lock waiting forever. The result still fails honestly.
-    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 5_000);
+    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 4_000);
   } finally {
     if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
     releaseS16AbstractLock();
