@@ -3,9 +3,9 @@
  *
  * These exist so the create-new-form flow (`POST /api/cfp/forms` with no `id`)
  * fails with stable, actionable contract errors instead of leaking a Prisma
- * uniqueness violation as a 500. Public `/cfp/:formId` resolution precedence
- * (exact id, then lowest-id slug match) is enforced by ordered queries in
- * `app/api/cfp/public/[formId]/route.ts`.
+ * uniqueness violation as a 500. Legacy public `/cfp/:formId` resolution uses
+ * an exact published ID or one unambiguous published slug in
+ * `public-form-resolver.ts`; it never selects a lowest-id collision.
  */
 
 /** Field keys that appear more than once in a form payload, in first-seen order. */
