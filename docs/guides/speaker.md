@@ -19,9 +19,10 @@ You do **not** need an account to submit. The event gives you a link — for For
   silently.
 
 If something is missing, the page highlights the exact fields — nothing is lost. After
-submitting you see the event's thank-you message. Greenroom records and attempts an email
-receipt to the submitter, an added-to-proposal notice to each co-speaker, and an alert to the
-event admins. A mail-provider problem never rolls back the saved proposal.
+submitting you see the event's thank-you message. When the event has email templates,
+Greenroom records and attempts a receipt to the submitter, an added-to-proposal notice to each
+co-speaker, and an alert to the event admins. A mail-provider problem never rolls back the
+saved proposal.
 
 ---
 

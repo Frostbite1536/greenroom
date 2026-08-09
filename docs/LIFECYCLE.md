@@ -20,6 +20,8 @@ stateDiagram-v2
     [*] --> SUBMITTED: POST /api/cfp/submissions, intent submit
     [*] --> SUBMITTED: POST /api/integrations/import
     DRAFT --> SUBMITTED: POST /api/cfp/submissions with abstractId
+    DRAFT --> ACCEPTED: POST /api/evaluations/decisions
+    DRAFT --> REJECTED: POST /api/evaluations/decisions
     SUBMITTED --> UNDER_REVIEW: POST /api/evaluations/assignments
     SUBMITTED --> ACCEPTED: POST /api/evaluations/decisions
     SUBMITTED --> REJECTED: POST /api/evaluations/decisions
@@ -130,7 +132,7 @@ A `Session` is a confirmed, schedulable talk. It has **at most one** `ScheduleSl
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Unscheduled: POST /api/evaluations/decisions (ACCEPTED)
+    [*] --> Unscheduled: decision ACCEPTED or legacy convert
     Unscheduled --> Scheduled: POST /api/agenda/slots (no conflicts)
     Unscheduled --> Unscheduled: POST /api/agenda/slots refused 409 SCHEDULE_CONFLICT
     Scheduled --> Scheduled: POST /api/agenda/slots (move — re-checked, may be refused)

@@ -42,8 +42,9 @@ questions, and co-speaker area.*
 *Use the approved test address, fill every visible required field, and submit.*
 
 > “The server validates the same rules the page shows, including questions that
-> become required only after another answer. The proposal is saved first; then
-> Greenroom records the submitter receipt, co-speaker notices, and admin alert.”
+> become required only after another answer. The demo event has email templates,
+> so the proposal is saved first; then Greenroom records the submitter receipt,
+> co-speaker notices, and admin alert.”
 
 *Pause on the thank-you screen.*
 

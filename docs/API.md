@@ -128,9 +128,9 @@ rewrite a submitted or accepted proposal.
   exact preview before send. It refuses undecided proposals. Optional reviewer feedback
   contains written comments only—never scores or reviewer identities—and all listed speakers
   receive the result.
-- A successful public submit records and attempts a receipt for the submitter and co-speakers,
-  plus an event-admin alert, after the abstract transaction commits. Delivery failure is
-  non-throwing, so it cannot erase a saved proposal.
+- With an event email template available, a successful public submit records and attempts a
+  receipt for the submitter and co-speakers plus an event-admin alert after the abstract
+  transaction commits. Delivery failure is non-throwing, so it cannot erase a saved proposal.
 - `POST /api/evaluations/scores` refuses `409 ABSTRACT_WITHDRAWN` once a speaker has withdrawn.
 - `PATCH /api/portal/tasks` accepts speaker-owned `TODO`, `IN_PROGRESS`, or `COMPLETED`
   updates and an optional `responses` map. Task-form answers merge with saved answers, run
