@@ -5,6 +5,7 @@ import {
   extractTemplateVariables,
   previewTemplate,
   sanitizeTemplateBody,
+  templateTriggerPatch,
   unknownTemplateVariables,
   KNOWN_TEMPLATE_VARIABLES,
   missingRequiredTemplateVariables,
@@ -82,6 +83,13 @@ test("the update schema refuses empty content and oversized bodies", () => {
   // `key` is deliberately not editable: reminders address templates by it.
   const parsed = emailTemplateUpdateSchema.safeParse({ subject: "Hi", htmlBody: "<p>x</p>", key: "renamed" });
   assert.equal(parsed.success && "key" in parsed.data, false);
+});
+
+test("optional template triggers use true PATCH presence semantics", () => {
+  assert.deepEqual(templateTriggerPatch(undefined), {});
+  assert.deepEqual(templateTriggerPatch(null), { trigger: null });
+  assert.deepEqual(templateTriggerPatch("   "), { trigger: null });
+  assert.deepEqual(templateTriggerPatch(" session.scheduled "), { trigger: "session.scheduled" });
 });
 
 test("reviewer-invite template edits retain the trusted invite URL placeholder", () => {

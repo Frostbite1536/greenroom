@@ -19,7 +19,7 @@ test("S1 direct event-owned writers lock and authorize stored rows before their 
   assert.ok(templates.indexOf("FOR UPDATE") < templates.indexOf("tx.emailTemplate.update"));
 });
 
-test("S1 form writes derive creates from context and preserve the narrow Abstract delete guard under its parent lock", () => {
+test("S15 form deletion locks retained task history and maps the final Restrict race", () => {
   const forms = source("app/api/cfp/forms/route.ts");
   assert.match(forms, /create: \{ eventId: ctx\.eventId, \.\.\.data \}/);
   assert.doesNotMatch(forms, /assertEventScope/);
@@ -29,8 +29,21 @@ test("S1 form writes derive creates from context and preserve the narrow Abstrac
   assert.match(formDelete, /prisma\.\$transaction\(/);
   assert.match(formDelete, /lockFormConfigForShapeWrite\(tx, formId\)/);
   assert.match(formDelete, /requireEventOwnedRow\(existing, auth\.eventId, "FORM_NOT_FOUND", "Form"\)/);
-  assert.match(formDelete, /tx\.abstract\.count\(\{ where: \{ formConfigId: form\.id \} \}\)/);
+  assert.match(formDelete, /lockAndReadFormDeleteUsage\(tx, form\.id\)/);
   assert.match(formDelete, /"FORM_HAS_ABSTRACTS"/);
+  assert.match(formDelete, /PrismaClientKnownRequestError && error\.code === "P2003"/);
   assert.match(formDelete, /tx\.formConfig\.delete\(\{ where: \{ id: form\.id \} \}\)/);
-  assert.doesNotMatch(formDelete, /tx\.speakerTask|catch \(error\)/);
+  assert.ok(formDelete.indexOf("lockFormConfigForShapeWrite") < formDelete.indexOf("lockAndReadFormDeleteUsage"));
+
+  const deleteLock = source("lib/services/form-delete-lock.ts");
+  assert.match(deleteLock, /FROM "OnboardingTask"[\s\S]*?WHERE "formConfigId" = \$\{formConfigId\}[\s\S]*?ORDER BY "id"[\s\S]*?FOR UPDATE/);
+  const deleteLockOrchestration = deleteLock.slice(deleteLock.indexOf("export async function lockAndReadFormDeleteUsage"));
+  assert.ok(deleteLockOrchestration.indexOf("lockFields") < deleteLockOrchestration.indexOf("lockLinkedTasks"));
+  assert.ok(deleteLockOrchestration.indexOf("lockLinkedTasks") < deleteLockOrchestration.indexOf("findAbstract"));
+});
+
+test("S18 template PATCH preserves an omitted trigger and clears only explicit values", () => {
+  const templates = source("app/api/comms/templates/[templateId]/route.ts");
+  assert.match(templates, /\.\.\.templateTriggerPatch\(input\.trigger\)/);
+  assert.doesNotMatch(templates, /trigger: input\.trigger\?\.trim\(\) \? input\.trigger\.trim\(\) : null/);
 });

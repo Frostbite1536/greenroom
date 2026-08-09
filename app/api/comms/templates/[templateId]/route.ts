@@ -7,6 +7,7 @@ import {
   emailTemplateUpdateSchema,
   missingRequiredTemplateVariables,
   sanitizeTemplateBody,
+  templateTriggerPatch,
   unknownTemplateVariables,
 } from "@/lib/comms/template-edit";
 
@@ -61,7 +62,7 @@ export function PATCH(req: Request, ctx: Params) {
         data: {
           subject: input.subject,
           htmlBody,
-          trigger: input.trigger?.trim() ? input.trigger.trim() : null,
+          ...templateTriggerPatch(input.trigger),
         },
         select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
       });
