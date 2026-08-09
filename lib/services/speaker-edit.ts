@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { AbstractStatus } from "@prisma/client";
+import type { AbstractStatus, EvaluationAssignmentStatus } from "@prisma/client";
 import { coSpeakerInputSchema, formAnswerValueSchema, idSchema } from "@/types/api";
 import type { FormAnswerValue } from "@/lib/services/types";
 
@@ -42,6 +42,15 @@ export const WITHDRAWABLE_STATUSES = [
   "UNDER_REVIEW",
   "MAYBE",
 ] as const satisfies readonly AbstractStatus[];
+
+/**
+ * Self-withdrawal closes only review work that remains actionable. Completed
+ * assignments and their scores remain part of the event's review history.
+ */
+export const WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES = [
+  "ASSIGNED",
+  "IN_PROGRESS",
+] as const satisfies readonly EvaluationAssignmentStatus[];
 
 export type WithdrawRefusal = { code: string; message: string };
 

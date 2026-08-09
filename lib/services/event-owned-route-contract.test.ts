@@ -47,3 +47,17 @@ test("S18 template PATCH preserves an omitted trigger and clears only explicit v
   assert.match(templates, /\.\.\.templateTriggerPatch\(input\.trigger\)/);
   assert.doesNotMatch(templates, /trigger: input\.trigger\?\.trim\(\) \? input\.trigger\.trim\(\) : null/);
 });
+
+test("C6 withdrawal serializes on Abstract before declining only open review work", () => {
+  const submission = source("app/api/cfp/submissions/[abstractId]/route.ts");
+  const withdrawal = submission.slice(submission.indexOf('if (patch.status === "WITHDRAWN")'), submission.indexOf("const saved"));
+
+  assert.match(withdrawal, /await lockAbstractForWrite\(tx, existing\.id\)/);
+  assert.match(withdrawal, /const freshRefusal = withdrawRefusal\(fresh\.status, Boolean\(fresh\.session\)\)/);
+  assert.match(withdrawal, /tx\.abstract\.update\([\s\S]*?data: \{ status: "WITHDRAWN" \}/);
+  assert.match(withdrawal, /tx\.reviewAssignment\.updateMany\(\{[\s\S]*?abstractId: existing\.id,[\s\S]*?status: \{ in: \[\.\.\.WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES\] \},[\s\S]*?data: \{ status: "DECLINED" \}/);
+  assert.ok(withdrawal.indexOf("lockAbstractForWrite") < withdrawal.indexOf("freshRefusal"));
+  assert.ok(withdrawal.indexOf("freshRefusal") < withdrawal.indexOf("tx.abstract.update"));
+  assert.ok(withdrawal.indexOf("tx.abstract.update") < withdrawal.indexOf("reviewAssignment.updateMany"));
+  assert.doesNotMatch(withdrawal, /reviewScore\.(?:delete|deleteMany|update|updateMany)/);
+});

@@ -21,6 +21,7 @@ import {
   mergeAnswers,
   rosterChanged,
   speakerSubmissionPatchSchema,
+  WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES,
   withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import type { FormAnswerValue } from "@/lib/services/types";
@@ -141,6 +142,16 @@ export function PATCH(req: Request, ctx: Params) {
           // Status only. `decidedAt` stays null: withdrawing is the speaker's
           // action, not a programme-team decision.
           data: { status: "WITHDRAWN" },
+        });
+        // The same Abstract advisory lock serializes score writes. Once the
+        // proposal is withdrawn, only still-open review work is closed; a
+        // completed review and its scores remain historical evidence.
+        await tx.reviewAssignment.updateMany({
+          where: {
+            abstractId: existing.id,
+            status: { in: [...WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES] },
+          },
+          data: { status: "DECLINED" },
         });
         return tx.abstract.findUniqueOrThrow({
           where: { id: existing.id },
