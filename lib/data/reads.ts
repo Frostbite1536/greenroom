@@ -48,6 +48,10 @@ import {
   EVALUATION_SETUP_VISIBLE_STATUSES,
   isEvaluationSetupAssignable,
 } from "@/lib/evaluation-setup-status";
+import {
+  isReviewerInvitePending,
+  reviewerInviteResendAvailableAt,
+} from "@/lib/services/reviewer-invite";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -1095,7 +1099,18 @@ export type SetupPlan = {
 export type SetupEvaluator = {
   userId: string;
   name: string;
+  /** ADMIN-only contact data is required for the explicit resend action. */
+  email: string;
   role: UserRole;
+  /** Explicit membership is ready before an invitation is accepted. */
+  access: "active";
+  /** Token-free lifecycle data, scoped to this bounded event-member page. */
+  invite: {
+    state: "pending" | "accepted" | "expired";
+    expiresAt: string;
+    resendAvailableAt: string | null;
+    delivery: "not_sent" | "pending" | "mocked" | "sent" | "failed";
+  } | null;
   /** Assignments in each plan, keyed by planId. */
   loadByPlan: Record<string, number>;
 };
@@ -1127,7 +1142,7 @@ export type EvaluationSetupView = {
 };
 
 /**
- * Everything the admin evaluation setup panel needs, in six event-scoped
+ * Everything the admin evaluation setup panel needs, in bounded event-scoped
  * projection/aggregate queries.
  *
  * Assignment detail is read as aggregates rather than rows: the panel only ever
@@ -1138,16 +1153,18 @@ export type EvaluationSetupView = {
 export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
   const ctx = await pageContext(["ADMIN"]);
 
+  const membersPromise = prisma.eventMember.findMany({
+    where: { eventId: ctx.eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
+    include: { user: { select: { id: true, name: true, email: true } } },
+    orderBy: { user: { name: "asc" } },
+    take: OPERATOR_QUERY_LIMITS.reviewerSetupMembers + 1,
+  });
   const [plans, members, abstracts, categories, byAbstract, byEvaluator] = await Promise.all([
     prisma.evaluationPlan.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { ordinal: "asc" },
     }),
-    prisma.eventMember.findMany({
-      where: { eventId: ctx.eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
-      include: { user: { select: { id: true, name: true } } },
-      orderBy: { user: { name: "asc" } },
-    }),
+    membersPromise,
     prisma.abstract.findMany({
       // DRAFTs are not submissions. Decisions and withdrawals remain visible
       // for historical coverage, but `assignable` keeps them out of the picker.
@@ -1181,6 +1198,25 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       _count: { _all: true },
     }),
   ]);
+  assertEventQueryBound(members, OPERATOR_QUERY_LIMITS.reviewerSetupMembers, "reviewer setup members");
+
+  const memberUserIds = members.map((member) => member.userId);
+  const invites = memberUserIds.length === 0
+    ? []
+    : await prisma.reviewerInvite.findMany({
+      where: { eventId: ctx.eventId, userId: { in: memberUserIds } },
+      select: {
+        userId: true,
+        tokenVersion: true,
+        expiresAt: true,
+        acceptedVersion: true,
+        lastSentAt: true,
+        lastDeliveryState: true,
+      },
+      take: OPERATOR_QUERY_LIMITS.reviewerSetupMembers + 1,
+    });
+  assertEventQueryBound(invites, OPERATOR_QUERY_LIMITS.reviewerSetupMembers, "reviewer setup invites");
+  const inviteByUserId = new Map(invites.map((invite) => [invite.userId, invite]));
 
   const assignedByPlan = new Map<string, Record<string, number>>();
   const completedByPlan = new Map<string, Record<string, number>>();
@@ -1231,12 +1267,27 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
         completedCount: totals.completed,
       };
     }),
-    evaluators: members.map((m) => ({
-      userId: m.user.id,
-      name: m.user.name,
-      role: m.role,
-      loadByPlan: loadByEvaluator.get(m.user.id) ?? {},
-    })),
+    evaluators: members.map((m) => {
+      const invite = inviteByUserId.get(m.user.id) ?? null;
+      const pending = invite ? isReviewerInvitePending(invite) : false;
+      const resendAvailableAt = invite ? reviewerInviteResendAvailableAt(invite.lastSentAt) : null;
+      return {
+        userId: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+        role: m.role,
+        access: "active" as const,
+        invite: invite
+          ? {
+              state: pending ? "pending" as const : invite.acceptedVersion === invite.tokenVersion ? "accepted" as const : "expired" as const,
+              expiresAt: invite.expiresAt.toISOString(),
+              resendAvailableAt: resendAvailableAt?.toISOString() ?? null,
+              delivery: invite.lastDeliveryState.toLowerCase() as "not_sent" | "pending" | "mocked" | "sent" | "failed",
+            }
+          : null,
+        loadByPlan: loadByEvaluator.get(m.user.id) ?? {},
+      };
+    }),
     abstracts: abstracts.map((a) => ({
       id: a.id,
       title: a.title,

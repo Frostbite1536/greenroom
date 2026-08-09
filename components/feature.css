@@ -274,6 +274,18 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .pick-row input { margin-top: 3px; flex-shrink: 0; }
 .pick-row .cell-title, .pick-row .cell-sub { display: block; }
 .pick-row .pill { flex-shrink: 0; }
+.reviewer-invite { display: grid; gap: 8px; padding: 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; }
+.reviewer-invite h3, .reviewer-invite h4 { margin: 0; font-size: 13px; }
+.reviewer-invite .hint { margin: 0; }
+.reviewer-invite .primary-button { justify-self: start; }
+.reviewer-pick-row { display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.reviewer-pick-row:last-child { border-bottom: none; }
+.reviewer-pick-row:hover { background: #f7faf9; }
+.reviewer-pick-label { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.reviewer-pick-label input { margin-top: 3px; flex-shrink: 0; }
+.reviewer-pick-label .cell-title, .reviewer-pick-label .cell-sub { display: block; }
+.reviewer-resend { display: grid; justify-items: start; gap: 4px; }
+.reviewer-resend .link-button { min-height: 32px; padding: 4px 0; }
 
 .criterion-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 84px 84px auto; gap: 8px; align-items: end; margin-bottom: 10px; }
 .criterion-main { display: grid; gap: 8px; min-width: 0; }

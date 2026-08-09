@@ -10,6 +10,7 @@
  * Port: 3222 (frontend range 322x). Kills only the PID it spawns.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
@@ -17,6 +18,7 @@ const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
 const BLIND_SPEAKER_EMAIL = "blind-boundary@scratch.test";
 const SECOND_EVALUATOR_EMAIL = "second-evaluator@scratch.test";
+const C17_REVIEWER_EMAIL = "c17-reviewer@scratch.test";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -30,6 +32,7 @@ const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
 const S2_OTHER_EVENT_ID = "scratch-frontend-s2-other";
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
+const REVIEWER_INVITE_APP_URL = "https://greenroom-hq.test";
 
 // Refuse to run against a server we did not start: a stale listener would
 // silently serve these checks and report a misleading pass.
@@ -67,12 +70,36 @@ async function reqManual(path, sess) {
   return { status: res.status, location: res.headers.get("location") ?? "", text: await res.text() };
 }
 
+async function postManual(path, body, sess) {
+  const res = await fetch(BASE + path, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(sess ? { cookie: cookie(sess) } : {}) },
+    body: JSON.stringify(body),
+    redirect: "manual",
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch (error) {
+    console.warn("[smoke] postManual JSON parse failed", error instanceof Error ? error.name : "unknown");
+    data = text;
+  }
+  return { status: res.status, data, location: res.headers.get("location") ?? "", headers: res.headers };
+}
+
+/** Scratch-only signing mirrors the forced-mock server secret; it is never logged. */
+function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
+  const exp = Math.floor(new Date(invite.expiresAt).getTime() / 1_000);
+  const message = `greenroom:reviewer-invite:v1:${invite.id}:${invite.tokenVersion}:${exp}:${nonce}`;
+  const signature = createHmac("sha256", SMOKE_SESSION_SECRET).update(message).digest("base64url");
+  return `v1.${invite.id}.${invite.tokenVersion}.${exp}.${nonce}.${signature}`;
+}
+
 // ---- scratch fixture -------------------------------------------------------
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -248,7 +275,7 @@ const check = (name, pass, detail = "") => {
 
 const server = spawn("npx", ["next", "start", "-p", PORT], {
   cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET },
+  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET, APP_URL: REVIEWER_INVITE_APP_URL },
 });
 console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 
@@ -277,7 +304,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -1076,8 +1103,8 @@ try {
   check("admin sees the assignment panel", setupPage.text.includes("Assign proposals to reviewers"));
   check("admin sees review coverage", setupPage.text.includes("Review coverage"));
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
-  check("evaluation setup payload omits unused reviewer emails",
-    !setupPage.text.includes("ravi@greenroom.demo"));
+  check("admin-only reviewer setup includes the contact data needed for resends",
+    setupPage.text.includes("ravi@greenroom.demo"));
   const proposalPickerStart = setupPage.text.indexOf('<section aria-labelledby="pick-proposals"');
   const proposalPickerEnd = setupPage.text.indexOf('<section aria-labelledby="pick-reviewers"');
   const proposalPicker = proposalPickerStart === -1 || proposalPickerEnd === -1
@@ -1134,14 +1161,18 @@ try {
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator does NOT see the setup panel",
     !evaluatorEval.text.includes("Assign proposals to reviewers")
-    && !evaluatorEval.text.includes("Review coverage"));
+    && !evaluatorEval.text.includes("Review coverage")
+    && !evaluatorEval.text.includes("ravi@greenroom.demo"));
 
   // Fresh event: the empty states must tell the admin what to do next.
   const freshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
   const freshPage = await req("GET", "/admin/evaluations", null, freshAdmin);
   check("fresh event evaluations page → 200", freshPage.status === 200, `got ${freshPage.status}`);
   check("fresh event offers an actionable first step",
-    freshPage.text.includes("No review round yet") && freshPage.text.includes("Create the first round"));
+    freshPage.text.includes("No review round yet")
+    && freshPage.text.includes("Create the first round")
+    && freshPage.text.includes("Invite a reviewer")
+    && freshPage.text.includes('name="reviewerEmail"'));
   check("fresh event does not show a coverage table", !freshPage.text.includes("Review coverage"));
 
   // The two mutations the panel drives, against the real routes.
@@ -1158,6 +1189,99 @@ try {
   const freshAfterRound = await req("GET", "/admin/evaluations", null, freshAdmin);
   check("a fresh event with a round but no proposals says so",
     freshAfterRound.text.includes("No proposals to review yet"));
+
+  // --- C17: event-scoped reviewer invitations -----------------------------
+  // This fresh identity is provisioned through the ADMIN route, so the UI must
+  // present its token-free lifecycle without hiding a pending reviewer from
+  // assignment selection.
+  const c17Invite = await req("POST", "/api/evaluations/reviewer-invites", {
+    email: C17_REVIEWER_EMAIL, name: "C17 Pending Reviewer",
+  }, admin);
+  const c17Reviewer = await prisma.user.findUnique({
+    where: { email: C17_REVIEWER_EMAIL }, select: { id: true },
+  });
+  const c17StoredInvite = c17Reviewer
+    ? await prisma.reviewerInvite.findUnique({
+      where: { eventId_userId: { eventId: EVENT_ID, userId: c17Reviewer.id } },
+      select: { id: true, tokenVersion: true, expiresAt: true },
+    })
+    : null;
+  check("C17 invite response is token-free and includes active access plus resend availability",
+    c17Invite.status === 200
+    && c17Invite.data?.data?.state === "invited"
+    && c17Invite.data?.data?.access === "active"
+    && typeof c17Invite.data?.data?.resendAvailableAt === "string"
+    && !JSON.stringify(c17Invite.data).includes("draftCapability")
+    && !Object.prototype.hasOwnProperty.call(c17Invite.data?.data ?? {}, "token"),
+    `${c17Invite.status}/${c17Invite.data?.data?.state ?? "?"}`);
+
+  const c17Setup = await req("GET", "/admin/evaluations", null, admin);
+  const c17ReviewerMarkup = c17Setup.text.slice(
+    Math.max(0, c17Setup.text.indexOf(C17_REVIEWER_EMAIL) - 700),
+    c17Setup.text.indexOf(C17_REVIEWER_EMAIL) + 900,
+  );
+  check("C17 admin setup renders the compact invite form and a pending selectable reviewer",
+    c17Setup.status === 200
+    && c17Setup.text.includes("Invite a reviewer")
+    && c17Setup.text.includes('name="reviewerName"')
+    && c17Setup.text.includes('name="reviewerEmail"')
+    && c17ReviewerMarkup.includes("Invitation pending acceptance")
+    && c17ReviewerMarkup.includes('name="reviewerIds"')
+    && !/name="reviewerIds"[^>]*disabled/.test(c17ReviewerMarkup));
+
+  const c17Evaluators = await req("GET", "/api/evaluations/evaluators", null, admin);
+  check("C17 admin evaluator projection exposes lifecycle metadata but no bearer",
+    c17Evaluators.status === 200
+    && c17Evaluators.data?.data?.some((row) => row.email === C17_REVIEWER_EMAIL
+      && row.access === "active"
+      && row.invite?.state === "pending"
+      && typeof row.invite?.resendAvailableAt === "string"
+      && !Object.prototype.hasOwnProperty.call(row.invite, "token"))
+    && !JSON.stringify(c17Evaluators.data).includes("draftCapability"));
+
+  const c17Cooldown = await req("POST", "/api/evaluations/reviewer-invites", {
+    email: C17_REVIEWER_EMAIL, name: "C17 Pending Reviewer", resend: true,
+  }, admin);
+  const c17SpeakerConflict = await req("POST", "/api/evaluations/reviewer-invites", {
+    email: speaker.user.email, name: "Do not overwrite", resend: false,
+  }, admin);
+  check("C17 resend cooldown and speaker-role conflict remain actionable server authority",
+    c17Cooldown.status === 429 && c17Cooldown.data?.error?.code === "INVITE_RESEND_COOLDOWN"
+    && c17SpeakerConflict.status === 409 && c17SpeakerConflict.data?.error?.code === "REVIEWER_ROLE_CONFLICT",
+    `${c17Cooldown.status}/${c17SpeakerConflict.status}`);
+
+  const c17AssignmentAbstract = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID, formConfigId: fx.form.id, submitterId: fx.users.speaker,
+      title: "Scratch: Pending reviewer can be assigned", abstract: "C17 assignment boundary.",
+      format: "Talk", durationMinutes: 30, categoryId: fx.category.id, status: "SUBMITTED",
+      submittedAt: new Date(), speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
+  const c17PendingAssignment = await req("POST", "/api/evaluations/assignments", {
+    planId: fx.plan.id, abstractIds: [c17AssignmentAbstract.id], evaluatorIds: c17Reviewer ? [c17Reviewer.id] : [],
+  }, admin);
+  check("C17 pending reviewer membership is assignment-eligible → 201", c17PendingAssignment.status === 201,
+    `${c17PendingAssignment.status} ${c17PendingAssignment.data?.error?.code ?? ""}`);
+
+  const c17PublicInvite = await req("GET", "/reviewer-invite", null, null);
+  check("C17 public invite page projects no event, reviewer, or bearer data",
+    c17PublicInvite.status === 200
+    && c17PublicInvite.text.includes("Reviewer invitation")
+    && !c17PublicInvite.text.includes(EVENT_ID)
+    && !c17PublicInvite.text.includes(C17_REVIEWER_EMAIL));
+
+  const c17Token = c17StoredInvite ? reviewerInviteBearer(c17StoredInvite) : "";
+  const c17Accept = await postManual("/api/auth/reviewer-invites/accept", { token: c17Token }, null);
+  const c17Replay = await postManual("/api/auth/reviewer-invites/accept", { token: c17Token }, null);
+  check("C17 accept uses the protected no-store 303 and a replay stays generic",
+    c17Accept.status === 303
+    && c17Accept.location === `${REVIEWER_INVITE_APP_URL}/admin/evaluations`
+    && c17Accept.headers.get("cache-control") === "no-store"
+    && c17Accept.headers.get("referrer-policy") === "no-referrer"
+    && (c17Accept.headers.get("set-cookie") ?? "").includes("sb_session=")
+    && c17Replay.status === 404 && c17Replay.data?.error?.code === "INVITE_NOT_FOUND",
+    `${c17Accept.status}/${c17Replay.status}`);
 
   // Assigning must move a genuinely SUBMITTED proposal to UNDER_REVIEW, with
   // the team key routed from its category (teamKey omitted on purpose). S5 now
