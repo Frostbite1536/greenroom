@@ -173,11 +173,12 @@ the proposal shows a **"Still on the programme"** warning with a link to the Age
 Nothing is deleted behind your back — take it off the schedule there, or change the decision
 back if it should run after all.
 
-**Someone wants to withdraw a proposal.** The speaker-owned API permits withdrawal before
-acceptance, but the portal button has not shipped yet, so coordinate the request with them
-instead of promising an on-page control. Once you have accepted a talk, change the programme
-decision and unschedule it. A withdrawn proposal cannot receive new assignments or scores;
-existing review coverage stays visible as archived history.
+**Someone wants to withdraw a proposal.** Speakers can withdraw their own Draft, Submitted,
+In review, or Maybe proposal from its portal after a clear confirmation. That transition is status-only:
+it removes the proposal from consideration but does not create a programme decision or erase
+the record. Once you have accepted a talk, the speaker must contact your team; make any
+programme/scheduling change through the admin workflow. A withdrawn proposal cannot receive
+new assignments or scores; existing review coverage stays visible as archived history.
 
 **Can two talks share a room deliberately?** The schedule refuses overlaps by design. If you
 genuinely need one (a demo of the conflict view, for instance), that is an administrator
