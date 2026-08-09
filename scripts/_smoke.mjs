@@ -2212,7 +2212,10 @@ try {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
     signalS16AbstractLock();
     await s16AbstractLockRelease;
-  });
+  // The 5-second observation below remains the regression boundary. This
+  // deliberately held fixture transaction needs only enough headroom to let
+  // its finally release/commit survive host scheduling jitter.
+  }, { timeout: 15_000 });
   await s16AbstractLockHeld;
   const s16OrderLockBaseline = {
     baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
