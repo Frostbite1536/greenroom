@@ -20,8 +20,8 @@ import {
 
 // --- status rules -----------------------------------------------------------
 
-test("submitted, under-review and accepted abstracts are editable", () => {
-  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED"] as const) {
+test("draft, review, maybe, and accepted abstracts are editable", () => {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED"] as const) {
     assert.equal(isEditableStatus(status), true, status);
     assert.equal(lockReasonFor(status), null, status);
   }
@@ -36,8 +36,8 @@ test("rejected and withdrawn abstracts are locked with a plain-language reason",
   }
 });
 
-test("the editable set is exactly the four non-terminal statuses", () => {
-  assert.deepEqual([...EDITABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED"]);
+test("the editable set includes the non-final MAYBE review state", () => {
+  assert.deepEqual([...EDITABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED"]);
 });
 
 // --- authorization ----------------------------------------------------------
@@ -247,8 +247,8 @@ test("withdrawing an already-terminal abstract reports the lock, not the withdra
   assert.equal(withdrawRefusal("WITHDRAWN", false)?.code, "ABSTRACT_LOCKED");
 });
 
-test("the withdrawable set excludes ACCEPTED and both terminal statuses", () => {
-  assert.deepEqual([...WITHDRAWABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW"]);
+test("the withdrawable set includes MAYBE and excludes ACCEPTED and terminal statuses", () => {
+  assert.deepEqual([...WITHDRAWABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"]);
   for (const status of WITHDRAWABLE_STATUSES) {
     assert.equal(isEditableStatus(status), true, `${status} must also be editable`);
   }
