@@ -2,10 +2,11 @@ import { redirect } from "next/navigation";
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { getApiContext } from "@/lib/api/context";
-import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { integrationStatus } from "@/lib/operations/status";
+import { DecisionsPanel } from "./decisions-panel";
 import { RemindersPanel } from "./reminders-panel";
 import { ImportPanel } from "./import-panel";
 import { IntegrationsPanel } from "./integrations-panel";
@@ -31,7 +32,7 @@ export default async function AdminOperationsPage() {
   if (ctx.role !== "ADMIN") redirect("/portal");
   const eventId = ctx.eventId;
 
-  const [templates, forms, speakerRows] = await Promise.all([
+  const [templates, forms, speakerRows, decidedAbstracts] = await Promise.all([
     prisma.emailTemplate.findMany({
       where: { eventId },
       select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
@@ -54,7 +55,29 @@ export default async function AdminOperationsPage() {
       orderBy: { user: { email: "asc" } },
       take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
     }),
+    // Decided proposals are the only ones a speaker should hear about by email.
+    prisma.abstract.findMany({
+      where: { eventId, status: { in: ["ACCEPTED", "REJECTED"] } },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        submitter: { select: { name: true, email: true } },
+        speakers: { select: { user: { select: { email: true } } }, take: 25 },
+        // Only scores that carry a written comment can appear in the email, so
+        // the panel must not promise feedback that is just a number.
+        _count: { select: { reviewScores: { where: { comment: { not: null } } } } },
+      },
+      orderBy: [{ decidedAt: "desc" }, { title: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.decidedAbstracts + 1,
+    }),
   ]);
+
+  assertEventQueryBound(
+    decidedAbstracts,
+    OPERATOR_QUERY_LIMITS.decidedAbstracts,
+    "decided proposals available for decision email",
+  );
 
   // One row per speaker; the reminders API is keyed by user, not by session.
   const speakers = [...new Map(speakerRows.map((row) => [row.userId, {
@@ -101,6 +124,19 @@ export default async function AdminOperationsPage() {
           email={email}
         />
         <ImportPanel eventId={eventId} forms={forms} />
+        <DecisionsPanel
+          decided={decidedAbstracts.map((abstract) => ({
+            id: abstract.id,
+            title: abstract.title,
+            status: abstract.status as "ACCEPTED" | "REJECTED",
+            speakerName: abstract.submitter.name,
+            recipientCount: new Set([
+              abstract.submitter.email.toLowerCase(),
+              ...abstract.speakers.map((row) => row.user.email.toLowerCase()),
+            ]).size,
+            feedbackCount: abstract._count.reviewScores,
+          }))}
+        />
         <IntegrationsPanel eventId={eventId} airtable={airtable} accelevents={accelevents} />
         <TemplatesPanel
           templates={templates.map((template) => ({

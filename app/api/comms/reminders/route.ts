@@ -1,11 +1,12 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
+import { canDeliverEmail, dispatchEmail } from "@/lib/comms/send";
 import {
   buildSpeakerCalendarInvite,
+  orderReminderSessions,
   reminderRequestSchema,
   renderEmailTemplate,
   selectEligibleSpeakers,
@@ -14,8 +15,6 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-type ResendEmailResponse = { id?: string; message?: string };
 
 function formatSlotTime(startsAt: Date | null): string {
   return startsAt ? startsAt.toISOString().replace("T", " ").replace(".000Z", " UTC") : "a time to be announced";
@@ -43,7 +42,7 @@ export const POST = handle(async (req) => {
         } } },
         session: { select: {
           id: true, title: true, description: true,
-          scheduleSlot: { select: { startsAt: true, endsAt: true, room: { select: { name: true } } } },
+          scheduleSlot: { select: { startsAt: true, endsAt: true, updatedAt: true, room: { select: { name: true } } } },
         } },
       },
       orderBy: { user: { email: "asc" } },
@@ -82,8 +81,12 @@ export const POST = handle(async (req) => {
       startsAt: row.session.scheduleSlot?.startsAt ?? null,
       endsAt: row.session.scheduleSlot?.endsAt ?? null,
       roomName: row.session.scheduleSlot?.room.name ?? null,
+      calendarUpdatedAt: row.session.scheduleSlot?.updatedAt ?? null,
     });
     grouped.set(row.user.id, existing);
+  }
+  for (const speaker of grouped.values()) {
+    speaker.sessions = orderReminderSessions(speaker.sessions);
   }
 
   const { recipients, invalidUserIds } = selectEligibleSpeakers([...grouped.values()], input.recipientUserIds);
@@ -94,8 +97,13 @@ export const POST = handle(async (req) => {
   }
   if (recipients.length === 0) throw new ApiError(422, "NO_ELIGIBLE_RECIPIENTS", "This event has no eligible speakers.");
 
-  const resendFrom = getResendFrom();
-  const isMock = useMockIntegrations() || !process.env.RESEND_API_KEY || !resendFrom;
+  // Delivery, mock fallback and EmailDispatch bookkeeping live in one audited
+  // place (`lib/comms/send.ts`) shared with submission and decision emails.
+  const isMock = !canDeliverEmail({
+    mocked: useMockIntegrations(),
+    from: getResendFrom(),
+    apiKey: process.env.RESEND_API_KEY,
+  });
   const appUrl = process.env.APP_URL;
   let sent = 0;
   let failed = 0;
@@ -114,55 +122,20 @@ export const POST = handle(async (req) => {
     };
     const rendered = renderEmailTemplate(template, variables);
     const invite = input.includeCalendarInvite ? buildSpeakerCalendarInvite(recipient, event.name, appUrl) : null;
-    const dispatch = await prisma.emailDispatch.create({
-      data: {
-        templateId: template.id,
-        senderId: ctx.userId,
-        recipient: recipient.email,
-        variables: variables as Prisma.InputJsonValue,
-        status: "queued",
+
+    const outcome = await dispatchEmail(prisma, {
+      templateId: template.id,
+      senderId: ctx.userId,
+      message: {
+        to: recipient.email,
+        subject: rendered.subject,
+        html: rendered.html,
+        ...(invite ? { attachments: [{ filename: invite.filename, content: invite.content }] } : {}),
       },
-      select: { id: true },
+      variables,
     });
-
-    if (isMock) {
-      await prisma.emailDispatch.update({
-        where: { id: dispatch.id },
-        data: { status: "mocked", providerId: `mock:${dispatch.id}`, sentAt: new Date() },
-      });
-      sent++;
-      continue;
-    }
-
-    try {
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY!}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": `greenroom-reminder-${dispatch.id}`,
-        },
-        signal: AbortSignal.timeout(10_000),
-        body: JSON.stringify({
-          from: resendFrom,
-          to: [recipient.email],
-          subject: rendered.subject,
-          html: rendered.html,
-          ...(invite ? { attachments: [{ filename: invite.filename, content: Buffer.from(invite.content, "utf8").toString("base64") }] } : {}),
-        }),
-      });
-      const payload = await response.json().catch(() => ({})) as ResendEmailResponse;
-      if (!response.ok || !payload.id) throw new Error(payload.message || `Resend returned ${response.status}.`);
-      await prisma.emailDispatch.update({
-        where: { id: dispatch.id },
-        data: { status: "sent", providerId: payload.id, sentAt: new Date() },
-      });
-      sent++;
-    } catch (error) {
-      const message = error instanceof Error ? error.message.slice(0, 500) : "Email provider request failed.";
-      await prisma.emailDispatch.update({ where: { id: dispatch.id }, data: { status: "failed", error: message } });
-      failed++;
-    }
+    if (outcome.status === "failed") failed++;
+    else sent++;
   }
 
   return ok({ templateKey: template.key, recipientCount: recipients.length, sent, failed, mocked: isMock });
