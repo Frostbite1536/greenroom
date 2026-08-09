@@ -64,8 +64,9 @@ then, with a reminder telling you what is missing.
 ## Changing your mind
 
 Reopen any proposal in your queue, adjust the scores, and choose **Update review**. Your
-previous comment is shown underneath the empty box. If it should remain on the review,
-re-enter it before updating; comment-preserving update semantics are still queued work.
+previous comment is shown underneath the empty box. Leaving that box empty while you change
+scores keeps the saved comment; entering a new comment replaces it. This screen does not yet
+offer a separate clear-comment action.
 
 ---
 

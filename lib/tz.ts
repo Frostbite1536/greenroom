@@ -92,7 +92,7 @@ export function zonedToUtcIso(dateKey: string, time: string, timeZone: string): 
 }
 
 export function formatTime(iso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     timeZone,
     hour: "numeric",
     minute: "2-digit",
@@ -125,7 +125,7 @@ export function formatEventDateTime(value: Date | string | null | undefined, tim
 
 export function formatDayLabel(dateKey: string, timeZone: string): string {
   // Noon avoids any DST edge when labelling a whole day.
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     timeZone,
     weekday: "short",
     month: "short",
