@@ -48,14 +48,28 @@ test("draft recovery storage is versioned, form-scoped, metadata-only, and guard
 });
 
 test("draft recovery storage tolerates unavailable browser storage", () => {
+  const storageError = new Error("blocked");
   const unavailable: DraftRecoveryStorage = {
-    getItem: () => { throw new Error("blocked"); },
-    setItem: () => { throw new Error("blocked"); },
-    removeItem: () => { throw new Error("blocked"); },
+    getItem: () => { throw storageError; },
+    setItem: () => { throw storageError; },
+    removeItem: () => { throw storageError; },
   };
-  assert.equal(readDraftRecovery(unavailable, "form-a"), null);
-  assert.equal(writeDraftRecovery(unavailable, metadata), false);
-  assert.doesNotThrow(() => clearDraftRecovery(unavailable, "form-a"));
+  const originalError = console.error;
+  const diagnostics: unknown[][] = [];
+  console.error = (...args: unknown[]) => { diagnostics.push(args); };
+  try {
+    assert.equal(readDraftRecovery(unavailable, "form-a"), null);
+    assert.equal(writeDraftRecovery(unavailable, metadata), false);
+    assert.doesNotThrow(() => clearDraftRecovery(unavailable, "form-a"));
+  } finally {
+    console.error = originalError;
+  }
+  assert.deepEqual(diagnostics, [
+    ["CFP draft recovery storage read failed", storageError],
+    ["CFP draft recovery storage write failed", storageError],
+    ["CFP draft recovery storage clear failed", storageError],
+  ]);
+  assert.ok(diagnostics.every((entry) => entry.length === 2));
 });
 
 test("draft recovery links are fragment-only and strict", () => {

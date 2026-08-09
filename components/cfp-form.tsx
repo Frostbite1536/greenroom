@@ -63,7 +63,8 @@ function isPositiveDraftRevision(value: unknown): value is number {
 function browserStorage(): Storage | null {
   try {
     return window.localStorage;
-  } catch {
+  } catch (error) {
+    console.error("CFP draft recovery browser storage access failed", error);
     return null;
   }
 }
@@ -123,7 +124,8 @@ export function CfpForm({ form }: { form: PublicFormView }) {
         "",
         withoutDraftRecoveryHash(window.location.pathname, window.location.search),
       );
-    } catch {
+    } catch (error) {
+      console.error("CFP draft recovery history strip failed", error);
       return { candidate: null, safeToRequest: false };
     }
     return {
@@ -140,7 +142,8 @@ export function CfpForm({ form }: { form: PublicFormView }) {
         "",
         `${withoutDraftRecoveryHash(window.location.pathname, window.location.search)}${draftRecoveryHash(metadata)}`,
       );
-    } catch {
+    } catch (error) {
+      console.error("CFP draft recovery history attach failed", error);
       // Local storage remains the fallback when history is unavailable.
     }
   }

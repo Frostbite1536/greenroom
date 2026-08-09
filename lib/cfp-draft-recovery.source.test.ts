@@ -24,6 +24,26 @@ test("CFP recovery guards browser storage and does not store form values", () =>
   assert.doesNotMatch(recovery, /speakers|answersByKey|abstract:\s*/);
 });
 
+test("recovery diagnostics use only bounded operation labels and caught errors", () => {
+  const recovery = readFileSync(new URL("./cfp-draft-recovery.ts", import.meta.url), "utf8");
+  for (const label of [
+    "CFP draft recovery storage read failed",
+    "CFP draft recovery storage write failed",
+    "CFP draft recovery storage clear failed",
+  ]) {
+    assert.match(recovery, new RegExp(`console\\.error\\("${label}", error\\);`));
+  }
+  for (const label of [
+    "CFP draft recovery browser storage access failed",
+    "CFP draft recovery history strip failed",
+    "CFP draft recovery history attach failed",
+  ]) {
+    assert.match(source, new RegExp(`console\\.error\\("${label}", error\\);`));
+  }
+  assert.doesNotMatch(recovery, /console\.error\([^;]*(?:formConfigId|abstractId|capability|metadata|draftRecoveryStorageKey)/);
+  assert.doesNotMatch(source, /console\.error\([^;]*(?:window\.location|draftRecoveryHash|capability|metadata)/);
+});
+
 test("a delayed resume cannot activate a draft after newer typing, and cross-tab revocation clears only metadata", () => {
   const staleResponseBranch = source.match(/if \(!shouldApplyRecoveredDraft\(editVersionAtRequest, editVersionRef\.current\)\) \{([\s\S]*?)return;\s*\}/)?.[1];
   assert.ok(staleResponseBranch?.includes("setRecoveryCandidate(recovered);"));

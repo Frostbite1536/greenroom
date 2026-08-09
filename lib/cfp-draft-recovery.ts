@@ -51,7 +51,10 @@ export function readDraftRecovery(
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     return isDraftRecoveryMetadata(parsed, formConfigId) ? parsed : null;
-  } catch {
+  } catch (error) {
+    // Never log the form-scoped key or metadata: browser storage errors can be
+    // diagnosed with this bounded operation label and the original error only.
+    console.error("CFP draft recovery storage read failed", error);
     return null;
   }
 }
@@ -72,7 +75,8 @@ export function writeDraftRecovery(
       draftRevision: metadata.draftRevision,
     }));
     return true;
-  } catch {
+  } catch (error) {
+    console.error("CFP draft recovery storage write failed", error);
     return false;
   }
 }
@@ -84,8 +88,8 @@ export function clearDraftRecovery(
   if (!storage) return;
   try {
     storage.removeItem(draftRecoveryStorageKey(formConfigId));
-  } catch {
-    // Recovery remains best-effort when browser storage is unavailable.
+  } catch (error) {
+    console.error("CFP draft recovery storage clear failed", error);
   }
 }
 
