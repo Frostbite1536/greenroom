@@ -13,7 +13,7 @@
  *   getFormsList()        ~ GET /api/cfp/forms
  *   getFormForBuilder()   ~ GET /api/cfp/forms/:id
  *   getEvaluationQueue()  ~ GET /api/evaluations/{plans,assignments}
- *   getPublicForm()       ~ GET /api/cfp/public/:formId
+ *   getPublicForm()       ~ GET /api/cfp/public/:eventSlug/:formSlug
  *   getPublicAgenda()     ~ GET /api/agenda/public
  *   getPublicSpeakers()   ~ public scheduled-speaker projection
  *   getEmbedTargets()     ~ admin metadata for the embed snippet page
@@ -40,6 +40,10 @@ import {
 } from "@/lib/services/admin-decision-summary";
 export type { AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/services/admin-decision-summary";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
+import {
+  canonicalPublicFormPath,
+  resolvePublishedPublicForm,
+} from "@/lib/services/public-form-resolver";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -119,9 +123,9 @@ export type FormListItem = {
   isOpen: boolean;
 };
 
-export async function getFormsList(): Promise<{ eventId: string; forms: FormListItem[] }> {
+export async function getFormsList(): Promise<{ eventId: string; eventSlug: string; forms: FormListItem[] }> {
   const ctx = await pageContext(["ADMIN"]);
-  const [forms, grouped] = await Promise.all([
+  const [forms, grouped, event] = await Promise.all([
     prisma.formConfig.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { createdAt: "desc" },
@@ -140,11 +144,14 @@ export async function getFormsList(): Promise<{ eventId: string; forms: FormList
       where: { eventId: ctx.eventId },
       _count: { _all: true },
     }),
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { slug: true } }),
   ]);
+  if (!event) throw new Error("Active event is unavailable.");
 
   const now = Date.now();
   return {
     eventId: ctx.eventId,
+    eventSlug: event.slug,
     forms: forms.map((form) => {
       const rows = grouped.filter((g) => g.formConfigId === form.id);
       const draftCount = rows
@@ -179,20 +186,21 @@ export type BuilderForm = Omit<ReturnType<typeof serializeForm>, "fields"> & {
 
 export async function getFormForBuilder(
   formId: string,
-): Promise<{ eventId: string; timezone: string; form: BuilderForm } | null> {
+): Promise<{ eventId: string; timezone: string; publicFormPath: string; form: BuilderForm } | null> {
   const ctx = await pageContext(["ADMIN"]);
   const [form, event] = await Promise.all([
     prisma.formConfig.findFirst({
       where: { id: formId, eventId: ctx.eventId },
       include: { fields: true },
     }),
-    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true, slug: true } }),
   ]);
-  if (!form) return null;
+  if (!form || !event) return null;
   const serialized = serializeForm(form);
   return {
     eventId: ctx.eventId,
-    timezone: event?.timezone ?? "UTC",
+    timezone: event.timezone,
+    publicFormPath: canonicalPublicFormPath({ eventSlug: event.slug, formSlug: serialized.slug }),
     form: { ...serialized, fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField) },
   };
 }
@@ -815,30 +823,24 @@ export type PublicFormView = Omit<ReturnType<typeof serializePublicForm>, "field
 };
 
 /**
- * Public CFP form by id or slug. No session required.
+ * Canonical public CFP form by event and form slug. No session required.
  *
- * Categories are read here rather than from `GET /api/cfp/categories` because
- * that endpoint requires ADMIN/EVALUATOR; the submitter needs to pick one for
- * category-based review routing to work.
+ * The shared Backend resolver loads the event-owned categories with the form,
+ * so this RSC projection cannot reintroduce the old unscoped slug lookup or an
+ * N+1 category read.
  */
-export const getPublicForm = cache(async function getPublicForm(formId: string): Promise<PublicFormView | null> {
-  const form = await prisma.formConfig.findFirst({
-    where: { published: true, OR: [{ id: formId }, { slug: formId }] },
-    include: { fields: true, event: { select: { name: true } } },
-  });
+export const getPublicForm = cache(async function getPublicForm(
+  eventSlug: string,
+  formSlug: string,
+): Promise<PublicFormView | null> {
+  const form = await resolvePublishedPublicForm({ eventSlug, formSlug });
   if (!form) return null;
-
-  const categories = await prisma.category.findMany({
-    where: { eventId: form.eventId },
-    orderBy: { sortOrder: "asc" },
-    select: { id: true, name: true },
-  });
 
   const serialized = serializePublicForm(form);
   return {
     ...serialized,
     fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField),
-    categories,
+    categories: serialized.categories,
     eventName: form.event.name,
   };
 });

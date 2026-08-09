@@ -79,7 +79,17 @@ function toDraft(form: BuilderForm) {
 
 type Draft = ReturnType<typeof toDraft>;
 
-export function FormBuilder({ form: initial, eventId, timezone }: { form: BuilderForm; eventId: string; timezone: string }) {
+export function FormBuilder({
+  form: initial,
+  eventId,
+  timezone,
+  publicFormPath,
+}: {
+  form: BuilderForm;
+  eventId: string;
+  timezone: string;
+  publicFormPath: string;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [draft, setDraft] = useState<Draft>(() => toDraft(initial));
@@ -219,14 +229,14 @@ export function FormBuilder({ form: initial, eventId, timezone }: { form: Builde
           <p className="hint">{draft.name}</p>
         </div>
         <div className="row wrap">
-          <Link className="ghost-button" href={`/cfp/${initial.id}`} target="_blank">
+          <Link className="ghost-button" href={publicFormPath} target="_blank">
             <ExternalLink size={15} /> View form
           </Link>
           <button
             className="ghost-button"
             type="button"
             onClick={async () => {
-              await navigator.clipboard?.writeText(`${location.origin}/cfp/${initial.id}`);
+              await navigator.clipboard?.writeText(`${location.origin}${publicFormPath}`);
               setCopied(true);
               setTimeout(() => setCopied(false), 1500);
             }}

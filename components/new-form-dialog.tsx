@@ -50,9 +50,11 @@ const STARTER_FIELDS = [
 
 export function NewFormDialog({
   eventId,
+  eventSlug,
   existingSlugs,
 }: {
   eventId: string;
+  eventSlug: string;
   /** Checked client-side: the API surfaces a duplicate `(eventId, slug)` as a generic 500. */
   existingSlugs: string[];
 }) {
@@ -136,7 +138,7 @@ export function NewFormDialog({
     }
 
     // The builder is the only place that can finish configuring a form, and it
-    // surfaces the public /cfp/<id> link and the publish toggle.
+    // surfaces the canonical event-scoped public link and the publish toggle.
     router.push(`/admin/forms/${res.data.id}`);
   }
 
@@ -209,7 +211,7 @@ export function NewFormDialog({
               }}
             />
             <span className="hint" id={`${ids}-slug-hint`}>
-              /cfp/{effectiveSlug || "your-form"}
+              /cfp/{eventSlug}/{effectiveSlug || "your-form"}
             </span>
             {errors.slug ? <span className="field-error">{errors.slug}</span> : null}
           </label>

@@ -24,6 +24,10 @@ const FRESH_EVENT_ID = "scratch-frontend-fresh";
 // S20 also needs an event-scoping boundary target. It is created only by this
 // scratch fixture and deleted with the other disposable events.
 const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
+// S2 creates a separate event with the same published form slug. It proves
+// canonical public URLs remain event-scoped and the legacy slug route fails
+// closed instead of choosing one candidate.
+const S2_OTHER_EVENT_ID = "scratch-frontend-s2-other";
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 
@@ -67,7 +71,7 @@ async function reqManual(path, sess) {
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
-  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID] } } });
+  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
   await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
 
   const now = Date.now();
@@ -251,7 +255,7 @@ let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
-      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID] } } });
+      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
       await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
@@ -294,6 +298,45 @@ try {
 
   if (!(await waitReady())) throw new Error("server never became ready");
 
+  // --- S2: event-scoped public form resolution ----------------------------
+  // Same form slugs are legitimate across events, so only the two-segment
+  // route may resolve either. The old single-slug route must not pick one.
+  const s2OtherEvent = await prisma.event.create({
+    data: { id: S2_OTHER_EVENT_ID, name: "Scratch S2 Other", slug: S2_OTHER_EVENT_ID, timezone: "UTC" },
+  });
+  const s2OtherForm = await prisma.formConfig.create({
+    data: {
+      eventId: s2OtherEvent.id,
+      name: "S2 Other CFP",
+      slug: fx.form.slug,
+      published: true,
+      minSpeakers: 1,
+      maxSpeakers: 1,
+    },
+  });
+  const s2UniqueLegacyForm = await prisma.formConfig.create({
+    data: {
+      eventId: EVENT_ID,
+      name: "S2 Unique Legacy CFP",
+      slug: "s2-legacy-unique",
+      published: true,
+      minSpeakers: 1,
+      maxSpeakers: 1,
+    },
+  });
+  const s2UnpublishedForm = await prisma.formConfig.create({
+    data: {
+      eventId: EVENT_ID,
+      name: "S2 Unpublished CFP",
+      slug: "s2-unpublished",
+      published: false,
+      minSpeakers: 1,
+      maxSpeakers: 1,
+    },
+  });
+  const canonicalCfpPath = `/cfp/${EVENT_ID}/${fx.form.slug}`;
+  const canonicalOtherCfpPath = `/cfp/${S2_OTHER_EVENT_ID}/${s2OtherForm.slug}`;
+
   // --- page renders ---
   for (const [name, path, sess] of [
     ["page /admin/forms", "/admin/forms", admin],
@@ -301,7 +344,7 @@ try {
     ["page /admin/abstracts", "/admin/abstracts", admin],
     ["page /admin/agenda", "/admin/agenda", admin],
     ["page /admin/evaluations (evaluator)", "/admin/evaluations", evaluator],
-    ["page /cfp/[formId] (public)", `/cfp/${fx.form.id}`, null],
+    ["page /cfp/[eventSlug]/[formSlug] (public)", canonicalCfpPath, null],
     ["page /embed/schedule (public)", `/embed/schedule?event=${EVENT_ID}`, null],
     ["page /admin/embeds", "/admin/embeds", admin],
     ["page /admin/settings", "/admin/settings", admin],
@@ -313,6 +356,31 @@ try {
   // --- real data actually rendered ---
   const formsPage = await req("GET", "/admin/forms", null, admin);
   check("forms page shows scratch form name", formsPage.text.includes("Scratch CFP"));
+
+  const canonicalCfp = await req("GET", canonicalCfpPath, null, null);
+  const canonicalOtherCfp = await req("GET", canonicalOtherCfpPath, null, null);
+  const canonicalCfpApi = await req("GET", `/api/cfp/public/${EVENT_ID}/${fx.form.slug}`, null, null);
+  const legacyByExactId = await reqManual(`/cfp/${fx.form.id}`, null);
+  const legacyByUniqueSlug = await reqManual(`/cfp/${s2UniqueLegacyForm.slug}`, null);
+  const ambiguousLegacySlug = await req("GET", `/cfp/${fx.form.slug}`, null, null);
+  const unpublishedCanonical = await req("GET", `/cfp/${EVENT_ID}/${s2UnpublishedForm.slug}`, null, null);
+  check("S2 canonical public URLs resolve same form slugs in their own events",
+    canonicalCfp.status === 200
+    && canonicalCfp.text.includes("Scratch CFP")
+    && canonicalOtherCfp.status === 200
+    && canonicalOtherCfp.text.includes("S2 Other CFP"));
+  check("S2 canonical public API shares the event-scoped form resolution",
+    canonicalCfpApi.status === 200 && canonicalCfpApi.data?.data?.id === fx.form.id);
+  check("S2 legacy exact form ID redirects to its canonical public URL",
+    legacyByExactId.status === 307 && legacyByExactId.location === canonicalCfpPath,
+    `${legacyByExactId.status} ${legacyByExactId.location}`);
+  check("S2 unique legacy slug redirects to its canonical public URL",
+    legacyByUniqueSlug.status === 307
+    && legacyByUniqueSlug.location === `/cfp/${EVENT_ID}/${s2UniqueLegacyForm.slug}`,
+    `${legacyByUniqueSlug.status} ${legacyByUniqueSlug.location}`);
+  check("S2 ambiguous legacy slug and unpublished canonical form fail closed",
+    ambiguousLegacySlug.status === 404 && unpublishedCanonical.status === 404,
+    `ambiguous ${ambiguousLegacySlug.status}; unpublished ${unpublishedCanonical.status}`);
 
   const absPage = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts page shows seeded abstract", absPage.text.includes("Scratch: Agents in Production"));
@@ -404,7 +472,7 @@ try {
   check("day grid renders draggable slot blocks", agendaPage.text.includes('draggable="true"'));
   check("day grid explains the drag affordance", agendaPage.text.includes("Drag a session to another room or time"));
 
-  const cfpPage = await req("GET", `/cfp/${fx.form.id}`, null, null);
+  const cfpPage = await req("GET", canonicalCfpPath, null, null);
   check("public CFP renders open form (not closed state)", !cfpPage.text.includes("Submissions are closed"));
   check("public CFP renders category select", cfpPage.text.includes("Applied AI"));
 
@@ -475,14 +543,15 @@ try {
   const newFormId = created.data?.data?.id;
   const builderPage = await req("GET", `/admin/forms/${newFormId}`, null, admin);
   check("new form opens in the builder → 200", builderPage.status === 200, `got ${builderPage.status}`);
-  check("builder surfaces the new form's public URL", builderPage.text.includes(`/cfp/${newFormId}`));
+  check("builder surfaces the new form's canonical event-scoped public URL",
+    builderPage.text.includes(`/cfp/${EVENT_ID}/scratch-new-form`));
 
   const listAfterCreate = await req("GET", "/admin/forms", null, admin);
   check("forms list shows the new form", listAfterCreate.text.includes("Scratch New Form"));
   check("forms list offers the New form action", listAfterCreate.text.includes("New form"));
 
   // Unpublished forms must stay invisible publicly until the builder publishes.
-  const unpublishedPublic = await req("GET", `/cfp/${newFormId}`, null, null);
+  const unpublishedPublic = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
   check("unpublished new form is not public yet → 404", unpublishedPublic.status === 404, `got ${unpublishedPublic.status}`);
 
   // A duplicate slug must not silently create a second form.
