@@ -520,14 +520,14 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
   // Child collections are deliberately scoped to the at-most-100 newest rows
   // plus the one event-scoped drawer target. Nothing below scans a flooded
   // event-wide answer/review/assignment collection.
-  const answerCountsPromise: Promise<AnswerCountGroup[]> = ctx.role === "ADMIN"
+  const answerCountsPromise = ctx.role === "ADMIN"
     ? prisma.formAnswer.groupBy({
         by: ["abstractId"],
         where: childWhere,
         _count: { _all: true },
       })
     : Promise.resolve([]);
-  const assignmentGroupsPromise: Promise<AssignmentProgressGroup[]> = prisma.reviewAssignment.groupBy({
+  const assignmentGroupsPromise = prisma.reviewAssignment.groupBy({
     by: ["abstractId", "status"],
     where: childWhere,
     _count: { _all: true },
