@@ -1,8 +1,8 @@
 # Lifecycles
 
 The state machines behind the golden path: what each record can be, which route moves it,
-and what the server refuses. Every transition below was read off the code at `ff58f13`; file
-paths are cited so a reviewer can check the arrow rather than trust the diagram.
+and what the server refuses. The transitions below track current `main`; file paths are cited
+so a reviewer can check the arrow rather than trust the diagram.
 
 Statuses are Prisma enums in `prisma/schema.prisma` (`AbstractStatus`,
 `EvaluationAssignmentStatus`, `TaskStatus`) and mirrored as Zod enums in `types/api.ts`.
@@ -20,6 +20,8 @@ stateDiagram-v2
     [*] --> SUBMITTED: POST /api/cfp/submissions, intent submit
     [*] --> SUBMITTED: POST /api/integrations/import
     DRAFT --> SUBMITTED: POST /api/cfp/submissions with abstractId
+    DRAFT --> ACCEPTED: POST /api/evaluations/decisions
+    DRAFT --> REJECTED: POST /api/evaluations/decisions
     SUBMITTED --> UNDER_REVIEW: POST /api/evaluations/assignments
     SUBMITTED --> ACCEPTED: POST /api/evaluations/decisions
     SUBMITTED --> REJECTED: POST /api/evaluations/decisions
@@ -27,8 +29,11 @@ stateDiagram-v2
     UNDER_REVIEW --> REJECTED: POST /api/evaluations/decisions
     ACCEPTED --> REJECTED: decision reversal
     REJECTED --> ACCEPTED: decision reversal
-    ACCEPTED --> [*]: converted to a Session
-    WITHDRAWN --> [*]: no route sets or leaves this state
+    DRAFT --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
+    SUBMITTED --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
+    UNDER_REVIEW --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
+    ACCEPTED --> [*]: decision has provisioned a Session
+    WITHDRAWN --> [*]: terminal; no route leaves this state
 ```
 
 ### Transitions
@@ -40,16 +45,25 @@ stateDiagram-v2
 | — | `SUBMITTED` | `POST /api/integrations/import`, `app/api/integrations/import/route.ts` | CSV/JSON import creates rows already `SUBMITTED`. Existing rows are only updated when they are `DRAFT` or `SUBMITTED`; anything further along is **skipped**, not overwritten. |
 | `DRAFT` | `SUBMITTED` | `POST /api/cfp/submissions` with `abstractId` | The same handler refuses any non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`. That check is what stops an anonymous caller rewriting a submitted proposal, so it is deliberately *not* relaxed for R1. |
 | `SUBMITTED` | `UNDER_REVIEW` | `POST /api/evaluations/assignments`, `app/api/evaluations/assignments/route.ts` | Only when the abstract is currently `SUBMITTED`; assigning an already `UNDER_REVIEW`/decided abstract creates the assignment without touching status. Admin only. |
-| any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
-| — | `WITHDRAWN` | **no route** | The status exists in the schema and the seed produces withdrawn examples, but nothing in the app writes it today. It is honoured everywhere as a lock (edits and decisions both refuse it). Withdrawal is currently an operator/database action. |
+| any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`; acceptance atomically provisions the Session, roster, and task assignments. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
+| `DRAFT`, `SUBMITTED`, `UNDER_REVIEW` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the programme team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a programme decision. |
+
+**Withdrawal has no portal button yet.** W1 shipped the API; the speaker-facing control is
+still to come, so today a speaker asks the programme team to coordinate the withdrawal rather
+than being promised a control that is not on the page.
 
 **Two honest caveats**, both visible in the code:
 
 - The decision route does not require a prior review. An abstract can go straight from
   `SUBMITTED` (or even `DRAFT`) to `ACCEPTED`; evaluation is a workflow, not a gate.
-- Rejecting an abstract that was already converted does **not** remove its `Session`
-  (`app/api/evaluations/decisions/route.ts` writes only the abstract). Un-programming a talk
-  is a schedule action: unschedule the slot (below).
+- Declining an accepted abstract does **not** remove the `Session` that acceptance provisioned
+  (`app/api/evaluations/decisions/route.ts` deliberately removes nothing) —
+  since a scheduled talk must not vanish from the programme on a status change
+  (INV-DOMAIN-001). Since W2 the decision response carries the linked session
+  (`session: { id, title, isScheduled, scheduledAt, roomName } | null`) and `/admin/abstracts`
+  shows a **"Still on the programme"** warning with a link to the agenda builder
+  (`components/abstracts-table.tsx`). Un-programming remains a schedule action: unschedule the
+  slot (below).
 
 ### Editing rules (R1)
 
@@ -66,36 +80,48 @@ Speakers edit through the session-authenticated routes in
 | `REJECTED` | no → `409 ABSTRACT_LOCKED` |
 | `WITHDRAWN` | no → `409 ABSTRACT_LOCKED` |
 
+The same endpoint carries the one status change a speaker may make — `{"status":
+"WITHDRAWN"}`, see the transition table above. Everything below describes content edits.
+
 - **Authorization** is the `AbstractSpeaker` link resolved from the signed session's persisted
   user id (`isAbstractSpeaker`), not the submitter field: any co-speaker may edit. Existence
   and event scope are checked first (`404 ABSTRACT_NOT_FOUND`), then ownership
   (`403 NOT_YOUR_SUBMISSION`), so the route never confirms another event's records.
-- **An edit does not move the abstract through this state machine.** `status`, `submittedAt`,
-  `decidedAt`, and `submitterId` are all absent from the update.
+- **A content edit does not move the abstract through this state machine.** `status`,
+  `submittedAt`, `decidedAt`, and `submitterId` are all absent from the update — the only
+  exception is the status-only withdraw above, which writes `status` and nothing else.
 - **No edit window.** The CFP window gate is skipped on this path
   (`validateSubmissionContent` vs `validateSubmission` in `lib/services/form-validation.ts`) —
   an accepted speaker necessarily edits after the CFP has closed. Public submission to a
   closed form is still refused with `FORM_CLOSED`.
-- **The roster locks at conversion.** If the abstract has a `Session`, changing the speaker
+- **The roster locks when a Session exists.** Acceptance normally creates it immediately; if
+  the abstract has a `Session`, changing the speaker
   set or who is primary returns `409 SPEAKERS_LOCKED`; content fields stay editable. Resending
   the identical roster is not a change (`rosterChanged` compares lowercased email sets).
 - **The linked `Session` is never touched** by an edit (INV-DOMAIN-001). The confirmed record
-  keeps the title it was converted with until an admin changes it.
+  keeps the title it had when accepted until an admin changes it.
 - Concurrency: the PATCH runs inside a transaction that first takes the per-abstract advisory
   lock (`lib/services/abstract-lock.ts`) and then re-reads status, session, and roster
   membership under that lock. Concurrent co-speaker edits are last-write-wins by design; there
   is no optimistic concurrency token in v1.
 
-### Conversion to a Session
+### Acceptance and legacy Session backfill
+
+`POST /api/evaluations/decisions` is the normal creation path. On `ACCEPTED`, the locked
+transaction creates or reuses the one Session, copies the roster, and idempotently fills the
+onboarding-task × speaker assignment cross-product. The response reports the linked Session,
+whether it was newly created (`sessionCreated`), and how many assignments were added
+(`tasksAssigned`).
 
 `POST /api/evaluations/convert` (`app/api/evaluations/convert/route.ts`), admin only:
 
 - requires `status === "ACCEPTED"`, else `409 NOT_ACCEPTED`;
 - creates **at most one** `Session` per abstract — enforced by the unique `sourceAbstractId`
   and by re-checking inside the advisory lock (INV-DOMAIN-001);
-- copies the abstract's speakers onto the session as `SessionSpeaker` rows (which is why the
-  roster locks afterwards);
-- is idempotent: `201` with a new session, `200` returning the existing `sessionId`.
+- copies the abstract's speakers onto the session as `SessionSpeaker` rows and backfills any
+  missing task assignments;
+- is idempotent: `201` with a new session, `200` returning the existing `sessionId`. In the
+  normal accept-first flow it therefore returns 200.
 
 ---
 
@@ -106,14 +132,15 @@ A `Session` is a confirmed, schedulable talk. It has **at most one** `ScheduleSl
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Unscheduled: POST /api/evaluations/convert (from an ACCEPTED abstract)
+    [*] --> Unscheduled: decision ACCEPTED or legacy convert
     Unscheduled --> Scheduled: POST /api/agenda/slots (no conflicts)
     Unscheduled --> Unscheduled: POST /api/agenda/slots refused 409 SCHEDULE_CONFLICT
     Scheduled --> Scheduled: POST /api/agenda/slots (move — re-checked, may be refused)
     Scheduled --> Unscheduled: DELETE /api/agenda/slots?sessionId=...
 ```
 
-- **Creation.** Conversion is the only way the running app creates a `Session`. The schema
+- **Creation.** Acceptance is the normal way the running app creates a `Session`; the
+  conversion endpoint is an idempotent legacy/manual backfill. The schema
   supports guaranteed/sponsor sessions with no source abstract (the seeded opening keynote is
   one), and `types/api.ts` reserves `guaranteedSessionInputSchema`, but no route implements
   direct creation yet.
@@ -154,17 +181,23 @@ stateDiagram-v2
     IN_PROGRESS --> COMPLETED: PATCH /api/portal/tasks
     TODO --> COMPLETED: PATCH /api/portal/tasks
     COMPLETED --> TODO: PATCH /api/portal/tasks (re-open)
-    TODO --> WAIVED: PATCH /api/portal/tasks
     COMPLETED --> [*]
-    WAIVED --> [*]
+    [*] --> WAIVED: organiser-prepared assignment
+    WAIVED --> [*]: read-only in the speaker portal
 ```
 
-- **Creation.** The seed assigns every template task to each confirmed session speaker
-  (`lib/demo/seed.ts`). No route creates assignments; there is no auto-assignment on
-  conversion yet.
-- **Updates.** `PATCH /api/portal/tasks` (`app/api/portal/tasks/route.ts`) accepts any of the
-  four statuses plus optional `artifactUrl`/`notes`. It is fully reversible: `completedAt` is
-  set when the status becomes `COMPLETED` and cleared for every other status.
+- **Creation.** Accepting a proposal (and the legacy convert/backfill path) idempotently assigns
+  every event onboarding task to every confirmed session speaker. The deterministic seed does
+  the same for its prebuilt programme.
+- **Updates.** `PATCH /api/portal/tasks` (`app/api/portal/tasks/route.ts`) accepts `TODO`,
+  `IN_PROGRESS`, or `COMPLETED`, plus optional `artifactUrl`/`notes` and task-form `responses`.
+  It is reversible: `completedAt` is set for `COMPLETED` and cleared otherwise. `WAIVED` may
+  exist as an organiser-prepared state, but a speaker cannot set it through this endpoint.
+- **Task forms.** Responses merge with the speaker's saved JSON, are pruned to the current
+  field set, and reuse the public CFP's conditional/type/option validator. Progress saves may
+  be incomplete, but every supplied value must be valid; `COMPLETED` is refused until all
+  visible required questions pass. The checklist disables its completion shortcut for a
+  form-carrying task, so the speaker opens the form to finish it.
 - **Authorization.** `401 UNAUTHORIZED` without a session; `404 NOT_FOUND` when the task is
   not part of the caller's event; `403 NOT_ASSIGNED` when the assignment row is not the
   caller's own. A speaker can only ever move their own row.
@@ -179,7 +212,7 @@ stateDiagram-v2
   - Reminder dispatch (`app/api/comms/reminders/route.ts`) selects assignments whose status is
     not in `["COMPLETED", "WAIVED"]` — the same rule, expressed once more.
 - `WAIVED` is the "this speaker doesn't need to do this" state: it settles the task without
-  claiming it was done.
+  claiming it was done, and is displayed but not writable by the speaker portal.
 
 ---
 
@@ -190,5 +223,11 @@ Scoring progress lives on `ReviewAssignment` (`EvaluationAssignmentStatus`):
 (`app/api/evaluations/scores/route.ts`) upserts the evaluator's scores and sets the assignment
 to `COMPLETED` when the request carries `complete: true`, otherwise `IN_PROGRESS`. Scores must
 reference a rubric key in the plan and fall inside that criterion's range (INV-EVAL-001), and
-an evaluator can only score abstracts assigned to them (`403 NOT_ASSIGNED`). `DECLINED` exists
-in the schema but no route sets it.
+an evaluator can only score abstracts assigned to them (`403 NOT_ASSIGNED`). Since W1 a
+withdrawn proposal can appear mid-review, so scoring is refused with `409 ABSTRACT_WITHDRAWN`
+— checked before the write **and** re-checked under the shared per-abstract lock
+(INV-ABSTRACT-001). Assignment creation takes that same lock and accepts only `SUBMITTED` or
+`UNDER_REVIEW`; decided and withdrawn proposals remain visible as historical coverage but
+cannot receive new assignments. `DECLINED` exists in the assignment-status enum, but no route
+sets it. A withdrawn queue item is archived in the evaluator UI, excluded from active
+progress, and never renders a scoring form.

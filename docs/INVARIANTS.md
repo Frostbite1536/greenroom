@@ -1,13 +1,14 @@
 # Sprint Invariants
 
-- **INV-DOMAIN-001:** `Abstract` is an evaluated proposal; `Session` is a confirmed schedulable talk. Acceptance/conversion creates at most one session per abstract.
+- **INV-DOMAIN-001:** `Abstract` is an evaluated proposal; `Session` is a confirmed schedulable talk. Acceptance atomically provisions at most one session per abstract; the legacy conversion route only backfills missing records.
 - **INV-EVENT-001:** Every protected read/write is scoped to an event membership and authorized role server-side.
 - **INV-FORM-001:** Public submissions enforce publication/window, submission, speaker-count, required-field, and bio-length constraints on the server.
 - **INV-EVAL-001:** A score must reference a rubric key in its evaluation plan and fall within that criterion's range.
 - **INV-SCHEDULE-001:** A room or speaker cannot occupy overlapping schedule intervals. Conflict detection and slot write are transactional.
-- **INV-TASK-001:** Speaker completion state is derived from per-speaker assignments, not task-template state.
-- **INV-ABSTRACT-001:** Every writer that check-then-writes a single abstract (speaker edit, admin decision, abstract-to-session conversion) takes the per-abstract advisory lock in `lib/services/abstract-lock.ts` inside its transaction and re-reads the row under that lock before writing.
-- **INV-EDIT-001:** A speaker may edit their own submission while it is `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, or `ACCEPTED`; `REJECTED` and `WITHDRAWN` are terminal for edits (409 `ABSTRACT_LOCKED`). An edit never changes `status`, `submittedAt`, `decidedAt`, or `submitterId`, never touches the linked `Session`, and cannot change the speaker roster once the abstract has been converted (409 `SPEAKERS_LOCKED`).
+- **INV-TASK-001:** Speaker completion state is derived from per-speaker assignments, not task-template state. Acceptance/backfill creates the onboarding-task × session-speaker cross-product idempotently, and a form-carrying task cannot become `COMPLETED` until its visible required answers pass the shared form validator.
+- **INV-ABSTRACT-001:** Every writer that check-then-writes a single abstract (speaker edit, self-withdraw, admin decision, review scores, abstract-to-session conversion) takes the per-abstract advisory lock in `lib/services/abstract-lock.ts` inside its transaction and re-reads the row under that lock before writing.
+- **INV-EDIT-001:** A speaker may edit their own submission while it is `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, or `ACCEPTED`; `REJECTED` and `WITHDRAWN` are terminal for edits (409 `ABSTRACT_LOCKED`). A content edit never changes `status`, `submittedAt`, `decidedAt`, or `submitterId`, never touches the linked `Session`, and cannot change the speaker roster once a Session exists—which normally happens at acceptance (409 `SPEAKERS_LOCKED`).
+- **INV-WITHDRAW-001:** `WITHDRAWN` is the only status a speaker may set, only on its own, and only from `DRAFT`/`SUBMITTED`/`UNDER_REVIEW`; an accepted or Session-linked proposal is refused (409 `WITHDRAW_NOT_ALLOWED`) because removing a confirmed talk from the programme is the admin's action. A status change never deletes a `Session` (INV-DOMAIN-001).
 - **INV-HTML-001:** Embedded resource HTML is sanitized before storage or rendering.
 - **INV-SECRET-001:** Secrets never enter client bundles, logs, or Git.
 - **INV-RESET-001:** Demo reset is explicit, idempotent, environment-gated, and unauthorized in production.

@@ -11,7 +11,8 @@ Explicit non-goals: CRM, marketing automation, payments, multi-language support,
 1. Admin publishes a configured CFP form.
 2. Speaker saves and submits an `Abstract` with one or more speakers.
 3. Admin assigns the abstract through an `EvaluationPlan`; evaluators score rubric criteria.
-4. Admin accepts the abstract and converts it into one confirmed `Session` (or creates a guaranteed session directly).
+4. Admin accepts the abstract, atomically provisioning one confirmed, unscheduled `Session`
+   plus each speaker's onboarding checklist (or starts with a seeded guaranteed session).
 5. Speaker completes profile and onboarding tasks.
 6. Admin schedules the session; room and speaker overlap checks must pass.
 7. Public schedule embed exposes the session and an `.ics` download.
@@ -35,7 +36,7 @@ All program data is event-scoped. `EventMember` assigns admin, evaluator, or spe
 - `FormConfig` owns submission windows, limits, messaging, speaker constraints, and `FormField` definitions.
 - `Abstract` is a proposal submitted through a form. It owns custom answers, speakers, assignments, and scores.
 - `EvaluationPlan` owns a versioned rubric JSON and evaluator/team assignments.
-- An accepted `Abstract` may produce exactly one `Session`; guaranteed/sponsor sessions have no source abstract.
+- Accepting an `Abstract` produces exactly one `Session`; guaranteed/sponsor sessions have no source abstract.
 - `Session` is the schedulable confirmed-talk record and has one optional `ScheduleSlot`.
 - `ScheduleSlot` references a room and optional track. Services must detect room and speaker interval overlaps transactionally.
 - `OnboardingTask` templates produce per-speaker `SpeakerTask` status/artifact records.
@@ -52,7 +53,7 @@ Shell routes (inside `app/(app)/`, behind the sidebar shell; sidebar entries are
 role in `components/app-shell.tsx`, mirroring the server-side authorization each page enforces):
 
 - `/admin/forms` and `/admin/forms/[formId]` — form list, create-form dialog, form builder
-- `/admin/abstracts` — submission pipeline, accept/decline, create session
+- `/admin/abstracts` — submission pipeline, custom answers, and accept/decline decisions
 - `/admin/evaluations` — evaluator scoring workspace
 - `/admin/agenda` — agenda builder: List / Day / Week / Tracks / Conflicts views.
   Drag-and-drop moves are offered in the **Day** view only (`onMove` is passed for
@@ -69,7 +70,8 @@ Backend ownership routes:
 - `/api/cfp/*`: form config, public form, draft/submit abstract
 - `/api/cfp/submissions/mine` and `/api/cfp/submissions/[abstractId]`: R1 — a signed-in
   speaker lists and edits their own submissions after submission/acceptance
-- `/api/evaluations/*`: plans, assignments, scores, decisions, abstract-to-session conversion
+- `/api/evaluations/*`: plans, assignments, scores, decisions with automatic provisioning,
+  and legacy abstract-to-session backfill
 - `/api/agenda/*`: sessions, slots, conflict checks
 - `/api/integrations/*`: Accelevents webhook and CSV/JSON import
 - `/api/v1/*`: read-only, API-key-gated server-to-server surface (see [`API.md`](API.md))
@@ -77,7 +79,8 @@ Backend ownership routes:
 Ops ownership routes:
 
 - `/api/portal/*`: profile and task updates
-- `/api/comms/*`: email dispatch, calendar downloads, Airtable one-way mirror
+- `/api/comms/*`: audited submission/decision/reminder email dispatch, calendar downloads,
+  Airtable one-way mirror
 - `/api/admin/reset`: environment-gated demo reset (refused in production)
 
 Request schemas and API envelope types are locked in `types/api.ts`. Workers must request shared changes through coordination rather than redefining contracts.
@@ -94,7 +97,8 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
 - Resource HTML must be sanitized before persistence or rendering.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
 - Schedule conflict checks and writes happen in one transaction (INV-SCHEDULE-001).
-- Every writer that check-then-writes one abstract (speaker edit, admin decision, conversion)
+- Every writer that check-then-writes one abstract (speaker edit/withdrawal, review assignment
+  or score, admin decision, legacy conversion)
   first takes a per-abstract transaction-scoped advisory lock (`lib/services/abstract-lock.ts`,
   INV-ABSTRACT-001) and re-reads the row inside the transaction, closing the TOCTOU window.
 - The v1 API authenticates before any database work and compares fixed-size key hashes.

@@ -12,6 +12,12 @@ speaker proposal editor and the template editor. Both runs were a fresh
 from a **genuinely empty database** (`DROP SCHEMA public CASCADE` first), so
 `db:push` had to build all 24+ tables from nothing.
 
+> **Historical evidence, preserved as measured.** Current `main` has since moved
+> Session creation into the acceptance transaction: accept returns 200 with
+> `sessionCreated`/`tasksAssigned`, and the legacy convert/backfill call normally
+> returns 200 for that existing Session. The 20/20 statuses and seed counts below
+> describe `f80247e`; they are not rewritten to imply a rerun that did not happen.
+
 ## Result: clean install works, golden path 20/20
 
 Timings below are the second (freeze-candidate) run.
@@ -81,10 +87,11 @@ authorization on.
    discovered because the harness reused one address. It now uses a unique
    address per run.
 
-## Reproduce
+## Reproduce the recorded tree
 
 ```bash
 git clone https://github.com/Frostbite1536/greenroom.git app && cd app
+git checkout f80247e
 npm install
 cp .env.example .env          # set DATABASE_URL to a DISPOSABLE Postgres database
 npm run db:push
@@ -99,7 +106,7 @@ node --env-file=.env scripts/install-rehearsal.mjs
 npm run build && SMOKE_PORT=3237 node --env-file=.env scripts/_frontend-smoke.mjs
 ```
 
-`scripts/install-rehearsal.mjs` **writes** (submit → accept → convert → schedule
+At the recorded checkout, `scripts/install-rehearsal.mjs` **writes** (submit → accept → convert → schedule
 → task completion), so it refuses to run unless all three guards pass: the
 explicit opt-in, a loopback-only target, and `INSTALL_REHEARSAL_EXPECTED_DB`
 matching the `DATABASE_URL` it was launched with — loopback alone proves the

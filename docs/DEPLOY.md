@@ -21,8 +21,8 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `DATABASE_URL` | ✅ | Neon **pooled** URL (contains `-pooler`), `sslmode=require`. |
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
-   | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`. |
-   | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a verified Resend sender and keep mocks on otherwise. |
+   | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`; production should use the canonical `https://greenroom-hq.com`. |
+   | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a sender verified for the deployment's domain and keep mocks on otherwise. Submission, decision, and reminder mail share the same audited delivery path—see "Email status" below. |
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
    | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
@@ -100,6 +100,34 @@ A live run returns a per-table report instead of failing whole-hog:
 - **Resume = re-run the same request.** Upserts merge on `External ID`, so rows
   that already landed are rewritten identically and failed rows are retried, with
   no duplicates and no deletes.
+
+## Email status
+
+Every Greenroom email passes through `lib/comms/send.ts`. It creates an `EmailDispatch` row
+before delivery, uses a stable idempotency key for that dispatch, and records `sent`, `mocked`,
+or `failed` afterwards. A provider failure is evidence in the database rather than an erased
+proposal or an untracked fire-and-forget promise.
+
+Real Resend POSTs are possible only when `MOCK_EXTERNAL_APIS=false`, `RESEND_API_KEY`, and a
+valid `RESEND_FROM` are all present. Otherwise delivery is mocked and recorded without making
+a provider request. Unit tests that exercise the live branch inject a fake fetcher; ordinary
+tests and smokes never contact Resend.
+
+Current mail-producing paths are:
+
+- public proposal submit: when the event has an email template, after the database transaction
+  commits a receipt goes to the submitter, each distinct co-speaker gets an
+  added-to-proposal notice, and event admins get an alert. Notification failure is deliberately
+  non-throwing, so a saved proposal stays saved;
+- `POST /api/comms/decision`: ADMIN-only, decided proposals only. Preview is the default and a
+  short-lived signed token binds the subsequent send to the exact recipients/content. Optional
+  feedback includes written reviewer comments only—never scores or reviewer identities;
+- `POST /api/comms/reminders`: renders the event's reminder template for speakers with open
+  onboarding work.
+
+The production Resend key/domain readiness is operator-reported. Confirm only redacted
+presence and the canonical sender/`APP_URL` during the announced integration window; never
+copy secret values into a command transcript, chat, or Markdown.
 
 ## Accelevents one-way program push
 
