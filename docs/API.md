@@ -116,9 +116,9 @@ the selected form to be published and open. Its JSON body is capped at 128 KiB b
 and its strict, bounded answers and speaker roster reject duplicate normalized speaker emails.
 The durable, HMAC-fingerprinted limits run in this scope order: 20 public writes per IP per 10
 minutes; 120 per event per hour across both drafts and submits; then, for a submit, 3 per primary
-email per 24 hours and 60 submitted proposals per event per hour. It still refuses any
-non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a
-submitted or accepted proposal.
+email per 24 hours and 60 submit attempts per event per hour. Those submit buckets are consumed
+before later business validation or conflict checks. It still refuses any non-`DRAFT` `abstractId`
+with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or accepted proposal.
 
 ### Bounded admin proposal reads
 
