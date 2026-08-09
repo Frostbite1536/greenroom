@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
@@ -52,6 +52,21 @@ type DeliveryWork = {
   eventName: string;
   token: string;
 };
+
+const reviewerInviteSelect = {
+  id: true,
+  eventId: true,
+  userId: true,
+  tokenVersion: true,
+  expiresAt: true,
+  acceptedAt: true,
+  acceptedVersion: true,
+  lastSentAt: true,
+  sendWindowStart: true,
+  sendWindowCount: true,
+  lastDeliveryState: true,
+  lastDeliveryAt: true,
+} satisfies Prisma.ReviewerInviteSelect;
 
 function inviteView(invite: InviteRow | null, state: "pending" | "invited" | "active", delivery?: string) {
   return {
@@ -172,30 +187,34 @@ export const POST = handle(async (req) => {
 
     const expiresAt = reviewerInviteExpiry(now);
     const { tokenVersion, sendWindowCount } = sendPlan;
-    let invite: InviteRow;
-    if (existing) {
-      const updated = await tx.$queryRaw<InviteRow[]>`
-        UPDATE "ReviewerInvite"
-        SET "tokenVersion" = ${tokenVersion}, "expiresAt" = ${expiresAt}, "acceptedAt" = NULL,
-            "acceptedVersion" = NULL, "lastSentAt" = ${now}, "sendWindowStart" = ${windowStart},
-            "sendWindowCount" = ${sendWindowCount}, "lastDeliveryState" = 'PENDING', "lastDeliveryAt" = NULL
-        WHERE "id" = ${existing.id}
-        RETURNING "id", "eventId", "userId", "tokenVersion", "expiresAt", "acceptedAt", "acceptedVersion",
-                  "lastSentAt", "sendWindowStart", "sendWindowCount", "lastDeliveryState", "lastDeliveryAt"
-      `;
-      invite = updated[0]!;
-    } else {
-      const inserted = await tx.$queryRaw<InviteRow[]>`
-        INSERT INTO "ReviewerInvite" (
-          "id", "eventId", "userId", "tokenVersion", "expiresAt", "lastSentAt", "sendWindowStart", "sendWindowCount"
-        ) VALUES (
-          ${randomUUID()}, ${ctx.eventId}, ${user.id}, ${tokenVersion}, ${expiresAt}, ${now}, ${windowStart}, 1
-        )
-        RETURNING "id", "eventId", "userId", "tokenVersion", "expiresAt", "acceptedAt", "acceptedVersion",
-                  "lastSentAt", "sendWindowStart", "sendWindowCount", "lastDeliveryState", "lastDeliveryAt"
-      `;
-      invite = inserted[0]!;
-    }
+    const invite: InviteRow = existing
+      ? await tx.reviewerInvite.update({
+        where: { id: existing.id },
+        data: {
+          tokenVersion,
+          expiresAt,
+          acceptedAt: null,
+          acceptedVersion: null,
+          lastSentAt: now,
+          sendWindowStart: windowStart,
+          sendWindowCount,
+          lastDeliveryState: "PENDING",
+          lastDeliveryAt: null,
+        },
+        select: reviewerInviteSelect,
+      })
+      : await tx.reviewerInvite.create({
+        data: {
+          eventId: ctx.eventId,
+          userId: user.id,
+          tokenVersion,
+          expiresAt,
+          lastSentAt: now,
+          sendWindowStart: windowStart,
+          sendWindowCount,
+        },
+        select: reviewerInviteSelect,
+      });
 
     if (!target) {
       await tx.eventMember.create({ data: { eventId: ctx.eventId, userId: user.id, role: "EVALUATOR" } });
@@ -221,13 +240,14 @@ export const POST = handle(async (req) => {
     variables: { kind: "reviewer_invite", eventName: planned.delivery.eventName },
   });
   const deliveryState = outcome.status.toUpperCase() as "SENT" | "MOCKED" | "FAILED";
-  await prisma.$executeRaw`
-    UPDATE "ReviewerInvite"
-    SET "lastDeliveryState" = ${deliveryState}, "lastDeliveryAt" = ${new Date()}
-    WHERE "id" = ${planned.delivery.inviteId}
-      AND "tokenVersion" = ${planned.delivery.tokenVersion}
-      AND "expiresAt" = ${planned.delivery.expiresAt}
-      AND "acceptedAt" IS NULL
-  `;
+  await prisma.reviewerInvite.updateMany({
+    where: {
+      id: planned.delivery.inviteId,
+      tokenVersion: planned.delivery.tokenVersion,
+      expiresAt: planned.delivery.expiresAt,
+      acceptedAt: null,
+    },
+    data: { lastDeliveryState: deliveryState, lastDeliveryAt: new Date() },
+  });
   return ok({ ...planned.response, delivery: outcome.status });
 });

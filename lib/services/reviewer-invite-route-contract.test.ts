@@ -30,6 +30,11 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.match(route, /sendWindowCount/);
   assert.match(route, /canReserveReviewerInviteSend/);
   assert.match(route, /sendPlan\.kind === "active"/);
+  assert.match(route, /tx\.reviewerInvite\.create\(/);
+  assert.match(route, /tx\.reviewerInvite\.update\(/);
+  assert.match(route, /prisma\.reviewerInvite\.updateMany\(/);
+  assert.doesNotMatch(route, /INSERT INTO "ReviewerInvite"/);
+  assert.doesNotMatch(route, /UPDATE "ReviewerInvite"/);
   assert.match(route, /variables:\s*\{ kind: "reviewer_invite", eventName:/);
   assert.doesNotMatch(route, /variables:\s*\{[^}]*inviteUrl/);
 });
