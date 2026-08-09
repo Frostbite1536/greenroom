@@ -1,11 +1,24 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, Megaphone, Plus, Trash2 } from "lucide-react";
 import type { PublicFormView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
 import { resolveVisibleFields, validateField, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
+import {
+  clearDraftRecovery,
+  draftRecoveryHash,
+  draftRecoveryStorageKey,
+  hasDraftRecoveryHash,
+  parseDraftRecoveryHash,
+  readDraftRecovery,
+  shouldApplyRecoveredDraft,
+  withoutDraftRecoveryHash,
+  writeDraftRecovery,
+  type DraftRecoveryLink,
+  type DraftRecoveryMetadata,
+} from "@/lib/cfp-draft-recovery";
 
 type Speaker = { name: string; email: string; isPrimary: boolean };
 type Step = 0 | 1 | 2 | 3;
@@ -19,7 +32,42 @@ const FORMATS: { label: string; value: string; minutes: number }[] = [
   { label: "Workshop (90 min)", value: "Workshop", minutes: 90 },
 ];
 
-type SubmissionResult = { id: string; status: string };
+type SubmissionResult = {
+  id: string;
+  status: string;
+  draftCapability?: unknown;
+  draftRevision?: unknown;
+};
+
+type ResumeDraftResult = {
+  id: string;
+  title: string;
+  abstract: string | null;
+  format: string | null;
+  durationMinutes: number | null;
+  categoryId: string | null;
+  speakers: Speaker[];
+  answersByKey: AnswerMap;
+  draftRevision: number;
+};
+
+type BusyAction = null | "draft" | "submit" | "resume";
+type RecoveryNotice = "network" | "conflict" | "unavailable" | null;
+type RecoveryCandidate = DraftRecoveryLink | DraftRecoveryMetadata;
+type StrippedRecoveryFragment = { candidate: DraftRecoveryLink | null; safeToRequest: boolean };
+
+function isPositiveDraftRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch (error) {
+    console.error("CFP draft recovery browser storage access failed", error);
+    return null;
+  }
+}
 
 export function CfpForm({ form }: { form: PublicFormView }) {
   const [step, setStep] = useState<Step>(0);
@@ -32,9 +80,15 @@ export function CfpForm({ form }: { form: PublicFormView }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
-  const [draftId, setDraftId] = useState<string | null>(null);
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "draft" | "submit">(null);
+  const [busy, setBusy] = useState<BusyAction>(null);
+  const [recoveryNotice, setRecoveryNotice] = useState<RecoveryNotice>(null);
+  const [recoveryCandidate, setRecoveryCandidate] = useState<RecoveryCandidate | null>(null);
+  const draftRecoveryRef = useRef<DraftRecoveryMetadata | null>(null);
+  const editVersionRef = useRef(0);
+  const resumeRequestRef = useRef(0);
+  const initializedFormRef = useRef<string | null>(null);
+  const resumeRef = useRef<(candidate: RecoveryCandidate) => void>(() => {});
 
   const visibleFields = useMemo(
     () => resolveVisibleFields(form.fields, answers),
@@ -48,14 +102,229 @@ export function CfpForm({ form }: { form: PublicFormView }) {
       delete next[key];
       return next;
     });
+    markEdited();
+  }
+
+  function markEdited() {
+    editVersionRef.current += 1;
     setDraftSavedAt(null);
   }
 
+  function replaceDraftRecovery(next: DraftRecoveryMetadata | null) {
+    draftRecoveryRef.current = next;
+  }
+
+  /** Remove a capability from the address bar before any recovery API work. */
+  function stripDraftRecoveryFragment(): StrippedRecoveryFragment {
+    if (!hasDraftRecoveryHash(window.location.hash)) return { candidate: null, safeToRequest: true };
+    const candidate = parseDraftRecoveryHash(window.location.hash);
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        withoutDraftRecoveryHash(window.location.pathname, window.location.search),
+      );
+    } catch (error) {
+      console.error("CFP draft recovery history strip failed", error);
+      return { candidate: null, safeToRequest: false };
+    }
+    return {
+      candidate: hasDraftRecoveryHash(window.location.hash) ? null : candidate,
+      safeToRequest: !hasDraftRecoveryHash(window.location.hash),
+    };
+  }
+
+  /** Replace rather than push so recovery links never create history entries. */
+  function attachDraftRecoveryFragment(metadata: DraftRecoveryMetadata) {
+    try {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        `${withoutDraftRecoveryHash(window.location.pathname, window.location.search)}${draftRecoveryHash(metadata)}`,
+      );
+    } catch (error) {
+      console.error("CFP draft recovery history attach failed", error);
+      // Local storage remains the fallback when history is unavailable.
+    }
+  }
+
+  function persistDraftRecovery(metadata: DraftRecoveryMetadata) {
+    replaceDraftRecovery(metadata);
+    writeDraftRecovery(browserStorage(), metadata);
+    attachDraftRecoveryFragment(metadata);
+  }
+
+  function discardDraftRecovery() {
+    resumeRequestRef.current += 1;
+    setBusy((current) => current === "resume" ? null : current);
+    replaceDraftRecovery(null);
+    clearDraftRecovery(browserStorage(), form.id);
+    stripDraftRecoveryFragment();
+  }
+
+  function metadataForNewDraft(data: SubmissionResult): DraftRecoveryMetadata | null {
+    if (data.status !== "DRAFT" || !data.id || typeof data.draftCapability !== "string" || !isPositiveDraftRevision(data.draftRevision)) return null;
+    return {
+      version: 1,
+      formConfigId: form.id,
+      abstractId: data.id,
+      capability: data.draftCapability,
+      draftRevision: data.draftRevision,
+    };
+  }
+
+  function metadataForExistingDraft(data: SubmissionResult, current: DraftRecoveryMetadata): DraftRecoveryMetadata | null {
+    if (data.id !== current.abstractId || !isPositiveDraftRevision(data.draftRevision)) return null;
+    return { ...current, draftRevision: data.draftRevision };
+  }
+
+  function applyRecoveredDraft(data: ResumeDraftResult) {
+    setTitle(data.title);
+    setAbstract(data.abstract ?? "");
+    setFormat(FORMATS.some((entry) => entry.value === data.format) ? data.format! : FORMATS[1].value);
+    setCategoryId(data.categoryId ?? "");
+    setAnswers(data.answersByKey ?? {});
+    setSpeakers(data.speakers.length > 0 ? data.speakers : [{ name: "", email: "", isPrimary: true }]);
+    setErrors({});
+  }
+
+  function handleDraftAccessError(code: string): boolean {
+    if (code !== "DRAFT_NOT_FOUND") return false;
+    discardDraftRecovery();
+    setRecoveryCandidate(null);
+    setRecoveryNotice("unavailable");
+    return true;
+  }
+
+  function beginResume(candidate: RecoveryCandidate) {
+    // The fragment is stripped before this async request, including retry and
+    // browser history flows. The token is only ever in the JSON request body.
+    if (!stripDraftRecoveryFragment().safeToRequest) {
+      setRecoveryCandidate(candidate);
+      setRecoveryNotice("network");
+      return;
+    }
+    const request = ++resumeRequestRef.current;
+    const editVersionAtRequest = editVersionRef.current;
+    setBusy("resume");
+    setFormError(null);
+    setRecoveryNotice(null);
+    void apiPost<ResumeDraftResult>("/api/cfp/submissions/resume", {
+      formConfigId: form.id,
+      abstractId: candidate.abstractId,
+      draftCapability: candidate.capability,
+    }).then((res) => {
+      if (request !== resumeRequestRef.current) return;
+      setBusy(null);
+      if (!res.ok) {
+        if (handleDraftAccessError(res.error.code)) return;
+        setRecoveryCandidate(candidate);
+        setRecoveryNotice(res.error.code === "DRAFT_CONFLICT" ? "conflict" : "network");
+        return;
+      }
+      if (!isPositiveDraftRevision(res.data.draftRevision) || res.data.id !== candidate.abstractId) {
+        discardDraftRecovery();
+        setRecoveryCandidate(null);
+        setRecoveryNotice("unavailable");
+        return;
+      }
+      const recovered: DraftRecoveryMetadata = {
+        version: 1,
+        formConfigId: form.id,
+        abstractId: res.data.id,
+        capability: candidate.capability,
+        draftRevision: res.data.draftRevision,
+      };
+      if (!shouldApplyRecoveredDraft(editVersionAtRequest, editVersionRef.current)) {
+        // Never attach delayed recovery metadata to newer local input. Keep a
+        // separate candidate and require the submitter to explicitly reload.
+        setRecoveryCandidate(recovered);
+        setRecoveryNotice("conflict");
+        return;
+      }
+      persistDraftRecovery(recovered);
+      setRecoveryCandidate(null);
+      applyRecoveredDraft(res.data);
+      setDraftSavedAt(new Date().toLocaleTimeString());
+    });
+  }
+
+  resumeRef.current = beginResume;
+
+  // A valid hash wins over storage and is removed before the first request. A
+  // layout effect runs before browser paint, so token-bearing URLs do not sit
+  // in the visible address bar while recovery begins.
+  useLayoutEffect(() => {
+    if (initializedFormRef.current === form.id) return;
+    initializedFormRef.current = form.id;
+    const parsedFragment = parseDraftRecoveryHash(window.location.hash);
+    const stored = readDraftRecovery(browserStorage(), form.id);
+    const fragment = stripDraftRecoveryFragment();
+    const candidate = fragment.candidate ?? parsedFragment ?? stored;
+    if (!fragment.safeToRequest) {
+      setRecoveryCandidate(candidate);
+      setRecoveryNotice("network");
+      return;
+    }
+    if (candidate) resumeRef.current(candidate);
+  }, [form.id]);
+
+  // Back/forward and pasted recovery URLs follow the same consume-and-strip
+  // path. A storage event only signals a competing tab; it never overwrites
+  // the form the submitter is actively editing.
+  useEffect(() => {
+    const resumeFromFragment = () => {
+      const recoveryHashSeen = hasDraftRecoveryHash(window.location.hash);
+      const parsedFragment = parseDraftRecoveryHash(window.location.hash);
+      const stored = readDraftRecovery(browserStorage(), form.id);
+      const fragment = stripDraftRecoveryFragment();
+      const candidate = fragment.candidate ?? parsedFragment ?? stored;
+      if (!fragment.safeToRequest) {
+        setRecoveryCandidate(candidate);
+        setRecoveryNotice("network");
+        return;
+      }
+      if (candidate && recoveryHashSeen) resumeRef.current(candidate);
+    };
+    const noteStorageChange = (event: StorageEvent) => {
+      if (event.key !== draftRecoveryStorageKey(form.id)) return;
+      const next = readDraftRecovery(browserStorage(), form.id);
+      const current = draftRecoveryRef.current;
+      if (
+        next
+        && (!current || next.abstractId !== current.abstractId || next.draftRevision > current.draftRevision)
+      ) {
+        setRecoveryCandidate(next);
+        setRecoveryNotice("conflict");
+      }
+      if (!next && current) {
+        // Another tab submitted or discarded this recovery token. Retain all
+        // visible values, but do not let this tab send the now-revoked token.
+        discardDraftRecovery();
+        setRecoveryCandidate(null);
+        setRecoveryNotice("unavailable");
+      }
+    };
+    window.addEventListener("hashchange", resumeFromFragment);
+    window.addEventListener("popstate", resumeFromFragment);
+    window.addEventListener("storage", noteStorageChange);
+    return () => {
+      window.removeEventListener("hashchange", resumeFromFragment);
+      window.removeEventListener("popstate", resumeFromFragment);
+      window.removeEventListener("storage", noteStorageChange);
+    };
+  }, [form.id]);
+
   function buildPayload(intent: "saveDraft" | "submit") {
     const chosen = FORMATS.find((f) => f.value === format);
+    const currentDraft = draftRecoveryRef.current;
     return {
       formConfigId: form.id,
-      abstractId: draftId ?? undefined,
+      ...(currentDraft ? {
+        abstractId: currentDraft.abstractId,
+        draftCapability: currentDraft.capability,
+        expectedDraftRevision: currentDraft.draftRevision,
+      } : {}),
       title: title.trim(),
       abstract: abstract.trim() || undefined,
       format: chosen?.value,
@@ -114,16 +383,37 @@ export function CfpForm({ form }: { form: PublicFormView }) {
       setStep(2);
       return;
     }
+    const editVersionAtRequest = editVersionRef.current;
+    if (!stripDraftRecoveryFragment().safeToRequest) {
+      setFormError("Could not securely prepare this saved draft. Refresh the page and try again.");
+      return;
+    }
     setBusy("draft");
     const res = await apiPost<SubmissionResult>("/api/cfp/submissions", buildPayload("saveDraft"));
     setBusy(null);
     if (!res.ok) {
+      if (handleDraftAccessError(res.error.code)) return;
+      if (res.error.code === "DRAFT_CONFLICT") {
+        setRecoveryCandidate(draftRecoveryRef.current);
+        setRecoveryNotice("conflict");
+        return;
+      }
       setFormError(res.error.message);
       setErrors(firstFieldErrors(res.error.fieldErrors));
       return;
     }
-    setDraftId(res.data.id);
-    setDraftSavedAt(new Date().toLocaleTimeString());
+    const current = draftRecoveryRef.current;
+    const nextDraft = current ? metadataForExistingDraft(res.data, current) : metadataForNewDraft(res.data);
+    if (!nextDraft) {
+      setFormError("Draft recovery could not be set up. Keep this page open while you finish your submission.");
+      return;
+    }
+    persistDraftRecovery(nextDraft);
+    setRecoveryCandidate(null);
+    setRecoveryNotice(null);
+    if (shouldApplyRecoveredDraft(editVersionAtRequest, editVersionRef.current)) {
+      setDraftSavedAt(new Date().toLocaleTimeString());
+    }
   }
 
   async function submit() {
@@ -136,10 +426,20 @@ export function CfpForm({ form }: { form: PublicFormView }) {
       setStep(2);
       return;
     }
+    if (!stripDraftRecoveryFragment().safeToRequest) {
+      setFormError("Could not securely prepare this saved draft. Refresh the page and try again.");
+      return;
+    }
     setBusy("submit");
     const res = await apiPost<SubmissionResult>("/api/cfp/submissions", buildPayload("submit"));
     setBusy(null);
     if (!res.ok) {
+      if (handleDraftAccessError(res.error.code)) return;
+      if (res.error.code === "DRAFT_CONFLICT") {
+        setRecoveryCandidate(draftRecoveryRef.current);
+        setRecoveryNotice("conflict");
+        return;
+      }
       setFormError(res.error.message);
       const mapped = firstFieldErrors(res.error.fieldErrors);
       setErrors(mapped);
@@ -148,6 +448,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
       else if (Object.keys(mapped).length > 0) setStep(1);
       return;
     }
+    discardDraftRecovery();
     setSubmitted(true);
   }
 
@@ -180,6 +481,37 @@ export function CfpForm({ form }: { form: PublicFormView }) {
       </div>
 
       {formError ? <div className="conflict-banner" style={{ marginBottom: 16 }} role="alert">{formError}</div> : null}
+
+      {busy === "resume" ? <p className="hint" role="status" aria-live="polite">Restoring saved draft…</p> : null}
+
+      {recoveryNotice ? (
+        <section className="conflict-banner" style={{ marginBottom: 16 }} role="alert" aria-labelledby="cfp-recovery-title">
+          <h2 id="cfp-recovery-title" style={{ fontSize: "1rem", margin: 0 }}>
+            {recoveryNotice === "network"
+              ? "Couldn’t restore your saved draft"
+              : recoveryNotice === "conflict"
+                ? "Your saved draft changed elsewhere"
+                : "This saved draft is no longer available"}
+          </h2>
+          <p style={{ marginBottom: recoveryNotice === "unavailable" ? 0 : 10 }}>
+            {recoveryNotice === "network"
+              ? "Your current form entries are still here. Check your connection and try restoring the saved draft again."
+              : recoveryNotice === "conflict"
+                ? "Your current form entries are still here. Reload only when you are ready to replace them with the saved draft."
+                : "Your current form entries are still here. You can keep editing and save a new draft."}
+          </p>
+          {recoveryNotice === "network" && recoveryCandidate ? (
+            <button className="ghost-button" type="button" onClick={() => resumeRef.current(recoveryCandidate)} disabled={busy !== null}>
+              {busy === "resume" ? "Restoring…" : "Retry restoring draft"}
+            </button>
+          ) : null}
+          {recoveryNotice === "conflict" && recoveryCandidate ? (
+            <button className="ghost-button" type="button" onClick={() => resumeRef.current(recoveryCandidate)} disabled={busy !== null}>
+              {busy === "resume" ? "Reloading…" : "Reload saved draft"}
+            </button>
+          ) : null}
+        </section>
+      ) : null}
 
       {step === 0 && (
         <div>
@@ -225,6 +557,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
               onChange={(e) => {
                 setTitle(e.target.value);
                 setErrors((x) => ({ ...x, title: "" }));
+                markEdited();
               }}
             />
             {errors.title ? <p className="field-error" id="cfp-title-err">{errors.title}</p> : null}
@@ -233,12 +566,12 @@ export function CfpForm({ form }: { form: PublicFormView }) {
           <div className="cfp-field">
             <label className="field-label" htmlFor="cfp-abstract">Abstract</label>
             <p className="hint" id="cfp-abstract-help">What will attendees learn? 150–300 words works well.</p>
-            <textarea id="cfp-abstract" className="text-input" rows={6} value={abstract} aria-describedby="cfp-abstract-help" onChange={(e) => setAbstract(e.target.value)} />
+            <textarea id="cfp-abstract" className="text-input" rows={6} value={abstract} aria-describedby="cfp-abstract-help" onChange={(e) => { setAbstract(e.target.value); markEdited(); }} />
           </div>
 
           <div className="cfp-field">
             <label className="field-label" htmlFor="cfp-format">Session format</label>
-            <select id="cfp-format" className="select-input" value={format} onChange={(e) => setFormat(e.target.value)}>
+            <select id="cfp-format" className="select-input" value={format} onChange={(e) => { setFormat(e.target.value); markEdited(); }}>
               {FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
           </div>
@@ -247,7 +580,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
             <div className="cfp-field">
               <label className="field-label" htmlFor="cfp-category">Topic category</label>
               <p className="hint" id="cfp-category-help">Routes your proposal to the right review team.</p>
-              <select id="cfp-category" className="select-input" value={categoryId} aria-describedby="cfp-category-help" onChange={(e) => setCategoryId(e.target.value)}>
+              <select id="cfp-category" className="select-input" value={categoryId} aria-describedby="cfp-category-help" onChange={(e) => { setCategoryId(e.target.value); markEdited(); }}>
                 <option value="">Select…</option>
                 {form.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -288,21 +621,21 @@ export function CfpForm({ form }: { form: PublicFormView }) {
             <div className="speaker-row" key={i}>
               <label className="stack">
                 <span className="field-label">Full name {i === 0 ? "(primary)" : ""}</span>
-                <input className="text-input" value={sp.name} aria-invalid={!!errors[`sp_name_${i}`]} onChange={(e) => setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                <input className="text-input" value={sp.name} aria-invalid={!!errors[`sp_name_${i}`]} onChange={(e) => { setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, name: e.target.value } : x))); markEdited(); }} />
                 {errors[`sp_name_${i}`] ? <span className="field-error">{errors[`sp_name_${i}`]}</span> : null}
               </label>
               <label className="stack">
                 <span className="field-label">Email</span>
-                <input className="text-input" type="email" value={sp.email} aria-invalid={!!errors[`sp_email_${i}`]} onChange={(e) => setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, email: e.target.value } : x)))} />
+                <input className="text-input" type="email" value={sp.email} aria-invalid={!!errors[`sp_email_${i}`]} onChange={(e) => { setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, email: e.target.value } : x))); markEdited(); }} />
                 {errors[`sp_email_${i}`] ? <span className="field-error">{errors[`sp_email_${i}`]}</span> : null}
               </label>
-              <button type="button" className="ghost-button danger-button" aria-label="Remove speaker" disabled={i === 0} onClick={() => setSpeakers((s) => s.filter((_, j) => j !== i))}>
+              <button type="button" className="ghost-button danger-button" aria-label="Remove speaker" disabled={i === 0} onClick={() => { setSpeakers((s) => s.filter((_, j) => j !== i)); markEdited(); }}>
                 <Trash2 size={15} />
               </button>
             </div>
           ))}
           {speakers.length < form.maxSpeakers && (
-            <button className="ghost-button" type="button" onClick={() => setSpeakers((s) => [...s, { name: "", email: "", isPrimary: false }])}>
+            <button className="ghost-button" type="button" onClick={() => { setSpeakers((s) => [...s, { name: "", email: "", isPrimary: false }]); markEdited(); }}>
               <Plus size={15} /> Add co-speaker
             </button>
           )}

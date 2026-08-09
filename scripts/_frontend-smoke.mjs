@@ -56,7 +56,7 @@ async function req(method, path, body, sess) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = text; }
-  return { status: res.status, data, text };
+  return { status: res.status, data, text, headers: res.headers };
 }
 
 async function reqManual(path, sess) {
@@ -584,10 +584,13 @@ try {
   // pre-checks slugs client-side. Backend: a 409 FORM_SLUG_TAKEN would be nicer.
   console.log(`  note duplicate-slug response: ${duplicate.status} ${duplicate.data?.error?.code ?? "?"}`);
 
-  // --- mutation 2: CFP draft then submit ---
-  const draft = await req("POST", "/api/cfp/submissions", {
+  // --- S7: resumable CFP draft capability and revision flow ---------------
+  // This mirrors the public form's body-only recovery contract. The raw
+  // capability appears exactly once at draft creation, then stays local to the
+  // browser/recovery body while revisions advance.
+  const recoveryDraftInput = {
     formConfigId: fx.form.id,
-    title: "Smoke draft proposal",
+    title: "Smoke recovery draft",
     abstract: "Draft body",
     format: "Talk",
     durationMinutes: 30,
@@ -595,13 +598,90 @@ try {
     speakers: [{ email: "smoke.speaker@example.com", name: "Smoke Speaker", isPrimary: true }],
     answers: { audience_level: "beginner", learning_objectives: "" },
     intent: "saveDraft",
-  }, null);
-  check("CFP save draft → 201", draft.status === 201, `${draft.status} ${JSON.stringify(draft.data?.error ?? "")}`);
-  check("draft has DRAFT status", draft.data?.data?.status === "DRAFT");
+  };
+  const draft = await req("POST", "/api/cfp/submissions", recoveryDraftInput, null);
+  const draftId = draft.data?.data?.id;
+  const draftCapability = draft.data?.data?.draftCapability;
+  check("S7 CFP save draft issues one capability at revision 1 → 201",
+    draft.status === 201
+      && draft.data?.data?.status === "DRAFT"
+      && typeof draftCapability === "string"
+      && /^[A-Za-z0-9_-]{43}$/.test(draftCapability)
+      && draft.data?.data?.draftRevision === 1,
+    `${draft.status}/${typeof draftCapability}/${draft.data?.data?.draftRevision}`);
 
+  const resume = await req("POST", "/api/cfp/submissions/resume", {
+    formConfigId: fx.form.id, abstractId: draftId, draftCapability,
+  }, null);
+  check("S7 body-only resume is no-store and returns editable draft state",
+    resume.status === 200
+      && resume.headers.get("cache-control") === "no-store"
+      && resume.data?.data?.id === draftId
+      && resume.data?.data?.draftRevision === 1
+      && resume.data?.data?.title === recoveryDraftInput.title,
+    `${resume.status}/${resume.headers.get("cache-control") ?? "none"}`);
+
+  const savedDraft = await req("POST", "/api/cfp/submissions", {
+    ...recoveryDraftInput,
+    abstractId: draftId,
+    draftCapability,
+    expectedDraftRevision: 1,
+    title: "Smoke recovery draft, saved",
+  }, null);
+  check("S7 save advances revision without reissuing the capability",
+    savedDraft.status === 200
+      && savedDraft.data?.data?.draftRevision === 2
+      && !("draftCapability" in (savedDraft.data?.data ?? {})),
+    `${savedDraft.status}/${savedDraft.data?.data?.draftRevision}`);
+
+  const invalidResume = await req("POST", "/api/cfp/submissions/resume", {
+    formConfigId: fx.form.id, abstractId: draftId, draftCapability: "x".repeat(43),
+  }, null);
+  const crossFormResume = await req("POST", "/api/cfp/submissions/resume", {
+    formConfigId: newFormId, abstractId: draftId, draftCapability,
+  }, null);
+  const staleSave = await req("POST", "/api/cfp/submissions", {
+    ...recoveryDraftInput,
+    abstractId: draftId,
+    draftCapability,
+    expectedDraftRevision: 1,
+  }, null);
+  check("S7 invalid and cross-form resume fail closed with one generic 404",
+    invalidResume.status === 404 && invalidResume.data?.error?.code === "DRAFT_NOT_FOUND"
+      && crossFormResume.status === 404 && crossFormResume.data?.error?.code === "DRAFT_NOT_FOUND",
+    `${invalidResume.status}/${crossFormResume.status}`);
+  check("S7 stale revision returns 409 for an explicit reload choice",
+    staleSave.status === 409 && staleSave.data?.error?.code === "DRAFT_CONFLICT",
+    `${staleSave.status}/${staleSave.data?.error?.code ?? ""}`);
+
+  const recoveredSubmit = await req("POST", "/api/cfp/submissions", {
+    ...recoveryDraftInput,
+    abstractId: draftId,
+    draftCapability,
+    expectedDraftRevision: 2,
+    title: "Smoke recovered submission",
+    abstract: "Full body",
+    speakers: [
+      { email: "smoke.speaker@example.com", name: "Smoke Speaker", isPrimary: true },
+      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false },
+    ],
+    answers: { audience_level: "beginner", learning_objectives: "Three takeaways." },
+    intent: "submit",
+  }, null);
+  const revokedResume = await req("POST", "/api/cfp/submissions/resume", {
+    formConfigId: fx.form.id, abstractId: draftId, draftCapability,
+  }, null);
+  check("S7 submit revokes recovery and a replay is unavailable",
+    recoveredSubmit.status === 200
+      && recoveredSubmit.data?.data?.status === "SUBMITTED"
+      && !("draftCapability" in (recoveredSubmit.data?.data ?? {}))
+      && revokedResume.status === 404
+      && revokedResume.data?.error?.code === "DRAFT_NOT_FOUND",
+    `${recoveredSubmit.status}/${revokedResume.status}`);
+
+  // Existing direct public submit remains a capability-free golden path.
   const submit = await req("POST", "/api/cfp/submissions", {
     formConfigId: fx.form.id,
-    abstractId: draft.data?.data?.id,
     title: "Smoke submitted proposal",
     abstract: "Full body",
     format: "Talk",
@@ -614,7 +694,7 @@ try {
     answers: { audience_level: "beginner", learning_objectives: "Three takeaways." },
     intent: "submit",
   }, null);
-  check("CFP submit → 200", submit.status === 200, `${submit.status} ${JSON.stringify(submit.data?.error ?? "")}`);
+  check("CFP direct submit remains capability-free → 201", submit.status === 201, `${submit.status} ${JSON.stringify(submit.data?.error ?? "")}`);
   check("submitted abstract has SUBMITTED status", submit.data?.data?.status === "SUBMITTED");
   check("co-speaker upserted by email", (submit.data?.data?.speakers ?? []).length === 2);
 
