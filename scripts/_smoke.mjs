@@ -85,6 +85,12 @@ function publicSubmissionRateFingerprint(domain, value) {
     .digest("hex");
 }
 
+function publicDraftCapabilityHash(capability) {
+  return createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:cfp-draft-capability:v1:${capability}`)
+    .digest("hex");
+}
+
 const j = async (method, path, body, sess, extraHeaders = {}, { signal } = {}) => {
   const res = await fetch(BASE + path, {
     method,
@@ -94,7 +100,7 @@ const j = async (method, path, body, sess, extraHeaders = {}, { signal } = {}) =
   });
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
-  return { status: res.status, data };
+  return { status: res.status, data, headers: res.headers };
 };
 
 const v1 = async (path) => {
@@ -146,6 +152,22 @@ function stopServer() {
 
 function cleanup() {
   cleanupPromise ??= (async () => {
+    try {
+      await prisma.publicSubmissionRateBucket.deleteMany({
+        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+      });
+      const remainingRateBuckets = await prisma.publicSubmissionRateBucket.count({
+        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+      });
+      check(
+        "scratch-owned public rate buckets are cleared at final teardown",
+        remainingRateBuckets === 0,
+        remainingRateBuckets,
+      );
+    } catch (error) {
+      cleanupFailed = true;
+      console.error("[smoke] scratch rate-bucket cleanup failed", error);
+    }
     await prisma.$disconnect().catch((error) => {
       cleanupFailed = true;
       console.error("[smoke] Prisma cleanup failed", error);
@@ -339,6 +361,13 @@ try {
   const publicCoreCounts = async () => ({
     users: await prisma.user.count(),
     abstracts: await prisma.abstract.count({ where: { eventId: SCRATCH_EVENT.id } }),
+    dispatches: await prisma.emailDispatch.count(),
+  });
+  const publicDraftCoreCounts = async () => ({
+    users: await prisma.user.count(),
+    abstracts: await prisma.abstract.count({ where: { eventId: SCRATCH_EVENT.id } }),
+    roster: await prisma.abstractSpeaker.count({ where: { abstract: { eventId: SCRATCH_EVENT.id } } }),
+    answers: await prisma.formAnswer.count({ where: { abstract: { eventId: SCRATCH_EVENT.id } } }),
     dispatches: await prisma.emailDispatch.count(),
   });
   const oversizeBefore = await publicCoreCounts();
@@ -849,7 +878,12 @@ try {
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
     answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
-  check("valid submit", sub.status === 201 && sub.data?.data?.status === "SUBMITTED", sub.status);
+  check(
+    "valid direct new submit remains compatible without a draft capability",
+    sub.status === 201 && sub.data?.data?.status === "SUBMITTED" &&
+      !Object.hasOwn(sub.data?.data ?? {}, "draftCapability") && !Object.hasOwn(sub.data?.data ?? {}, "draftRevision"),
+    sub.status,
+  );
   const abstractId = sub.data?.data?.id;
   check("co-speaker upserted by email", sub.data?.data?.speakers?.length === 2);
   const submissionDispatches = await prisma.emailDispatch.findMany({
@@ -866,6 +900,270 @@ try {
   check(
     "O2 smoke delivery is mocked before any provider call",
     submissionDispatches.every((row) => row.status === "mocked" && row.providerId?.startsWith("mock:")),
+  );
+
+  // S17/S7: a brand-new anonymous draft emits one browser capability, while
+  // the database receives only its domain-separated HMAC. Every later write
+  // proves the capability/revision under LOCK-ORDER-v1 before any User,
+  // roster, answer, or receipt mutation.
+  const s17DraftInput = {
+    formConfigId: formId,
+    title: "S17 resumable draft",
+    abstract: "Scratch-only capability recovery",
+    speakers: [{ email: "s17-draft@scratch.test", name: "S17 Draft", isPrimary: true }],
+    answers: { title_note: "draft", consent: true },
+    intent: "saveDraft",
+  };
+  const s17Create = await j("POST", "/api/cfp/submissions", s17DraftInput);
+  const s17DraftId = s17Create.data?.data?.id;
+  const s17Capability = s17Create.data?.data?.draftCapability;
+  const s17Created = s17DraftId
+    ? await prisma.abstract.findUnique({
+      where: { id: s17DraftId },
+      select: { id: true, submitterId: true, status: true, draftCapabilityHash: true, draftRevision: true },
+    })
+    : null;
+  const s17CapabilityOccurrences = typeof s17Capability === "string"
+    ? JSON.stringify(s17Create.data).split(s17Capability).length - 1
+    : 0;
+  check(
+    "S17 new DRAFT emits one 43-character capability and persists only its 64-hex HMAC at revision 1",
+    s17Create.status === 201 && typeof s17Capability === "string" && /^[A-Za-z0-9_-]{43}$/.test(s17Capability) &&
+      s17CapabilityOccurrences === 1 && s17Created?.status === "DRAFT" && s17Created.draftRevision === 1 &&
+      s17Created.draftCapabilityHash === publicDraftCapabilityHash(s17Capability) &&
+      /^[a-f0-9]{64}$/.test(s17Created.draftCapabilityHash ?? "") && !s17Created.draftCapabilityHash?.includes(s17Capability),
+    `${s17Create.status}/${typeof s17Capability}/${s17Created?.draftRevision}/${s17CapabilityOccurrences}`,
+  );
+
+  const s17Resume = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId: s17DraftId, draftCapability: s17Capability,
+  });
+  const s17ResumeKeys = Object.keys(s17Resume.data?.data ?? {}).sort();
+  const s17ResumeSpeakerKeys = Object.keys(s17Resume.data?.data?.speakers?.[0] ?? {}).sort();
+  check(
+    "S17 resume is no-store and returns only narrow editable state plus revision",
+    s17Resume.status === 200 && s17Resume.headers.get("cache-control") === "no-store" &&
+      JSON.stringify(s17ResumeKeys) === JSON.stringify([
+        "abstract", "answersByKey", "categoryId", "draftRevision", "durationMinutes", "format", "id", "speakers", "title",
+      ]) &&
+      JSON.stringify(s17ResumeSpeakerKeys) === JSON.stringify(["email", "isPrimary", "name"]) &&
+      s17Resume.data?.data?.answersByKey?.title_note === "draft" && s17Resume.data?.data?.draftRevision === 1,
+    `${s17Resume.status}/${s17Resume.headers.get("cache-control")}/${JSON.stringify(s17ResumeKeys)}`,
+  );
+
+  const s17Save = await j("POST", "/api/cfp/submissions", {
+    ...s17DraftInput,
+    abstractId: s17DraftId,
+    draftCapability: s17Capability,
+    expectedDraftRevision: 1,
+    title: "S17 saved draft",
+  });
+  const s17Saved = s17DraftId
+    ? await prisma.abstract.findUnique({ where: { id: s17DraftId }, select: { draftRevision: true, draftCapabilityHash: true } })
+    : null;
+  check(
+    "S17 valid draft save advances revision 1 to 2 without reissuing the capability",
+    s17Save.status === 200 && s17Save.data?.data?.draftRevision === 2 &&
+      !Object.hasOwn(s17Save.data?.data ?? {}, "draftCapability") && s17Saved?.draftRevision === 2 &&
+      s17Saved.draftCapabilityHash === publicDraftCapabilityHash(s17Capability ?? ""),
+    `${s17Save.status}/${s17Save.data?.data?.draftRevision}/${Object.hasOwn(s17Save.data?.data ?? {}, "draftCapability")}`,
+  );
+
+  const s17NoWriteBeforeFailures = await publicDraftCoreCounts();
+  const s17ExistingDraftInput = {
+    ...s17DraftInput,
+    abstractId: s17DraftId,
+    expectedDraftRevision: 2,
+  };
+  const s17CapabilityFailures = [];
+  for (const draftCapability of [undefined, "", "x".repeat(129), { wrong: true }, "B".repeat(43)]) {
+    s17CapabilityFailures.push(await j("POST", "/api/cfp/submissions", {
+      ...s17ExistingDraftInput,
+      ...(draftCapability === undefined ? {} : { draftCapability }),
+    }));
+  }
+  const s17CrossForm = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, formConfigId: s19ClosedForm.id, draftCapability: s17Capability,
+  });
+  const s17StaleRevision = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, draftCapability: s17Capability, expectedDraftRevision: 0,
+  });
+  const s17NoWriteAfterFailures = await publicDraftCoreCounts();
+  const isDraftNotFound = (response) => response.status === 404 && response.data?.error?.code === "DRAFT_NOT_FOUND";
+  check(
+    "S17 missing, empty, oversize, wrong-type, wrong, and cross-form capabilities are one generic no-write 404",
+    s17CapabilityFailures.every(isDraftNotFound) && isDraftNotFound(s17CrossForm) &&
+      JSON.stringify(s17NoWriteAfterFailures) === JSON.stringify(s17NoWriteBeforeFailures),
+    `${s17CapabilityFailures.map((response) => response.status).join(",")}/${s17CrossForm.status}/${JSON.stringify(s17NoWriteAfterFailures)}`,
+  );
+  check(
+    "S17 a valid capability with stale revision 0 returns 409 without writes",
+    s17StaleRevision.status === 409 && s17StaleRevision.data?.error?.code === "DRAFT_CONFLICT" &&
+      JSON.stringify(s17NoWriteAfterFailures) === JSON.stringify(s17NoWriteBeforeFailures),
+    `${s17StaleRevision.status}/${s17StaleRevision.data?.error?.code}`,
+  );
+
+  const s17LegacyDraft = s17Created
+    ? await prisma.abstract.create({
+      data: {
+        eventId: SCRATCH_EVENT.id, formConfigId: formId, submitterId: s17Created.submitterId,
+        title: "S17 legacy capability-less draft", status: "DRAFT", draftRevision: 0, draftCapabilityHash: null,
+      },
+      select: { id: true },
+    })
+    : null;
+  const s17NoWriteBeforeLegacyFailures = await publicDraftCoreCounts();
+  const s17NonDraft = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, abstractId, draftCapability: s17Capability,
+  });
+  const s17Legacy = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, abstractId: s17LegacyDraft?.id, draftCapability: s17Capability, expectedDraftRevision: 0,
+  });
+  const s17NoWriteAfterLegacyFailures = await publicDraftCoreCounts();
+  check(
+    "S17 non-DRAFT and legacy-null capabilities are generic no-write 404 responses",
+    isDraftNotFound(s17NonDraft) && isDraftNotFound(s17Legacy) &&
+      JSON.stringify(s17NoWriteAfterLegacyFailures) === JSON.stringify(s17NoWriteBeforeLegacyFailures),
+    `${s17NonDraft.status}/${s17Legacy.status}/${JSON.stringify(s17NoWriteAfterLegacyFailures)}`,
+  );
+
+  const s17ResumeNoWriteBefore = await publicDraftCoreCounts();
+  const s17ResumeFailures = [];
+  for (const draftCapability of [undefined, "", "C".repeat(43), { wrong: true }]) {
+    s17ResumeFailures.push(await j("POST", "/api/cfp/submissions/resume", {
+      formConfigId: formId,
+      abstractId: s17DraftId,
+      ...(draftCapability === undefined ? {} : { draftCapability }),
+    }));
+  }
+  const s17ResumeCrossForm = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: s19ClosedForm.id, abstractId: s17DraftId, draftCapability: s17Capability,
+  });
+  const s17ResumeNonDraft = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId, draftCapability: s17Capability,
+  });
+  const s17ResumeLegacy = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId: s17LegacyDraft?.id, draftCapability: s17Capability,
+  });
+  const s17ResumeNoWriteAfter = await publicDraftCoreCounts();
+  check(
+    "S17 resume missing, empty, wrong, wrong-type, cross-form, non-DRAFT, and legacy-null paths are generic no-write 404s",
+    s17ResumeFailures.every(isDraftNotFound) && isDraftNotFound(s17ResumeCrossForm) &&
+      isDraftNotFound(s17ResumeNonDraft) && isDraftNotFound(s17ResumeLegacy) &&
+      JSON.stringify(s17ResumeNoWriteAfter) === JSON.stringify(s17ResumeNoWriteBefore),
+    `${s17ResumeFailures.map((response) => response.status).join(",")}/${s17ResumeCrossForm.status}/${s17ResumeNonDraft.status}/${s17ResumeLegacy.status}`,
+  );
+
+  // Hold the final class, turn the draft terminal, then release the waiting
+  // public writer. Its fresh post-lock read must refuse without any mutation.
+  const s17ContentionCreate = await j("POST", "/api/cfp/submissions", {
+    ...s17DraftInput,
+    title: "S17 contention draft",
+    speakers: [{ email: "s17-contention@scratch.test", name: "S17 Contention", isPrimary: true }],
+  });
+  const s17ContentionId = s17ContentionCreate.data?.data?.id;
+  const s17ContentionCapability = s17ContentionCreate.data?.data?.draftCapability;
+  let signalS17AbstractLock;
+  let releaseS17AbstractLock;
+  const s17AbstractLockHeld = new Promise((resolve) => { signalS17AbstractLock = resolve; });
+  const s17AbstractLockRelease = new Promise((resolve) => { releaseS17AbstractLock = resolve; });
+  const s17AbstractHolder = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${s17ContentionId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    signalS17AbstractLock();
+    await s17AbstractLockRelease;
+    await tx.abstract.update({
+      where: { id: s17ContentionId },
+      data: { status: "SUBMITTED", submittedAt: new Date(), draftCapabilityHash: null },
+    });
+  });
+  await s17AbstractLockHeld;
+  const pendingAdvisoryLocks = async () => {
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count" FROM pg_locks WHERE locktype = 'advisory' AND NOT granted
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const s17PendingBaseline = await pendingAdvisoryLocks();
+  const s17ContentionAbort = new AbortController();
+  const s17WaitingWriter = j("POST", "/api/cfp/submissions", {
+    ...s17DraftInput,
+    abstractId: s17ContentionId,
+    draftCapability: s17ContentionCapability,
+    expectedDraftRevision: 1,
+    title: "S17 stale contention overwrite",
+  }, undefined, {}, { signal: s17ContentionAbort.signal });
+  let s17ObservedWait = false;
+  let s17WaitingObservation;
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await pendingAdvisoryLocks() > s17PendingBaseline) {
+        s17ObservedWait = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    releaseS17AbstractLock();
+    await s17AbstractHolder;
+    s17WaitingObservation = await observeBeforeDeadline(s17WaitingWriter, 5_000);
+  } finally {
+    if (!s17WaitingObservation?.completed) s17ContentionAbort.abort();
+    releaseS17AbstractLock();
+    await s17AbstractHolder.catch(() => {});
+  }
+  const s17ContentionAfter = s17ContentionId
+    ? await prisma.abstract.findUnique({
+      where: { id: s17ContentionId },
+      include: { speakers: true, answers: true },
+    })
+    : null;
+  check(
+    "S17 held Abstract writer waits, re-reads terminal state, and leaves roster/answers/revision unchanged",
+    s17ContentionCreate.status === 201 && s17ObservedWait && s17WaitingObservation?.completed &&
+      !s17WaitingObservation.error && isDraftNotFound(s17WaitingObservation.value) &&
+      s17ContentionAfter?.status === "SUBMITTED" && s17ContentionAfter.draftCapabilityHash === null &&
+      s17ContentionAfter.draftRevision === 1 && s17ContentionAfter.title === "S17 contention draft" &&
+      s17ContentionAfter.speakers.length === 1 && s17ContentionAfter.answers.length === 2,
+    `${s17ContentionCreate.status}/${s17ObservedWait}/${s17WaitingObservation?.completed}/${s17WaitingObservation?.value?.status}/${s17ContentionAfter?.status}`,
+  );
+
+  const s17DispatchesBeforeSubmit = await prisma.emailDispatch.count({ where: { templateId: commsTemplate.id } });
+  const s17Submit = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, draftCapability: s17Capability, expectedDraftRevision: 2, intent: "submit",
+  });
+  const s17AfterSubmit = s17DraftId
+    ? await prisma.abstract.findUnique({ where: { id: s17DraftId }, select: { status: true, draftCapabilityHash: true, draftRevision: true } })
+    : null;
+  const s17DispatchesAfterSubmit = await prisma.emailDispatch.findMany({
+    where: { templateId: commsTemplate.id }, select: { recipient: true }, orderBy: { id: "asc" },
+  });
+  const s17ReplayCoreBefore = await publicDraftCoreCounts();
+  const s17Replay = await j("POST", "/api/cfp/submissions", {
+    ...s17ExistingDraftInput, draftCapability: s17Capability, expectedDraftRevision: 3, intent: "submit",
+  });
+  const s17ReplayCoreAfter = await publicDraftCoreCounts();
+  check(
+    "S17 existing submit atomically revokes its capability and emits one receipt only on the real transition",
+    s17Submit.status === 200 && s17AfterSubmit?.status === "SUBMITTED" && s17AfterSubmit.draftCapabilityHash === null &&
+      s17AfterSubmit.draftRevision === 3 && !Object.hasOwn(s17Submit.data?.data ?? {}, "draftCapability") &&
+      s17DispatchesAfterSubmit.length === s17DispatchesBeforeSubmit + 1 &&
+      s17DispatchesAfterSubmit.filter((row) => row.recipient === "s17-draft@scratch.test").length === 1,
+    `${s17Submit.status}/${s17AfterSubmit?.draftRevision}/${s17DispatchesBeforeSubmit}->${s17DispatchesAfterSubmit.length}`,
+  );
+  check(
+    "S17 revoked-capability replay is generic 404 and cannot duplicate the receipt or core writes",
+    isDraftNotFound(s17Replay) && JSON.stringify(s17ReplayCoreAfter) === JSON.stringify(s17ReplayCoreBefore),
+    `${s17Replay.status}/${JSON.stringify(s17ReplayCoreAfter)}`,
+  );
+  const s17ResumeRevokedBefore = await publicDraftCoreCounts();
+  const s17ResumeRevoked = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId: s17DraftId, draftCapability: s17Capability,
+  });
+  const s17ResumeRevokedAfter = await publicDraftCoreCounts();
+  check(
+    "S17 resume after an actual submit sees a revoked capability as the same no-write 404",
+    isDraftNotFound(s17ResumeRevoked) && JSON.stringify(s17ResumeRevokedAfter) === JSON.stringify(s17ResumeRevokedBefore),
+    `${s17ResumeRevoked.status}/${JSON.stringify(s17ResumeRevokedAfter)}`,
   );
 
   // 5. Admin lists abstracts
@@ -1914,7 +2212,10 @@ try {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
     signalS16AbstractLock();
     await s16AbstractLockRelease;
-  });
+  // The 5-second observation below remains the regression boundary. This
+  // deliberately held fixture transaction needs only enough headroom to let
+  // its finally release/commit survive host scheduling jitter.
+  }, { timeout: 15_000 });
   await s16AbstractLockHeld;
   const s16OrderLockBaseline = {
     baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
@@ -2133,15 +2434,15 @@ try {
   }, speaker);
   check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
 
-  // Regression guard: an anonymous edit remains refused. The S20 window gate
-  // now correctly wins once a form is closed, before the draft-status check.
+  // Regression guard: capability/DRAFT authorization precedes window policy,
+  // so a cap-less anonymous edit never learns whether this form is closed.
   const publicOverwrite = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, abstractId: r1Id, title: "Anonymous overwrite",
     speakers: [{ email: "attacker@scratch.test", name: "Attacker", isPrimary: true }],
     answers: {}, intent: "saveDraft",
   });
-  check("R1 public path still refuses an anonymous edit after the form closes",
-    publicOverwrite.status === 422 && publicOverwrite.data?.error?.code === "FORM_CLOSED",
+  check("R1 cap-less anonymous edit after close stays the generic draft 404",
+    publicOverwrite.status === 404 && publicOverwrite.data?.error?.code === "DRAFT_NOT_FOUND",
     publicOverwrite.data?.error?.code);
 
   // 22. W1 — speaker self-withdraw, and the states it makes reachable for the
@@ -2291,8 +2592,8 @@ try {
   fatalError = true;
   console.error("SMOKE ERROR", e);
 } finally {
+  await cleanup();
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
-  await cleanup();
   process.exit(fatalError || failed.length || cleanupFailed ? 1 : 0);
 }

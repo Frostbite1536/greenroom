@@ -219,11 +219,20 @@ const publicSpeakerInputSchema = z
     });
   });
 
+// Parsing stays deliberately broad and body-size bounded. An absent,
+// malformed, or wrong capability is normalized by the route to generic
+// DRAFT_NOT_FOUND so this anonymous endpoint never becomes a capability
+// oracle. The capability helper accepts only the exact 256-bit base64url form.
+const draftCapabilitySchema = z.unknown().optional();
+const draftRevisionSchema = z.number().int().min(0).max(2_147_483_647);
+
 /** Strict, bounded body contract for anonymous draft and submit writes. */
 export const publicAbstractUpsertSchema = z
   .object({
     formConfigId: idSchema,
     abstractId: idSchema.optional(),
+    draftCapability: draftCapabilitySchema.optional(),
+    expectedDraftRevision: draftRevisionSchema.optional(),
     title: z.string().trim().min(3).max(180),
     abstract: z.string().trim().max(5_000).optional(),
     format: z.string().trim().max(80).optional(),
@@ -232,6 +241,15 @@ export const publicAbstractUpsertSchema = z
     speakers: publicSpeakerInputSchema,
     answers: publicAnswersSchema,
     intent: z.enum(["saveDraft", "submit"]),
+  })
+  .strict();
+
+/** Body-only capability check for recovering an anonymous draft. */
+export const publicDraftResumeSchema = z
+  .object({
+    formConfigId: idSchema,
+    abstractId: idSchema,
+    draftCapability: draftCapabilitySchema.optional(),
   })
   .strict();
 
@@ -397,6 +415,7 @@ export const calendarRequestSchema = z.object({ eventId: idSchema, sessionId: id
 export type FormConfigInput = z.infer<typeof formConfigInputSchema>;
 export type AbstractUpsert = z.infer<typeof abstractUpsertSchema>;
 export type PublicAbstractUpsert = z.infer<typeof publicAbstractUpsertSchema>;
+export type PublicDraftResume = z.infer<typeof publicDraftResumeSchema>;
 export type EvaluationPlanInput = z.infer<typeof evaluationPlanInputSchema>;
 export type ReviewScoreInput = z.infer<typeof reviewScoreInputSchema>;
 export type GuaranteedSessionInput = z.infer<typeof guaranteedSessionInputSchema>;

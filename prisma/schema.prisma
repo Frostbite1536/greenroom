@@ -204,6 +204,8 @@ model Abstract {
   durationMinutes Int?
   categoryId      String?
   status          AbstractStatus @default(DRAFT)
+  draftCapabilityHash String?
+  draftRevision   Int            @default(0)
   submittedAt     DateTime?
   decidedAt       DateTime?
   createdAt       DateTime       @default(now())

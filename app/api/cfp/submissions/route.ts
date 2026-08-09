@@ -20,19 +20,47 @@ import {
   type FormSpec,
 } from "@/lib/services/form-validation";
 import type { FormAnswerValue } from "@/lib/services/types";
-import { lockCurrentFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
-import { lockFormConfigForAnswerWrite } from "@/lib/services/form-config-lock";
-import { lockPublicSubmissionIdentities } from "@/lib/services/public-submission";
+import { lockPublicDraftWrite } from "@/lib/services/public-draft-write-lock";
 import { enforcePublicSubmissionRateLimit, publicClientIp } from "@/lib/services/public-submission-rate";
+import {
+  generateDraftCapability,
+  hashDraftCapability,
+  verifyDraftWriteAccess,
+} from "@/lib/services/draft-capability";
+import { getServerSigningSecret } from "@/lib/server-signing";
 
 export const dynamic = "force-dynamic";
 
+const DRAFT_NOT_FOUND = "DRAFT_NOT_FOUND";
+const DRAFT_NOT_FOUND_MESSAGE = "Draft not found.";
+
+function draftNotFound(): ApiError {
+  return new ApiError(404, DRAFT_NOT_FOUND, DRAFT_NOT_FOUND_MESSAGE);
+}
+
+function requireDraftCapabilitySecret(): string {
+  const secret = getServerSigningSecret();
+  if (!secret) {
+    throw new ApiError(503, "DRAFT_CAPABILITY_UNAVAILABLE", "Draft recovery is temporarily unavailable.");
+  }
+  return secret;
+}
+
+function publicDraftResponse(
+  abstract: Parameters<typeof serializeAbstract>[0] & { draftRevision: number },
+  draftCapability?: string,
+) {
+  return {
+    ...serializeAbstract(abstract),
+    ...(abstract.status === "DRAFT" ? { draftRevision: abstract.draftRevision } : {}),
+    ...(draftCapability ? { draftCapability } : {}),
+  };
+}
+
 /**
- * GET /api/cfp/submissions — bounded list for the caller's event (admin or
- * admin). Supports `?status=` (comma-separated), `?formConfigId=`,
- * and explicit `?planId=` decision-summary selection.
- * The explicit envelope prevents a large event from silently exhausting an
- * operator read while preserving an honest filtered total for the UI.
+ * GET /api/cfp/submissions — bounded list for the caller's event (admin only).
+ * Supports `?status=` (comma-separated), `?formConfigId=`, and explicit
+ * `?planId=` decision-summary selection.
  */
 export const GET = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -54,19 +82,12 @@ export const GET = handle(async (req) => {
     [
       prisma.abstract.findMany({
         where,
-        // Every included relation is bounded by this cap-plus-one parent query;
-        // no unbounded event-wide relation fetch is possible through this route.
         take: ADMIN_ABSTRACT_LIST_TAKE,
-        include: {
-          category: true,
-          speakers: { include: { user: true } },
-          answers: true,
-        },
+        include: { category: true, speakers: { include: { user: true } }, answers: true },
         orderBy: adminAbstractListOrderBy,
       }),
       prisma.abstract.count({ where }),
     ],
-    // Rows and the filtered total must observe one PostgreSQL snapshot.
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
   );
   const page = toAdminAbstractListEnvelope(abstracts.map(serializeAdminAbstract), total);
@@ -78,36 +99,24 @@ export const GET = handle(async (req) => {
 });
 
 /**
- * POST /api/cfp/submissions — save a draft or submit an abstract from the
- * public CFP page (works with a null session). Both drafts and submits require
- * a published, open form; anonymous rows must not accumulate after a CFP has
- * closed. Co-speakers are keyed by email:
- * shell `User` rows are upserted by lowercased email, and the primary speaker
- * is the submitter (contract in STATE.md / types/api.ts). On `submit`, all
- * INV-FORM-001 constraints are enforced server-side.
+ * POST /api/cfp/submissions — anonymous draft save or submit. Existing draft
+ * writes use the one-time capability only after every preceding LOCK-ORDER-v1
+ * class is acquired; rate limiting remains a separate short transaction.
  */
 export const POST = handle(async (req) => {
   const parsed = publicAbstractUpsertSchema.safeParse(await parseBoundedJson(req));
   if (!parsed.success) throw fromZod(parsed.error);
   const input = parsed.data;
 
-  // This minimal known-form pre-read establishes event scope for the independent
-  // rate transaction. Eligibility is authoritative only after the business
-  // transaction obtains its FormConfig parent lock below.
   const preReadForm = await prisma.formConfig.findUnique({
     where: { id: input.formConfigId },
     select: { id: true, eventId: true, published: true, opensAt: true, closesAt: true },
   });
   if (!preReadForm) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
 
-  const primary =
-    input.speakers.find((s) => s.isPrimary) ?? input.speakers[0];
-  if (!primary) {
-    throw new ApiError(422, "NO_PRIMARY_SPEAKER", "A primary speaker is required.");
-  }
+  const primary = input.speakers.find((speaker) => speaker.isPrimary) ?? input.speakers[0];
+  if (!primary) throw new ApiError(422, "NO_PRIMARY_SPEAKER", "A primary speaker is required.");
 
-  // Known-form attempts consume a rate token before later content/category
-  // validation. This transaction finishes before the business writer starts.
   await enforcePublicSubmissionRateLimit({
     eventId: preReadForm.eventId,
     intent: input.intent,
@@ -115,51 +124,97 @@ export const POST = handle(async (req) => {
     clientIp: publicClientIp(req.headers),
   });
 
+  // Only a new draft needs a raw capability. It is kept in request-local memory
+  // until the response and is never loaded from, or written to, a serializer.
+  const createdDraftCapability = !input.abstractId && input.intent === "saveDraft"
+    ? generateDraftCapability()
+    : null;
+  const capabilitySecret = (input.abstractId || createdDraftCapability)
+    ? requireDraftCapabilitySecret()
+    : null;
+
   const saved = await prisma.$transaction(async (tx) => {
-    // LOCK-ORDER-v1: FormConfig parent, sorted FormFields, sorted identities.
-    // No Abstract lock is added here pending the coordinated inversion work.
-    const form = await lockFormConfigForAnswerWrite(tx, input.formConfigId);
-    if (!form) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
-    const fields = await lockCurrentFormFieldsForAnswerWrite(tx, form.id);
+    const locks = await lockPublicDraftWrite(tx, {
+      formConfigId: input.formConfigId,
+      speakerEmails: input.speakers.map((speaker) => speaker.email),
+      abstractId: input.abstractId,
+    });
+    if (!locks) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
+
+    // Existing writes reach this point only after FormConfig, sorted fields,
+    // sorted identity keys, and the target Abstract advisory lock. Re-read all
+    // mutable authority facts before validation, User upsert, or persistence.
+    const existing = input.abstractId
+      ? await tx.abstract.findUnique({
+          where: { id: input.abstractId },
+          include: { answers: true },
+        })
+      : null;
+    if (input.abstractId) {
+      if (
+        !existing ||
+        existing.formConfigId !== locks.form.id ||
+        existing.eventId !== locks.form.eventId ||
+        existing.status !== "DRAFT" ||
+        !capabilitySecret
+      ) {
+        throw draftNotFound();
+      }
+      const access = verifyDraftWriteAccess({
+        storedHash: existing.draftCapabilityHash,
+        capability: input.draftCapability,
+        secret: capabilitySecret,
+        draftRevision: existing.draftRevision,
+        expectedDraftRevision: input.expectedDraftRevision,
+      });
+      if (access === "not_found") throw draftNotFound();
+      if (access === "conflict") {
+        throw new ApiError(409, "DRAFT_CONFLICT", "This draft changed in another tab. Reload it before saving again.");
+      }
+    }
+
     const spec: FormSpec = {
-      published: form.published,
-      opensAt: form.opensAt,
-      closesAt: form.closesAt,
-      minSpeakers: form.minSpeakers,
-      maxSpeakers: form.maxSpeakers,
-      maxBioLength: form.maxBioLength,
-      fields: toFormFieldSpecs(fields),
+      published: locks.form.published,
+      opensAt: locks.form.opensAt,
+      closesAt: locks.form.closesAt,
+      minSpeakers: locks.form.minSpeakers,
+      maxSpeakers: locks.form.maxSpeakers,
+      maxBioLength: locks.form.maxBioLength,
+      fields: toFormFieldSpecs(locks.fields),
     };
     const windowError = validateSubmissionWindow(spec);
     if (windowError) throw new ApiError(422, windowError.code, windowError.message, windowError.fieldErrors);
 
-    // Map incoming answer keys to known locked field ids; unknown keys remain
-    // intentionally ignored, matching the public renderer's forward-safe form.
-    const fieldByKey = new Map(fields.map((field) => [field.key, field]));
-    const answersByKey: Record<string, FormAnswerValue> = {};
+    const fieldByKey = new Map(locks.fields.map((field) => [field.key, field]));
+    const fieldById = new Map(locks.fields.map((field) => [field.id, field]));
+    const suppliedAnswersByKey: Record<string, FormAnswerValue> = {};
     for (const [key, value] of Object.entries(input.answers)) {
-      if (fieldByKey.has(key)) answersByKey[key] = value as FormAnswerValue;
+      if (fieldByKey.has(key)) suppliedAnswersByKey[key] = value as FormAnswerValue;
     }
+    const storedAnswersByKey: Record<string, FormAnswerValue> = {};
+    for (const answer of existing?.answers ?? []) {
+      const field = fieldById.get(answer.formFieldId);
+      if (field) storedAnswersByKey[field.key] = answer.value as FormAnswerValue;
+    }
+    const mergedAnswersByKey = { ...storedAnswersByKey, ...suppliedAnswersByKey };
 
     if (input.intent === "submit") {
       const error = validateSubmission(spec, {
         speakerCount: input.speakers.length,
-        answers: answersByKey,
+        answers: mergedAnswersByKey,
       });
       if (error) throw new ApiError(422, error.code, error.message, error.fieldErrors);
     }
 
     if (input.categoryId) {
       const category = await tx.category.findUnique({ where: { id: input.categoryId } });
-      if (!category || category.eventId !== form.eventId) {
+      if (!category || category.eventId !== locks.form.eventId) {
         throw new ApiError(422, "INVALID_CATEGORY", "Selected category is not valid for this event.");
       }
     }
 
-    await lockPublicSubmissionIdentities(tx, input.speakers.map((speaker) => speaker.email));
-
-    // Public CFP input may create a shell user, but must never overwrite an
-    // existing identity or grant an event membership/role.
+    // Capability/revision/form status now hold under the Abstract lock; only
+    // after that proof may untrusted input create Users or mutate the roster.
     const usersByEmail = new Map<string, { id: string }>();
     for (const speaker of [...input.speakers].sort((left, right) => left.email.localeCompare(right.email))) {
       if (!usersByEmail.has(speaker.email)) {
@@ -174,34 +229,22 @@ export const POST = handle(async (req) => {
     }
     const speakerUsers = input.speakers.map((speaker) => usersByEmail.get(speaker.email)!);
     const primaryUser = speakerUsers[input.speakers.indexOf(primary)];
-
-    if (input.abstractId) {
-      const existing = await tx.abstract.findUnique({ where: { id: input.abstractId } });
-      if (!existing || existing.formConfigId !== form.id) {
-        throw new ApiError(404, "ABSTRACT_NOT_FOUND", "Draft not found.");
-      }
-      if (existing.status !== "DRAFT") {
-        throw new ApiError(409, "ABSTRACT_LOCKED", "This abstract can no longer be edited.");
-      }
-    }
-
     const isSubmit = input.intent === "submit";
 
-    // Enforce submission limit per submitter for this form (submitted only).
-    if (isSubmit && form.submissionLimit) {
+    if (isSubmit && locks.form.submissionLimit) {
       const count = await tx.abstract.count({
         where: {
-          formConfigId: form.id,
+          formConfigId: locks.form.id,
           submitterId: primaryUser.id,
           status: { not: "DRAFT" },
-          ...(input.abstractId ? { id: { not: input.abstractId } } : {}),
+          ...(existing ? { id: { not: existing.id } } : {}),
         },
       });
-      if (count >= form.submissionLimit) {
+      if (count >= locks.form.submissionLimit) {
         throw new ApiError(
           409,
           "SUBMISSION_LIMIT",
-          `You can submit at most ${form.submissionLimit} proposal(s) to this form.`,
+          `You can submit at most ${locks.form.submissionLimit} proposal(s) to this form.`,
         );
       }
     }
@@ -215,26 +258,35 @@ export const POST = handle(async (req) => {
       status: isSubmit ? ("SUBMITTED" as const) : ("DRAFT" as const),
       submittedAt: isSubmit ? new Date() : null,
     };
-
-    const abstract = input.abstractId
-      ? await tx.abstract.update({ where: { id: input.abstractId }, data: abstractData })
+    const abstract = existing
+      ? await tx.abstract.update({
+          where: { id: existing.id },
+          data: {
+            ...abstractData,
+            draftRevision: { increment: 1 },
+            ...(isSubmit ? { draftCapabilityHash: null } : {}),
+          },
+        })
       : await tx.abstract.create({
           data: {
-            eventId: form.eventId,
-            formConfigId: form.id,
+            eventId: locks.form.eventId,
+            formConfigId: locks.form.id,
             submitterId: primaryUser.id,
             ...abstractData,
+            draftRevision: createdDraftCapability ? 1 : 0,
+            draftCapabilityHash: createdDraftCapability
+              ? hashDraftCapability(createdDraftCapability, capabilitySecret!)
+              : null,
           },
         });
 
-    // Reconcile speakers.
-    const keepUserIds = speakerUsers.map((u) => u.id);
+    const keepUserIds = speakerUsers.map((user) => user.id);
     await tx.abstractSpeaker.deleteMany({
       where: { abstractId: abstract.id, userId: { notIn: keepUserIds } },
     });
-    for (let i = 0; i < input.speakers.length; i++) {
-      const userId = speakerUsers[i].id;
-      const isPrimary = input.speakers[i] === primary;
+    for (let index = 0; index < input.speakers.length; index++) {
+      const userId = speakerUsers[index].id;
+      const isPrimary = input.speakers[index] === primary;
       await tx.abstractSpeaker.upsert({
         where: { abstractId_userId: { abstractId: abstract.id, userId } },
         update: { isPrimary },
@@ -242,8 +294,7 @@ export const POST = handle(async (req) => {
       });
     }
 
-    // Reconcile answers to known fields.
-    for (const [key, value] of Object.entries(answersByKey)) {
+    for (const [key, value] of Object.entries(suppliedAnswersByKey)) {
       const field = fieldByKey.get(key);
       if (!field) continue;
       await tx.formAnswer.upsert({
@@ -257,15 +308,18 @@ export const POST = handle(async (req) => {
       });
     }
 
-    return tx.abstract.findUniqueOrThrow({
-      where: { id: abstract.id },
-      include: { category: true, speakers: { include: { user: true } }, answers: true },
-    });
+    return {
+      abstract: await tx.abstract.findUniqueOrThrow({
+        where: { id: abstract.id },
+        include: { category: true, speakers: { include: { user: true } }, answers: true },
+      }),
+      transitionedToSubmitted: isSubmit,
+    };
   });
 
-  // A submitted public roster receives exactly one receipt at its persisted
-  // Abstract.submitter (the primary roster entry). Delivery never blocks save.
-  if (input.intent === "submit") await notifyAbstractSubmitted(saved.id);
-
-  return ok(serializeAbstract(saved), input.abstractId ? 200 : 201);
+  if (saved.transitionedToSubmitted) await notifyAbstractSubmitted(saved.abstract.id);
+  return ok(
+    publicDraftResponse(saved.abstract, createdDraftCapability ?? undefined),
+    input.abstractId ? 200 : 201,
+  );
 });
