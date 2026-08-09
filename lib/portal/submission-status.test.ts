@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { submissionErrorMessage, submissionStatusView } from "./submission-status";
+import { editScopeNotice, submissionErrorMessage, submissionStatusView } from "./submission-status";
 
 const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"];
 
@@ -44,4 +44,23 @@ test("an unknown code prefers the server's prose but never echoes a bare code", 
   assert.equal(submissionErrorMessage("WHATEVER", "The form is closed for new proposals."), "The form is closed for new proposals.");
   assert.doesNotMatch(submissionErrorMessage("WHATEVER", "SOME_CODE"), /SOME_CODE/);
   assert.doesNotMatch(submissionErrorMessage("WHATEVER"), /WHATEVER/);
+});
+
+test("edit-scope copy tells the truth about what an edit changes", () => {
+  const beforeConversion = editScopeNotice(false);
+  const afterConversion = editScopeNotice(true);
+  assert.match(beforeConversion, /update your proposal directly/i);
+  // Once a talk is scheduled the session drives the public listing, so the copy
+  // must NOT promise the schedule changes (audit1#8).
+  assert.match(afterConversion, /don't update the public schedule listing/i);
+  assert.doesNotMatch(afterConversion, /\bwill update the (public|schedule)\b/i);
+  for (const text of [beforeConversion, afterConversion]) {
+    assert.doesNotMatch(text, /\b[A-Z][A-Z_]{3,}\b/);
+  }
+});
+
+test("accepted-status copy no longer claims edits reach attendees", () => {
+  const accepted = submissionStatusView("ACCEPTED");
+  assert.equal(accepted.editable, true);
+  assert.doesNotMatch(accepted.detail, /details attendees will see/i);
 });
