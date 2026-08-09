@@ -55,6 +55,14 @@ async function req(method, path, body, sess) {
   return { status: res.status, data, text };
 }
 
+async function reqManual(path, sess) {
+  const res = await fetch(BASE + path, {
+    headers: sess ? { cookie: cookie(sess) } : undefined,
+    redirect: "manual",
+  });
+  return { status: res.status, location: res.headers.get("location") ?? "", text: await res.text() };
+}
+
 // ---- scratch fixture -------------------------------------------------------
 
 async function resetScratch() {
@@ -744,12 +752,6 @@ try {
     && organizerReviewNotesText.includes("Review 1")
     && organizerReviewNotesText.includes("Strong.")
     && !organizerReviewNotesText.includes("Ravi Patel"));
-  const evaluatorCommentDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, evaluator);
-  check("evaluator abstract drawer excludes organizer review notes",
-    evaluatorCommentDrawer.status === 200
-    && !evaluatorCommentDrawer.text.includes("Review notes")
-    && !evaluatorCommentDrawer.text.includes("Strong."));
-
   const scoreClear = await req("POST", "/api/evaluations/scores", {
     planId: fx.plan.id,
     abstractId: fx.abstract.id,
@@ -802,12 +804,14 @@ try {
   const recoveredEvaluatorPage = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator textarea recovers the evaluator-owned legacy comment",
     textareaValue(recoveredEvaluatorPage.text) === "Legacy first note");
-  const hiddenEvaluatorDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, evaluator);
-  check("evaluator payload still excludes every organizer comment",
-    !hiddenEvaluatorDrawer.text.includes("Review notes")
-    && !hiddenEvaluatorDrawer.text.includes("Legacy first note")
-    && !hiddenEvaluatorDrawer.text.includes("Legacy second note")
-    && !hiddenEvaluatorDrawer.text.includes("Second review note"));
+  const evaluatorAbstractRedirect = await reqManual(
+    `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`,
+    evaluator,
+  );
+  check("evaluator is redirected from the global abstracts pipeline before its drawer renders",
+    evaluatorAbstractRedirect.status === 307
+    && evaluatorAbstractRedirect.location.includes("/admin/evaluations")
+    && !evaluatorAbstractRedirect.text.includes("Legacy first note"));
 
   const outOfRange = await req("POST", "/api/evaluations/scores", {
     planId: fx.plan.id, abstractId: fx.abstract.id,
@@ -892,8 +896,8 @@ try {
   check("evaluator nav hides CFP forms, agenda and speaker onboarding",
     !evaluatorNav.text.includes("/admin/forms") && !evaluatorNav.text.includes("/admin/agenda")
     && !evaluatorNav.text.includes("/admin/speakers") && !evaluatorNav.text.includes("/admin/settings"));
-  check("evaluator nav keeps evaluations + abstracts",
-    evaluatorNav.text.includes("/admin/evaluations") && evaluatorNav.text.includes("/admin/abstracts"));
+  check("evaluator nav keeps evaluations and omits the global abstracts pipeline",
+    evaluatorNav.text.includes("/admin/evaluations") && !evaluatorNav.text.includes("/admin/abstracts"));
 
   // --- F2: admin evaluation setup panel -----------------------------------
   const setupPage = await req("GET", "/admin/evaluations", null, admin);
@@ -982,35 +986,149 @@ try {
       where: { planId: fx.plan.id, abstractId: setupAbstract.id },
     })) === 1);
 
-  // --- F3 (frontend half): blind rounds must hide identity on /admin/abstracts
-  // Not just visually: the names and emails must never reach the client payload.
-  const beforeBlind = await req("GET", "/admin/abstracts", null, evaluator);
-  check("non-blind round: evaluator sees speaker names",
-    beforeBlind.text.includes("Blind Boundary Speaker"));
-  check("unused speaker emails never enter the evaluator payload",
-    !beforeBlind.text.includes(BLIND_SPEAKER_EMAIL));
+  // --- C15: the global proposal pipeline is ADMIN-only -------------------
+  // An evaluator receives a server redirect before any proposal RSC data can
+  // render. Their one allowed review surface is still assignment-scoped.
+  const evaluatorPipeline = await reqManual("/admin/abstracts", evaluator);
+  check("evaluator global abstracts route redirects to the assignment workspace",
+    evaluatorPipeline.status === 307 && evaluatorPipeline.location.includes("/admin/evaluations"));
+  const evaluatorSubmissions = await req("GET", "/api/cfp/submissions", null, evaluator);
+  check("evaluator global submissions API is forbidden → 403",
+    evaluatorSubmissions.status === 403 && !evaluatorSubmissions.text.includes("Scratch: Agents in Production"));
 
+  // Blind policy remains attached to the evaluator's assigned plan. This queue
+  // must not expose the speaker, email, custom CFP answers, organizer notes,
+  // global score summaries, or a proposal assigned only to another evaluator.
+  const audienceFieldId = fx.form.fields.find((field) => field.key === "audience_level")?.id;
+  if (!audienceFieldId) throw new Error("C15 fixture requires the audience-level form field");
+  await prisma.formAnswer.upsert({
+    where: { abstractId_formFieldId: { abstractId: fx.abstract.id, formFieldId: audienceFieldId } },
+    update: { value: "advanced" },
+    create: { abstractId: fx.abstract.id, formFieldId: audienceFieldId, value: "advanced" },
+  });
+  const evaluatorTwoOnly = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID,
+      formConfigId: fx.form.id,
+      submitterId: fx.users.speaker,
+      title: "Scratch: Evaluator Two Only",
+      abstract: "This proposal is not assigned to Ravi.",
+      status: "UNDER_REVIEW",
+      submittedAt: new Date(),
+      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: { planId: fx.plan.id, abstractId: evaluatorTwoOnly.id, evaluatorId: fx.users.evaluatorTwo, status: "ASSIGNED" },
+  });
   await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: true } });
-  const blindEvaluator = await req("GET", "/admin/abstracts", null, evaluator);
-  check("blind round: evaluator page withholds the speaker name",
-    !blindEvaluator.text.includes("Blind Boundary Speaker"));
-  check("blind round: evaluator is told profiles are hidden",
-    blindEvaluator.text.includes("Profiles hidden"));
-
   const blindQueue = await req("GET", "/admin/evaluations", null, evaluator);
-  check("blind scoring queue withholds the speaker name",
-    !blindQueue.text.includes("Blind Boundary Speaker"));
-  check("blind scoring queue states the remaining text-identification limit",
-    blindQueue.text.includes("Proposal text can still identify a speaker"));
+  check("blind assigned queue withholds identity and keeps the text-identification limit",
+    !blindQueue.text.includes("Sofia Marques")
+    && !blindQueue.text.includes("Blind Boundary Speaker")
+    && !blindQueue.text.includes("sofia@greenroom.demo")
+    && blindQueue.text.includes("Proposal text can still identify a speaker"));
+  check("evaluator queue excludes custom answers, organizer data, decisions, and another evaluator's proposal",
+    !blindQueue.text.includes("Audience level")
+    && !blindQueue.text.includes("Review notes")
+    && !blindQueue.text.includes("Decision summary")
+    && !blindQueue.text.includes("Change decision")
+    && !blindQueue.text.includes("Scratch: Evaluator Two Only"));
 
-  // Admins run the process and retain names. Email is not rendered anywhere on
-  // this surface, so data minimization keeps it out of every client payload.
-  const blindAdmin = await req("GET", "/admin/abstracts", null, admin);
-  check("blind round: admin still sees speaker names",
-    blindAdmin.text.includes("Blind Boundary Speaker"));
-  check("unused speaker emails never enter the admin payload",
-    !blindAdmin.text.includes(BLIND_SPEAKER_EMAIL));
+  const blindAdmin = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin);
+  check("admin global drawer retains identities, custom answers, and de-identified notes",
+    blindAdmin.text.includes("Sofia Marques")
+    && blindAdmin.text.includes("Audience level")
+    && blindAdmin.text.includes("Advanced")
+    && blindAdmin.text.includes("Review notes")
+    && blindAdmin.text.includes("Legacy first note"));
   await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: false } });
+
+  // Exactly one plan selects itself. A second plan intentionally creates an
+  // ambiguous organizer state; the page must ask for a URL-backed round rather
+  // than falling back to the highest ordinal. The extra plan's completed score
+  // must not affect Round 1's weighted two-review result (3.70).
+  const onePlanSummary = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin);
+  const onePlanSummaryText = renderedText(onePlanSummary.text) ?? "";
+  check("one decision round auto-selects its completed weighted summary",
+    onePlanSummaryText.includes("Decision scores include only valid, completed reviews from this round.")
+    && onePlanSummaryText.includes("3.70")
+    && onePlanSummaryText.includes("2 of 2 completed"));
+  const otherPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: EVENT_ID,
+      name: "Scratch Round 2",
+      ordinal: 2,
+      isBlind: false,
+      rubric: [
+        { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1.5 },
+        { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 1 },
+      ],
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: { planId: otherPlan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluatorTwo, status: "COMPLETED" },
+  });
+  await prisma.reviewScore.createMany({
+    data: [
+      { planId: otherPlan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluatorTwo, rubricKey: "relevance", score: 1 },
+      { planId: otherPlan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluatorTwo, rubricKey: "clarity", score: 1 },
+    ],
+  });
+  const partialReview = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID,
+      formConfigId: fx.form.id,
+      submitterId: fx.users.speaker,
+      title: "Scratch: Partial completed review",
+      abstract: "Only one rubric score is stored.",
+      status: "UNDER_REVIEW",
+      submittedAt: new Date(),
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: { planId: fx.plan.id, abstractId: partialReview.id, evaluatorId: fx.users.evaluator, status: "COMPLETED" },
+  });
+  await prisma.reviewScore.create({
+    data: { planId: fx.plan.id, abstractId: partialReview.id, evaluatorId: fx.users.evaluator, rubricKey: "relevance", score: 5 },
+  });
+  const multiplePlanPage = await req("GET", "/admin/abstracts", null, admin);
+  check("multiple decision rounds require an explicit choice and show no numeric summary",
+    multiplePlanPage.text.includes("Choose a decision round")
+    && multiplePlanPage.text.includes("Choose a round")
+    && !multiplePlanPage.text.includes("3.70"));
+  const selectedRoundPage = await req("GET", `/admin/abstracts?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
+  const selectedRoundText = renderedText(selectedRoundPage.text) ?? "";
+  check("selected plan stays in the URL and excludes another plan's completed score",
+    selectedRoundText.includes("Round 1 — Scratch Round 1")
+    && selectedRoundText.includes("3.70")
+    && selectedRoundText.includes("2/2 completed reviews included"));
+  const partialRoundPage = await req(
+    "GET",
+    `/admin/abstracts?abstractId=${encodeURIComponent(partialReview.id)}&planId=${encodeURIComponent(fx.plan.id)}`,
+    null,
+    admin,
+  );
+  const partialRoundText = renderedText(partialRoundPage.text) ?? "";
+  check("partial completed review is counted but withheld from the decision score",
+    partialRoundText.includes("No included reviews")
+    && partialRoundText.includes("0 of 1 completed"));
+  const adminSubmissions = await req("GET", `/api/cfp/submissions?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
+  const apiSummary = adminSubmissions.data?.data?.decisionSummary;
+  const apiAbstract = (adminSubmissions.data?.data?.abstracts ?? []).find((abstract) => abstract.id === fx.abstract.id);
+  check("admin submissions API returns the selected server-owned summary without legacy aggregates",
+    adminSubmissions.status === 200
+    && apiSummary?.selectedPlan?.id === fx.plan.id
+    && apiSummary?.summariesByAbstractId?.[fx.abstract.id]?.weightedAverage === 3.7
+    && !("avgScore" in (apiAbstract ?? {}))
+    && !("reviewsComplete" in (apiAbstract ?? {}))
+    && !("reviewsTotal" in (apiAbstract ?? {})));
+  const missingPlanPage = await req("GET", "/admin/abstracts?planId=missing-plan", null, admin);
+  check("unknown decision round is a route-level 404", missingPlanPage.status === 404, `got ${missingPlanPage.status}`);
+  // The later withdrawn-queue regression is intentionally scoped to its
+  // original single-round fixture, so remove this C15-only ambiguity fixture.
+  await prisma.abstract.delete({ where: { id: partialReview.id } });
+  await prisma.evaluationPlan.delete({ where: { id: otherPlan.id } });
 
   // A speaker can withdraw mid-review (W1), and scoring one is refused 409.
   // The evaluator queue must say so rather than offering a form that will fail.

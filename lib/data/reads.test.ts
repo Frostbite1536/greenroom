@@ -3,25 +3,11 @@ import { test } from "node:test";
 import {
   ADMIN_ABSTRACT_SNAPSHOT_OPTIONS,
   indexAdminAnswers,
-  indexAssignmentProgress,
   indexOrganizerReviewComments,
   planAdminAnswerRead,
   summarizeAdminAbstractMetrics,
-  toFiniteAverageScore,
 } from "./reads";
 import { ApiError } from "@/lib/api/http";
-
-test("indexes review progress by abstract without dropping partial assignments", () => {
-  const progress = indexAssignmentProgress([
-    { abstractId: "abstract-a", status: "ASSIGNED", _count: { _all: 2 } },
-    { abstractId: "abstract-a", status: "COMPLETED", _count: { _all: 1 } },
-    { abstractId: "abstract-b", status: "COMPLETED", _count: { _all: 3 } },
-  ]);
-
-  assert.deepEqual(progress.get("abstract-a"), { reviewsTotal: 3, reviewsComplete: 1 });
-  assert.deepEqual(progress.get("abstract-b"), { reviewsTotal: 3, reviewsComplete: 3 });
-  assert.equal(progress.get("missing"), undefined);
-});
 
 test("admin answer allocation isolates one answer flood and retains later complete proposals", () => {
   const row = (abstractId: string, id: string) => ({
@@ -89,14 +75,6 @@ test("admin abstract metrics stay global rather than reflecting a bounded table 
     ]),
     { total: 109, pending: 20, accepted: 9 },
   );
-});
-
-test("average score projection retains finite values and rejects null or non-finite values", () => {
-  assert.equal(toFiniteAverageScore(3.5), 3.5);
-  assert.equal(toFiniteAverageScore(null), null);
-  assert.equal(toFiniteAverageScore(undefined), null);
-  assert.equal(toFiniteAverageScore(Number.NaN), null);
-  assert.equal(toFiniteAverageScore(Number.POSITIVE_INFINITY), null);
 });
 
 test("admin abstract parent snapshot contract uses repeatable read isolation", () => {
