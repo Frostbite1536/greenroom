@@ -15,6 +15,7 @@ import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
 const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
+const BLIND_SPEAKER_EMAIL = "blind-boundary@scratch.test";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -54,6 +55,7 @@ async function req(method, path, body, sess) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
+  await prisma.user.deleteMany({ where: { email: BLIND_SPEAKER_EMAIL } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -232,6 +234,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
+      await prisma.user.deleteMany({ where: { email: BLIND_SPEAKER_EMAIL } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -666,6 +669,11 @@ try {
   // Assigning must move a genuinely SUBMITTED proposal to UNDER_REVIEW, with
   // the team key routed from its category (teamKey omitted on purpose). S5 now
   // correctly refuses the inherited smoke's old ACCEPTED fixture.
+  const blindSpeaker = await prisma.user.upsert({
+    where: { email: BLIND_SPEAKER_EMAIL },
+    update: { name: "Blind Boundary Speaker" },
+    create: { email: BLIND_SPEAKER_EMAIL, name: "Blind Boundary Speaker" },
+  });
   const setupAbstract = await prisma.abstract.create({
     data: {
       eventId: EVENT_ID,
@@ -676,7 +684,7 @@ try {
       categoryId: fx.category.id,
       status: "SUBMITTED",
       submittedAt: new Date(),
-      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+      speakers: { create: [{ userId: blindSpeaker.id, isPrimary: true }] },
     },
   });
   const freshAssign = await req("POST", "/api/evaluations/assignments", {
@@ -705,6 +713,64 @@ try {
     && (await prisma.reviewAssignment.count({
       where: { planId: fx.plan.id, abstractId: setupAbstract.id },
     })) === 1);
+
+  // --- F3 (frontend half): blind rounds must hide identity on /admin/abstracts
+  // Not just visually: the names and emails must never reach the client payload.
+  const beforeBlind = await req("GET", "/admin/abstracts", null, evaluator);
+  check("non-blind round: evaluator sees speaker names",
+    beforeBlind.text.includes("Blind Boundary Speaker"));
+  check("unused speaker emails never enter the evaluator payload",
+    !beforeBlind.text.includes(BLIND_SPEAKER_EMAIL));
+
+  await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: true } });
+  const blindEvaluator = await req("GET", "/admin/abstracts", null, evaluator);
+  check("blind round: evaluator page withholds the speaker name",
+    !blindEvaluator.text.includes("Blind Boundary Speaker"));
+  check("blind round: evaluator is told profiles are hidden",
+    blindEvaluator.text.includes("Profiles hidden"));
+
+  const blindQueue = await req("GET", "/admin/evaluations", null, evaluator);
+  check("blind scoring queue withholds the speaker name",
+    !blindQueue.text.includes("Blind Boundary Speaker"));
+  check("blind scoring queue states the remaining text-identification limit",
+    blindQueue.text.includes("Proposal text can still identify a speaker"));
+
+  // Admins run the process and retain names. Email is not rendered anywhere on
+  // this surface, so data minimization keeps it out of every client payload.
+  const blindAdmin = await req("GET", "/admin/abstracts", null, admin);
+  check("blind round: admin still sees speaker names",
+    blindAdmin.text.includes("Blind Boundary Speaker"));
+  check("unused speaker emails never enter the admin payload",
+    !blindAdmin.text.includes(BLIND_SPEAKER_EMAIL));
+  await prisma.evaluationPlan.update({ where: { id: fx.plan.id }, data: { isBlind: false } });
+
+  // A speaker can withdraw mid-review (W1), and scoring one is refused 409.
+  // The evaluator queue must say so rather than offering a form that will fail.
+  // Target the row the page opens on (first not-yet-scored assignment), so both
+  // the queue badge and the scoring-panel notice are exercised.
+  await prisma.abstract.update({ where: { id: setupAbstract.id }, data: { status: "WITHDRAWN" } });
+  const withdrawnQueue = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator queue badges a withdrawn proposal", withdrawnQueue.text.includes("Withdrawn"));
+  check("scoring panel explains no review is needed",
+    withdrawnQueue.text.includes("no longer needs a review"));
+  check("withdrawn work does not keep review progress incomplete",
+    withdrawnQueue.text.includes("1 of 1 reviewable proposal scored"));
+  check("withdrawn scoring panel omits the unusable review form",
+    !withdrawnQueue.text.includes("Submit review") && !withdrawnQueue.text.includes("Score every criterion"));
+
+  const withdrawnSetup = await req("GET", "/admin/evaluations", null, admin);
+  const historyMarkers = {
+    title: withdrawnSetup.text.includes("Scratch: Ready for reviewer assignment"),
+    status: withdrawnSetup.text.includes("Withdrawn"),
+    archivedAssignment: withdrawnSetup.text.includes("archived"),
+    preWithdrawalCount: withdrawnSetup.text.includes("before withdrawal"),
+  };
+  check("withdrawn proposal remains visible as historical coverage",
+    Object.values(historyMarkers).every(Boolean),
+    JSON.stringify(historyMarkers));
+  check("withdrawn assignment does not keep round progress incomplete",
+    withdrawnSetup.text.includes("1/1 reviews done"));
+  await prisma.abstract.update({ where: { id: setupAbstract.id }, data: { status: "UNDER_REVIEW" } });
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts

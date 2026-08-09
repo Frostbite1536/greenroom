@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarPlus, FileStack, Search, Star, X } from "lucide-react";
+import { AlertTriangle, CalendarPlus, EyeOff, FileStack, Search, Star, X } from "lucide-react";
 import type { AbstractRow } from "@/lib/data/reads";
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
@@ -168,8 +168,16 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                     </td>
                     <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                     <td>
-                      {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
-                      {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
+                      {a.identityHidden ? (
+                        <span className="muted row" style={{ gap: 5 }}>
+                          <EyeOff size={12} aria-hidden="true" /> Profiles hidden — blind review
+                        </span>
+                      ) : (
+                        <>
+                          {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
+                          {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
+                        </>
+                      )}
                     </td>
                     <td>
                       {a.reviewsTotal > 0 ? `${a.reviewsComplete}/${a.reviewsTotal}` : <span className="muted">—</span>}
@@ -314,7 +322,11 @@ function AbstractDrawer({
           <div className="kv"><span>Duration</span><span>{abstract.durationMinutes ? `${abstract.durationMinutes} min` : "—"}</span></div>
           <div className="kv">
             <span>Speakers</span>
-            <span>{abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}</span>
+            <span>
+              {abstract.identityHidden
+                ? "Speaker profiles hidden for blind review. Proposal text may still identify a speaker."
+                : abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}
+            </span>
           </div>
           <div className="kv"><span>Reviews</span><span>{abstract.reviewsTotal > 0 ? `${abstract.reviewsComplete}/${abstract.reviewsTotal} complete` : "Not assigned"}</span></div>
           <div className="kv"><span>Avg score</span><span>{abstract.avgScore !== null ? abstract.avgScore.toFixed(2) : "Not scored"}</span></div>

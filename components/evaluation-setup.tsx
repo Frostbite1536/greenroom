@@ -31,6 +31,7 @@ const STATUS_LABEL: Record<string, string> = {
   UNDER_REVIEW: "Under review",
   ACCEPTED: "Accepted",
   REJECTED: "Declined",
+  WITHDRAWN: "Withdrawn",
 };
 
 export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
@@ -172,7 +173,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
               <div className="cell-sub">{p.name}</div>
               <div className="cell-sub">
                 {p.rubric.length} criteria · {p.assignmentCount === 0
-                  ? "no reviewers assigned"
+                  ? "no active reviews"
                   : `${p.completedCount}/${p.assignmentCount} reviews done`}
               </div>
             </button>
@@ -205,8 +206,8 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
             </EmptyState>
           ) : assignableAbstracts.length === 0 ? (
             <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals ready for review">
-              Every submitted proposal has already reached a decision. Their historical coverage
-              remains visible below.
+              Every submitted proposal has reached a decision or been withdrawn. Historical
+              coverage remains visible below.
             </EmptyState>
           ) : (
             <>
@@ -320,8 +321,8 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                           <span className="cell-sub">
                             {e.role === "ADMIN" ? "Admin" : "Evaluator"} ·{" "}
                             {(e.loadByPlan[plan.id] ?? 0) === 0
-                              ? "nothing assigned"
-                              : `${e.loadByPlan[plan.id]} in this round`}
+                              ? "nothing active"
+                              : `${e.loadByPlan[plan.id]} active in this round`}
                           </span>
                         </span>
                       </label>
@@ -403,7 +404,9 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                       <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                       <td>{STATUS_LABEL[a.status] ?? a.status}</td>
                       <td>
-                        {assigned === 0 && a.assignable ? (
+                        {a.status === "WITHDRAWN" && assigned > 0 ? (
+                          <span className="muted">{`${assigned} archived`}</span>
+                        ) : assigned === 0 && a.assignable ? (
                           <span className="programme-alert">
                             <AlertTriangle size={11} aria-hidden="true" /> None
                           </span>
@@ -413,7 +416,15 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                           assigned
                         )}
                       </td>
-                      <td>{assigned === 0 ? <span className="muted">—</span> : `${done}/${assigned}`}</td>
+                      <td>
+                        {assigned === 0 ? (
+                          <span className="muted">—</span>
+                        ) : a.status === "WITHDRAWN" ? (
+                          `${done}/${assigned} before withdrawal`
+                        ) : (
+                          `${done}/${assigned}`
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
