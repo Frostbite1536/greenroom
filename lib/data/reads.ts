@@ -27,6 +27,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -656,7 +657,6 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
   }
 
   const rubric = Array.isArray(plan.rubric) ? (plan.rubric as unknown as RubricCriterionView[]) : [];
-  const authoritativeCommentKey = rubric[0]?.key;
   const blind = plan.isBlind && ctx.role === "EVALUATOR";
 
   return {
@@ -683,9 +683,10 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
         abstractStatus: a.abstract.status,
         speakers: blind ? [] : a.abstract.speakers.map((s) => s.user.name),
         myScores: mine?.scores ?? {},
-        myComment: authoritativeCommentKey
-          ? mine?.commentsByRubric.get(authoritativeCommentKey) ?? null
-          : null,
+        myComment: selectEvaluatorReviewComment(
+          rubric.map((criterion) => criterion.key),
+          mine ? [...mine.commentsByRubric].map(([rubricKey, comment]) => ({ rubricKey, comment })) : [],
+        ),
       };
     }),
   };

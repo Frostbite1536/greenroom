@@ -6,6 +6,7 @@ import {
   resolveOverallReviewComment,
   reviewScoreCreateData,
   reviewScoreUpdateData,
+  selectEvaluatorReviewComment,
 } from "@/lib/services/review-score-comment";
 import { ApiError } from "@/lib/api/http";
 
@@ -49,6 +50,63 @@ test("a rubric reorder is detectable only when it moves the overall comment key"
   assert.equal(overallReviewCommentKeyChanged(current, current), false);
   assert.equal(overallReviewCommentKeyChanged(current, [current[1], current[0]]), true);
   assert.equal(overallReviewCommentKeyChanged([], current), true);
+});
+
+test("evaluator comment recovery follows current rubric order before sorted former keys", () => {
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["clarity", "impact"],
+      [{ rubricKey: "clarity", comment: "Canonical feedback" }],
+    ),
+    "Canonical feedback",
+  );
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["impact", "clarity"],
+      [{ rubricKey: "clarity", comment: "Former first-key feedback" }],
+    ),
+    "Former first-key feedback",
+  );
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["impact"],
+      [{ rubricKey: "former_clarity", comment: "Deleted-key feedback" }],
+    ),
+    "Deleted-key feedback",
+  );
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["impact", "clarity"],
+      [
+        { rubricKey: "impact", comment: "Current first-key feedback" },
+        { rubricKey: "clarity", comment: "Later current feedback" },
+        { rubricKey: "a_former", comment: "Sorted orphan should not win" },
+        { rubricKey: "z_former", comment: "Later orphan" },
+      ],
+    ),
+    "Current first-key feedback",
+  );
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["impact"],
+      [
+        { rubricKey: "z_former", comment: "Later orphan" },
+        { rubricKey: "a_former", comment: "Sorted orphan feedback" },
+      ],
+    ),
+    "Sorted orphan feedback",
+  );
+  assert.equal(
+    selectEvaluatorReviewComment(
+      ["impact", "clarity"],
+      [
+        { rubricKey: "impact", comment: null },
+        { rubricKey: "clarity", comment: null },
+        { rubricKey: "former_clarity", comment: null },
+      ],
+    ),
+    null,
+  );
 });
 
 test("review score comments accept nonblank text or null, never an ambiguous blank", () => {

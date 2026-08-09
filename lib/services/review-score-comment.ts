@@ -15,6 +15,11 @@ export type OverallReviewComment = {
   comment: string | null;
 };
 
+export type StoredReviewComment = {
+  rubricKey: string;
+  comment: string | null;
+};
+
 /**
  * Overall comments are persisted on the first rubric criterion. Moving that
  * key would make existing comments disappear from the evaluator projection,
@@ -25,6 +30,33 @@ export function overallReviewCommentKeyChanged(
   nextRubric: readonly { key: string }[],
 ): boolean {
   return (parseRubric(currentRubric)[0]?.key ?? null) !== (nextRubric[0]?.key ?? null);
+}
+
+/**
+ * Recover the one evaluator-visible overall comment from rows written before
+ * comments were canonicalized onto the first rubric key. Prefer the current
+ * plan order, then sort only truly orphaned former keys so this read remains
+ * stable until an explicit write canonicalizes (or clears) the review again.
+ */
+export function selectEvaluatorReviewComment(
+  rubricKeys: readonly string[],
+  storedComments: readonly StoredReviewComment[],
+): string | null {
+  const commentByRubric = new Map<string, string>();
+  for (const { rubricKey, comment } of storedComments) {
+    if (comment !== null) commentByRubric.set(rubricKey, comment);
+  }
+
+  for (const rubricKey of rubricKeys) {
+    const comment = commentByRubric.get(rubricKey);
+    if (comment !== undefined) return comment;
+  }
+
+  const currentKeys = new Set(rubricKeys);
+  const orphanedKeys = [...commentByRubric.keys()]
+    .filter((rubricKey) => !currentKeys.has(rubricKey))
+    .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
+  return orphanedKeys.length > 0 ? commentByRubric.get(orphanedKeys[0]) ?? null : null;
 }
 
 /**

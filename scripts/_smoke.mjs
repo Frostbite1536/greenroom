@@ -740,18 +740,48 @@ try {
     await sharedPlanLockRelease;
   });
   await sharedPlanLockHeld;
+  let signalAbstractLock;
+  let releaseAbstractLock;
+  const abstractLockHeld = new Promise((resolve) => { signalAbstractLock = resolve; });
+  const abstractLockRelease = new Promise((resolve) => { releaseAbstractLock = resolve; });
+  const blockedAbstractLock = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${parallelScoreAbstractId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    signalAbstractLock();
+    await abstractLockRelease;
+  });
+  await abstractLockHeld;
+  const countPlanRowShareLocks = async () => {
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count"
+      FROM pg_locks
+      WHERE relation = '"EvaluationPlan"'::regclass
+        AND mode = 'RowShareLock'
+        AND granted
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const baselinePlanRowShareLocks = await countPlanRowShareLocks();
   const parallelScore = j("POST", "/api/evaluations/scores", {
     planId, abstractId: parallelScoreAbstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
   }, evalr);
-  const parallelScoreBeforeRelease = await Promise.race([
-    parallelScore,
-    new Promise((resolve) => setTimeout(() => resolve(null), 500)),
-  ]);
+  let scorerTookCompatiblePlanShareLock = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await countPlanRowShareLocks() > baselinePlanRowShareLocks) {
+      scorerTookCompatiblePlanShareLock = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // The scorer cannot finish while this holder keeps its target abstract
+  // serialized, so observing its second granted RowShareLock is direct proof
+  // that Plan FOR SHARE is compatible with an active scorer's plan lock.
+  releaseAbstractLock();
   releaseSharedPlanLock();
-  await sharedPlanLock;
-  const parallelScoreResult = parallelScoreBeforeRelease ?? await parallelScore;
+  await Promise.all([blockedAbstractLock, sharedPlanLock]);
+  const parallelScoreResult = await parallelScore;
   check("C5 concurrent scorers share the plan lock before distinct abstract locks",
-    parallelScoreBeforeRelease?.status === 200 && parallelScoreResult?.status === 200,
+    scorerTookCompatiblePlanShareLock && parallelScoreResult?.status === 200,
     parallelScoreResult?.status);
 
   let signalPlanUpdateShareLock;
@@ -818,6 +848,35 @@ try {
   }, evalr);
   check("C5 rejects ambiguous blank feedback instead of treating it as a clear",
     blankComment.status === 422 && blankComment.data?.error?.code === "VALIDATION_ERROR", blankComment.status);
+  const strandedLegacyRubricKey = "pre_fix_former_first_key";
+  const strandedLegacyComment = "Pre-fix stranded evaluator feedback";
+  await prisma.reviewScore.create({
+    data: {
+      planId,
+      abstractId,
+      evaluatorId,
+      rubricKey: strandedLegacyRubricKey,
+      score: 4,
+      comment: strandedLegacyComment,
+    },
+  });
+  const strandedEvaluatorQueue = await fetch(`${BASE}/admin/evaluations`, {
+    headers: { cookie: cookie(evalr) },
+  });
+  const strandedEvaluatorQueueHtml = await strandedEvaluatorQueue.text();
+  check("C5 evaluator recovers pre-fix stranded overall feedback from an orphan rubric key",
+    strandedEvaluatorQueue.status === 200 && strandedEvaluatorQueueHtml.includes(strandedLegacyComment),
+    strandedEvaluatorQueue.status);
+  await prisma.reviewScore.delete({
+    where: {
+      planId_abstractId_evaluatorId_rubricKey: {
+        planId,
+        abstractId,
+        evaluatorId,
+        rubricKey: strandedLegacyRubricKey,
+      },
+    },
+  });
   const legacyCommentKeys = ["legacy-comment-a", "legacy-comment-b"];
   await prisma.reviewScore.createMany({
     data: [
