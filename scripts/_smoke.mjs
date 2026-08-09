@@ -1377,10 +1377,15 @@ try {
     tokenVersion: 1,
     expiresAt: new Date(Date.now() + 86_400_000),
   };
-  await prisma.$executeRaw`
-    INSERT INTO "ReviewerInvite" ("id", "eventId", "userId", "tokenVersion", "expiresAt")
-    VALUES (${c17CrossInvite.id}, ${SCRATCH_EVENT.id}, ${c17CrossUser.id}, ${c17CrossInvite.tokenVersion}, ${c17CrossInvite.expiresAt})
-  `;
+  await prisma.reviewerInvite.create({
+    data: {
+      id: c17CrossInvite.id,
+      eventId: SCRATCH_EVENT.id,
+      userId: c17CrossUser.id,
+      tokenVersion: c17CrossInvite.tokenVersion,
+      expiresAt: c17CrossInvite.expiresAt,
+    },
+  });
   const c17Cross = await postReviewerInviteAccept(reviewerInviteBearer(c17CrossInvite));
   const c17GenericFailures = [c17Missing, c17Empty, c17Wrong, c17WrongType, c17Expired, c17Cross];
   check(
@@ -1391,10 +1396,10 @@ try {
     ),
     c17GenericFailures.map((result) => `${result.status}/${result.data?.error?.code}`).join(","),
   );
-  await prisma.$executeRaw`
-    UPDATE "ReviewerInvite" SET "lastSentAt" = ${new Date(Date.now() - 660_000)}
-    WHERE "id" = ${c17StoredInvite.id}
-  `;
+  await prisma.reviewerInvite.update({
+    where: { id: c17StoredInvite.id },
+    data: { lastSentAt: new Date(Date.now() - 660_000) },
+  });
   const c17Renew = await j("POST", "/api/evaluations/reviewer-invites", {
     email: c17Email, name: "Attempted Rename", resend: true,
   }, admin);
@@ -1497,10 +1502,10 @@ try {
     c17SpeakerConflict.status === 409 && c17SpeakerConflict.data?.error?.code === "REVIEWER_ROLE_CONFLICT",
     `${c17SpeakerConflict.status}/${c17SpeakerConflict.data?.error?.code}`,
   );
-  await prisma.$executeRaw`
-    UPDATE "ReviewerInvite" SET "sendWindowStart" = date_trunc('hour', NOW()), "sendWindowCount" = 20
-    WHERE "id" = ${c17StoredInvite.id}
-  `;
+  await prisma.reviewerInvite.update({
+    where: { id: c17StoredInvite.id },
+    data: { sendWindowStart: new Date(new Date().setUTCMinutes(0, 0, 0)), sendWindowCount: 20 },
+  });
   const c17CappedEmail = "capped-reviewer@scratch.test";
   const c17Capped = await j("POST", "/api/evaluations/reviewer-invites", {
     email: c17CappedEmail, name: "Capped Reviewer", resend: false,
