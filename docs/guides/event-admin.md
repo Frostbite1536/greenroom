@@ -47,10 +47,17 @@ point.
 
 ## 2. Read what came in
 
-**Abstracts** shows every proposal for the event, newest first, with filter chips across the
-top (All / Submitted / Under review / Accepted / Declined / Drafts) and a search box. Select a
+**Abstracts** loads the newest 100 proposals for the event: submitted proposals are newest first,
+then drafts. When there are more, the page says exactly how many of the event total are loaded.
+Its filter chips (All / Submitted / Under review / Accepted / Declined / Drafts) and search box
+apply only to those loaded proposals; the summary metrics still cover the whole event. Select a
 row to read the proposal itself — title, description, form, category, session type and length,
 who is speaking, how many reviews are complete, and the score so far.
+
+A known direct proposal link can open one older proposal in its drawer when it belongs to the
+same event. That drawer does not add the older proposal to the table, its tab counts, or its
+search results. Detail reads for reviews and answers are scoped to the loaded page and that one
+drawer target.
 
 Two useful facts:
 
@@ -59,9 +66,10 @@ Two useful facts:
   like ones typed into the form.
 
 The panel also renders the form's custom answers with their question labels and field types.
-Links are clickable only for safe HTTP(S) values, and very large answer sets fail closed rather
-than showing a misleading partial result. The score figure is still a plain average of every
-stored score; a weighted, completed-review decision score remains future work.
+Links are clickable only for safe HTTP(S) values. If one proposal's answers are too large to load
+within the bound, or change while they are being read, that proposal's answers are withheld rather
+than partially shown; unaffected proposals remain visible. The score figure is still a plain
+average of every stored score; a weighted, completed-review decision score remains future work.
 
 ---
 
