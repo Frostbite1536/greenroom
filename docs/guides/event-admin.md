@@ -147,7 +147,7 @@ just a tick.
 
 Use **Operations** to preview decision emails, optionally include the review team's written
 comments, and then send the exact previewed content to every listed speaker. Scores and
-reviewer identities are never included. Submission receipts/alerts and reminders use the same
+reviewer identities are never included. Submission receipts and reminders use the same
 audited delivery log; the page identifies mock mode before an operator sends.
 
 ---
