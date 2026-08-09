@@ -5,6 +5,7 @@ import { sanitizeHtml } from "@/lib/sanitize-html";
 import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import {
   emailTemplateUpdateSchema,
+  missingRequiredTemplateVariables,
   sanitizeTemplateBody,
   unknownTemplateVariables,
 } from "@/lib/comms/template-edit";
@@ -43,10 +44,18 @@ export function PATCH(req: Request, ctx: Params) {
     const template = await prisma.$transaction(async (tx) => {
       // Lock and authorize the stored row immediately before writing so an id
       // from another event is indistinguishable from an unknown id.
-      const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
-        SELECT "id", "eventId" FROM "EmailTemplate" WHERE "id" = ${templateId} FOR UPDATE
+      const [existing] = await tx.$queryRaw<{ id: string; eventId: string; key: string }[]>`
+        SELECT "id", "eventId", "key" FROM "EmailTemplate" WHERE "id" = ${templateId} FOR UPDATE
       `;
       const owned = requireEventOwnedRow(existing, auth.eventId, "TEMPLATE_NOT_FOUND", "Template");
+      const missing = missingRequiredTemplateVariables(owned.key, input.subject, htmlBody);
+      if (missing.length > 0) {
+        throw new ApiError(
+          422,
+          "MISSING_REQUIRED_TEMPLATE_VARIABLE",
+          `This template must include ${missing.map((variable) => `{{${variable}}}`).join(", ")}.`,
+        );
+      }
       return tx.emailTemplate.update({
         where: { id: owned.id },
         data: {

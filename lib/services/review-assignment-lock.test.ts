@@ -16,6 +16,9 @@ test("assignment writes lock plan, bytewise target members, then bytewise Abstra
       calls.push(`plan:${planId}`);
       return { id: planId, eventId: "event-a" };
     },
+    async lockMemberAuthorities(_tx, eventId, evaluatorIds) {
+      calls.push(`member-keys:${eventId}:${evaluatorIds.join(",")}`);
+    },
     async lockMembers(_tx, eventId, evaluatorIds) {
       calls.push(`members:${eventId}:${evaluatorIds.join(",")}`);
     },
@@ -38,6 +41,7 @@ test("assignment writes lock plan, bytewise target members, then bytewise Abstra
   assert.deepEqual(result, { id: "plan-a", eventId: "event-a" });
   assert.deepEqual(calls, [
     "plan:plan-a",
+    "member-keys:event-a:user-a,user-z",
     "members:event-a:user-a,user-z",
     "abstract:abstract-a",
     "abstract:abstract-z",
@@ -51,6 +55,7 @@ test("foreign or missing plans stop before membership and Abstract locks", async
       calls.push("plan");
       return { id: "plan-other", eventId: "event-other" };
     },
+    async lockMemberAuthorities() { calls.push("member-keys"); },
     async lockMembers() { calls.push("members"); },
     async lockAbstract() { calls.push("abstract"); },
   };
