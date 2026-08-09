@@ -322,7 +322,7 @@ try {
     speakers: [{ email, name: "Window", isPrimary: true }],
     answers: { title_note: "window", consent: true }, intent,
   });
-  const [unpublishedDraft, unpublishedSubmit, closedDraft, closedSubmit] = await Promise.all([
+  const [unpublishedDraft, unpublishedSubmit, closedDraft, s19ClosedSubmit] = await Promise.all([
     s19WindowAttempt(s19UnpublishedForm.id, "saveDraft", "s19-unpublished-draft@scratch.test"),
     s19WindowAttempt(s19UnpublishedForm.id, "submit", "s19-unpublished-submit@scratch.test"),
     s19WindowAttempt(s19ClosedForm.id, "saveDraft", "s19-closed-draft@scratch.test"),
@@ -333,8 +333,8 @@ try {
     unpublishedDraft.status === 422 && unpublishedDraft.data?.error?.code === "FORM_UNPUBLISHED" &&
       unpublishedSubmit.status === 422 && unpublishedSubmit.data?.error?.code === "FORM_UNPUBLISHED" &&
       closedDraft.status === 422 && closedDraft.data?.error?.code === "FORM_CLOSED" &&
-      closedSubmit.status === 422 && closedSubmit.data?.error?.code === "FORM_CLOSED",
-    `${unpublishedDraft.status}/${unpublishedSubmit.status}/${closedDraft.status}/${closedSubmit.status}`,
+      s19ClosedSubmit.status === 422 && s19ClosedSubmit.data?.error?.code === "FORM_CLOSED",
+    `${unpublishedDraft.status}/${unpublishedSubmit.status}/${closedDraft.status}/${s19ClosedSubmit.status}`,
   );
 
   const rateTestIp = "198.51.100.91";
@@ -532,63 +532,52 @@ try {
     speakers: [{ email: "b2@scratch.test", name: "B2 Speaker", isPrimary: true }],
     intent: "submit",
   };
-  const b2Hidden = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "beginner" },
+  let b2SubmissionSequence = 0;
+  const b2Submit = (body) => j("POST", "/api/cfp/submissions", {
+    ...b2Base,
+    ...body,
+    // Every example is an independent anonymous attempt. Keep fixture-only
+    // identities apart so S20's real per-primary submit ceiling does not turn
+    // later content-validation cases into rate-limit cases.
+    speakers: [{ email: `b2-${++b2SubmissionSequence}@scratch.test`, name: "B2 Speaker", isPrimary: true }],
   });
+  const b2Hidden = await b2Submit({ answers: { title_note: "n", consent: true, audience: "beginner" } });
   check("B2 a required field that was never shown does not block submission",
     b2Hidden.status === 201, `${b2Hidden.status} ${JSON.stringify(b2Hidden.data?.error?.fieldErrors ?? {})}`);
 
-  const b2Revealed = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced" },
-  });
+  const b2Revealed = await b2Submit({ answers: { title_note: "n", consent: true, audience: "advanced" } });
   check("B2 the same field is required once its condition is met",
     b2Revealed.status === 422 && !!b2Revealed.data?.error?.fieldErrors?.workshop_needs,
     b2Revealed.data?.error?.code);
 
-  const b2Answered = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced", workshop_needs: "Two power sockets" },
-  });
+  const b2Answered = await b2Submit({ answers: { title_note: "n", consent: true, audience: "advanced", workshop_needs: "Two power sockets" } });
   check("B2 answering the revealed field submits cleanly", b2Answered.status === 201, b2Answered.status);
 
-  const b2BadOption = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, audience: "smuggled-option" },
-  });
+  const b2BadOption = await b2Submit({ answers: { title_note: "n", consent: true, audience: "smuggled-option" } });
   check("B2 a select answer outside the options is refused",
     b2BadOption.status === 422 && !!b2BadOption.data?.error?.fieldErrors?.audience, b2BadOption.data?.error?.code);
 
-  const b2BadMulti = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, topics: ["ai", "quantum"] },
-  });
+  const b2BadMulti = await b2Submit({ answers: { title_note: "n", consent: true, topics: ["ai", "quantum"] } });
   check("B2 a multi-select answer outside the options is refused",
     b2BadMulti.status === 422 && !!b2BadMulti.data?.error?.fieldErrors?.topics, b2BadMulti.data?.error?.code);
 
-  const b2BadNumber = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, rating: "not a number" },
-  });
+  const b2BadNumber = await b2Submit({ answers: { title_note: "n", consent: true, rating: "not a number" } });
   check("B2 a non-numeric answer to a number field is refused",
     b2BadNumber.status === 422 && !!b2BadNumber.data?.error?.fieldErrors?.rating, b2BadNumber.data?.error?.code);
 
-  const b2BadUrl = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, website: "definitely not a url" },
-  });
+  const b2BadUrl = await b2Submit({ answers: { title_note: "n", consent: true, website: "definitely not a url" } });
   check("B2 an invalid URL answer is refused",
     b2BadUrl.status === 422 && !!b2BadUrl.data?.error?.fieldErrors?.website, b2BadUrl.data?.error?.code);
 
-  const b2UnsafeUrl = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: true, website: "javascript:alert(1)" },
-  });
+  const b2UnsafeUrl = await b2Submit({ answers: { title_note: "n", consent: true, website: "javascript:alert(1)" } });
   check("B2 a non-HTTP URL scheme is refused",
     b2UnsafeUrl.status === 422 && !!b2UnsafeUrl.data?.error?.fieldErrors?.website, b2UnsafeUrl.data?.error?.code);
 
-  const b2Unticked = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: false },
-  });
+  const b2Unticked = await b2Submit({ answers: { title_note: "n", consent: false } });
   check("B2 a required checkbox must be ticked, not merely answered",
     b2Unticked.status === 422 && !!b2Unticked.data?.error?.fieldErrors?.consent, b2Unticked.data?.error?.code);
 
-  const b2WrongType = await j("POST", "/api/cfp/submissions", {
-    ...b2Base, answers: { title_note: "n", consent: "yes" },
-  });
+  const b2WrongType = await b2Submit({ answers: { title_note: "n", consent: "yes" } });
   check("B2 a checkbox answered with a string is refused",
     b2WrongType.status === 422 && !!b2WrongType.data?.error?.fieldErrors?.consent, b2WrongType.data?.error?.code);
 
@@ -1635,15 +1624,15 @@ try {
   }, speaker);
   check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
 
-  // Regression guard: the public, unauthenticated path must NOT have gained the
-  // ability to overwrite a submitted/accepted abstract.
+  // Regression guard: an anonymous edit remains refused. The S20 window gate
+  // now correctly wins once a form is closed, before the draft-status check.
   const publicOverwrite = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, abstractId: r1Id, title: "Anonymous overwrite",
     speakers: [{ email: "attacker@scratch.test", name: "Attacker", isPrimary: true }],
     answers: {}, intent: "saveDraft",
   });
-  check("R1 public path still refuses to edit a non-DRAFT abstract",
-    publicOverwrite.status === 409 && publicOverwrite.data?.error?.code === "ABSTRACT_LOCKED",
+  check("R1 public path still refuses an anonymous edit after the form closes",
+    publicOverwrite.status === 422 && publicOverwrite.data?.error?.code === "FORM_CLOSED",
     publicOverwrite.data?.error?.code);
 
   // 22. W1 — speaker self-withdraw, and the states it makes reachable for the
