@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { reviewAssignmentInputSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -76,24 +77,66 @@ export const POST = handle(async (req) => {
     throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
   }
 
-  const abstracts = await prisma.abstract.findMany({
+  // Authorization preflight only: do not let a guessed cross-event id acquire
+  // another event's advisory lock. Status is deliberately not trusted here;
+  // the transaction must re-read it after taking the shared write locks.
+  const scopedAbstracts = await prisma.abstract.findMany({
     where: { id: { in: input.abstractIds }, eventId: ctx.eventId },
-    include: { category: true },
+    select: { id: true },
   });
-  if (abstracts.length !== input.abstractIds.length) {
+  if (scopedAbstracts.length !== input.abstractIds.length) {
     throw new ApiError(422, "INVALID_ABSTRACTS", "One or more abstracts are not in this event.");
   }
 
-  const evaluators = await prisma.eventMember.findMany({
-    where: { eventId: ctx.eventId, userId: { in: input.evaluatorIds } },
-    select: { userId: true },
-  });
-  const validEvaluatorIds = new Set(evaluators.map((e) => e.userId));
-  if (validEvaluatorIds.size !== input.evaluatorIds.length) {
-    throw new ApiError(422, "INVALID_EVALUATORS", "One or more evaluators are not event members.");
-  }
-
   const created = await prisma.$transaction(async (tx) => {
+    // Assignment, speaker withdrawal, scoring and decisions all observe the
+    // same per-abstract serialization boundary. Stable ordering prevents two
+    // multi-proposal assignment requests from deadlocking each other.
+    for (const abstractId of [...input.abstractIds].sort()) {
+      await lockAbstractForWrite(tx, abstractId);
+    }
+
+    // Re-read only after every lock is held. A decision or withdrawal that won
+    // the race must stay terminal; assignment may never resurrect it as
+    // UNDER_REVIEW or attach a new reviewer to it.
+    const abstracts = await tx.abstract.findMany({
+      where: { id: { in: input.abstractIds }, eventId: ctx.eventId },
+      include: { category: true },
+    });
+    if (abstracts.length !== input.abstractIds.length) {
+      throw new ApiError(422, "INVALID_ABSTRACTS", "One or more abstracts are not in this event.");
+    }
+    const unreviewable = abstracts.find(
+      (abstract) => abstract.status !== "SUBMITTED" && abstract.status !== "UNDER_REVIEW",
+    );
+    if (unreviewable) {
+      throw new ApiError(
+        409,
+        "ABSTRACT_NOT_REVIEWABLE",
+        "Only submitted or under-review proposals can be assigned. Refresh and choose a reviewable proposal.",
+      );
+    }
+
+    // Event membership alone is insufficient: speakers and operators must not
+    // become reviewers through a forged user id. Admins may review alongside
+    // evaluators, matching the existing queue and setup read contracts.
+    const evaluators = await tx.eventMember.findMany({
+      where: {
+        eventId: ctx.eventId,
+        userId: { in: input.evaluatorIds },
+        role: { in: ["EVALUATOR", "ADMIN"] },
+      },
+      select: { userId: true },
+    });
+    const validEvaluatorIds = new Set(evaluators.map((evaluator) => evaluator.userId));
+    if (validEvaluatorIds.size !== input.evaluatorIds.length) {
+      throw new ApiError(
+        422,
+        "INVALID_EVALUATORS",
+        "Every reviewer must be an evaluator or admin for this event.",
+      );
+    }
+
     let count = 0;
     for (const abstract of abstracts) {
       const teamKey = input.teamKey ?? abstract.category?.defaultTeamKey ?? null;
