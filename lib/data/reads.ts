@@ -26,6 +26,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -851,19 +852,25 @@ export async function getEventSettings(): Promise<EventSettingsView> {
     prisma.room.findMany({
       where: { eventId: ctx.eventId },
       orderBy: settingsOrder,
+      take: OPERATOR_QUERY_LIMITS.settingsRooms + 1,
       select: { id: true, name: true, capacity: true, sortOrder: true },
     }),
     prisma.track.findMany({
       where: { eventId: ctx.eventId },
       orderBy: settingsOrder,
+      take: OPERATOR_QUERY_LIMITS.settingsTracks + 1,
       select: { id: true, name: true, color: true, sortOrder: true },
     }),
     prisma.category.findMany({
       where: { eventId: ctx.eventId },
       orderBy: settingsOrder,
+      take: OPERATOR_QUERY_LIMITS.settingsCategories + 1,
       select: { id: true, name: true, description: true, defaultTeamKey: true, sortOrder: true },
     }),
   ]);
+  assertEventQueryBound(rooms, OPERATOR_QUERY_LIMITS.settingsRooms, "rooms in event settings");
+  assertEventQueryBound(tracks, OPERATOR_QUERY_LIMITS.settingsTracks, "tracks in event settings");
+  assertEventQueryBound(categories, OPERATOR_QUERY_LIMITS.settingsCategories, "categories in event settings");
 
   return {
     event: {

@@ -308,13 +308,44 @@ try {
   check("settings API returns only the active event", settingsRead.status === 200 && settingsRead.data?.data?.event?.id === EVENT_ID,
     `${settingsRead.status} ${JSON.stringify(settingsRead.data?.error ?? "")}`);
   check("settings API serializes local event dates", typeof settingsRead.data?.data?.event?.startsOn === "string" && typeof settingsRead.data?.data?.event?.endsOn === "string");
+  check("settings API returns stable rooms, tracks, and categories",
+    settingsRead.data?.data?.rooms?.map((room) => room.name).join(",") === "Hall A,Hall B"
+    && settingsRead.data?.data?.tracks?.map((track) => track.name).join(",") === "Mainstage"
+    && settingsRead.data?.data?.categories?.map((category) => category.name).join(",") === "Applied AI");
 
-  const settingsUpdate = await req("PATCH", "/api/admin/settings", {
+  const originalSettingsEvent = settingsRead.data?.data?.event;
+  const settingsNameUpdate = await req("PATCH", "/api/admin/settings", {
     name: "Scratch Frontend Settings",
-    timezone: settingsRead.data?.data?.event?.timezone,
   }, admin);
-  check("settings API updates active-event identity", settingsUpdate.status === 200 && settingsUpdate.data?.data?.event?.name === "Scratch Frontend Settings",
-    `${settingsUpdate.status} ${JSON.stringify(settingsUpdate.data?.error ?? "")}`);
+  check("name-only settings PATCH preserves timezone and local dates",
+    settingsNameUpdate.status === 200
+    && settingsNameUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsNameUpdate.data?.data?.event?.timezone === originalSettingsEvent?.timezone
+    && settingsNameUpdate.data?.data?.event?.startsOn === originalSettingsEvent?.startsOn
+    && settingsNameUpdate.data?.data?.event?.endsOn === originalSettingsEvent?.endsOn,
+    `${settingsNameUpdate.status} ${JSON.stringify(settingsNameUpdate.data?.error ?? "")}`);
+
+  const settingsTimezoneUpdate = await req("PATCH", "/api/admin/settings", {
+    timezone: "America/Denver",
+  }, admin);
+  check("timezone-only settings PATCH preserves concurrent name and local dates",
+    settingsTimezoneUpdate.status === 200
+    && settingsTimezoneUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsTimezoneUpdate.data?.data?.event?.timezone === "America/Denver"
+    && settingsTimezoneUpdate.data?.data?.event?.startsOn === originalSettingsEvent?.startsOn
+    && settingsTimezoneUpdate.data?.data?.event?.endsOn === originalSettingsEvent?.endsOn,
+    `${settingsTimezoneUpdate.status} ${JSON.stringify(settingsTimezoneUpdate.data?.error ?? "")}`);
+
+  const settingsDateUpdate = await req("PATCH", "/api/admin/settings", {
+    startsOn: "2032-05-12", endsOn: "2032-05-14",
+  }, admin);
+  check("paired event-date PATCH preserves concurrent name and timezone",
+    settingsDateUpdate.status === 200
+    && settingsDateUpdate.data?.data?.event?.name === "Scratch Frontend Settings"
+    && settingsDateUpdate.data?.data?.event?.timezone === "America/Denver"
+    && settingsDateUpdate.data?.data?.event?.startsOn === "2032-05-12"
+    && settingsDateUpdate.data?.data?.event?.endsOn === "2032-05-14",
+    `${settingsDateUpdate.status} ${JSON.stringify(settingsDateUpdate.data?.error ?? "")}`);
 
   const settingsRoom = await req("POST", "/api/admin/settings/rooms", {
     name: "Settings Studio", capacity: 85,
@@ -330,7 +361,10 @@ try {
     `${settingsRoomUpdate.status} ${JSON.stringify(settingsRoomUpdate.data?.error ?? "")}`);
 
   const usedRoomDelete = await req("DELETE", `/api/admin/settings/rooms?roomId=${fx.roomA.id}`, null, admin);
-  check("settings API refuses to remove a scheduled room", usedRoomDelete.status === 409 && usedRoomDelete.data?.error?.code === "ROOM_IN_USE",
+  check("settings API refuses to remove a scheduled room with guidance",
+    usedRoomDelete.status === 409
+    && usedRoomDelete.data?.error?.code === "ROOM_IN_USE"
+    && /move or unschedule/i.test(usedRoomDelete.data?.error?.message ?? ""),
     `${usedRoomDelete.status} ${JSON.stringify(usedRoomDelete.data?.error ?? "")}`);
   const unusedRoomDelete = await req("DELETE", `/api/admin/settings/rooms?roomId=${settingsRoomId}`, null, admin);
   check("settings API removes an unused room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId,
