@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { abstractToSessionSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 
 export const dynamic = "force-dynamic";
@@ -12,6 +13,12 @@ export const dynamic = "force-dynamic";
  * (INV-DOMAIN-001, enforced by the unique `sourceAbstractId`) and copies the
  * abstract's speakers onto the session. Idempotent: re-running returns the
  * existing session.
+ *
+ * Accepting an abstract now provisions this automatically (WAVE1-B1), so this
+ * endpoint remains for two jobs: converting a legacy accepted abstract that
+ * has no Session yet (using the requested duration), and acting as the manual
+ * checklist backfill for existing Sessions. A requested duration never mutates
+ * a Session that already exists; scheduling owns later duration changes.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -34,30 +41,8 @@ export const POST = handle(async (req) => {
     if (abstract.status !== "ACCEPTED") {
       throw new ApiError(409, "NOT_ACCEPTED", "Only accepted abstracts can become sessions.");
     }
-    if (abstract.session) {
-      return { sessionId: abstract.session.id, created: false as const };
-    }
 
-    const created = await tx.session.create({
-      data: {
-        eventId: abstract.eventId,
-        sourceAbstractId: abstract.id,
-        title: abstract.title,
-        description: abstract.abstract,
-        format: abstract.format,
-        durationMinutes: input.durationMinutes,
-      },
-    });
-    if (abstract.speakers.length > 0) {
-      await tx.sessionSpeaker.createMany({
-        data: abstract.speakers.map((s) => ({
-          sessionId: created.id,
-          userId: s.userId,
-          isPrimary: s.isPrimary,
-        })),
-      });
-    }
-    return { sessionId: created.id, created: true as const };
+    return provisionAcceptedAbstract(tx, abstract, input.durationMinutes);
   });
 
   return ok(result, result.created ? 201 : 200);
