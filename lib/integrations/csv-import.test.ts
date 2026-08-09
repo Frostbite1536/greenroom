@@ -164,6 +164,10 @@ test("coerceCsvAnswer converts typed values and validates options", () => {
     () => coerceCsvAnswer("not a URL", { key: "website", type: "URL", required: false, options: null }),
     CsvImportError,
   );
+  assert.throws(
+    () => coerceCsvAnswer("javascript:alert(1)", { key: "website", type: "URL", required: false, options: null }),
+    CsvImportError,
+  );
 });
 
 test("required imported checkboxes must be checked", () => {

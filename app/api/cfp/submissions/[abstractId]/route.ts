@@ -215,6 +215,7 @@ export function PATCH(req: Request, ctx: Params) {
       const error = validateSubmissionContent(spec, {
         speakerCount: patch.speakers ? patch.speakers.length : existing.speakers.length,
         answers: merged,
+        answerKeysToValidate: Object.keys(patch.answers ?? {}),
       });
       if (error) return fail(422, error.code, error.message, error.fieldErrors);
     }

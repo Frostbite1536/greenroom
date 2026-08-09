@@ -108,10 +108,17 @@ test("numbers accept the renderer's string input but reject non-numbers", () => 
   assert.ok(validateAnswerType(number, ["4"]));
 });
 
-test("urls must parse", () => {
+test("URLs must be browser-safe HTTP(S) links", () => {
   const url = field({ key: "website", type: "URL" });
   assert.equal(validateAnswerType(url, "https://example.test/x"), null);
   assert.ok(validateAnswerType(url, "example.test"));
+  assert.ok(validateAnswerType(url, "javascript:alert(1)"));
+  assert.ok(validateAnswerType(url, "data:text/plain,hello"));
+});
+
+test("select fields with missing stored options fail closed", () => {
+  assert.ok(validateAnswerType(field({ key: "audience", type: "SELECT", options: null }), "expert"));
+  assert.ok(validateAnswerType(field({ key: "topics", type: "MULTI_SELECT", options: null }), ["ai"]));
 });
 
 test("checkboxes are boolean only, and null means unanswered", () => {
@@ -198,4 +205,22 @@ test("an answer outside the field's options is refused by the server", () => {
   });
   assert.equal(error?.code, "FIELD_ERRORS");
   assert.ok(error?.fieldErrors?.audience);
+});
+
+test("a forged hidden answer is still type-checked", () => {
+  const error = validateSubmissionContent(conditionalForm, {
+    speakerCount: 1,
+    answers: { audience: "beginner", consent: true, workshop_needs: ["forged"] },
+  });
+  assert.equal(error?.code, "FIELD_ERRORS");
+  assert.ok(error?.fieldErrors?.workshop_needs);
+});
+
+test("an unrelated edit is not blocked by a legacy stale hidden answer", () => {
+  const error = validateSubmissionContent(conditionalForm, {
+    speakerCount: 1,
+    answers: { audience: "beginner", consent: true, workshop_needs: ["legacy"] },
+    answerKeysToValidate: ["audience"],
+  });
+  assert.equal(error, null);
 });

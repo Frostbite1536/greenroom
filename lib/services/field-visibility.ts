@@ -1,4 +1,9 @@
-import { isFieldVisible, type ConditionalLogic, type LogicField } from "@/lib/form-logic";
+import {
+  isFieldVisible,
+  isHttpUrl,
+  type ConditionalLogic,
+  type LogicField,
+} from "@/lib/form-logic";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 /**
@@ -133,10 +138,7 @@ export function validateAnswerType(
       return null;
     }
     case "URL": {
-      if (typeof value !== "string") return "Enter a valid link (including https://).";
-      try {
-        new URL(value);
-      } catch {
+      if (typeof value !== "string" || !isHttpUrl(value)) {
         return "Enter a valid link (including https://).";
       }
       return null;
@@ -144,7 +146,7 @@ export function validateAnswerType(
     case "SELECT": {
       if (typeof value !== "string") return "Choose one of the listed options.";
       const allowed = (field.options ?? []).map((option) => option.value);
-      if (allowed.length > 0 && !allowed.includes(value)) {
+      if (!allowed.includes(value)) {
         return "Choose one of the listed options.";
       }
       return null;
@@ -154,7 +156,7 @@ export function validateAnswerType(
         return "Choose from the listed options.";
       }
       const allowed = (field.options ?? []).map((option) => option.value);
-      if (allowed.length > 0 && value.some((entry) => !allowed.includes(entry))) {
+      if (value.some((entry) => !allowed.includes(entry))) {
         return "Choose from the listed options.";
       }
       if (new Set(value).size !== value.length) return "Each option can only be chosen once.";

@@ -321,6 +321,12 @@ try {
   check("B2 an invalid URL answer is refused",
     b2BadUrl.status === 422 && !!b2BadUrl.data?.error?.fieldErrors?.website, b2BadUrl.data?.error?.code);
 
+  const b2UnsafeUrl = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, website: "javascript:alert(1)" },
+  });
+  check("B2 a non-HTTP URL scheme is refused",
+    b2UnsafeUrl.status === 422 && !!b2UnsafeUrl.data?.error?.fieldErrors?.website, b2UnsafeUrl.data?.error?.code);
+
   const b2Unticked = await j("POST", "/api/cfp/submissions", {
     ...b2Base, answers: { title_note: "n", consent: false },
   });
@@ -597,6 +603,32 @@ try {
   check("R1 edit response carries the field spec for the renderer",
     Array.isArray(edit1.data?.data?.form?.fields) && edit1.data?.data?.form?.fields.length === 8 &&
     !("isOpen" in (edit1.data?.data?.form ?? {})));
+
+  const b2EditReveal = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "advanced" },
+  }, speaker);
+  check("B2 speaker edit enforces a newly revealed required field",
+    b2EditReveal.status === 422 && !!b2EditReveal.data?.error?.fieldErrors?.workshop_needs,
+    b2EditReveal.data?.error?.code);
+
+  const b2EditAnswered = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "advanced", workshop_needs: "A projector" },
+  }, speaker);
+  check("B2 speaker edit accepts the revealed field once answered",
+    b2EditAnswered.status === 200, b2EditAnswered.status);
+
+  const b2EditHide = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "beginner" },
+  }, speaker);
+  check("B2 speaker edit ignores a now-hidden required field",
+    b2EditHide.status === 200, b2EditHide.status);
+
+  const b2EditHiddenForge = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { workshop_needs: ["forged"] },
+  }, speaker);
+  check("B2 speaker edit rejects a forged hidden answer with the wrong type",
+    b2EditHiddenForge.status === 422 && !!b2EditHiddenForge.data?.error?.fieldErrors?.workshop_needs,
+    b2EditHiddenForge.data?.error?.code);
 
   const clearRequired = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { answers: { title_note: null } }, speaker);
   check("R1 clearing a required answer refused (422 FIELD_ERRORS)",

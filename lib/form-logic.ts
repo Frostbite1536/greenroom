@@ -64,6 +64,16 @@ export function isFieldVisible(field: LogicField, answers: AnswerMap): boolean {
   return logic.match === "all" ? results.every(Boolean) : results.some(Boolean);
 }
 
+/** URL fields represent browser links, not arbitrary URI schemes. */
+export function isHttpUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /** Validate one visible field, returning an error message or null. */
 export function validateField(field: LogicField, value: AnswerValue): string | null {
   const empty = field.type === "CHECKBOX" ? value !== true : isBlank(value);
@@ -73,15 +83,14 @@ export function validateField(field: LogicField, value: AnswerValue): string | n
   }
   if (empty) return null;
 
-  if (field.type === "URL" && typeof value === "string") {
-    try {
-      new URL(value);
-    } catch {
-      return "Enter a valid URL (including https://).";
-    }
+  if (field.type === "URL" && (typeof value !== "string" || !isHttpUrl(value))) {
+    return "Enter a valid URL (including https://).";
   }
-  if (field.type === "NUMBER" && typeof value === "string" && Number.isNaN(Number(value))) {
-    return "Enter a number.";
+  if (field.type === "NUMBER") {
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (typeof value === "boolean" || Array.isArray(value) || !Number.isFinite(numeric)) {
+      return "Enter a number.";
+    }
   }
   return null;
 }

@@ -62,6 +62,12 @@ export function toFormFieldSpecs(
 export type SubmissionInput = {
   speakerCount: number;
   answers: Record<string, FormAnswerValue>;
+  /**
+   * Keys supplied by this request. Visible answers are always checked; this
+   * additionally checks forged hidden answers without making an old, hidden
+   * stored value block an otherwise unrelated speaker edit.
+   */
+  answerKeysToValidate?: readonly string[];
   /** Field key treated as the speaker bio for max-length enforcement. */
   bioFieldKey?: string;
 };
@@ -135,6 +141,7 @@ export function validateSubmissionContent(
   // sends answers for visible fields only, so requiring a conditionally hidden
   // field would reject a perfectly valid submission (audit2#3).
   const visible = resolveVisibleFields(form.fields, input.answers);
+  const visibleKeys = new Set(visible.map((field) => field.key));
 
   for (const field of visible) {
     const value = input.answers[field.key];
@@ -149,6 +156,16 @@ export function validateSubmissionContent(
       continue;
     }
     const typeError = validateAnswerType(field, value);
+    if (typeError) (fieldErrors[field.key] ??= []).push(typeError);
+  }
+
+  // A caller can forge an answer for a field the current conditions hide.
+  // It is not required, but any value newly supplied at the boundary must
+  // still match that field's type/options before a route may persist it.
+  const suppliedKeys = new Set(input.answerKeysToValidate ?? Object.keys(input.answers));
+  for (const field of form.fields) {
+    if (visibleKeys.has(field.key) || !suppliedKeys.has(field.key)) continue;
+    const typeError = validateAnswerType(field, input.answers[field.key]);
     if (typeError) (fieldErrors[field.key] ??= []).push(typeError);
   }
 
