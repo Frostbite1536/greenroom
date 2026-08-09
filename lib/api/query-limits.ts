@@ -20,6 +20,16 @@ export const OPERATOR_QUERY_LIMITS = {
   settingsTracks: 250,
   settingsCategories: 1_000,
   adminAbstracts: 100,
+  // The newest-page cap plus one separately scoped, valid older deep-link
+  // selection. It does not enlarge the list API's 100-row parent page.
+  adminDecisionAbstracts: 101,
+  // Decision summaries cover the capped parent page plus at most one valid
+  // selected older row. Dependent event reads are cap-plus-one and fail closed
+  // rather than silently reporting a partial organizer decision number.
+  adminDecisionPlans: 100,
+  adminDecisionRubricCriteria: 250,
+  adminDecisionAssignments: 5_000,
+  adminDecisionScores: 25_000,
   adminReviewComments: 5_000,
 } as const;
 

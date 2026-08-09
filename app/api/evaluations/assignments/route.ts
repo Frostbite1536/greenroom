@@ -27,7 +27,9 @@ export const GET = handle(async (req) => {
       abstract: {
         include: { category: true, speakers: { include: { user: true } } },
       },
-      evaluator: { select: { id: true, name: true, email: true } },
+      ...(ctx.role === "ADMIN"
+        ? { evaluator: { select: { id: true, name: true, email: true } } }
+        : {}),
     },
     orderBy: { assignedAt: "asc" },
   });
@@ -39,7 +41,7 @@ export const GET = handle(async (req) => {
       abstractId: a.abstractId,
       teamKey: a.teamKey,
       status: a.status,
-      evaluator: a.evaluator,
+      ...(ctx.role === "ADMIN" ? { evaluator: a.evaluator } : {}),
       abstract: {
         id: a.abstract.id,
         // Blind review hides speaker identity from evaluators.

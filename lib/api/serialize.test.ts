@@ -9,7 +9,7 @@ import {
   type ReviewAssignment,
   type ReviewScore,
 } from "@prisma/client";
-import { serializeAbstract } from "@/lib/api/abstract-serialize";
+import { serializeAbstract, serializeAdminAbstract } from "@/lib/api/abstract-serialize";
 import { serializePublicForm } from "@/lib/api/form-serialize";
 
 test("serializePublicForm includes event categories in supplied stable order", () => {
@@ -101,4 +101,33 @@ test("serializeAbstract preserves the non-final MAYBE state and its null final-d
   const result = serializeAbstract(abstract);
   assert.equal(result.status, "MAYBE");
   assert.equal(result.decidedAt, null);
+});
+
+test("serializeAdminAbstract omits legacy cross-round score and progress fields", () => {
+  const abstract = {
+    id: "abstract-1",
+    eventId: "event-1",
+    formConfigId: "form-1",
+    submitterId: "user-1",
+    title: "A proposal",
+    abstract: null,
+    format: null,
+    durationMinutes: null,
+    categoryId: null,
+    status: "UNDER_REVIEW",
+    submittedAt: null,
+    decidedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    reviewAssignments: [{ status: "COMPLETED" }] as Pick<ReviewAssignment, "status">[],
+    reviewScores: [{ score: new Prisma.Decimal(4) }] as Pick<ReviewScore, "score">[],
+  } satisfies Abstract & {
+    reviewAssignments: Pick<ReviewAssignment, "status">[];
+    reviewScores: Pick<ReviewScore, "score">[];
+  };
+
+  const result = serializeAdminAbstract(abstract);
+  assert.equal("avgScore" in result, false);
+  assert.equal("reviewsComplete" in result, false);
+  assert.equal("reviewsTotal" in result, false);
 });
