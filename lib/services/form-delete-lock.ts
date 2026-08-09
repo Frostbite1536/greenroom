@@ -51,8 +51,11 @@ const productionDependencies: FormDeleteLockDependencies = {
 /**
  * LOCK-ORDER-v1 for whole-form deletion after the caller has FormConfig FOR
  * UPDATE: sorted FormFields, then sorted linked OnboardingTask rows, followed
- * by fresh usage reads. No Abstract advisory lock is acquired: every Abstract
- * writer joins the FormConfig parent before its per-Abstract lock.
+ * by fresh usage reads. FormConfig FOR UPDATE blocks PostgreSQL FK key-share
+ * checks, so new references or retargets cannot pass while deletion is in
+ * flight. The fresh Abstract read detects committed references, and the
+ * delete-time P2003 fallback fails closed. No Abstract advisory lock is needed
+ * because no current writer retargets an existing Abstract's formConfigId.
  */
 export async function lockAndReadFormDeleteUsage(
   tx: Prisma.TransactionClient,
