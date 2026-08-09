@@ -1,17 +1,22 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { abstractStatusSchema, abstractUpsertSchema } from "@/types/api";
+import { abstractStatusSchema, publicAbstractUpsertSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
-import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
+import { ApiError, fail, fromZod, handle, ok } from "@/lib/api/http";
+import { parseBoundedJson } from "@/lib/api/bounded-json";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
 import { notifyAbstractSubmitted } from "@/lib/comms/notify-service";
 import {
   toFormFieldSpecs,
   validateSubmission,
+  validateSubmissionWindow,
   type FormSpec,
 } from "@/lib/services/form-validation";
 import type { FormAnswerValue } from "@/lib/services/types";
-import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
+import { lockCurrentFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
+import { lockFormConfigForAnswerWrite } from "@/lib/services/form-config-lock";
+import { lockPublicSubmissionIdentities } from "@/lib/services/public-submission";
+import { enforcePublicSubmissionRateLimit, publicClientIp } from "@/lib/services/public-submission-rate";
 
 export const dynamic = "force-dynamic";
 
@@ -56,19 +61,26 @@ export const GET = handle(async (req) => {
 
 /**
  * POST /api/cfp/submissions — save a draft or submit an abstract from the
- * public CFP page (works with a null session). Co-speakers are keyed by email:
+ * public CFP page (works with a null session). Both drafts and submits require
+ * a published, open form; anonymous rows must not accumulate after a CFP has
+ * closed. Co-speakers are keyed by email:
  * shell `User` rows are upserted by lowercased email, and the primary speaker
  * is the submitter (contract in STATE.md / types/api.ts). On `submit`, all
  * INV-FORM-001 constraints are enforced server-side.
  */
 export const POST = handle(async (req) => {
-  const input = await parseBody(req, abstractUpsertSchema);
+  const parsed = publicAbstractUpsertSchema.safeParse(await parseBoundedJson(req));
+  if (!parsed.success) throw fromZod(parsed.error);
+  const input = parsed.data;
 
-  const form = await prisma.formConfig.findUnique({
+  // This minimal known-form pre-read establishes event scope for the independent
+  // rate transaction. Eligibility is authoritative only after the business
+  // transaction obtains its FormConfig parent lock below.
+  const preReadForm = await prisma.formConfig.findUnique({
     where: { id: input.formConfigId },
-    include: { fields: true },
+    select: { id: true, eventId: true, published: true, opensAt: true, closesAt: true },
   });
-  if (!form) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
+  if (!preReadForm) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
 
   const primary =
     input.speakers.find((s) => s.isPrimary) ?? input.speakers[0];
@@ -76,14 +88,21 @@ export const POST = handle(async (req) => {
     throw new ApiError(422, "NO_PRIMARY_SPEAKER", "A primary speaker is required.");
   }
 
-  // Map incoming answer keys to known field ids; unknown keys are ignored.
-  const fieldByKey = new Map(form.fields.map((f) => [f.key, f]));
-  const answersByKey: Record<string, FormAnswerValue> = {};
-  for (const [key, value] of Object.entries(input.answers)) {
-    if (fieldByKey.has(key)) answersByKey[key] = value as FormAnswerValue;
-  }
+  // Known-form attempts consume a rate token before later content/category
+  // validation. This transaction finishes before the business writer starts.
+  await enforcePublicSubmissionRateLimit({
+    eventId: preReadForm.eventId,
+    intent: input.intent,
+    primaryEmail: primary.email,
+    clientIp: publicClientIp(req.headers),
+  });
 
-  if (input.intent === "submit") {
+  const saved = await prisma.$transaction(async (tx) => {
+    // LOCK-ORDER-v1: FormConfig parent, sorted FormFields, sorted identities.
+    // No Abstract lock is added here pending the coordinated inversion work.
+    const form = await lockFormConfigForAnswerWrite(tx, input.formConfigId);
+    if (!form) throw new ApiError(404, "FORM_NOT_FOUND", "This form is not available.");
+    const fields = await lockCurrentFormFieldsForAnswerWrite(tx, form.id);
     const spec: FormSpec = {
       published: form.published,
       opensAt: form.opensAt,
@@ -91,47 +110,51 @@ export const POST = handle(async (req) => {
       minSpeakers: form.minSpeakers,
       maxSpeakers: form.maxSpeakers,
       maxBioLength: form.maxBioLength,
-      fields: toFormFieldSpecs(form.fields),
+      fields: toFormFieldSpecs(fields),
     };
-    const error = validateSubmission(spec, {
-      speakerCount: input.speakers.length,
-      answers: answersByKey,
-    });
-    if (error) return fail(422, error.code, error.message, error.fieldErrors);
-  }
+    const windowError = validateSubmissionWindow(spec);
+    if (windowError) throw new ApiError(422, windowError.code, windowError.message, windowError.fieldErrors);
 
-  if (input.categoryId) {
-    const category = await prisma.category.findUnique({ where: { id: input.categoryId } });
-    if (!category || category.eventId !== form.eventId) {
-      throw new ApiError(422, "INVALID_CATEGORY", "Selected category is not valid for this event.");
+    // Map incoming answer keys to known locked field ids; unknown keys remain
+    // intentionally ignored, matching the public renderer's forward-safe form.
+    const fieldByKey = new Map(fields.map((field) => [field.key, field]));
+    const answersByKey: Record<string, FormAnswerValue> = {};
+    for (const [key, value] of Object.entries(input.answers)) {
+      if (fieldByKey.has(key)) answersByKey[key] = value as FormAnswerValue;
     }
-  }
 
-  const saved = await prisma.$transaction(async (tx) => {
-    const formIsCurrent = await lockFormFieldsForAnswerWrite(
-      tx,
-      new Map([[form.id, form.fields]]),
-    );
-    if (!formIsCurrent) {
-      throw new ApiError(
-        409,
-        "FORM_CHANGED",
-        "This form changed while your proposal was being saved. Review the latest questions and try again.",
-      );
+    if (input.intent === "submit") {
+      const error = validateSubmission(spec, {
+        speakerCount: input.speakers.length,
+        answers: answersByKey,
+      });
+      if (error) throw new ApiError(422, error.code, error.message, error.fieldErrors);
     }
+
+    if (input.categoryId) {
+      const category = await tx.category.findUnique({ where: { id: input.categoryId } });
+      if (!category || category.eventId !== form.eventId) {
+        throw new ApiError(422, "INVALID_CATEGORY", "Selected category is not valid for this event.");
+      }
+    }
+
+    await lockPublicSubmissionIdentities(tx, input.speakers.map((speaker) => speaker.email));
 
     // Public CFP input may create a shell user, but must never overwrite an
     // existing identity or grant an event membership/role.
-    const speakerUsers = await Promise.all(
-      input.speakers.map((s) =>
-        tx.user.upsert({
-          where: { email: s.email },
+    const usersByEmail = new Map<string, { id: string }>();
+    for (const speaker of [...input.speakers].sort((left, right) => left.email.localeCompare(right.email))) {
+      if (!usersByEmail.has(speaker.email)) {
+        const user = await tx.user.upsert({
+          where: { email: speaker.email },
           update: {},
-          create: { email: s.email, name: s.name },
+          create: { email: speaker.email, name: speaker.name },
           select: { id: true },
-        }),
-      ),
-    );
+        });
+        usersByEmail.set(speaker.email, user);
+      }
+    }
+    const speakerUsers = input.speakers.map((speaker) => usersByEmail.get(speaker.email)!);
     const primaryUser = speakerUsers[input.speakers.indexOf(primary)];
 
     if (input.abstractId) {
@@ -222,9 +245,8 @@ export const POST = handle(async (req) => {
     });
   });
 
-  // O2 (Ops): tell the submitter, co-speakers and the program team. Never
-  // throws and never blocks the response contract — a proposal must be saved
-  // even if the mail provider is down. See lib/comms/notify-service.ts.
+  // A submitted public roster receives exactly one receipt at its persisted
+  // Abstract.submitter (the primary roster entry). Delivery never blocks save.
   if (input.intent === "submit") await notifyAbstractSubmitted(saved.id);
 
   return ok(serializeAbstract(saved), input.abstractId ? 200 : 201);

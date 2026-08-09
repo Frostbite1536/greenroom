@@ -176,6 +176,50 @@ export const abstractUpsertSchema = z.object({
   intent: z.enum(["saveDraft", "submit"]),
 });
 
+// Public input is deliberately narrower than signed-in speaker edits: it is
+// the unauthenticated write surface and must remain well below the app-owned
+// 128 KiB streamed-body limit.
+const publicFormAnswerValueSchema = z.union([
+  z.string().max(8_000),
+  z.number().finite().min(-1_000_000).max(1_000_000),
+  z.boolean(),
+  z.array(z.string().max(1_000)).max(50),
+  z.null(),
+]);
+const publicAnswersSchema = z
+  .record(z.string().min(1).max(120), publicFormAnswerValueSchema)
+  .superRefine((answers, ctx) => {
+    if (Object.keys(answers).length > 100) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Submit no more than 100 answers." });
+    }
+  });
+const publicSpeakerInputSchema = z
+  .array(
+    z.object({
+      email: z.string().trim().toLowerCase().max(254).email(),
+      name: z.string().trim().min(1).max(120),
+      isPrimary: z.boolean().default(false),
+    }).strict(),
+  )
+  .min(1)
+  .max(20);
+
+/** Strict, bounded body contract for anonymous draft and submit writes. */
+export const publicAbstractUpsertSchema = z
+  .object({
+    formConfigId: idSchema,
+    abstractId: idSchema.optional(),
+    title: z.string().trim().min(3).max(180),
+    abstract: z.string().trim().max(5_000).optional(),
+    format: z.string().trim().max(80).optional(),
+    durationMinutes: z.number().int().min(5).max(480).optional(),
+    categoryId: idSchema.optional(),
+    speakers: publicSpeakerInputSchema,
+    answers: publicAnswersSchema,
+    intent: z.enum(["saveDraft", "submit"]),
+  })
+  .strict();
+
 export const rubricCriterionSchema = z
   .object({
     key: z.string().regex(/^[a-z][a-z0-9_]*$/),
@@ -337,6 +381,7 @@ export const calendarRequestSchema = z.object({ eventId: idSchema, sessionId: id
 
 export type FormConfigInput = z.infer<typeof formConfigInputSchema>;
 export type AbstractUpsert = z.infer<typeof abstractUpsertSchema>;
+export type PublicAbstractUpsert = z.infer<typeof publicAbstractUpsertSchema>;
 export type EvaluationPlanInput = z.infer<typeof evaluationPlanInputSchema>;
 export type ReviewScoreInput = z.infer<typeof reviewScoreInputSchema>;
 export type GuaranteedSessionInput = z.infer<typeof guaranteedSessionInputSchema>;

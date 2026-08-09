@@ -45,16 +45,31 @@ if (occupiedPort) {
 // not have one configured. It exercises the optional v1 read surface without
 // changing any shared environment or touching the judged event.
 const V1_API_KEY = process.env.GREENROOM_API_KEY || "scratch-v1-api-key-for-local-only-0001";
-const j = async (method, path, body, sess) => {
+let publicSubmissionIpSequence = 1;
+function isolatedPublicSubmissionHeaders(method, path) {
+  if (method !== "POST" || path !== "/api/cfp/submissions") return {};
+  const sequence = publicSubmissionIpSequence++;
+  // A valid single-address Vercel header keeps independent smoke examples from
+  // sharing the production-safe `unknown` IP throttle bucket.
+  return { "x-vercel-forwarded-for": `198.18.${Math.floor(sequence / 250)}.${(sequence % 250) + 1}` };
+}
+
+const j = async (method, path, body, sess, extraHeaders = {}) => {
   const res = await fetch(BASE + path, {
     method,
-    headers: { "content-type": "application/json", ...(sess ? { cookie: cookie(sess) } : {}) },
+    headers: {
+      "content-type": "application/json",
+      ...isolatedPublicSubmissionHeaders(method, path),
+      ...extraHeaders,
+      ...(sess ? { cookie: cookie(sess) } : {}),
+    },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data };
 };
+
 const v1 = async (path) => {
   const res = await fetch(BASE + path, { headers: { authorization: `Bearer ${V1_API_KEY}` } });
   const text = await res.text();
@@ -241,6 +256,125 @@ try {
     JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
       JSON.stringify(["AI", "Community", "Systems"]),
   );
+
+  // S19/S20 — public writes are bounded before parsing, strict at the schema
+  // boundary, and rate-limited in a short transaction that commits before a
+  // later business-validation refusal. Keep these headers/rate rows isolated
+  // from the rest of this long-lived scratch smoke.
+  const publicCoreCounts = async () => ({
+    users: await prisma.user.count(),
+    abstracts: await prisma.abstract.count({ where: { eventId: SCRATCH_EVENT.id } }),
+    dispatches: await prisma.emailDispatch.count(),
+  });
+  const oversizeBefore = await publicCoreCounts();
+  // This is intentionally just over the app-owned 128 KiB limit: sufficiently
+  // small for a deterministic local request, but rejected before JSON.parse or
+  // any rate/business write.
+  const oversizeResponse = await fetch(BASE + "/api/cfp/submissions", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-vercel-forwarded-for": "198.51.100.90" },
+    body: JSON.stringify({ padding: "x".repeat(128 * 1024) }),
+  });
+  const oversize = { status: oversizeResponse.status, data: await oversizeResponse.json() };
+  const oversizeAfter = await publicCoreCounts();
+  check(
+    "S19 app-owned 128 KiB rejection is 413 before parsing or writing core rows",
+    oversize.status === 413 && oversize.data?.error?.code === "REQUEST_TOO_LARGE" &&
+      JSON.stringify(oversizeAfter) === JSON.stringify(oversizeBefore),
+    `${oversize.status} ${JSON.stringify(oversize.data)}`,
+  );
+
+  const strictBefore = await publicCoreCounts();
+  const strictNested = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 strict nested object",
+    speakers: [{ email: "s19-strict@scratch.test", name: "Strict", isPrimary: true, ignored: true }],
+    answers: {}, intent: "saveDraft",
+  });
+  const boundedAnswerKey = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 bounded answer key",
+    speakers: [{ email: "s19-bounded@scratch.test", name: "Bounded", isPrimary: true }],
+    answers: { ["k".repeat(121)]: "too long" }, intent: "saveDraft",
+  });
+  const strictAfter = await publicCoreCounts();
+  check(
+    "S19 public schema rejects strict nested extras and bounded answer keys before core writes",
+    strictNested.status === 422 && boundedAnswerKey.status === 422 &&
+      JSON.stringify(strictAfter) === JSON.stringify(strictBefore),
+    `${strictNested.status}/${boundedAnswerKey.status}`,
+  );
+
+  const s19UnpublishedForm = await prisma.formConfig.create({
+    data: {
+      eventId: SCRATCH_EVENT.id, name: "S19 Unpublished", slug: `s19-unpublished-${Date.now()}`,
+      published: false,
+    },
+  });
+  const s19ClosedForm = await prisma.formConfig.create({
+    data: {
+      eventId: SCRATCH_EVENT.id, name: "S19 Closed", slug: `s19-closed-${Date.now()}`,
+      published: true, closesAt: new Date(Date.now() - 60_000),
+    },
+  });
+  const s19WindowAttempt = (formConfigId, intent, email) => j("POST", "/api/cfp/submissions", {
+    formConfigId, title: `S19 ${intent} window refusal`,
+    speakers: [{ email, name: "Window", isPrimary: true }],
+    answers: { title_note: "window", consent: true }, intent,
+  });
+  const [unpublishedDraft, unpublishedSubmit, closedDraft, closedSubmit] = await Promise.all([
+    s19WindowAttempt(s19UnpublishedForm.id, "saveDraft", "s19-unpublished-draft@scratch.test"),
+    s19WindowAttempt(s19UnpublishedForm.id, "submit", "s19-unpublished-submit@scratch.test"),
+    s19WindowAttempt(s19ClosedForm.id, "saveDraft", "s19-closed-draft@scratch.test"),
+    s19WindowAttempt(s19ClosedForm.id, "submit", "s19-closed-submit@scratch.test"),
+  ]);
+  check(
+    "S19 both public drafts and submits require a published, open form",
+    unpublishedDraft.status === 422 && unpublishedDraft.data?.error?.code === "FORM_UNPUBLISHED" &&
+      unpublishedSubmit.status === 422 && unpublishedSubmit.data?.error?.code === "FORM_UNPUBLISHED" &&
+      closedDraft.status === 422 && closedDraft.data?.error?.code === "FORM_CLOSED" &&
+      closedSubmit.status === 422 && closedSubmit.data?.error?.code === "FORM_CLOSED",
+    `${unpublishedDraft.status}/${unpublishedSubmit.status}/${closedDraft.status}/${closedSubmit.status}`,
+  );
+
+  const rateTestIp = "198.51.100.91";
+  const rateTestHeaders = { "x-vercel-forwarded-for": rateTestIp };
+  const rateEmails = Array.from({ length: 21 }, (_, index) => `s19-rate-${index}@scratch.test`);
+  const rateCoreBefore = await publicCoreCounts();
+  const rateInvalidAttempts = [];
+  for (let index = 0; index < 20; index++) {
+    rateInvalidAttempts.push(await j("POST", "/api/cfp/submissions", {
+      formConfigId: formId, title: `S19 rate business-invalid ${index}`,
+      speakers: [{ email: rateEmails[index], name: "Rate", isPrimary: true }],
+      answers: {}, intent: "submit",
+    }, undefined, rateTestHeaders));
+  }
+  const rateBucketBeforeLimit = await prisma.$queryRaw`
+    SELECT COALESCE(MAX("count"), 0)::int AS "count"
+    FROM "PublicSubmissionRateBucket"
+    WHERE "eventId" = ${SCRATCH_EVENT.id} AND "scope" = 'public_write_ip_10m'
+  `;
+  const rateLimited = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S19 rate limited after invalid attempts",
+    speakers: [{ email: rateEmails[20], name: "Rate", isPrimary: true }],
+    answers: {}, intent: "submit",
+  }, undefined, rateTestHeaders);
+  const rateCoreAfter = await publicCoreCounts();
+  check(
+    "S20 known-form business-invalid attempts durably consume the independent IP bucket and the next write is 429 without core writes",
+    rateInvalidAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FIELD_ERRORS") &&
+      rateBucketBeforeLimit[0]?.count === 20 &&
+      rateLimited.status === 429 && rateLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      JSON.stringify(rateCoreAfter) === JSON.stringify(rateCoreBefore),
+    `${rateInvalidAttempts.map((attempt) => attempt.status).join(",")}/${rateBucketBeforeLimit[0]?.count}/${rateLimited.status}`,
+  );
+  await prisma.$executeRaw`
+    DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  const rateBucketsAfterCleanup = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  check("S20 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
 
   // M5: active-event settings are admin-only and use event-local calendar
   // dates, never the browser's timezone. Rooms are scoped server-side too.
@@ -556,9 +690,9 @@ try {
     orderBy: { recipient: "asc" },
   });
   check(
-    "O2 legacy template fallback records receipt, co-speaker notice, and admin alert",
+    "S19 public submit records exactly one receipt for its primary submitter",
     JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
-      JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
+      JSON.stringify(["spk@x.com"]),
     JSON.stringify(submissionDispatches.map((row) => row.recipient)),
   );
   check(

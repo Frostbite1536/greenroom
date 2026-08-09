@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { EMAIL_SUBJECT_MAX_LENGTH, normalizeEmailSubject } from "@/lib/comms/subject";
 
 /**
  * Editing rules for reminder templates.
@@ -50,7 +51,7 @@ export function unknownTemplateVariables(...texts: string[]): string[] {
 }
 
 export const emailTemplateUpdateSchema = z.object({
-  subject: z.string().trim().min(1, "Give the email a subject.").max(200),
+  subject: z.string().transform((value) => normalizeEmailSubject(value)).pipe(z.string().min(1, "Give the email a subject.").max(EMAIL_SUBJECT_MAX_LENGTH)),
   htmlBody: z.string().trim().min(1, "The email needs a message.").max(20_000),
   // Free-form label on the model; kept short and optional.
   trigger: z.string().trim().max(60).nullish(),
@@ -92,7 +93,7 @@ export function previewTemplate(template: { subject: string; htmlBody: string })
       return escape ? escapeHtml(value) : value;
     });
   return {
-    subject: substitute(template.subject, false),
+    subject: normalizeEmailSubject(substitute(template.subject, false)),
     html: substitute(sanitizeHtml(template.htmlBody), true),
   };
 }

@@ -1,8 +1,7 @@
 import { prisma } from "@/lib/prisma";
+import type { PrismaClient } from "@prisma/client";
 import { dispatchEmail, type Fetcher } from "@/lib/comms/send";
 import {
-  buildCoSpeakerNotice,
-  buildSubmissionAlert,
   buildSubmissionReceipt,
   CFP_SUBMITTED_TEMPLATE_KEY,
 } from "@/lib/comms/notifications";
@@ -19,6 +18,7 @@ import {
  * that outlives the response is not guaranteed to run.
  */
 export type NotifySummary = { attempted: number; sent: number; mocked: number; failed: number; skipped?: string };
+export type SubmissionNotificationDb = Pick<PrismaClient, "abstract" | "emailTemplate" | "emailDispatch">;
 
 const EMPTY: NotifySummary = { attempted: 0, sent: 0, mocked: 0, failed: 0 };
 
@@ -32,18 +32,18 @@ async function guard(run: () => Promise<NotifySummary>): Promise<NotifySummary> 
   }
 }
 
-const ADMIN_ALERT_LIMIT = 10;
-
 /**
- * Tell the submitter, their co-speakers, and the program team that a proposal
- * arrived. Idempotent enough for practical use: it is called once per submit.
+ * Deliver exactly one receipt to `Abstract.submitter`. The public writer
+ * derives that submitter from its primary roster entry; anonymous input never
+ * triggers co-speaker or program-team mail.
  */
 export async function notifyAbstractSubmitted(
   abstractId: string,
-  options: { fetcher?: Fetcher } = {},
+  options: { fetcher?: Fetcher; db?: SubmissionNotificationDb } = {},
 ): Promise<NotifySummary> {
   return guard(async () => {
-    const abstract = await prisma.abstract.findUnique({
+    const db = options.db ?? prisma;
+    const abstract = await db.abstract.findUnique({
       where: { id: abstractId },
       select: {
         id: true,
@@ -51,12 +51,7 @@ export async function notifyAbstractSubmitted(
         status: true,
         eventId: true,
         event: { select: { name: true } },
-        category: { select: { name: true } },
         submitter: { select: { name: true, email: true } },
-        speakers: {
-          select: { isPrimary: true, user: { select: { name: true, email: true } } },
-          take: 25,
-        },
       },
     });
     // Drafts are not submissions: nobody is told about a proposal in progress.
@@ -65,7 +60,7 @@ export async function notifyAbstractSubmitted(
     // Notifications hang off the event's own templates so an operator can see
     // every send in one place; without a template there is nothing to log to.
     const template =
-      await prisma.emailTemplate.findUnique({
+      await db.emailTemplate.findUnique({
         where: {
           eventId_key: {
             eventId: abstract.eventId,
@@ -79,54 +74,21 @@ export async function notifyAbstractSubmitted(
       // not come from this row; it is the required dispatch-log parent only.
       // Prefer the dedicated key as soon as it exists, but do not silently
       // suppress receipts while legacy event templates are still in place.
-      await prisma.emailTemplate.findFirst({
+      await db.emailTemplate.findFirst({
         where: { eventId: abstract.eventId },
         select: { id: true },
         orderBy: { key: "asc" },
       });
     if (!template) return { ...EMPTY, skipped: "no_template" };
 
-    const speakers = abstract.speakers.map((row) => row.user);
-    const admins = await prisma.eventMember.findMany({
-      where: { eventId: abstract.eventId, role: "ADMIN" },
-      select: { user: { select: { name: true, email: true } } },
-      take: ADMIN_ALERT_LIMIT,
-    });
-
-    const messages = [
-      buildSubmissionReceipt({
-        eventName: abstract.event.name,
-        speaker: abstract.submitter,
-        title: abstract.title,
-        coSpeakers: speakers,
-      }),
-    ].map((mail) => ({ ...mail, to: abstract.submitter.email }));
-
-    for (const person of speakers) {
-      if (person.email.toLowerCase() === abstract.submitter.email.toLowerCase()) continue;
-      const mail = buildCoSpeakerNotice({
-        eventName: abstract.event.name,
-        coSpeaker: person,
-        submitter: abstract.submitter,
-        title: abstract.title,
-      });
-      messages.push({ ...mail, to: person.email });
-    }
-
-    for (const admin of admins) {
-      const mail = buildSubmissionAlert({
-        eventName: abstract.event.name,
-        adminName: admin.user.name,
-        title: abstract.title,
-        speakers,
-        categoryName: abstract.category?.name ?? null,
-      });
-      messages.push({ ...mail, to: admin.user.email });
-    }
+    const messages = [{
+      ...buildSubmissionReceipt({ eventName: abstract.event.name, speaker: abstract.submitter, title: abstract.title }),
+      to: abstract.submitter.email,
+    }];
 
     const summary = { ...EMPTY, attempted: messages.length };
     for (const message of messages) {
-      const outcome = await dispatchEmail(prisma, {
+      const outcome = await dispatchEmail(db, {
         templateId: template.id,
         message: { to: message.to, subject: message.subject, html: message.html },
         variables: { abstractId: abstract.id, kind: "submission" },

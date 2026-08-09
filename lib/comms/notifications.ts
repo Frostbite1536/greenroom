@@ -1,9 +1,10 @@
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { normalizeEmailSubject } from "@/lib/comms/subject";
 
 /**
- * Email bodies for the three notifications the director asked for
- * (requirements delta #2, answers 3 and 6): a submission confirmation, a
- * co-speaker contact, and a decision email that can carry reviewer feedback.
+ * Email bodies for the public submission receipt and the organizer-controlled
+ * decision email. Anonymous roster input must not fan out email to co-speakers
+ * or staff: a submit creates exactly one receipt for its persisted primary.
  *
  * Pure string builders — no database, no network — so the wording is unit
  * tested and the routes stay thin. Every interpolated value is escaped: these
@@ -12,9 +13,8 @@ import { sanitizeHtml } from "@/lib/sanitize-html";
 export type NotificationSpeaker = { name: string; email: string };
 
 /**
- * The submission receipt, co-speaker notice, and program-team alert are one
- * submission event.  Keep their recorded dispatches attached to this named
- * event template rather than whichever seeded template sorts first.
+ * Keep the authoritative primary-speaker receipt attached to this named event
+ * template rather than whichever seeded template sorts first.
  */
 export const CFP_SUBMITTED_TEMPLATE_KEY = "cfp-submitted";
 
@@ -43,55 +43,13 @@ export function buildSubmissionReceipt(input: {
   eventName: string;
   speaker: NotificationSpeaker;
   title: string;
-  coSpeakers: NotificationSpeaker[];
 }): SubmissionEmail {
-  const others = input.coSpeakers.filter((person) => person.email !== input.speaker.email);
   return {
-    subject: `We received your proposal for ${input.eventName}`,
+    subject: normalizeEmailSubject(`We received your proposal for ${input.eventName}`),
     html: [
       paragraph(`Hi ${input.speaker.name},`),
       paragraph(`Thanks for submitting “${input.title}” to ${input.eventName}.`),
-      others.length > 0
-        ? paragraph(`We've also let your co-speaker${others.length === 1 ? "" : "s"} know: ${others.map((person) => person.name).join(", ")}.`)
-        : "",
       paragraph("The program team reviews every proposal and will be in touch by email. You don't need to do anything else for now."),
-    ].filter(Boolean).join(""),
-  };
-}
-
-/** Tells a co-speaker they were added, so the first they hear of it isn't the schedule. */
-export function buildCoSpeakerNotice(input: {
-  eventName: string;
-  coSpeaker: NotificationSpeaker;
-  submitter: NotificationSpeaker;
-  title: string;
-}): SubmissionEmail {
-  return {
-    subject: `You were added to a proposal for ${input.eventName}`,
-    html: [
-      paragraph(`Hi ${input.coSpeaker.name},`),
-      paragraph(`${input.submitter.name} submitted “${input.title}” to ${input.eventName} and listed you as a co-speaker.`),
-      paragraph("If that's not right, reply to this email and the program team will sort it out."),
-    ].join(""),
-  };
-}
-
-/** Heads-up to the program team that something landed in the queue. */
-export function buildSubmissionAlert(input: {
-  eventName: string;
-  adminName: string;
-  title: string;
-  speakers: NotificationSpeaker[];
-  categoryName: string | null;
-}): SubmissionEmail {
-  return {
-    subject: `New proposal: ${input.title}`,
-    html: [
-      paragraph(`Hi ${input.adminName},`),
-      paragraph(`“${input.title}” was just submitted to ${input.eventName}.`),
-      paragraph(`Speaker${input.speakers.length === 1 ? "" : "s"}: ${input.speakers.map((person) => `${person.name} (${person.email})`).join(", ")}`),
-      input.categoryName ? paragraph(`Track: ${input.categoryName}`) : "",
-      paragraph("It's waiting in Abstracts whenever the team is ready to review."),
     ].filter(Boolean).join(""),
   };
 }
@@ -144,7 +102,7 @@ export function buildDecisionEmail(input: {
   );
 
   return {
-    subject: accepted ? `Your talk was accepted for ${input.eventName}` : `Update on your ${input.eventName} submission`,
+    subject: normalizeEmailSubject(accepted ? `Your talk was accepted for ${input.eventName}` : `Update on your ${input.eventName} submission`),
     html: parts.join(""),
   };
 }
