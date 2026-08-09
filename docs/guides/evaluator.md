@@ -26,11 +26,11 @@ one — so you can work straight down the list without hunting. If a speaker wit
 is labelled **Withdrawn**, excluded from progress, and shown without a scoring form.
 
 If the plan that owns your assignment is **blind**, a "Blind" badge appears and speaker profiles
-are hidden in your queue and on the proposal you are scoring. The same boundary hides identities
-on your proposal list for work covered by a blind plan. Proposal titles and free text can still
-name a speaker, so Greenroom warns rather than promising full anonymity. Custom form answers are
-withheld from evaluators in both blind and non-blind rounds. (Forward 2026's seeded round is not
-blind.)
+are hidden in your queue and on the proposal you are scoring. The server omits those identities
+from the blind assignment/queue response rather than merely concealing them in the browser.
+Proposal titles and free text can still name a speaker, so Greenroom warns rather than promising
+full anonymity. Custom form answers are withheld from evaluators in both blind and non-blind
+rounds. (Forward 2026's seeded round is not blind.)
 
 ---
 
