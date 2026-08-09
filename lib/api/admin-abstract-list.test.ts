@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ADMIN_ABSTRACT_LIST_TAKE,
@@ -35,4 +36,12 @@ test("admin abstract list returns a bounded honest envelope rather than silently
   assert.deepEqual(toAdminAbstractListEnvelope(["only"], 1), {
     abstracts: ["only"], total: 1, hasMore: false,
   });
+});
+
+test("admin abstract GET reads the page and filtered total from one repeatable-read snapshot", () => {
+  const route = readFileSync(new URL("../../app/api/cfp/submissions/route.ts", import.meta.url), "utf8");
+  const getRoute = route.slice(route.indexOf("export const GET"), route.indexOf("export const POST"));
+  assert.match(getRoute, /prisma\.\$transaction\(/);
+  assert.ok(getRoute.indexOf("prisma.abstract.findMany") < getRoute.indexOf("prisma.abstract.count({ where })"));
+  assert.match(getRoute, /isolationLevel: Prisma\.TransactionIsolationLevel\.RepeatableRead/);
 });

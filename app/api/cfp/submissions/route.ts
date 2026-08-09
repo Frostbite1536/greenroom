@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { abstractStatusSchema, publicAbstractUpsertSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
@@ -47,23 +47,27 @@ export const GET = handle(async (req) => {
     : undefined;
 
   const where = adminAbstractListWhere({ eventId: ctx.eventId, statuses, formConfigId });
-  const [abstracts, total] = await prisma.$transaction([
-    prisma.abstract.findMany({
-      where,
-      // Every included relation is bounded by this cap-plus-one parent query;
-      // no unbounded event-wide relation fetch is possible through this route.
-      take: ADMIN_ABSTRACT_LIST_TAKE,
-      include: {
-        category: true,
-        speakers: { include: { user: true } },
-        answers: true,
-        reviewAssignments: { select: { status: true } },
-        reviewScores: { select: { score: true } },
-      },
-      orderBy: adminAbstractListOrderBy,
-    }),
-    prisma.abstract.count({ where }),
-  ]);
+  const [abstracts, total] = await prisma.$transaction(
+    [
+      prisma.abstract.findMany({
+        where,
+        // Every included relation is bounded by this cap-plus-one parent query;
+        // no unbounded event-wide relation fetch is possible through this route.
+        take: ADMIN_ABSTRACT_LIST_TAKE,
+        include: {
+          category: true,
+          speakers: { include: { user: true } },
+          answers: true,
+          reviewAssignments: { select: { status: true } },
+          reviewScores: { select: { score: true } },
+        },
+        orderBy: adminAbstractListOrderBy,
+      }),
+      prisma.abstract.count({ where }),
+    ],
+    // Rows and the filtered total must observe one PostgreSQL snapshot.
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
   return ok(toAdminAbstractListEnvelope(abstracts.map(serializeAbstract), total));
 });
 
