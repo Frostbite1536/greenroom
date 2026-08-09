@@ -40,6 +40,8 @@ export default async function EvaluationsPage() {
     );
   }
 
+  const reviewableQueue = view.queue.filter((row) => row.abstractStatus !== "WITHDRAWN");
+
   return (
     <section className="page-stack" style={{ width: "min(1280px, 100%)" }}>
       <PageHeader
@@ -53,9 +55,9 @@ export default async function EvaluationsPage() {
         <div className="metric">
           <span>Your progress</span>
           <strong>
-            {view.queue.length === 0
-              ? "—"
-              : `${view.queue.filter((q) => q.status === "COMPLETED").length}/${view.queue.length}`}
+            {reviewableQueue.length === 0
+              ? view.queue.length === 0 ? "—" : "Complete"
+              : `${reviewableQueue.filter((q) => q.status === "COMPLETED").length}/${reviewableQueue.length}`}
           </strong>
         </div>
       </div>

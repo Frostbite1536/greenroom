@@ -170,7 +170,7 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                     <td>
                       {a.identityHidden ? (
                         <span className="muted row" style={{ gap: 5 }}>
-                          <EyeOff size={12} aria-hidden="true" /> Hidden — blind round
+                          <EyeOff size={12} aria-hidden="true" /> Profiles hidden — blind review
                         </span>
                       ) : (
                         <>
@@ -324,7 +324,7 @@ function AbstractDrawer({
             <span>Speakers</span>
             <span>
               {abstract.identityHidden
-                ? "Hidden — this proposal is in a blind review round"
+                ? "Speaker profiles hidden for blind review. Proposal text may still identify a speaker."
                 : abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}
             </span>
           </div>

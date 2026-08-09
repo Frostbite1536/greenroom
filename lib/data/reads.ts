@@ -241,11 +241,11 @@ export type AbstractRow = {
   durationMinutes: number | null;
   categoryName: string | null;
   formName: string;
-  speakers: { name: string; email: string; isPrimary: boolean }[];
+  speakers: { name: string; isPrimary: boolean }[];
   /**
-   * True when this row's speakers were withheld because the caller is an
-   * evaluator and the proposal is covered by a blind round. `speakers` is empty
-   * in that case — the identity is never sent to the client, not just hidden.
+   * True when speaker profiles were withheld because the caller is an evaluator
+   * and the proposal is covered by a blind round. `speakers` is empty in that
+   * case — profile identity is never sent to the client, not just hidden.
    */
   identityHidden: boolean;
   submittedAt: string | null;
@@ -326,7 +326,9 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         category: { select: { name: true } },
         formConfig: { select: { name: true } },
         speakers: {
-          select: { isPrimary: true, user: { select: { name: true, email: true } } },
+          // Email is not rendered on this surface, so it never enters the RSC
+          // payload for either admins or evaluators.
+          select: { isPrimary: true, user: { select: { name: true } } },
         },
         // `scheduleSlot` tells the admin table whether the confirmed talk is
         // actually on the public programme, which is what makes a reversed
@@ -355,8 +357,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
 
   /**
    * Blind review has to mean something on this page too, not only in the scoring
-   * queue: an evaluator could otherwise read every speaker's name and email
-   * here and defeat the blind round entirely (audit1 #2). A proposal counts as
+   * queue: an evaluator could otherwise read every speaker's name here and
+   * defeat the blind round entirely (audit1 #2). A proposal counts as
    * blind-covered when any blind plan holds an assignment for it. Admins run the
    * process and are unaffected.
    */
@@ -392,7 +394,6 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
           ? []
           : a.speakers.map((s) => ({
               name: s.user.name,
-              email: s.user.email,
               isPrimary: s.isPrimary,
             })),
         identityHidden: blindCovered.has(a.id),
@@ -883,11 +884,11 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       orderBy: { user: { name: "asc" } },
     }),
     prisma.abstract.findMany({
-      // DRAFTs are not submissions. Decisions remain visible for historical
-      // coverage, but `assignable` below keeps them out of the picker.
+      // DRAFTs are not submissions. Decisions and withdrawals remain visible
+      // for historical coverage, but `assignable` keeps them out of the picker.
       where: {
         eventId: ctx.eventId,
-        status: { in: ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED"] },
+        status: { in: ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"] },
       },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
       select: {
@@ -909,7 +910,9 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     }),
     prisma.reviewAssignment.groupBy({
       by: ["planId", "evaluatorId"],
-      where: { plan: { eventId: ctx.eventId } },
+      // Withdrawn work can no longer be scored and must not inflate a
+      // reviewer's active load.
+      where: { plan: { eventId: ctx.eventId }, abstract: { status: { not: "WITHDRAWN" } } },
       _count: { _all: true },
     }),
   ]);
@@ -917,21 +920,29 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
   const assignedByPlan = new Map<string, Record<string, number>>();
   const completedByPlan = new Map<string, Record<string, number>>();
   const planTotals = new Map<string, { assigned: number; completed: number }>();
+  const withdrawnAbstractIds = new Set(
+    abstracts.filter((abstract) => abstract.status === "WITHDRAWN").map((abstract) => abstract.id),
+  );
   for (const row of byAbstract) {
     const n = row._count._all;
     const assigned = assignedByPlan.get(row.abstractId) ?? {};
     assigned[row.planId] = (assigned[row.planId] ?? 0) + n;
     assignedByPlan.set(row.abstractId, assigned);
 
-    const totals = planTotals.get(row.planId) ?? { assigned: 0, completed: 0 };
-    totals.assigned += n;
     if (row.status === "COMPLETED") {
-      totals.completed += n;
       const completed = completedByPlan.get(row.abstractId) ?? {};
       completed[row.planId] = (completed[row.planId] ?? 0) + n;
       completedByPlan.set(row.abstractId, completed);
     }
-    planTotals.set(row.planId, totals);
+
+    // A withdrawn proposal remains in historical coverage, but its assignment
+    // is no longer actionable and cannot keep round progress below 100%.
+    if (!withdrawnAbstractIds.has(row.abstractId)) {
+      const totals = planTotals.get(row.planId) ?? { assigned: 0, completed: 0 };
+      totals.assigned += n;
+      if (row.status === "COMPLETED") totals.completed += n;
+      planTotals.set(row.planId, totals);
+    }
   }
 
   const loadByEvaluator = new Map<string, Record<string, number>>();

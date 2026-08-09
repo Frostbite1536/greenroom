@@ -24,7 +24,11 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [activeId, setActiveId] = useState<string | null>(
-    view.queue.find((q) => q.status !== "COMPLETED")?.abstractId ?? view.queue[0]?.abstractId ?? null,
+    view.queue.find((q) => q.status !== "COMPLETED" && q.abstractStatus !== "WITHDRAWN")
+      ?.abstractId
+      ?? view.queue.find((q) => q.status !== "COMPLETED")?.abstractId
+      ?? view.queue[0]?.abstractId
+      ?? null,
   );
   // Local score edits layered over the server state, keyed by abstract id.
   const [edits, setEdits] = useState<Record<string, Record<string, number>>>({});
@@ -79,8 +83,11 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     );
   }
 
-  const completed = view.queue.filter((q) => q.status === "COMPLETED").length;
-  const progress = Math.round((completed / view.queue.length) * 100);
+  const reviewableQueue = view.queue.filter((q) => q.abstractStatus !== "WITHDRAWN");
+  const completed = reviewableQueue.filter((q) => q.status === "COMPLETED").length;
+  const progress = reviewableQueue.length === 0
+    ? 100
+    : Math.round((completed / reviewableQueue.length) * 100);
 
   // A speaker can withdraw mid-review (W1); scoring one is refused server-side
   // with 409 ABSTRACT_WITHDRAWN, so the form must not invite the attempt.
@@ -125,7 +132,13 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     }
     setNotice("Review submitted.");
     setComment("");
-    const nextRow = view.queue.find((q) => q.status !== "COMPLETED" && q.abstractId !== active.abstractId);
+    const nextRow = view.queue.find(
+      (q) => q.status !== "COMPLETED"
+        && q.abstractStatus !== "WITHDRAWN"
+        && q.abstractId !== active.abstractId,
+    ) ?? view.queue.find(
+      (q) => q.status !== "COMPLETED" && q.abstractId !== active.abstractId,
+    );
     if (nextRow) setActiveId(nextRow.abstractId);
     startTransition(() => router.refresh());
   }
@@ -136,16 +149,21 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
         <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--line)" }}>
           <div className="row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
             <strong>{plan.name}</strong>
-            {plan.isBlind ? <Pill tone="neutral"><EyeOff size={12} /> Blind</Pill> : null}
+            {plan.isBlind ? <Pill tone="neutral"><EyeOff size={12} aria-hidden="true" /> Blind</Pill> : null}
           </div>
           <div className="progress-bar" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Your review progress">
             <span style={{ width: `${progress}%` }} />
           </div>
-          <p className="hint" style={{ marginTop: 6 }}>{completed} of {view.queue.length} in your queue scored</p>
+          <p className="hint" style={{ marginTop: 6 }}>
+            {reviewableQueue.length === 0
+              ? "No reviewable proposals remain."
+              : `${completed} of ${reviewableQueue.length} reviewable proposal${reviewableQueue.length === 1 ? "" : "s"} scored`}
+          </p>
         </div>
         <div>
           {view.queue.map((item) => (
             <button
+              type="button"
               key={item.abstractId}
               className={`queue-item ${item.abstractId === active.abstractId ? "active" : ""}`}
               onClick={() => selectRow(item)}
@@ -156,7 +174,7 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
                 <Pill tone={item.abstractStatus === "WITHDRAWN" ? "neutral" : STATUS_TONE[item.status]}>
                   {item.abstractStatus === "WITHDRAWN" ? "Withdrawn" : (
                     <>
-                      {item.status === "COMPLETED" ? <Check size={11} /> : null}
+                      {item.status === "COMPLETED" ? <Check size={11} aria-hidden="true" /> : null}
                       {STATUS_LABEL[item.status]}
                     </>
                   )}
@@ -173,18 +191,23 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
 
       <div className="card" style={{ padding: 24 }}>
         <div className="row wrap" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-          <p className="eyebrow">Now scoring{active.teamKey ? ` · ${active.teamKey}` : ""}</p>
-          <span className="hint">Weighted score: <strong>{weightedTotal}</strong></span>
+          <p className="eyebrow">
+            {withdrawn ? "Withdrawn proposal" : `Now scoring${active.teamKey ? ` · ${active.teamKey}` : ""}`}
+          </p>
+          {!withdrawn ? <span className="hint">Weighted score: <strong>{weightedTotal}</strong></span> : null}
         </div>
         <h2 style={{ margin: "0 0 6px" }}>{active.title}</h2>
         <p className="hint">
           {active.categoryName ?? "Uncategorised"}
-          {plan.isBlind && active.speakers.length === 0
-            ? " · Speaker identity hidden (blind review)"
+          {plan.isBlind && view.role === "EVALUATOR" && active.speakers.length === 0
+            ? " · Speaker profiles hidden (blind review)"
             : active.speakers.length > 0
               ? ` · ${active.speakers.join(", ")}`
               : ""}
         </p>
+        {plan.isBlind && view.role === "EVALUATOR" ? (
+          <p className="hint">Proposal text can still identify a speaker.</p>
+        ) : null}
         {active.abstractBody ? (
           <p style={{ lineHeight: 1.6, marginTop: 12 }}>{active.abstractBody}</p>
         ) : (
@@ -198,52 +221,61 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
           </p>
         ) : null}
 
-        <div style={{ marginTop: 16 }}>
-          {plan.rubric.map((c) => (
-            <div className="rubric-row" key={c.key}>
-              <div>
-                <span className="field-label">{c.label}</span>
-                {c.weight !== 1 ? <span className="hint"> · weight {c.weight}</span> : null}
-                {c.description ? <p className="hint">{c.description}</p> : null}
-              </div>
-              <div className="score-buttons" role="radiogroup" aria-label={c.label}>
-                {Array.from({ length: c.max - c.min + 1 }, (_, i) => c.min + i).map((n) => (
-                  <button
-                    key={n}
-                    type="button"
-                    role="radio"
-                    aria-checked={scores[c.key] === n}
-                    className={`score-btn ${scores[c.key] === n ? "selected" : ""}`}
-                    onClick={() => setScore(c.key, n)}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
+        {!withdrawn ? (
+          <>
+            <div style={{ marginTop: 16 }}>
+              {plan.rubric.map((c) => (
+                <div className="rubric-row" key={c.key}>
+                  <div>
+                    <span className="field-label">{c.label}</span>
+                    {c.weight !== 1 ? <span className="hint"> · weight {c.weight}</span> : null}
+                    {c.description ? <p className="hint">{c.description}</p> : null}
+                  </div>
+                  <div className="score-buttons" role="radiogroup" aria-label={c.label}>
+                    {Array.from({ length: c.max - c.min + 1 }, (_, i) => c.min + i).map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        role="radio"
+                        aria-checked={scores[c.key] === n}
+                        className={`score-btn ${scores[c.key] === n ? "selected" : ""}`}
+                        onClick={() => setScore(c.key, n)}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <label className="stack" style={{ marginTop: 8 }}>
-          <span className="field-label">Comments (optional)</span>
-          <textarea className="text-input" rows={3} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Feedback for the program committee…" />
-          {active.myComment && !comment ? <span className="hint">Previously: “{active.myComment}”</span> : null}
-        </label>
+            <label className="stack" style={{ marginTop: 8 }}>
+              <span className="field-label">Comments (optional)</span>
+              <textarea
+                className="text-input"
+                name="reviewComment"
+                autoComplete="off"
+                maxLength={2000}
+                rows={3}
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Feedback for the program committee…"
+              />
+              {active.myComment && !comment ? <span className="hint">Previously: “{active.myComment}”</span> : null}
+            </label>
 
-        {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
-        {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
+            {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
+            {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
 
-        <div className="row wrap" style={{ marginTop: 16, gap: 10 }}>
-          <button className="primary-button" type="button" disabled={withdrawn || !allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
-            <ClipboardCheck size={16} />
-            {busy ? "Saving…" : active.status === "COMPLETED" ? "Update review" : "Submit review"}
-          </button>
-          {withdrawn ? (
-            <span className="hint">This proposal was withdrawn — no review needed.</span>
-          ) : !allScored ? (
-            <span className="hint">Score every criterion to submit.</span>
-          ) : null}
-        </div>
+            <div className="row wrap" style={{ marginTop: 16, gap: 10 }}>
+              <button className="primary-button" type="button" disabled={!allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                <ClipboardCheck size={16} aria-hidden="true" />
+                {busy ? "Saving…" : active.status === "COMPLETED" ? "Update review" : "Submit review"}
+              </button>
+              {!allScored ? <span className="hint">Score every criterion to submit.</span> : null}
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );
