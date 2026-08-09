@@ -16,6 +16,7 @@ import {
 import { toFormFieldSpecs, validateSubmission } from "@/lib/services/form-validation";
 import { resolveVisibleFields } from "@/lib/services/field-visibility";
 import type { FormAnswerValue } from "@/lib/services/types";
+import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -207,6 +208,18 @@ export const POST = handle(async (req) => {
       let created = 0;
       let updated = 0;
       let skipped = 0;
+      const importedFormIds = [...new Set(prepared.map((item) => item.formConfigId))];
+      const formFieldsAreCurrent = await lockFormFieldsForAnswerWrite(
+        tx,
+        new Map(importedFormIds.map((formId) => [formId, formsById.get(formId)!.fields])),
+      );
+      if (!formFieldsAreCurrent) {
+        throw new ApiError(
+          409,
+          "FORM_CHANGED",
+          "A form changed while this import was being prepared. Review the latest questions and retry the import.",
+        );
+      }
       // Every concurrent batch obtains advisory locks in the same order, which
       // prevents two overlapping CSVs from deadlocking on identities A/B.
       const preparedInLockOrder = [...prepared].sort((left, right) =>

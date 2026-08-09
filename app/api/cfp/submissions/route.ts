@@ -10,6 +10,7 @@ import {
   type FormSpec,
 } from "@/lib/services/form-validation";
 import type { FormAnswerValue } from "@/lib/services/types";
+import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -106,6 +107,18 @@ export const POST = handle(async (req) => {
   }
 
   const saved = await prisma.$transaction(async (tx) => {
+    const formIsCurrent = await lockFormFieldsForAnswerWrite(
+      tx,
+      new Map([[form.id, form.fields]]),
+    );
+    if (!formIsCurrent) {
+      throw new ApiError(
+        409,
+        "FORM_CHANGED",
+        "This form changed while your proposal was being saved. Review the latest questions and try again.",
+      );
+    }
+
     // Public CFP input may create a shell user, but must never overwrite an
     // existing identity or grant an event membership/role.
     const speakerUsers = await Promise.all(

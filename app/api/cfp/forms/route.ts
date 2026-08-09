@@ -11,6 +11,7 @@ import {
   findUsedRemovedOptions,
 } from "@/lib/services/form-config";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
+import { lockFormFieldsForShapeWrite } from "@/lib/services/form-field-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -184,13 +185,7 @@ async function assertAnswersNotDestroyed(
   // answers. A concurrent answer insert holds a conflicting FK key-share lock:
   // it either commits before this read (and is seen) or waits until this form
   // edit finishes. Concurrent form saves serialize on the same ordered rows.
-  await tx.$queryRaw<Array<{ id: string }>>`
-    SELECT "id"
-    FROM "FormField"
-    WHERE "formConfigId" = ${formConfigId}
-    ORDER BY "id"
-    FOR UPDATE
-  `;
+  await lockFormFieldsForShapeWrite(tx, formConfigId);
 
   const stored = await tx.formField.findMany({
     where: { formConfigId },
