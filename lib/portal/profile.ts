@@ -37,3 +37,17 @@ export function profilePatch(initial: PortalProfile, current: PortalProfile): Po
   }
   return patch;
 }
+
+/**
+ * Apply a successful PATCH response without discarding typing that happened
+ * after its request snapshot. Those newer values stay dirty against `saved`.
+ */
+export function reconcileSavedProfile(
+  submitted: PortalProfile,
+  current: PortalProfile,
+  saved: PortalProfile,
+): PortalProfile {
+  return Object.fromEntries(
+    PORTAL_PROFILE_FIELDS.map((field) => [field, current[field] === submitted[field] ? saved[field] : current[field]]),
+  ) as PortalProfile;
+}

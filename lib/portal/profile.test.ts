@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { speakerProfileUpdateSchema } from "../../types/api";
-import { profileFormValues, profilePatch } from "./profile";
+import { profileFormValues, profilePatch, reconcileSavedProfile } from "./profile";
 
 const stored = {
   bio: "Builds reliable systems.",
@@ -46,4 +46,16 @@ test("profile API input normalizes blank explicit values to null without turning
     socialLinks: null,
   });
   assert.deepEqual(speakerProfileUpdateSchema.parse({ jobTitle: "Staff Engineer" }), { jobTitle: "Staff Engineer" });
+});
+
+test("a successful profile save keeps edits typed after its request snapshot dirty", () => {
+  const submitted = profileFormValues({ ...stored, jobTitle: "  Principal Engineer  " });
+  const saved = profileFormValues({ ...stored, jobTitle: "Principal Engineer" });
+  const current = { ...submitted, jobTitle: "Director of Engineering" };
+
+  const reconciled = reconcileSavedProfile(submitted, current, saved);
+
+  assert.equal(reconciled.jobTitle, "Director of Engineering");
+  assert.equal(reconciled.company, saved.company);
+  assert.deepEqual(profilePatch(saved, reconciled), { jobTitle: "Director of Engineering" });
 });

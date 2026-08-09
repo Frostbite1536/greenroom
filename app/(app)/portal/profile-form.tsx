@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { profileFormValues, profilePatch, type PortalProfile } from "@/lib/portal/profile";
+import {
+  profileFormValues,
+  profilePatch,
+  reconcileSavedProfile,
+  type PortalProfile,
+} from "@/lib/portal/profile";
 import styles from "./portal.module.css";
 
 export type { PortalProfile } from "@/lib/portal/profile";
@@ -12,23 +17,29 @@ const MAX_BIO = 3000;
 export function ProfileForm({ profile }: { profile: PortalProfile }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const [baseline, setBaseline] = useState(profile);
   const [form, setForm] = useState(profile);
+  const formRef = useRef(profile);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function update<K extends keyof PortalProfile>(key: K, value: string) {
-    setForm((f) => ({ ...f, [key]: value }));
+    const next = { ...formRef.current, [key]: value };
+    formRef.current = next;
+    setForm(next);
     setSaved(false);
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving) return;
     setSaving(true);
     setError(null);
     setSaved(false);
 
-    const payload = profilePatch(profile, form);
+    const submitted = formRef.current;
+    const payload = profilePatch(baseline, submitted);
 
     try {
       const res = await fetch("/api/portal/profile", {
@@ -42,8 +53,12 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
         const first = fieldErrors ? Object.entries(fieldErrors)[0] : undefined;
         setError(first ? `${first[0]}: ${first[1][0]}` : (body?.error?.message ?? "Could not save your profile."));
       } else {
-        setForm(profileFormValues(body.data));
-        setSaved(true);
+        const savedProfile = profileFormValues(body.data);
+        const reconciled = reconcileSavedProfile(submitted, formRef.current, savedProfile);
+        formRef.current = reconciled;
+        setBaseline(savedProfile);
+        setForm(reconciled);
+        setSaved(Object.keys(profilePatch(savedProfile, reconciled)).length === 0);
         startTransition(() => router.refresh());
       }
     } catch {
@@ -53,7 +68,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
     }
   }
 
-  const dirty = Object.keys(profilePatch(profile, form)).length > 0;
+  const dirty = Object.keys(profilePatch(baseline, form)).length > 0;
 
   return (
     <form onSubmit={onSubmit}>
