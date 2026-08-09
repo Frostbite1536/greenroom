@@ -63,6 +63,14 @@ Two limits, and the portal tells you which one applies:
 
 You do not need to beat a deadline: editing keeps working after the call for speakers closes.
 
+### Withdrawing before a decision
+
+For a **Draft**, **Submitted**, or **In review** proposal, choose **Withdraw proposal**
+and confirm. This takes that proposal out of consideration and makes it read-only in
+your portal; it does not erase the record or send a decision on the programme team's
+behalf. If the team has already accepted the talk, there is no self-withdraw action —
+contact them so they can make the programme change safely.
+
 ---
 
 ## 4. Getting ready to speak
@@ -96,9 +104,9 @@ else the event has published.
 receive an email notice but do not automatically get an account — ask the programme team to
 add you if you need one.
 
-**I want to withdraw my talk.** Ask the programme team and they will withdraw it for you.
-A withdraw button in your portal is on the way; either way, a talk that has already been
-accepted has to be taken off the programme by the team rather than by you.
+**I want to withdraw my talk.** Before the programme team decides, open the proposal,
+choose **Withdraw proposal**, and confirm. Once a talk is accepted, contact the programme
+team instead: removing it from the programme is their action, not a portal click.
 
 **Will I receive the decision by email?** An event admin can preview and send the decision to
 every listed speaker. They may include written reviewer feedback, but never the reviewers'

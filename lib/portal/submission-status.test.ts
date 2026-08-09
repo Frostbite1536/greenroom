@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  canRequestWithdrawal,
   editSavedNotice,
   editScopeNotice,
   submissionErrorMessage,
   submissionStatusView,
+  withdrawalSuccessNotice,
+  withdrawalUnavailableNotice,
 } from "./submission-status";
 
 const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"];
@@ -74,4 +77,25 @@ test("save confirmation preserves the proposal/session boundary", () => {
   assert.match(editSavedNotice(false), /updated proposal/i);
   assert.match(editSavedNotice(true), /public schedule listing has not changed/i);
   assert.doesNotMatch(editSavedNotice(true), /right away/i);
+});
+
+test("only pre-decision, unconverted proposals offer a withdrawal request", () => {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW"]) {
+    assert.equal(canRequestWithdrawal(status, false), true, status);
+    assert.equal(canRequestWithdrawal(status, true), false, `${status} with a session`);
+  }
+  for (const status of ["ACCEPTED", "REJECTED", "WITHDRAWN", "UNKNOWN"]) {
+    assert.equal(canRequestWithdrawal(status, false), false, status);
+  }
+  assert.match(withdrawalUnavailableNotice("ACCEPTED", false) ?? "", /programme team/i);
+  assert.match(withdrawalUnavailableNotice("SUBMITTED", true) ?? "", /programme team/i);
+  assert.equal(withdrawalUnavailableNotice("REJECTED", false), null);
+});
+
+test("withdrawal success and a concurrent acceptance refusal stay actionable", () => {
+  assert.match(withdrawalSuccessNotice(), /withdrawn/i);
+  assert.match(withdrawalSuccessNotice(), /no longer under consideration/i);
+  const refusal = submissionErrorMessage("WITHDRAW_NOT_ALLOWED");
+  assert.match(refusal, /program team/i);
+  assert.doesNotMatch(refusal, /WITHDRAW_NOT_ALLOWED/);
 });
