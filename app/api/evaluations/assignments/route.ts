@@ -2,7 +2,11 @@ import { prisma } from "@/lib/prisma";
 import { reviewAssignmentInputSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
-import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import {
+  isAssignmentEvaluatorRole,
+  isAssignmentReviewable,
+  lockReviewAssignmentWrite,
+} from "@/lib/services/review-assignment-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -91,26 +95,44 @@ export const POST = handle(async (req) => {
   }
 
   const created = await prisma.$transaction(async (tx) => {
-    // Assignment, speaker withdrawal, scoring and decisions all observe the
-    // same per-abstract serialization boundary. Stable ordering prevents two
-    // multi-proposal assignment requests from deadlocking each other.
-    for (const abstractId of [...input.abstractIds].sort()) {
-      await lockAbstractForWrite(tx, abstractId);
+    // Route-specific LOCK-ORDER-v1: parent plan → target membership authority
+    // rows → stable per-abstract advisory locks. The fresh reads below happen
+    // only after all classes are held, so neither a role downgrade/deletion nor
+    // a decision/withdrawal can turn stale before the assignment write.
+    const lockedPlan = await lockReviewAssignmentWrite(tx, {
+      eventId: ctx.eventId,
+      planId: input.planId,
+      evaluatorIds: input.evaluatorIds,
+      abstractIds: input.abstractIds,
+    });
+    if (!lockedPlan || lockedPlan.eventId !== ctx.eventId) {
+      throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
     }
 
-    // Re-read only after every lock is held. A decision or withdrawal that won
-    // the race must stay terminal; assignment may never resurrect it as
-    // UNDER_REVIEW or attach a new reviewer to it.
-    const abstracts = await tx.abstract.findMany({
-      where: { id: { in: input.abstractIds }, eventId: ctx.eventId },
-      include: { category: true },
-    });
+    const [freshPlan, evaluators, abstracts] = await Promise.all([
+      tx.evaluationPlan.findUnique({
+        where: { id: input.planId },
+        select: { eventId: true },
+      }),
+      tx.eventMember.findMany({
+        where: {
+          eventId: ctx.eventId,
+          userId: { in: input.evaluatorIds },
+        },
+        select: { userId: true, role: true },
+      }),
+      tx.abstract.findMany({
+        where: { id: { in: input.abstractIds }, eventId: ctx.eventId },
+        include: { category: true },
+      }),
+    ]);
+    if (!freshPlan || freshPlan.eventId !== ctx.eventId) {
+      throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
+    }
     if (abstracts.length !== input.abstractIds.length) {
       throw new ApiError(422, "INVALID_ABSTRACTS", "One or more abstracts are not in this event.");
     }
-    const unreviewable = abstracts.find(
-      (abstract) => abstract.status !== "SUBMITTED" && abstract.status !== "UNDER_REVIEW",
-    );
+    const unreviewable = abstracts.find((abstract) => !isAssignmentReviewable(abstract));
     if (unreviewable) {
       throw new ApiError(
         409,
@@ -120,17 +142,12 @@ export const POST = handle(async (req) => {
     }
 
     // Event membership alone is insufficient: speakers and operators must not
-    // become reviewers through a forged user id. Admins may review alongside
-    // evaluators, matching the existing queue and setup read contracts.
-    const evaluators = await tx.eventMember.findMany({
-      where: {
-        eventId: ctx.eventId,
-        userId: { in: input.evaluatorIds },
-        role: { in: ["EVALUATOR", "ADMIN"] },
-      },
-      select: { userId: true },
-    });
-    const validEvaluatorIds = new Set(evaluators.map((evaluator) => evaluator.userId));
+    // become reviewers through a forged user id. The target rows were locked
+    // before the Abstract class and are now freshly validated. Admins may
+    // review alongside evaluators, matching the existing queue contract.
+    const validEvaluatorIds = new Set(
+      evaluators.filter((evaluator) => isAssignmentEvaluatorRole(evaluator.role)).map((evaluator) => evaluator.userId),
+    );
     if (validEvaluatorIds.size !== input.evaluatorIds.length) {
       throw new ApiError(
         422,
