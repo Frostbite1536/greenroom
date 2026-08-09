@@ -425,7 +425,7 @@ try {
   check("CFP submit missing required field → 422", badSubmit.status === 422, `got ${badSubmit.status}`);
   check("422 carries fieldErrors the UI can map", !!badSubmit.data?.error?.fieldErrors);
 
-  // --- mutation 3: accept + convert ---
+  // --- mutation 3: accept auto-provisions; convert reuses that Session ---
   const decide = await req("POST", "/api/evaluations/decisions", {
     abstractId: submit.data?.data?.id, decision: "ACCEPTED",
   }, admin);
@@ -435,8 +435,9 @@ try {
   const convert = await req("POST", "/api/evaluations/convert", {
     abstractId: submit.data?.data?.id, durationMinutes: 30,
   }, admin);
-  check("convert to session → 201", convert.status === 201, `${convert.status} ${JSON.stringify(convert.data?.error ?? "")}`);
-  check("convert reports created", convert.data?.data?.created === true);
+  check("convert reuses the auto-provisioned session → 200", convert.status === 200,
+    `${convert.status} ${JSON.stringify(convert.data?.error ?? "")}`);
+  check("convert reports existing session", convert.data?.data?.created === false);
 
   const convertAgain = await req("POST", "/api/evaluations/convert", {
     abstractId: submit.data?.data?.id, durationMinutes: 30,
