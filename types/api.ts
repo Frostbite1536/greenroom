@@ -267,13 +267,28 @@ export const scheduleConflictSchema = z.object({
   message: z.string(),
 });
 
+const nullableProfileText = (maxLength: number) => z.preprocess(
+  (value) => typeof value === "string" ? value.trim() || null : value,
+  z.string().max(maxLength).nullable(),
+).optional();
+
+const nullableProfileUrl = z.preprocess(
+  (value) => typeof value === "string" ? value.trim() || null : value,
+  z.string().url().nullable(),
+).optional();
+
+const nullableSocialLinks = z.record(z.string().trim().min(1), z.string().trim().url())
+  .transform((links) => Object.keys(links).length === 0 ? null : links)
+  .nullable()
+  .optional();
+
 export const speakerProfileUpdateSchema = z.object({
-  bio: z.string().max(3000).optional(),
-  company: z.string().max(160).optional(),
-  jobTitle: z.string().max(160).optional(),
-  headshotUrl: z.string().url().optional(),
-  slideDeckUrl: z.string().url().optional(),
-  socialLinks: z.record(z.string(), z.string().url()).optional(),
+  bio: nullableProfileText(3000),
+  company: nullableProfileText(160),
+  jobTitle: nullableProfileText(160),
+  headshotUrl: nullableProfileUrl,
+  slideDeckUrl: nullableProfileUrl,
+  socialLinks: nullableSocialLinks,
 });
 
 export const speakerTaskUpdateSchema = z.object({

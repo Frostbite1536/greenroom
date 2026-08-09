@@ -2,9 +2,10 @@ import { requireSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
+import { profileFormValues } from "@/lib/portal/profile";
 import { profileCompletion } from "@/lib/speakers/status";
 import { submissionStatusView } from "@/lib/portal/submission-status";
-import { ProfileForm, type PortalProfile } from "./profile-form";
+import { ProfileForm } from "./profile-form";
 import { TaskChecklist, type PortalTask } from "./task-checklist";
 import styles from "./portal.module.css";
 
@@ -76,13 +77,7 @@ export default async function PortalPage() {
     status: row.status,
   }));
 
-  const initialProfile: PortalProfile = {
-    bio: profile?.bio ?? "",
-    company: profile?.company ?? "",
-    jobTitle: profile?.jobTitle ?? "",
-    headshotUrl: profile?.headshotUrl ?? "",
-    slideDeckUrl: profile?.slideDeckUrl ?? "",
-  };
+  const initialProfile = profileFormValues(profile);
 
   const sessions = sessionSpeakers.map((s) => s.session);
   const doneCount = tasks.filter((t) => t.status === "COMPLETED" || t.status === "WAIVED").length;
