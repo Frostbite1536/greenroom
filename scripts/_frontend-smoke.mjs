@@ -560,6 +560,29 @@ try {
   check("confirmed proposal UI has no Maybe action",
     afterMaybe.text.includes("Maybe is unavailable because this talk is confirmed."));
 
+  // The table's accessible row text is useful, but the decision controls live
+  // in a client drawer. Open its server-rendered deep-link states so this
+  // smoke proves the confirmed drawer itself retains the legal choices only.
+  const confirmedDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin);
+  const confirmedDecisionDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}&mode=decide`, null, admin);
+  const drawerButtons = (html) => {
+    const drawerIndex = html.indexOf('role="dialog"');
+    if (drawerIndex === -1) return [];
+    const drawer = html.slice(drawerIndex);
+    return [...drawer.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
+      .map((match) => match[1].replace(/<[^>]+>/g, "").replace(/&[^;]+;/g, "").trim());
+  };
+  const normalDrawerButtons = drawerButtons(confirmedDrawer.text);
+  const decisionDrawerButtons = drawerButtons(confirmedDecisionDrawer.text);
+  check("confirmed proposal drawer renders its normal change-decision control",
+    confirmedDrawer.status === 200 && normalDrawerButtons.includes("Change decision"));
+  check("confirmed proposal decision drawer keeps Accept and Decline but omits Maybe",
+    confirmedDecisionDrawer.status === 200
+    && decisionDrawerButtons.includes("Accept")
+    && decisionDrawerButtons.includes("Decline")
+    && !decisionDrawerButtons.includes("Maybe"),
+    JSON.stringify(decisionDrawerButtons));
+
   // The W2 safeguard remains for the final decision that can legally change a
   // confirmed proposal: declining it does not delete the existing Session.
   const reverse = await req("POST", "/api/evaluations/decisions", {

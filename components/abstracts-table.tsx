@@ -57,10 +57,18 @@ const TABS: { key: string; label: string }[] = [
   { key: "DRAFT", label: "Drafts" },
 ];
 
-export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
+export function AbstractsTable({
+  abstracts,
+  initialSelectedId = null,
+  initialChanging = false,
+}: {
+  abstracts: AbstractRow[];
+  initialSelectedId?: string | null;
+  initialChanging?: boolean;
+}) {
   const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   // Lifted out of the drawer on purpose: the drawer closes on a backdrop click,
   // and this consequence is too easy to miss if it disappears with it.
   const [warning, setWarning] = useState<ProgrammeWarning | null>(null);
@@ -221,6 +229,7 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
       {selected ? (
         <AbstractDrawer
           abstract={selected}
+          initialChanging={selectedId === initialSelectedId && initialChanging}
           onClose={() => setSelectedId(null)}
           onProgrammeWarning={setWarning}
         />
@@ -231,10 +240,12 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
 
 function AbstractDrawer({
   abstract,
+  initialChanging,
   onClose,
   onProgrammeWarning,
 }: {
   abstract: AbstractRow;
+  initialChanging: boolean;
   onClose: () => void;
   onProgrammeWarning: (warning: ProgrammeWarning) => void;
 }) {
@@ -243,7 +254,7 @@ function AbstractDrawer({
   const [busy, setBusy] = useState<null | "accept" | "maybe" | "reject" | "convert">(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [changing, setChanging] = useState(false);
+  const [changing, setChanging] = useState(initialChanging);
 
   const status = String(abstract.status);
   const meta = STATUS_META[status];
