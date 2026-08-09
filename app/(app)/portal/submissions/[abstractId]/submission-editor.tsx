@@ -9,6 +9,7 @@ import {
   canRequestWithdrawal,
   editSavedNotice,
   editScopeNotice,
+  submissionActionLabel,
   submissionErrorMessage,
   submissionStatusView,
   withdrawalSuccessNotice,
@@ -69,7 +70,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [withdrawn, setWithdrawn] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [busyAction, setBusyAction] = useState<"save" | "withdraw" | null>(null);
 
   function hydrate(data: Loaded) {
     setLoaded(data);
@@ -154,7 +155,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       setSaveError(submissionErrorMessage("VALIDATION_ERROR"));
       return;
     }
-    setSaving(true);
+    setBusyAction("save");
     setSaved(false);
     setSaveError(null);
     setFieldErrors({});
@@ -188,7 +189,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       console.warn("Submission save failed", error);
       setSaveError(submissionErrorMessage("NETWORK_ERROR"));
     } finally {
-      setSaving(false);
+      setBusyAction(null);
     }
   }
 
@@ -201,7 +202,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
     );
     if (!confirmed) return;
 
-    setSaving(true);
+    setBusyAction("withdraw");
     setSaved(false);
     setWithdrawn(false);
     setSaveError(null);
@@ -223,7 +224,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       console.warn("Submission withdrawal failed", error);
       setSaveError(submissionErrorMessage("NETWORK_ERROR"));
     } finally {
-      setSaving(false);
+      setBusyAction(null);
     }
   }
 
@@ -404,14 +405,14 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
             className={styles.withdrawButton}
             type="button"
             onClick={withdraw}
-            disabled={saving}
+            disabled={busyAction !== null}
           >
-            {saving ? "Withdrawing…" : "Withdraw proposal"}
+            {submissionActionLabel("withdraw", busyAction)}
           </button>
         ) : null}
         {readOnly ? null : (
-          <button className="primary-button" type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Save changes"}
+          <button className="primary-button" type="submit" disabled={busyAction !== null}>
+            {submissionActionLabel("save", busyAction)}
           </button>
         )}
       </div>

@@ -37,6 +37,7 @@ means for you:
 | **Draft** | not sent to the programme team yet |
 | **Submitted** | received; the programme team reviews it and follows up |
 | **In review** | reviewers are reading it now |
+| **Maybe** | the programme team is still deciding |
 | **Accepted** | you are on the programme |
 | **Not accepted** | it did not make the programme this time |
 | **Withdrawn** | it was taken out of consideration |
@@ -65,7 +66,7 @@ You do not need to beat a deadline: editing keeps working after the call for spe
 
 ### Withdrawing before a decision
 
-For a **Draft**, **Submitted**, or **In review** proposal, choose **Withdraw proposal**
+For a **Draft**, **Submitted**, **In review**, or **Maybe** proposal, choose **Withdraw proposal**
 and confirm. This takes that proposal out of consideration and makes it read-only in
 your portal; it does not erase the record or send a decision on the programme team's
 behalf. If the team has already accepted the talk, there is no self-withdraw action —

@@ -174,7 +174,7 @@ Nothing is deleted behind your back — take it off the schedule there, or chang
 back if it should run after all.
 
 **Someone wants to withdraw a proposal.** Speakers can withdraw their own Draft, Submitted,
-or In review proposal from its portal after a clear confirmation. That transition is status-only:
+In review, or Maybe proposal from its portal after a clear confirmation. That transition is status-only:
 it removes the proposal from consideration but does not create a programme decision or erase
 the record. Once you have accepted a talk, the speaker must contact your team; make any
 programme/scheduling change through the admin workflow. A withdrawn proposal cannot receive

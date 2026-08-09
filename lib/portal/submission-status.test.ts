@@ -4,13 +4,14 @@ import {
   canRequestWithdrawal,
   editSavedNotice,
   editScopeNotice,
+  submissionActionLabel,
   submissionErrorMessage,
   submissionStatusView,
   withdrawalSuccessNotice,
   withdrawalUnavailableNotice,
 } from "./submission-status";
 
-const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"];
+const ALL = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED", "REJECTED", "WITHDRAWN"];
 
 test("every status reads as plain English, never as a raw code", () => {
   for (const status of ALL) {
@@ -20,10 +21,14 @@ test("every status reads as plain English, never as a raw code", () => {
     assert.doesNotMatch(view.detail, /\b[A-Z][A-Z_]{3,}\b/, `detail leaks a code: ${view.detail}`);
   }
   assert.equal(submissionStatusView("UNDER_REVIEW").label, "In review");
+  const maybe = submissionStatusView("MAYBE");
+  assert.equal(maybe.label, "Maybe");
+  assert.match(maybe.detail, /still deciding/i);
+  assert.equal(maybe.editable, true);
 });
 
 test("editability matches the backend contract: terminal outcomes are read-only", () => {
-  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "ACCEPTED"]) {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED"]) {
     assert.equal(submissionStatusView(status).editable, true, status);
   }
   for (const status of ["REJECTED", "WITHDRAWN"]) {
@@ -80,7 +85,7 @@ test("save confirmation preserves the proposal/session boundary", () => {
 });
 
 test("only pre-decision, unconverted proposals offer a withdrawal request", () => {
-  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW"]) {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"]) {
     assert.equal(canRequestWithdrawal(status, false), true, status);
     assert.equal(canRequestWithdrawal(status, true), false, `${status} with a session`);
   }
@@ -98,4 +103,11 @@ test("withdrawal success and a concurrent acceptance refusal stay actionable", (
   const refusal = submissionErrorMessage("WITHDRAW_NOT_ALLOWED");
   assert.match(refusal, /program team/i);
   assert.doesNotMatch(refusal, /WITHDRAW_NOT_ALLOWED/);
+});
+
+test("save and withdrawal buttons only announce their own request", () => {
+  assert.equal(submissionActionLabel("save", "save"), "Saving…");
+  assert.equal(submissionActionLabel("save", "withdraw"), "Save changes");
+  assert.equal(submissionActionLabel("withdraw", "withdraw"), "Withdrawing…");
+  assert.equal(submissionActionLabel("withdraw", "save"), "Withdraw proposal");
 });
