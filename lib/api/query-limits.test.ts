@@ -9,6 +9,7 @@ test("operator query bounds allow the documented limit and reject the extra sent
   assert.equal(OPERATOR_QUERY_LIMITS.settingsRooms, 500);
   assert.equal(OPERATOR_QUERY_LIMITS.settingsTracks, 250);
   assert.equal(OPERATOR_QUERY_LIMITS.settingsCategories, 1_000);
+  assert.equal(OPERATOR_QUERY_LIMITS.adminReviewComments, 5_000);
   assert.doesNotThrow(() =>
     assertEventQueryBound({ length: OPERATOR_QUERY_LIMITS.templates }, OPERATOR_QUERY_LIMITS.templates, "templates"),
   );

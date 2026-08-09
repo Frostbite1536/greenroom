@@ -27,6 +27,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -212,6 +213,56 @@ type StoredAnswerProjection = {
   };
 };
 
+/** A de-identified evaluator note available only to an organizer projection. */
+export type OrganizerReviewComment = {
+  /** One text normally; multiple strings preserve divergent legacy criteria honestly. */
+  comments: string[];
+};
+
+type StoredReviewCommentProjection = {
+  abstractId: string;
+  evaluatorId: string;
+  rubricKey: string;
+  comment: string | null;
+};
+
+/**
+ * Keep raw evaluator comments out of shared/evaluator reads. Returning null,
+ * rather than an empty map, lets the serializer omit the field entirely for a
+ * non-admin caller.
+ */
+export function indexOrganizerReviewComments(
+  role: string,
+  rows: readonly StoredReviewCommentProjection[],
+  limit: number = OPERATOR_QUERY_LIMITS.adminReviewComments,
+): Map<string, OrganizerReviewComment[]> | null {
+  if (role !== "ADMIN") return null;
+  assertEventQueryBound(rows, limit, "review comments in the organizer view");
+
+  const byReview = new Map<string, { abstractId: string; comments: string[] }>();
+  for (const row of rows) {
+    // Prisma retains nullable field types even with `not: null` in the query.
+    // Keep the projection defensively safe if the query ever changes.
+    if (row.comment === null) continue;
+
+    const key = `${row.abstractId}\u0000${row.evaluatorId}`;
+    const existing = byReview.get(key);
+    if (existing) {
+      if (!existing.comments.includes(row.comment)) existing.comments.push(row.comment);
+      continue;
+    }
+    byReview.set(key, { abstractId: row.abstractId, comments: [row.comment] });
+  }
+
+  const byAbstract = new Map<string, OrganizerReviewComment[]>();
+  for (const review of byReview.values()) {
+    const comments = byAbstract.get(review.abstractId) ?? [];
+    comments.push({ comments: review.comments });
+    byAbstract.set(review.abstractId, comments);
+  }
+  return byAbstract;
+}
+
 /** Build an all-or-nothing event answer index so no proposal is silently partial. */
 export function indexAdminAnswers(
   rows: readonly StoredAnswerProjection[],
@@ -264,6 +315,8 @@ export type AbstractRow = {
    * rather than silently showing an empty section.
    */
   answersUnavailable: boolean;
+  /** Present only in the organizer/admin projection; evaluator payloads omit it. */
+  reviewComments?: OrganizerReviewComment[];
   hasSession: boolean;
   /** The confirmed talk created from this proposal, if conversion has happened. */
   sessionId: string | null;
@@ -312,8 +365,17 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
           },
         })
       : Promise.resolve([]);
+  const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> =
+    ctx.role === "ADMIN"
+      ? prisma.reviewScore.findMany({
+          where: { abstract: { eventId: ctx.eventId }, comment: { not: null } },
+          orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
+          take: OPERATOR_QUERY_LIMITS.adminReviewComments + 1,
+          select: { abstractId: true, evaluatorId: true, rubricKey: true, comment: true },
+        })
+      : Promise.resolve([]);
 
-  const [abstracts, assignmentGroups, scoreRows, answerRows] = await Promise.all([
+  const [abstracts, assignmentGroups, scoreRows, answerRows, reviewCommentRows] = await Promise.all([
     prisma.abstract.findMany({
       where: { eventId: ctx.eventId },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
@@ -352,6 +414,9 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
     // One bounded admin-only read for the whole event beats a per-drawer query;
     // deterministic ordering makes the all-or-nothing cutoff reproducible.
     answerRowsPromise,
+    // Organizer feedback is a distinct admin-only projection. Evaluators keep
+    // their caller-scoped `myComment` in getEvaluationQueue instead.
+    reviewCommentRowsPromise,
   ]);
 
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
@@ -377,6 +442,7 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
   // Over the bound: drop the overflow row and report honestly instead of
   // rendering a silently-partial answer list.
   const answerIndex = indexAdminAnswers(answerRows, ADMIN_ANSWER_LIMIT);
+  const reviewCommentsByAbstract = indexOrganizerReviewComments(ctx.role, reviewCommentRows);
 
   return {
     eventId: ctx.eventId,
@@ -406,6 +472,9 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         answers: answerIndex.byAbstract.get(a.id) ?? [],
         answersHidden: ctx.role !== "ADMIN",
         answersUnavailable: answerIndex.unavailable,
+        ...(reviewCommentsByAbstract
+          ? { reviewComments: reviewCommentsByAbstract.get(a.id) ?? [] }
+          : {}),
         hasSession: a.session !== null,
         sessionId: a.session?.id ?? null,
         sessionScheduled: a.session?.scheduleSlot != null,
@@ -578,11 +647,12 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
     prisma.reviewAssignment.count({ where: { planId: plan.id, status: "COMPLETED" } }),
   ]);
 
-  const scoresByAbstract = new Map<string, { scores: Record<string, number>; comment: string | null }>();
+  const scoresByAbstract = new Map<string, { scores: Record<string, number>; commentsByRubric: Map<string, string | null> }>();
   for (const row of myScores) {
-    const entry = scoresByAbstract.get(row.abstractId) ?? { scores: {}, comment: null };
+    const entry: { scores: Record<string, number>; commentsByRubric: Map<string, string | null> } =
+      scoresByAbstract.get(row.abstractId) ?? { scores: {}, commentsByRubric: new Map() };
     entry.scores[row.rubricKey] = Number(row.score);
-    if (row.comment) entry.comment = row.comment;
+    entry.commentsByRubric.set(row.rubricKey, row.comment);
     scoresByAbstract.set(row.abstractId, entry);
   }
 
@@ -613,7 +683,10 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
         abstractStatus: a.abstract.status,
         speakers: blind ? [] : a.abstract.speakers.map((s) => s.user.name),
         myScores: mine?.scores ?? {},
-        myComment: mine?.comment ?? null,
+        myComment: selectEvaluatorReviewComment(
+          rubric.map((criterion) => criterion.key),
+          mine ? [...mine.commentsByRubric].map(([rubricKey, comment]) => ({ rubricKey, comment })) : [],
+        ),
       };
     }),
   };

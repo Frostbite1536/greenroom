@@ -4,6 +4,11 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { parseRubric, validateScores } from "@/lib/services/rubric";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import {
+  resolveOverallReviewComment,
+  reviewScoreCreateData,
+  reviewScoreUpdateData,
+} from "@/lib/services/review-score-comment";
 
 export const dynamic = "force-dynamic";
 
@@ -50,11 +55,48 @@ export const POST = handle(async (req) => {
   if (validationError) {
     return fail(422, validationError.code, validationError.message, validationError.fieldErrors);
   }
+  resolveOverallReviewComment(
+    input.scores,
+    rubric.map((criterion) => criterion.key),
+  );
 
   await prisma.$transaction(async (tx) => {
+    // LOCK-ORDER-v1: score writes take the shared plan row lock before their
+    // Abstract advisory lock. It is compatible with concurrent scorers, while
+    // a plan's FOR UPDATE blocks until every scorer has validated and written
+    // against the same first-rubric-key comment contract.
+    const [lockedPlan] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "EvaluationPlan" WHERE "id" = ${input.planId} FOR SHARE
+    `;
+    if (!lockedPlan) {
+      throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
+    }
+    const currentPlan = await tx.evaluationPlan.findUniqueOrThrow({
+      where: { id: lockedPlan.id },
+      select: { eventId: true, rubric: true },
+    });
+    if (currentPlan.eventId !== ctx.eventId) {
+      throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
+    }
+    const currentRubric = parseRubric(currentPlan.rubric);
+    const currentValidationError = validateScores(currentRubric, input.scores);
+    if (currentValidationError) {
+      throw new ApiError(
+        422,
+        currentValidationError.code,
+        currentValidationError.message,
+        currentValidationError.fieldErrors,
+      );
+    }
+    const overallComment = resolveOverallReviewComment(
+      input.scores,
+      currentRubric.map((criterion) => criterion.key),
+    );
+
     // Same per-abstract advisory lock as withdraw/decisions/convert: the
     // pre-transaction WITHDRAWN check can go stale against a concurrent
-    // withdrawal, so re-check under the lock before persisting scores.
+    // withdrawal, so re-check under the lock before persisting scores. Keep
+    // this after the plan lock to avoid a Plan -> Abstract inversion.
     await lockAbstractForWrite(tx, input.abstractId);
     const fresh = await tx.abstract.findUniqueOrThrow({
       where: { id: input.abstractId },
@@ -67,7 +109,22 @@ export const POST = handle(async (req) => {
         "The speaker withdrew this proposal, so it no longer needs a review.",
       );
     }
+    if (overallComment) {
+      // Normalize a deliberate replacement or clear across every stored
+      // criterion before writing the one canonical overall comment below.
+      await tx.reviewScore.updateMany({
+        where: {
+          planId: input.planId,
+          abstractId: input.abstractId,
+          evaluatorId: ctx.userId,
+        },
+        data: { comment: null },
+      });
+    }
     for (const entry of input.scores) {
+      const comment = overallComment?.rubricKey === entry.rubricKey
+        ? overallComment.comment
+        : undefined;
       await tx.reviewScore.upsert({
         where: {
           planId_abstractId_evaluatorId_rubricKey: {
@@ -77,14 +134,13 @@ export const POST = handle(async (req) => {
             rubricKey: entry.rubricKey,
           },
         },
-        update: { score: entry.score, comment: entry.comment ?? null },
+        update: reviewScoreUpdateData({ score: entry.score, comment }),
         create: {
           planId: input.planId,
           abstractId: input.abstractId,
           evaluatorId: ctx.userId,
           rubricKey: entry.rubricKey,
-          score: entry.score,
-          comment: entry.comment ?? null,
+          ...reviewScoreCreateData({ score: entry.score, comment }),
         },
       });
     }

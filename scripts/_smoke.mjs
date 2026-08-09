@@ -316,9 +316,31 @@ try {
   check("M5 admin deletes an unused event-scoped room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId && !deletedRoom, unusedRoomDelete.status);
 
   const m5Category = await j("POST", "/api/cfp/categories", {
-    eventId: SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
+    eventId: OTHER_SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
   }, admin);
-  check("M5 retains the existing admin category create path", m5Category.status === 201 && !!m5Category.data?.data?.id, m5Category.status);
+  check("S1 category create derives event scope from the session, never the body",
+    m5Category.status === 201 &&
+      m5Category.data?.data?.eventId === SCRATCH_EVENT.id &&
+      !!m5Category.data?.data?.id,
+    m5Category.status);
+  const otherCategory = await prisma.category.create({
+    data: { eventId: OTHER_SCRATCH_EVENT.id, name: "Other Event Category", sortOrder: 0 },
+  });
+  const crossEventCategory = await j("POST", "/api/cfp/categories", {
+    id: otherCategory.id,
+    eventId: SCRATCH_EVENT.id,
+    name: "Unauthorized category change",
+    sortOrder: 0,
+  }, admin);
+  const otherCategoryAfterCrossEventUpdate = await prisma.category.findUnique({
+    where: { id: otherCategory.id },
+    select: { name: true },
+  });
+  check("S1 category update refuses unknown and cross-event ids without changing the other event",
+    crossEventCategory.status === 404 &&
+      crossEventCategory.data?.error?.code === "CATEGORY_NOT_FOUND" &&
+      otherCategoryAfterCrossEventUpdate?.name === "Other Event Category",
+    crossEventCategory.status);
 
   const importPayload = {
     eventId: SCRATCH_EVENT.id,
@@ -550,11 +572,36 @@ try {
 
   // 6. Create evaluation plan
   const plan = await j("POST", "/api/evaluations/plans", {
-    eventId: SCRATCH_EVENT.id, name: "Round 1 Smoke", ordinal: 1,
+    eventId: OTHER_SCRATCH_EVENT.id, name: "Round 1 Smoke", ordinal: 1,
     rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
   }, admin);
-  check("create plan", plan.status === 201, plan.status);
+  check("S1 plan create derives event scope from the session, never the body",
+    plan.status === 201 && plan.data?.data?.eventId === SCRATCH_EVENT.id, plan.status);
   const planId = plan.data?.data?.id;
+  const otherPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      name: "Other Event Round",
+      ordinal: 1,
+      rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+    },
+  });
+  const crossEventPlan = await j("POST", "/api/evaluations/plans", {
+    id: otherPlan.id,
+    eventId: SCRATCH_EVENT.id,
+    name: "Unauthorized plan change",
+    ordinal: 1,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+  }, admin);
+  const otherPlanAfterCrossEventUpdate = await prisma.evaluationPlan.findUnique({
+    where: { id: otherPlan.id },
+    select: { name: true },
+  });
+  check("S1 plan update refuses unknown and cross-event ids without changing the other event",
+    crossEventPlan.status === 404 &&
+      crossEventPlan.data?.error?.code === "PLAN_NOT_FOUND" &&
+      otherPlanAfterCrossEventUpdate?.name === "Other Event Round",
+    crossEventPlan.status);
 
   // 7. Evaluator has a pre-existing scratch membership; resolve the real DB id.
   await j("GET", "/api/evaluations/plans", null, evalr);
@@ -658,6 +705,199 @@ try {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 5, comment: "strong" }], complete: true,
   }, evalr);
   check("valid score recorded + assignment completed", score.status === 200 && score.data?.data?.complete === true, score.status);
+  const correctedScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  const correctedReviewScore = await prisma.reviewScore.findUnique({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+    select: { score: true, comment: true },
+  });
+  check("C5 score correction with an omitted comment preserves saved feedback",
+    correctedScore.status === 200 && correctedReviewScore?.score?.toString() === "4" && correctedReviewScore.comment === "strong",
+    correctedScore.status);
+  const parallelScoreSubmission = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "Parallel score lock check",
+    speakers: [{ email: "parallel-score@scratch.test", name: "Parallel Scorer", isPrimary: true }],
+    answers: { title_note: "parallel", consent: true },
+    intent: "submit",
+  });
+  const parallelScoreAbstractId = parallelScoreSubmission.data?.data?.id;
+  const parallelScoreAssignment = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [parallelScoreAbstractId], evaluatorIds: [evaluatorId],
+  }, admin);
+  check("C5 plan-lock concurrency setup creates a second assigned abstract",
+    parallelScoreSubmission.status === 201 && parallelScoreAssignment.status === 201 && !!parallelScoreAbstractId,
+    parallelScoreAssignment.status);
+
+  let signalSharedPlanLock;
+  let releaseSharedPlanLock;
+  const sharedPlanLockHeld = new Promise((resolve) => { signalSharedPlanLock = resolve; });
+  const sharedPlanLockRelease = new Promise((resolve) => { releaseSharedPlanLock = resolve; });
+  const sharedPlanLock = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "EvaluationPlan" WHERE "id" = ${planId} FOR SHARE`;
+    signalSharedPlanLock();
+    await sharedPlanLockRelease;
+  });
+  await sharedPlanLockHeld;
+  let signalAbstractLock;
+  let releaseAbstractLock;
+  const abstractLockHeld = new Promise((resolve) => { signalAbstractLock = resolve; });
+  const abstractLockRelease = new Promise((resolve) => { releaseAbstractLock = resolve; });
+  const blockedAbstractLock = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${parallelScoreAbstractId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    signalAbstractLock();
+    await abstractLockRelease;
+  });
+  await abstractLockHeld;
+  const countPlanRowShareLocks = async () => {
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count"
+      FROM pg_locks
+      WHERE relation = '"EvaluationPlan"'::regclass
+        AND mode = 'RowShareLock'
+        AND granted
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const baselinePlanRowShareLocks = await countPlanRowShareLocks();
+  const parallelScore = j("POST", "/api/evaluations/scores", {
+    planId, abstractId: parallelScoreAbstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  let scorerTookCompatiblePlanShareLock = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await countPlanRowShareLocks() > baselinePlanRowShareLocks) {
+      scorerTookCompatiblePlanShareLock = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // The scorer cannot finish while this holder keeps its target abstract
+  // serialized, so observing its second granted RowShareLock is direct proof
+  // that Plan FOR SHARE is compatible with an active scorer's plan lock.
+  releaseAbstractLock();
+  releaseSharedPlanLock();
+  await Promise.all([blockedAbstractLock, sharedPlanLock]);
+  const parallelScoreResult = await parallelScore;
+  check("C5 concurrent scorers share the plan lock before distinct abstract locks",
+    scorerTookCompatiblePlanShareLock && parallelScoreResult?.status === 200,
+    parallelScoreResult?.status);
+
+  let signalPlanUpdateShareLock;
+  let releasePlanUpdateShareLock;
+  const planUpdateShareLockHeld = new Promise((resolve) => { signalPlanUpdateShareLock = resolve; });
+  const planUpdateShareLockRelease = new Promise((resolve) => { releasePlanUpdateShareLock = resolve; });
+  const planUpdateShareLock = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "EvaluationPlan" WHERE "id" = ${planId} FOR SHARE`;
+    signalPlanUpdateShareLock();
+    await planUpdateShareLockRelease;
+  });
+  await planUpdateShareLockHeld;
+  const waitingPlanUpdate = j("POST", "/api/evaluations/plans", {
+    id: planId,
+    eventId: SCRATCH_EVENT.id,
+    name: "Round 1 Smoke concurrent lock check",
+    ordinal: 1,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+  }, admin);
+  const planUpdatedBeforeShareRelease = await Promise.race([
+    waitingPlanUpdate.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 150)),
+  ]);
+  releasePlanUpdateShareLock();
+  await planUpdateShareLock;
+  const completedPlanUpdate = await waitingPlanUpdate;
+  check("C5 plan FOR UPDATE excludes active shared scorer locks",
+    planUpdatedBeforeShareRelease === false && completedPlanUpdate.status === 200,
+    completedPlanUpdate.status);
+  const rejectedRubricReorder = await j("POST", "/api/evaluations/plans", {
+    id: planId,
+    eventId: SCRATCH_EVENT.id,
+    name: "Round 1 Smoke concurrent lock check",
+    ordinal: 1,
+    rubric: [
+      { key: "impact", label: "Impact", min: 1, max: 5, weight: 1 },
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 },
+    ],
+  }, admin);
+  const [planAfterRejectedReorder, commentAfterRejectedReorder] = await Promise.all([
+    prisma.evaluationPlan.findUnique({ where: { id: planId }, select: { rubric: true } }),
+    prisma.reviewScore.findUnique({
+      where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+      select: { comment: true },
+    }),
+  ]);
+  check("C5 rubric reorder preserves the authoritative comment key and visible feedback",
+    rejectedRubricReorder.status === 409 &&
+      rejectedRubricReorder.data?.error?.code === "REVIEW_COMMENT_KEY_IN_USE" &&
+      planAfterRejectedReorder?.rubric?.[0]?.key === "relevance" &&
+      commentAfterRejectedReorder?.comment === "strong",
+    rejectedRubricReorder.data?.error?.code);
+  const clearedScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: null }], complete: true,
+  }, evalr);
+  const clearedReviewScore = await prisma.reviewScore.findUnique({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+    select: { comment: true },
+  });
+  check("C5 explicit null deliberately clears saved feedback",
+    clearedScore.status === 200 && clearedReviewScore?.comment === null, clearedScore.status);
+  const blankComment = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: "   " }], complete: true,
+  }, evalr);
+  check("C5 rejects ambiguous blank feedback instead of treating it as a clear",
+    blankComment.status === 422 && blankComment.data?.error?.code === "VALIDATION_ERROR", blankComment.status);
+  const strandedLegacyRubricKey = "pre_fix_former_first_key";
+  const strandedLegacyComment = "Pre-fix stranded evaluator feedback";
+  await prisma.reviewScore.create({
+    data: {
+      planId,
+      abstractId,
+      evaluatorId,
+      rubricKey: strandedLegacyRubricKey,
+      score: 4,
+      comment: strandedLegacyComment,
+    },
+  });
+  const strandedEvaluatorQueue = await fetch(`${BASE}/admin/evaluations`, {
+    headers: { cookie: cookie(evalr) },
+  });
+  const strandedEvaluatorQueueHtml = await strandedEvaluatorQueue.text();
+  check("C5 evaluator recovers pre-fix stranded overall feedback from an orphan rubric key",
+    strandedEvaluatorQueue.status === 200 && strandedEvaluatorQueueHtml.includes(strandedLegacyComment),
+    strandedEvaluatorQueue.status);
+  await prisma.reviewScore.delete({
+    where: {
+      planId_abstractId_evaluatorId_rubricKey: {
+        planId,
+        abstractId,
+        evaluatorId,
+        rubricKey: strandedLegacyRubricKey,
+      },
+    },
+  });
+  const legacyCommentKeys = ["legacy-comment-a", "legacy-comment-b"];
+  await prisma.reviewScore.createMany({
+    data: [
+      { planId, abstractId, evaluatorId, rubricKey: legacyCommentKeys[0], score: 4, comment: "Legacy text one" },
+      { planId, abstractId, evaluatorId, rubricKey: legacyCommentKeys[1], score: 4, comment: "Legacy text two" },
+    ],
+  });
+  const [adminAbstractRead, evaluatorAbstractRead] = await Promise.all([
+    j("GET", "/admin/abstracts", null, admin),
+    j("GET", "/admin/abstracts", null, evalr),
+  ]);
+  check("C5 divergent legacy comments keep the admin read usable without exposing evaluator identity",
+    adminAbstractRead.status === 200 &&
+      !String(adminAbstractRead.data).includes(evaluatorId) &&
+      evaluatorAbstractRead.status === 200 &&
+      !String(evaluatorAbstractRead.data).includes("Legacy text one") &&
+      !String(evaluatorAbstractRead.data).includes(evaluatorId),
+    `${adminAbstractRead.status}/${evaluatorAbstractRead.status}`);
+  await prisma.reviewScore.deleteMany({
+    where: { planId, abstractId, evaluatorId, rubricKey: { in: legacyCommentKeys } },
+  });
 
   const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
   const reviewedAbstract = reviewedList.data?.data?.find((item) => item.id === abstractId);
@@ -666,7 +906,7 @@ try {
     reviewedList.status === 200 &&
       reviewedAbstract?.reviewsComplete === 1 &&
       reviewedAbstract?.reviewsTotal === 1 &&
-      reviewedAbstract?.avgScore === 5,
+      reviewedAbstract?.avgScore === 4,
   );
 
   // M4: MAYBE is a non-final, evaluable decision state. It creates neither a

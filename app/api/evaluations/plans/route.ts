@@ -1,8 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { evaluationPlanInputSchema } from "@/types/api";
-import { assertEventScope, requireContext } from "@/lib/api/context";
+import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
+import { overallReviewCommentKeyChanged } from "@/lib/services/review-score-comment";
 
 export const dynamic = "force-dynamic";
 
@@ -37,7 +39,6 @@ export const GET = handle(async () => {
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, evaluationPlanInputSchema);
-  assertEventScope(ctx, input.eventId);
 
   const data = {
     name: input.name,
@@ -49,11 +50,31 @@ export const POST = handle(async (req) => {
   };
 
   try {
-    const plan = await prisma.evaluationPlan.upsert({
-      where: { id: input.id ?? "__new__" },
-      update: data,
-      create: { eventId: input.eventId, ...data },
-    });
+    const plan = input.id
+      ? await prisma.$transaction(async (tx) => {
+          // The row lock keeps the verified event ownership current until the
+          // update commits, rather than trusting the request body eventId.
+          const [existing] = await tx.$queryRaw<{ id: string; eventId: string; rubric: unknown }[]>`
+            SELECT "id", "eventId", "rubric" FROM "EvaluationPlan" WHERE "id" = ${input.id} FOR UPDATE
+          `;
+          const owned = requireEventOwnedRow(existing, ctx.eventId, "PLAN_NOT_FOUND", "Plan");
+          if (overallReviewCommentKeyChanged(owned.rubric, input.rubric)) {
+            const comment = await tx.reviewScore.findFirst({
+              where: { planId: owned.id, comment: { not: null } },
+              select: { id: true },
+            });
+            if (comment) {
+              throw new ApiError(
+                409,
+                "REVIEW_COMMENT_KEY_IN_USE",
+                "Keep the first rubric criterion while written reviewer feedback exists, or clear that feedback before reordering it.",
+                { rubric: ["The first criterion stores overall reviewer feedback and cannot change yet."] },
+              );
+            }
+          }
+          return tx.evaluationPlan.update({ where: { id: owned.id }, data });
+        })
+      : await prisma.evaluationPlan.create({ data: { eventId: ctx.eventId, ...data } });
     return ok(plan, input.id ? 200 : 201);
   } catch (error) {
     if (
