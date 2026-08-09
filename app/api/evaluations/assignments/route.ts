@@ -77,6 +77,17 @@ export const POST = handle(async (req) => {
     throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
   }
 
+  // Authorization preflight only: do not let a guessed cross-event id acquire
+  // another event's advisory lock. Status is deliberately not trusted here;
+  // the transaction must re-read it after taking the shared write locks.
+  const scopedAbstracts = await prisma.abstract.findMany({
+    where: { id: { in: input.abstractIds }, eventId: ctx.eventId },
+    select: { id: true },
+  });
+  if (scopedAbstracts.length !== input.abstractIds.length) {
+    throw new ApiError(422, "INVALID_ABSTRACTS", "One or more abstracts are not in this event.");
+  }
+
   const created = await prisma.$transaction(async (tx) => {
     // Assignment, speaker withdrawal, scoring and decisions all observe the
     // same per-abstract serialization boundary. Stable ordering prevents two
