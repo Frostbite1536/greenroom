@@ -4,6 +4,7 @@ import {
   buildCoSpeakerNotice,
   buildSubmissionAlert,
   buildSubmissionReceipt,
+  CFP_SUBMITTED_TEMPLATE_KEY,
 } from "@/lib/comms/notifications";
 
 /**
@@ -64,9 +65,8 @@ export async function notifyAbstractSubmitted(
     // Notifications hang off the event's own templates so an operator can see
     // every send in one place; without a template there is nothing to log to.
     const template = await prisma.emailTemplate.findFirst({
-      where: { eventId: abstract.eventId },
+      where: { eventId: abstract.eventId, key: CFP_SUBMITTED_TEMPLATE_KEY },
       select: { id: true },
-      orderBy: { key: "asc" },
     });
     if (!template) return { ...EMPTY, skipped: "no_template" };
 

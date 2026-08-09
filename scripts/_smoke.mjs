@@ -412,7 +412,7 @@ try {
   const commsTemplate = await prisma.emailTemplate.create({
     data: {
       eventId: SCRATCH_EVENT.id,
-      key: "cfp-accepted",
+      key: "cfp-submitted",
       subject: "Scratch decision",
       htmlBody: "<p>Scratch only</p>",
       trigger: "manual",
