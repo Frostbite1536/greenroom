@@ -407,6 +407,9 @@ try {
   check("B5 setup: restore the full field set", b5Restore.status === 200, b5Restore.status);
 
   // O2: the shared delivery path requires a template row for its dispatch FK.
+  // Use the legacy accepted key here to prove an already-running event keeps
+  // sending during the short code-deploy -> coordinated-reseed interval. The
+  // dedicated cfp-submitted key is preferred once the new seed is applied.
   // The server is forced into mock mode above, so these checks cannot reach
   // Resend even if the local shell happens to carry live credentials.
   const commsTemplate = await prisma.emailTemplate.create({
@@ -441,7 +444,7 @@ try {
     orderBy: { recipient: "asc" },
   });
   check(
-    "O2 submit records receipt, co-speaker notice, and admin alert",
+    "O2 legacy template fallback records receipt, co-speaker notice, and admin alert",
     JSON.stringify(submissionDispatches.map((row) => row.recipient)) ===
       JSON.stringify(["admin@scratch.test", "co@x.com", "spk@x.com"]),
     JSON.stringify(submissionDispatches.map((row) => row.recipient)),
@@ -576,13 +579,39 @@ try {
       reviewedAbstract?.avgScore === 5,
   );
 
-  // 10. Convert before acceptance must fail (INV-DOMAIN-001)
-  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
-  check("convert before acceptance refused", early.status === 409, early.data?.error?.code);
+  // M4: MAYBE is a non-final, evaluable decision state. It creates neither a
+  // Session nor tasks, and only an event admin may set it.
+  const anonymousMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" });
+  check("M4 anonymous callers cannot set MAYBE",
+    anonymousMaybe.status === 401 && anonymousMaybe.data?.error?.code === "UNAUTHENTICATED", anonymousMaybe.status);
+  const evaluatorMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, evalr);
+  check("M4 evaluators cannot set MAYBE",
+    evaluatorMaybe.status === 403, evaluatorMaybe.status);
+  const maybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 MAYBE is serialized as a non-final decision with no session",
+    maybe.status === 200 &&
+      maybe.data?.data?.status === "MAYBE" &&
+      maybe.data?.data?.decidedAt === null &&
+      maybe.data?.data?.session === null &&
+      maybe.data?.data?.sessionCreated === false &&
+      maybe.data?.data?.tasksAssigned === 0,
+    JSON.stringify(maybe.data?.data));
+  check("M4 MAYBE never provisions a session or task assignment",
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 0 &&
+      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === 0);
+  const maybeScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: "worth a closer look" }], complete: true,
+  }, evalr);
+  check("M4 an existing evaluator can still score a MAYBE proposal",
+    maybeScore.status === 200 && maybeScore.data?.data?.complete === true, maybeScore.status);
 
-  // 11. Accept, then convert to a Session
+  // 10. Convert before acceptance (including MAYBE) must fail (INV-DOMAIN-001)
+  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("M4 MAYBE cannot convert into a session", early.status === 409, early.data?.error?.code);
+
+  // 11. A MAYBE proposal remains decidable: accepting it provisions the Session.
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
-  check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
+  check("M4 MAYBE can later be accepted", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
@@ -601,11 +630,11 @@ try {
     includeFeedback: true,
   }, admin);
   check(
-    "O2 decision preview includes comments but never scores or reviewer identities",
+    "O2 decision preview includes the latest comments but never scores or reviewer identities",
     decisionPreview.status === 200 &&
       decisionPreview.data?.data?.preview === true &&
       decisionPreview.data?.data?.feedbackCount === 1 &&
-      decisionPreview.data?.data?.html?.includes("strong") &&
+      decisionPreview.data?.data?.html?.includes("worth a closer look") &&
       !decisionPreview.data?.data?.html?.includes("5/5") &&
       !/reviewer|evaluator/i.test(decisionPreview.data?.data?.html ?? ""),
     decisionPreview.status,
@@ -867,6 +896,54 @@ try {
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
 
+  // C12: one real task deadline is rendered in the event timezone and the
+  // invitation path remains forced-mock. This is scratch-only and deliberately
+  // runs while the speaker has a fully scheduled session above.
+  await prisma.event.update({ where: { id: SCRATCH_EVENT.id }, data: { timezone: "America/Los_Angeles" } });
+  const c12Task = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "C12 scratch deadline",
+      required: true,
+      dueAt: new Date("2026-05-02T06:59:00.000Z"),
+      sortOrder: 99,
+    },
+  });
+  // The scheduled session above belongs to the submitted primary speaker, not
+  // the signed scratch account used for portal authorization checks.
+  const c12Speaker = await prisma.user.findUniqueOrThrow({ where: { email: "spk@x.com" } });
+  await prisma.speakerTask.create({ data: { taskId: c12Task.id, userId: c12Speaker.id, status: "TODO" } });
+  const c12Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "c12-task-reminder",
+      subject: "Deadline {{dueDate}}",
+      htmlBody: "<p>{{talkTitle}} at {{slotTime}} in {{roomName}}. {{calendarInviteNote}}</p>",
+      trigger: "task.reminder",
+    },
+  });
+  const c12Reminder = await j("POST", "/api/comms/reminders", {
+    eventId: SCRATCH_EVENT.id,
+    templateKey: c12Template.key,
+    recipientUserIds: [c12Speaker.id],
+    includeCalendarInvite: true,
+  }, admin);
+  const c12Dispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c12Template.id, recipient: c12Speaker.email },
+    select: { status: true, providerId: true, variables: true },
+  });
+  const c12Variables = c12Dispatch?.variables;
+  check(
+    "C12 reminder uses the task deadline and event timezone in forced mock mode",
+    c12Reminder.status === 200 &&
+      c12Dispatch?.status === "mocked" &&
+      c12Dispatch.providerId?.startsWith("mock:") &&
+      c12Variables?.dueDate === "Fri, May 1, 2026, 11:59 PM PDT" &&
+      typeof c12Variables?.slotTime === "string" && c12Variables.slotTime.endsWith("PDT") &&
+      c12Variables.calendarInviteNote === "A calendar invite is attached.",
+    c12Reminder.status,
+  );
+
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
   // the intended read models (no reviewer data or unplaced sessions).
   const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
@@ -1086,8 +1163,9 @@ try {
     wStranger.status === 403 && wStranger.data?.error?.code === "NOT_YOUR_SUBMISSION", wStranger.status);
 
   const wDraw = await j("PATCH", `/api/cfp/submissions/${wId}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 speaker withdraws an UNDER_REVIEW proposal",
-    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN", wDraw.status);
+  check("M6 portal contract: speaker withdraws an UNDER_REVIEW proposal",
+    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN" &&
+    wDraw.data?.data?.submission?.canEdit === false, wDraw.status);
   check("W1 withdrawing does not stamp a programme decision",
     wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
 
@@ -1123,8 +1201,9 @@ try {
     wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN", wQueueRow?.abstract?.status);
 
   const wAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 an accepted, converted talk cannot be self-withdrawn",
-    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED", wAccepted.status);
+  check("M6 accepted/converted talk refusal is an actionable 409",
+    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED" &&
+    /contact the program team/i.test(wAccepted.data?.error?.message ?? ""), wAccepted.status);
 
   // 23. W2 — a decision reports the session it leaves behind, so the admin UI
   // can prompt to unschedule (no auto-deletion: INV-DOMAIN-001).
@@ -1138,6 +1217,43 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
+
+  const m4FixtureLimit = 100;
+  const m4TaskIds = (await prisma.onboardingTask.findMany({
+    where: { eventId: SCRATCH_EVENT.id }, select: { id: true }, take: m4FixtureLimit + 1,
+  })).map((task) => task.id);
+  const m4SpeakerIds = (await prisma.sessionSpeaker.findMany({
+    where: { sessionId }, select: { userId: true }, take: m4FixtureLimit + 1,
+  })).map((speakerRow) => speakerRow.userId);
+  if (m4TaskIds.length > m4FixtureLimit || m4SpeakerIds.length > m4FixtureLimit) {
+    throw new Error(`M4 scratch fixture exceeds its ${m4FixtureLimit}-row bound`);
+  }
+  const m4CohortWhere = { taskId: { in: m4TaskIds }, userId: { in: m4SpeakerIds } };
+  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: m4CohortWhere });
+  const expectedM4Backfill = (m4TaskIds.length * m4SpeakerIds.length) - m4TasksBeforeMaybe;
+
+  // MAYBE is a pre-confirmation state. Refusing it once a Session exists keeps
+  // every public programme consumer on one status and preserves the Session.
+  const scheduledMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 a confirmed Session cannot return to MAYBE",
+    scheduledMaybe.status === 409 && scheduledMaybe.data?.error?.code === "MAYBE_NOT_AVAILABLE",
+    scheduledMaybe.data?.error?.code);
+  check("M4 the refused MAYBE transition preserves accepted programme truth and its task cohort",
+    (await prisma.abstract.findUnique({ where: { id: abstractId }, select: { status: true } }))?.status === "ACCEPTED" &&
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) === m4TasksBeforeMaybe);
+  const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
+  check("M4 re-accepting still avoids duplicate Session provisioning and reconciles missing tasks",
+    restoredAccepted.status === 200 &&
+      restoredAccepted.data?.data?.status === "ACCEPTED" &&
+      typeof restoredAccepted.data?.data?.decidedAt === "string" &&
+      restoredAccepted.data?.data?.session?.id === sessionId &&
+      restoredAccepted.data?.data?.sessionCreated === false &&
+      restoredAccepted.data?.data?.tasksAssigned === expectedM4Backfill &&
+      await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) ===
+        m4TasksBeforeMaybe + expectedM4Backfill,
+    JSON.stringify(restoredAccepted.data?.data));
 
   const reversed = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "REJECTED" }, admin);
   check("W2 reversing a decision reports the still-scheduled session",

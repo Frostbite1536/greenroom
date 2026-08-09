@@ -11,6 +11,13 @@ import { sanitizeHtml } from "@/lib/sanitize-html";
  */
 export type NotificationSpeaker = { name: string; email: string };
 
+/**
+ * The submission receipt, co-speaker notice, and program-team alert are one
+ * submission event.  Keep their recorded dispatches attached to this named
+ * event template rather than whichever seeded template sorts first.
+ */
+export const CFP_SUBMITTED_TEMPLATE_KEY = "cfp-submitted";
+
 export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")

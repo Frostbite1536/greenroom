@@ -1,9 +1,15 @@
 # A3 — Authenticated production walkthrough (evidence)
 
+> **Historical evidence, preserved as observed.** This run predates the
+> canonical-domain cutover and Wave 0 automatic Session provisioning. Its URL,
+> commit, response codes, and two-step accept/convert result describe that
+> recorded production run; they are not a claim about current main. The current
+> demo is <https://greenroom-hq.com>.
+
 Run 2026-08-08 ~12:15–12:25 CDT by the Architect against
 `https://greenroom-omega-dusky.vercel.app` at production commit `0bb4aad`,
 inside an announced single-writer window. This was the first **persisted
-admin-mutation sweep** on the final signed-session implementation.
+admin-mutation sweep** on the then-current signed-session implementation.
 
 Authentication used the app's own `/login` server action over HTTPS (the same
 one-click persona flow a judge uses) — no forged cookies; the signed

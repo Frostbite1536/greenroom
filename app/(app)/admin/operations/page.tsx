@@ -32,7 +32,8 @@ export default async function AdminOperationsPage() {
   if (ctx.role !== "ADMIN") redirect("/portal");
   const eventId = ctx.eventId;
 
-  const [templates, forms, speakerRows, decidedAbstracts] = await Promise.all([
+  const [event, templates, forms, speakerRows, decidedAbstracts] = await Promise.all([
+    prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
     prisma.emailTemplate.findMany({
       where: { eventId },
       select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
@@ -119,7 +120,8 @@ export default async function AdminOperationsPage() {
       <div className={styles.grid}>
         <RemindersPanel
           eventId={eventId}
-          templates={templates.map((template) => ({ key: template.key, subject: template.subject }))}
+          timezone={event?.timezone ?? "UTC"}
+          templates={templates.map((template) => ({ key: template.key, subject: template.subject, trigger: template.trigger }))}
           speakers={speakers}
           email={email}
         />

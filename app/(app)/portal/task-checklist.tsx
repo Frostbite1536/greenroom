@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { formatEventDateTime } from "@/lib/tz";
 import styles from "./portal.module.css";
 
 export type PortalTask = {
@@ -13,16 +14,6 @@ export type PortalTask = {
   hasForm: boolean;
   status: "TODO" | "IN_PROGRESS" | "COMPLETED" | "WAIVED";
 };
-
-function formatDue(dueAt: string | null, timezone: string): string | null {
-  if (!dueAt) return null;
-  return new Date(dueAt).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: timezone,
-  });
-}
 
 export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezone: string }) {
   const router = useRouter();
@@ -83,7 +74,7 @@ export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezo
         {tasks.map((task) => {
           const status = statusOf(task);
           const isDone = status === "COMPLETED" || status === "WAIVED";
-          const due = formatDue(task.dueAt, timezone);
+          const due = formatEventDateTime(task.dueAt, timezone);
           return (
             <li className={`${styles.task} ${isDone ? styles.taskDone : ""}`} key={task.taskId}>
               <input

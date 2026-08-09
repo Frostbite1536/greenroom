@@ -7,6 +7,13 @@ One run per route, captured by the Ops worker: the public routes on
 UTC** after the accessibility fixes and the newer screens landed. Every measured
 request is a read-only `GET`; no mutation, seed, or reset was issued.
 
+> **Historical measurement, preserved as measured.** The public-route numbers
+> below were captured from the then-canonical Vercel deployment before the
+> canonical-domain cutover. They remain evidence for that build, not a fresh
+> measurement of current `https://greenroom-hq.com`. Use the canonical URL in
+> the reproduction command for a new measurement; do not overwrite this table
+> without recording the new date, commit, and environment.
+
 ## Results
 
 | Route | Environment | Perf | A11y | FCP | LCP | TBT | CLS | Speed Index | TTFB | Page weight |
@@ -22,8 +29,9 @@ request is a read-only `GET`; no mutation, seed, or reset was issued.
 | `/portal` | local prod build | **97** | **100** | 0.9 s | 2.2 s | 150 ms | 0 | 2.1 s | 1124 ms¹ | 152 KiB |
 | `/portal/submissions/[id]` | local prod build | **97** | **100** | 0.9 s | 2.2 s | 150 ms | 0 | 2.5 s | 609 ms¹ | 159 KiB |
 
-**Every audited route scores 100 on accessibility, with zero layout shift, and
-every page ships under ~180 KiB.** Ten routes covering all four user journeys:
+**At the recorded measurement, every audited route scored 100 on accessibility,
+with zero layout shift, and every page shipped under ~180 KiB.** Ten routes
+covering all four user journeys:
 public visitor, speaker, reviewer, and event admin.
 
 ¹ **Read this before comparing TTFB columns.** The admin and portal routes
@@ -82,7 +90,7 @@ screen-reader pass has been performed, and that remains the honest gap.
 ```bash
 # Public production routes
 CHROME_PATH="C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" \
-npx lighthouse "https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026" \
+npx lighthouse "https://greenroom-hq.com/embed/schedule?event=forward-2026" \
   --only-categories=performance,accessibility \
   --chrome-flags="--headless=new --no-sandbox" \
   --output=json --output-path=lighthouse-embed-schedule.json

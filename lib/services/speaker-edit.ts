@@ -21,6 +21,7 @@ export const EDITABLE_STATUSES = [
   "DRAFT",
   "SUBMITTED",
   "UNDER_REVIEW",
+  "MAYBE",
   "ACCEPTED",
 ] as const satisfies readonly AbstractStatus[];
 
@@ -39,6 +40,7 @@ export const WITHDRAWABLE_STATUSES = [
   "DRAFT",
   "SUBMITTED",
   "UNDER_REVIEW",
+  "MAYBE",
 ] as const satisfies readonly AbstractStatus[];
 
 export type WithdrawRefusal = { code: string; message: string };

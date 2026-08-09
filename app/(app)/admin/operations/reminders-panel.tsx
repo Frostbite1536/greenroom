@@ -6,7 +6,7 @@ import { describeReminderResult, type IntegrationStatus } from "@/lib/operations
 import styles from "./operations.module.css";
 
 type Speaker = { userId: string; name: string; email: string };
-type Template = { key: string; subject: string };
+type Template = { key: string; subject: string; trigger: string | null };
 type Result = { tone: "good" | "warn" | "bad"; headline: string; note?: string };
 
 /**
@@ -18,11 +18,13 @@ type Result = { tone: "good" | "warn" | "bad"; headline: string; note?: string }
  */
 export function RemindersPanel({
   eventId,
+  timezone,
   templates,
   speakers,
   email,
 }: {
   eventId: string;
+  timezone: string;
   templates: Template[];
   speakers: Speaker[];
   email: IntegrationStatus;
@@ -33,6 +35,9 @@ export function RemindersPanel({
   const [includeCalendarInvite, setIncludeCalendarInvite] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const selectedTemplate = templates.find((template) => template.key === templateKey);
+  const scheduledSessionMessage = selectedTemplate?.trigger === "session.scheduled";
+  const attachesCalendarInvite = scheduledSessionMessage || includeCalendarInvite;
 
   function toggle(userId: string) {
     setSelected((current) =>
@@ -50,7 +55,7 @@ export function RemindersPanel({
         body: JSON.stringify({
           eventId,
           templateKey,
-          includeCalendarInvite,
+          includeCalendarInvite: attachesCalendarInvite,
           ...(mode === "selected" ? { recipientUserIds: selected } : {}),
         }),
       });
@@ -80,7 +85,7 @@ export function RemindersPanel({
     <section className={styles.panel} aria-labelledby="ops-reminders">
       <div className={styles.panelHead}>
         <h2 id="ops-reminders">Speaker reminders</h2>
-        <p>Email the speakers who still have onboarding to finish.</p>
+        <p>Email the speakers who still have onboarding to finish. Deadlines and session times use the event timezone ({timezone}).</p>
       </div>
 
       <p className={styles.hintText}>
@@ -130,9 +135,21 @@ export function RemindersPanel({
           ) : null}
 
           <label className={styles.recipient}>
-            <input type="checkbox" checked={includeCalendarInvite} onChange={(e) => setIncludeCalendarInvite(e.target.checked)} />
-            Attach a calendar invite for their session
+            <input
+              type="checkbox"
+              checked={attachesCalendarInvite}
+              disabled={scheduledSessionMessage}
+              onChange={(e) => setIncludeCalendarInvite(e.target.checked)}
+            />
+            {scheduledSessionMessage
+              ? "A calendar invite is required for this scheduled-session message"
+              : "Attach a calendar invite only for speakers with a scheduled session"}
           </label>
+          <p className={styles.hintText}>
+            {scheduledSessionMessage
+              ? "This message can only be sent to speakers with an actual scheduled session."
+              : "Speakers without a scheduled session receive the reminder without an invitation or schedule details."}
+          </p>
 
           <div className={styles.actions}>
             <button className="primary-button" type="button" onClick={send} disabled={!canSend}>

@@ -6,10 +6,14 @@ import { ArrowLeft, Check, Lock, Plus, X } from "lucide-react";
 import { FieldControl, type RenderField } from "@/components/field-renderer";
 import { resolveVisibleFields, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
 import {
+  canRequestWithdrawal,
   editSavedNotice,
   editScopeNotice,
+  submissionActionLabel,
   submissionErrorMessage,
   submissionStatusView,
+  withdrawalSuccessNotice,
+  withdrawalUnavailableNotice,
 } from "@/lib/portal/submission-status";
 import styles from "../../portal.module.css";
 
@@ -65,7 +69,8 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [withdrawn, setWithdrawn] = useState(false);
+  const [busyAction, setBusyAction] = useState<"save" | "withdraw" | null>(null);
 
   function hydrate(data: Loaded) {
     setLoaded(data);
@@ -120,6 +125,8 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
   const readOnly = !submission.canEdit;
   // The backend allows roster edits right up until the talk becomes a session.
   const rosterEditable = !readOnly && !submission.speakersLocked;
+  const canWithdraw = canRequestWithdrawal(submission.status, submission.speakersLocked);
+  const withdrawUnavailable = withdrawalUnavailableNotice(submission.status, submission.speakersLocked);
 
   function updateSpeaker(index: number, patch: Partial<Speaker>) {
     setSpeakers((current) => current.map((speaker, i) => (i === index ? { ...speaker, ...patch } : speaker)));
@@ -148,7 +155,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       setSaveError(submissionErrorMessage("VALIDATION_ERROR"));
       return;
     }
-    setSaving(true);
+    setBusyAction("save");
     setSaved(false);
     setSaveError(null);
     setFieldErrors({});
@@ -182,7 +189,42 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       console.warn("Submission save failed", error);
       setSaveError(submissionErrorMessage("NETWORK_ERROR"));
     } finally {
-      setSaving(false);
+      setBusyAction(null);
+    }
+  }
+
+  async function withdraw() {
+    // This merely hides an impossible control. The PATCH route remains
+    // authoritative and re-checks status/session ownership under its lock.
+    if (!canWithdraw) return;
+    const confirmed = window.confirm(
+      "Withdraw this proposal? It will be removed from consideration and you will not be able to undo it in the portal.",
+    );
+    if (!confirmed) return;
+
+    setBusyAction("withdraw");
+    setSaved(false);
+    setWithdrawn(false);
+    setSaveError(null);
+    setFieldErrors({});
+    try {
+      const res = await fetch(`/api/cfp/submissions/${abstractId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "WITHDRAWN" }),
+      });
+      const body = await res.json();
+      if (!body?.ok) {
+        setSaveError(submissionErrorMessage(body?.error?.code ?? "UNKNOWN", body?.error?.message));
+        return;
+      }
+      hydrate(body.data as Loaded);
+      setWithdrawn(true);
+    } catch (error) {
+      console.warn("Submission withdrawal failed", error);
+      setSaveError(submissionErrorMessage("NETWORK_ERROR"));
+    } finally {
+      setBusyAction(null);
     }
   }
 
@@ -203,6 +245,13 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
       {readOnly ? (
         <p className={styles.saveNote} role="status">
           <Lock size={14} aria-hidden="true" /> {submission.lockReason ?? view.detail}
+        </p>
+      ) : null}
+
+      {withdrawUnavailable ? <p className={styles.withdrawNotice}>{withdrawUnavailable}</p> : null}
+      {canWithdraw ? (
+        <p className={styles.withdrawHelp} id="withdraw-help">
+          This removes the proposal from consideration. You cannot undo it in the portal.
         </p>
       ) : null}
 
@@ -346,12 +395,24 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
 
       {saveError ? <p className={styles.saveError} role="alert">{saveError}</p> : null}
       {saved ? <p className={styles.saveNote} role="status"><Check size={14} aria-hidden="true" /> {editSavedNotice(submission.speakersLocked)}</p> : null}
+      {withdrawn ? <p className={styles.saveNote} role="status"><Check size={14} aria-hidden="true" /> {withdrawalSuccessNotice()}</p> : null}
 
       <div className={styles.formActions}>
         <Link className="ghost-button" href="/portal"><ArrowLeft size={15} aria-hidden="true" /> Back to your portal</Link>
+        {canWithdraw ? (
+          <button
+            aria-describedby="withdraw-help"
+            className={styles.withdrawButton}
+            type="button"
+            onClick={withdraw}
+            disabled={busyAction !== null}
+          >
+            {submissionActionLabel("withdraw", busyAction)}
+          </button>
+        ) : null}
         {readOnly ? null : (
-          <button className="primary-button" type="submit" disabled={saving}>
-            {saving ? "Saving…" : "Save changes"}
+          <button className="primary-button" type="submit" disabled={busyAction !== null}>
+            {submissionActionLabel("save", busyAction)}
           </button>
         )}
       </div>

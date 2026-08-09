@@ -5,7 +5,7 @@
  * never show a speaker `UNDER_REVIEW` or an error code. Every string here is
  * what a speaker reads, so it says what happened and what happens next.
  */
-export type SubmissionStatus = "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "ACCEPTED" | "REJECTED" | "WITHDRAWN";
+export type SubmissionStatus = "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "MAYBE" | "ACCEPTED" | "REJECTED" | "WITHDRAWN";
 
 export type SubmissionStatusView = {
   label: string;
@@ -32,6 +32,12 @@ const VIEWS: Record<SubmissionStatus, SubmissionStatusView> = {
   UNDER_REVIEW: {
     label: "In review",
     detail: "Reviewers are reading it now. You can still make changes.",
+    tone: "info",
+    editable: true,
+  },
+  MAYBE: {
+    label: "Maybe",
+    detail: "The programme team is still deciding. You can keep editing or withdraw this proposal.",
     tone: "info",
     editable: true,
   },
@@ -99,6 +105,36 @@ export function editSavedNotice(converted: boolean): string {
     : "Saved. The programme team can see your updated proposal.";
 }
 
+/**
+ * UI affordance only: PATCH remains the authority and repeats this validation
+ * under an abstract lock. A confirmed talk never gets a self-withdraw button,
+ * even if stale client data says the proposal is otherwise editable.
+ */
+export function canRequestWithdrawal(status: string, speakersLocked: boolean): boolean {
+  return !speakersLocked && ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"].includes(status);
+}
+
+/** Explain the accepted/session boundary instead of rendering a dead control. */
+export function withdrawalUnavailableNotice(status: string, speakersLocked: boolean): string | null {
+  if (status === "ACCEPTED" || speakersLocked) {
+    return "Your talk is already confirmed on the programme. Contact the programme team if it needs to be removed.";
+  }
+  return null;
+}
+
+/** A completed withdrawal is terminal for the speaker portal, not a decision. */
+export function withdrawalSuccessNotice(): string {
+  return "Your proposal has been withdrawn. It is no longer under consideration and cannot be edited here.";
+}
+
+export type SubmissionBusyAction = "save" | "withdraw" | null;
+
+/** Keep each disabled control honest about which request is currently running. */
+export function submissionActionLabel(action: Exclude<SubmissionBusyAction, null>, busyAction: SubmissionBusyAction): string {
+  if (action === "save") return busyAction === "save" ? "Saving…" : "Save changes";
+  return busyAction === "withdraw" ? "Withdrawing…" : "Withdraw proposal";
+}
+
 export function submissionErrorMessage(code: string, serverMessage?: string): string {
   switch (code) {
     case "UNAUTHENTICATED":
@@ -109,6 +145,8 @@ export function submissionErrorMessage(code: string, serverMessage?: string): st
       return "We couldn't find this proposal. It may have been removed.";
     case "ABSTRACT_LOCKED":
       return "This proposal can no longer be edited. Contact the program team if something needs to change.";
+    case "WITHDRAW_NOT_ALLOWED":
+      return "This talk is already on the programme, so it can't be withdrawn here. Contact the program team to remove it.";
     case "SPEAKERS_LOCKED":
       return "Your talk is already on the program, so the speaker list is fixed. Contact the program team to change who's presenting.";
     case "TOO_FEW_SPEAKERS":
