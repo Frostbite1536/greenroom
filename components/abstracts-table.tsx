@@ -7,6 +7,7 @@ import { AlertTriangle, CalendarPlus, EyeOff, FileStack, Search, Star, X } from 
 import type { AbstractRow } from "@/lib/data/reads";
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
+import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
 import { EmptyState, Pill } from "@/components/ui";
 
 const STATUS_META: Record<string, { label: string; tone: string }> = {
@@ -33,17 +34,17 @@ function programmeState(a: Pick<AbstractRow, "hasSession" | "sessionScheduled">)
 
 /**
  * A proposal that is no longer accepted but whose talk is still on the
- * programme. A Maybe is intentionally non-final, but it must not conceal a
- * talk that an earlier acceptance already created.
+ * programme. MAYBE is unavailable after confirmation, so only a declined or
+ * withdrawn proposal can disagree with its already-confirmed programme state.
  * INV-DOMAIN-001 keeps the confirmed talk as the record of truth, so nothing is
  * deleted automatically — which means the admin has to be told.
  */
 function isProgrammeMismatch(a: Pick<AbstractRow, "hasSession" | "status">): boolean {
   const status = String(a.status);
-  return a.hasSession && (status === "MAYBE" || status === "REJECTED" || status === "WITHDRAWN");
+  return a.hasSession && (status === "REJECTED" || status === "WITHDRAWN");
 }
 
-type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "MAYBE" | "REJECTED" };
+type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "REJECTED" };
 type Decision = "ACCEPTED" | "MAYBE" | "REJECTED";
 
 const TABS: { key: string; label: string }[] = [
@@ -92,13 +93,9 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
             <AlertTriangle size={17} aria-hidden="true" />
             <div>
               <strong>“{warning.title}” is still on the programme.</strong>{" "}
-              {warning.decision === "MAYBE"
-                ? warning.state === "scheduled"
-                  ? "Marking it maybe does not take the talk off the schedule. Open the agenda builder to remove it if it should not run."
-                  : "A talk had already been created from this proposal. Marking it maybe does not delete it."
-                : warning.state === "scheduled"
-                  ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
-                  : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
+              {warning.state === "scheduled"
+                ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
+                : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
               <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
                 <Link className="ghost-button" href="/admin/agenda">Open agenda builder</Link>
                 <button type="button" className="link-button" onClick={() => setWarning(null)}>Dismiss</button>
@@ -201,7 +198,18 @@ export function AbstractsTable({ abstracts }: { abstracts: AbstractRow[] }) {
                         <span className="muted">—</span>
                       )}
                     </td>
-                    <td><button type="button" className="link-button" onClick={() => setSelectedId(a.id)}>View</button></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => setSelectedId(a.id)}
+                        aria-label={a.hasSession
+                          ? `View ${a.title}. Maybe is unavailable because this talk is confirmed.`
+                          : `View ${a.title}`}
+                      >
+                        View
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -246,8 +254,8 @@ function AbstractDrawer({
   // can affect an already-scheduled talk.
   const isDecided = status === "ACCEPTED" || status === "MAYBE" || status === "REJECTED";
   const canDecide = undecided || (isDecided && changing);
-  // A Maybe remains reviewable rather than becoming a confirmed talk. Only an
-  // acceptance can provision a Session; an earlier one stays visible below.
+  const canOfferMaybe = canOfferMaybeDecision(abstract.hasSession) && status !== "MAYBE";
+  // Only acceptance can provision a confirmed talk. MAYBE stays reviewable.
   const canConvert = status === "ACCEPTED" && !abstract.hasSession;
 
   const PROGRAMME_LABEL: Record<ProgrammeState, string> = {
@@ -257,7 +265,7 @@ function AbstractDrawer({
   };
 
   async function decide(decision: Decision) {
-    if (decision === "REJECTED" || (decision === "MAYBE" && state !== "none")) {
+    if (decision === "REJECTED") {
       // Spell out the consequence BEFORE the click, not only after it.
       const existingTalk =
         state === "scheduled"
@@ -266,17 +274,12 @@ function AbstractDrawer({
             ? "A talk has already been created from this proposal."
             : "";
       const consequence = existingTalk
-        ? decision === "MAYBE"
-          ? `\n\n${existingTalk} Marking the proposal as maybe will not delete it.`
-          : `\n\n${existingTalk} Declining will not delete it${state === "scheduled" ? " — you will also need to unschedule it in the agenda builder" : ""}.`
+        ? `\n\n${existingTalk} Declining will not delete it${state === "scheduled" ? " — you will also need to unschedule it in the agenda builder" : ""}.`
         : "";
-      const action = decision === "MAYBE" ? "Mark as maybe" : "Decline";
-      if (!window.confirm(`${action} “${abstract.title}”?${consequence}`)) return;
+      if (!window.confirm(`Decline “${abstract.title}”?${consequence}`)) return;
     }
     setBusy(decision === "ACCEPTED" ? "accept" : decision === "MAYBE" ? "maybe" : "reject");
     setError(null);
-    // `sessionId` is the W2 backend addition; until it ships, fall back to the
-    // linkage this page already read server-side. Either way the check holds.
     const res = await apiPost<{ sessionId?: string | null; session?: { id: string } | null }>("/api/evaluations/decisions", {
       abstractId: abstract.id,
       decision,
@@ -288,7 +291,7 @@ function AbstractDrawer({
     }
     const linkedSessionId = res.data?.sessionId ?? res.data?.session?.id ?? abstract.sessionId;
     setChanging(false);
-    if (decision !== "ACCEPTED" && linkedSessionId) {
+    if (decision === "REJECTED" && linkedSessionId) {
       onProgrammeWarning({
         title: abstract.title,
         state: state === "none" ? "created" : state,
@@ -374,11 +377,9 @@ function AbstractDrawer({
           <p className="hint" style={{ marginTop: 10 }}>
             {status === "WITHDRAWN"
               ? "This proposal was withdrawn, but its talk is still on the programme. "
-              : status === "MAYBE"
-                ? "This proposal is marked maybe, but its talk is still on the programme. "
-                : "This proposal was declined, but its talk is still on the programme. "}
+              : "This proposal was declined, but its talk is still on the programme. "}
             <Link href="/admin/agenda">Open the agenda builder</Link> to take it off the schedule
-            {status === "REJECTED" || status === "MAYBE"
+            {status === "REJECTED"
               ? ", or change the decision back to accepted if it should run after all."
               : "."}
           </p>
@@ -393,9 +394,11 @@ function AbstractDrawer({
               <button type="button" className="primary-button" disabled={busy !== null || pending} onClick={() => decide("ACCEPTED")}>
                 {busy === "accept" ? "Accepting…" : "Accept"}
               </button>
-              <button type="button" className="ghost-button" disabled={busy !== null || pending} onClick={() => decide("MAYBE")}>
-                {busy === "maybe" ? "Marking as maybe…" : "Maybe"}
-              </button>
+              {canOfferMaybe ? (
+                <button type="button" className="ghost-button" disabled={busy !== null || pending} onClick={() => decide("MAYBE")}>
+                  {busy === "maybe" ? "Marking as maybe…" : "Maybe"}
+                </button>
+              ) : null}
               <button type="button" className="ghost-button danger-button" disabled={busy !== null || pending} onClick={() => decide("REJECTED")}>
                 {busy === "reject" ? "Declining…" : "Decline"}
               </button>
