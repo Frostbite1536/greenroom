@@ -8,7 +8,7 @@ type EventOwnedRow = { eventId: string };
  * this check to enumerate another event's records.
  */
 export function requireEventOwnedRow<T extends EventOwnedRow>(
-  row: T | undefined,
+  row: T | null | undefined,
   eventId: string,
   code: string,
   resourceName: string,

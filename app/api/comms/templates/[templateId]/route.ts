@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import {
   emailTemplateUpdateSchema,
   sanitizeTemplateBody,
@@ -34,27 +35,27 @@ export function PATCH(req: Request, ctx: Params) {
     const { templateId } = await ctx.params;
     const input = await parseBody(req, emailTemplateUpdateSchema);
 
-    const existing = await prisma.emailTemplate.findUnique({
-      where: { id: templateId },
-      select: { id: true, eventId: true },
-    });
-    if (!existing || existing.eventId !== auth.eventId) {
-      throw new ApiError(404, "TEMPLATE_NOT_FOUND", "That template does not exist for this event.");
-    }
-
     const { htmlBody, changed } = sanitizeTemplateBody(input.htmlBody);
     if (htmlBody.trim().length === 0) {
       throw new ApiError(422, "EMPTY_TEMPLATE_BODY", "That message is empty once unsupported formatting is removed.");
     }
 
-    const template = await prisma.emailTemplate.update({
-      where: { id: existing.id },
-      data: {
-        subject: input.subject,
-        htmlBody,
-        trigger: input.trigger?.trim() ? input.trigger.trim() : null,
-      },
-      select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
+    const template = await prisma.$transaction(async (tx) => {
+      // Lock and authorize the stored row immediately before writing so an id
+      // from another event is indistinguishable from an unknown id.
+      const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
+        SELECT "id", "eventId" FROM "EmailTemplate" WHERE "id" = ${templateId} FOR UPDATE
+      `;
+      const owned = requireEventOwnedRow(existing, auth.eventId, "TEMPLATE_NOT_FOUND", "Template");
+      return tx.emailTemplate.update({
+        where: { id: owned.id },
+        data: {
+          subject: input.subject,
+          htmlBody,
+          trigger: input.trigger?.trim() ? input.trigger.trim() : null,
+        },
+        select: { id: true, key: true, subject: true, htmlBody: true, trigger: true, updatedAt: true },
+      });
     });
 
     return ok({
