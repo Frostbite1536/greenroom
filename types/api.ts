@@ -202,7 +202,22 @@ const publicSpeakerInputSchema = z
     }).strict(),
   )
   .min(1)
-  .max(20);
+  .max(20)
+  .superRefine((speakers, ctx) => {
+    const firstIndexByEmail = new Map<string, number>();
+    speakers.forEach((speaker, index) => {
+      const firstIndex = firstIndexByEmail.get(speaker.email);
+      if (firstIndex !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "email"],
+          message: `This speaker email is already used by speaker ${firstIndex + 1}.`,
+        });
+        return;
+      }
+      firstIndexByEmail.set(speaker.email, index);
+    });
+  });
 
 /** Strict, bounded body contract for anonymous draft and submit writes. */
 export const publicAbstractUpsertSchema = z

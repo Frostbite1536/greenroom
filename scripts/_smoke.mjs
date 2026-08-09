@@ -297,12 +297,21 @@ try {
     speakers: [{ email: "s19-bounded@scratch.test", name: "Bounded", isPrimary: true }],
     answers: { ["k".repeat(121)]: "too long" }, intent: "saveDraft",
   });
+  const duplicateSpeaker = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "S19 duplicate speaker",
+    speakers: [
+      { email: "s19-duplicate@scratch.test", name: "Primary", isPrimary: true },
+      { email: " S19-DUPLICATE@SCRATCH.TEST ", name: "Duplicate", isPrimary: false },
+    ],
+    answers: {}, intent: "saveDraft",
+  });
   const strictAfter = await publicCoreCounts();
   check(
-    "S19 public schema rejects strict nested extras and bounded answer keys before core writes",
-    strictNested.status === 422 && boundedAnswerKey.status === 422 &&
+    "S19 public schema rejects strict extras, bounded keys, and duplicate normalized speakers before core writes",
+    strictNested.status === 422 && boundedAnswerKey.status === 422 && duplicateSpeaker.status === 422 &&
       JSON.stringify(strictAfter) === JSON.stringify(strictBefore),
-    `${strictNested.status}/${boundedAnswerKey.status}`,
+    `${strictNested.status}/${boundedAnswerKey.status}/${duplicateSpeaker.status}`,
   );
 
   const s19UnpublishedForm = await prisma.formConfig.create({

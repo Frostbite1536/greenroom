@@ -19,6 +19,16 @@ test("public submission schema is strict at both the top level and speaker objec
   }).success, false);
 });
 
+test("public submission schema rejects duplicate normalized speaker emails before roster writes", () => {
+  assert.equal(publicAbstractUpsertSchema.safeParse({
+    ...validPublicSubmission,
+    speakers: [
+      validPublicSubmission.speakers[0],
+      { email: " SPEAKER@EXAMPLE.TEST ", name: "Duplicate", isPrimary: false },
+    ],
+  }).success, false);
+});
+
 test("public submission schema bounds every attacker-controlled answer shape and speaker email", () => {
   const tooLongEmail = `${"a".repeat(245)}@example.test`;
   assert.equal(publicAbstractUpsertSchema.safeParse({
