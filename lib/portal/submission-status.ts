@@ -37,7 +37,11 @@ const VIEWS: Record<SubmissionStatus, SubmissionStatusView> = {
   },
   ACCEPTED: {
     label: "Accepted",
-    detail: "You're on the program. You can still update the details attendees will see.",
+    // Honest by design (audit1#8): once a talk is converted to a session, the
+    // public listing is the session record, and editing the proposal does NOT
+    // change it. Promising otherwise would be a lie a speaker only discovers
+    // when the programme still shows their old title.
+    detail: "You're on the program. You can still update your proposal, and the team will pick up any changes.",
     tone: "good",
     editable: true,
   },
@@ -74,6 +78,27 @@ export function submissionStatusView(status: string): SubmissionStatusView {
  * portal must never render one. Unknown codes fall back to the server's own
  * message, which is already written in prose.
  */
+/**
+ * What editing actually affects, told plainly.
+ *
+ * Before a talk is scheduled, the proposal *is* the record. Afterwards the
+ * confirmed session drives the public schedule and embeds, so an edit here is a
+ * request to the programme team rather than a live change (INV-DOMAIN-001:
+ * conversion copies the fields once and the session stays authoritative).
+ */
+export function editScopeNotice(converted: boolean): string {
+  return converted
+    ? "Your talk is already on the programme. This page is your proposal record — changes here don't update the public schedule listing, so the programme team will apply anything that matters."
+    : "Changes here update your proposal directly.";
+}
+
+/** Confirmation copy follows the same Abstract/Session boundary as the editor. */
+export function editSavedNotice(converted: boolean): string {
+  return converted
+    ? "Saved to your proposal. The public schedule listing has not changed."
+    : "Saved. The programme team can see your updated proposal.";
+}
+
 export function submissionErrorMessage(code: string, serverMessage?: string): string {
   switch (code) {
     case "UNAUTHENTICATED":
