@@ -99,6 +99,30 @@ export function formatTime(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/**
+ * Render an instant as a complete, stable event-local deadline or appointment.
+ *
+ * Dates reach both server-rendered pages and small client islands. Pinning both
+ * the locale and the stored IANA zone prevents either the server's locale or a
+ * remote speaker's browser zone from changing the actual date or time shown.
+ */
+export function formatEventDateTime(value: Date | string | null | undefined, timeZone: string): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
+}
+
 export function formatDayLabel(dateKey: string, timeZone: string): string {
   // Noon avoids any DST edge when labelling a whole day.
   return new Intl.DateTimeFormat(undefined, {

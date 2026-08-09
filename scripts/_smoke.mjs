@@ -974,6 +974,54 @@ try {
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
 
+  // C12: one real task deadline is rendered in the event timezone and the
+  // invitation path remains forced-mock. This is scratch-only and deliberately
+  // runs while the speaker has a fully scheduled session above.
+  await prisma.event.update({ where: { id: SCRATCH_EVENT.id }, data: { timezone: "America/Los_Angeles" } });
+  const c12Task = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "C12 scratch deadline",
+      required: true,
+      dueAt: new Date("2026-05-02T06:59:00.000Z"),
+      sortOrder: 99,
+    },
+  });
+  // The scheduled session above belongs to the submitted primary speaker, not
+  // the signed scratch account used for portal authorization checks.
+  const c12Speaker = await prisma.user.findUniqueOrThrow({ where: { email: "spk@x.com" } });
+  await prisma.speakerTask.create({ data: { taskId: c12Task.id, userId: c12Speaker.id, status: "TODO" } });
+  const c12Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "c12-task-reminder",
+      subject: "Deadline {{dueDate}}",
+      htmlBody: "<p>{{talkTitle}} at {{slotTime}} in {{roomName}}. {{calendarInviteNote}}</p>",
+      trigger: "task.reminder",
+    },
+  });
+  const c12Reminder = await j("POST", "/api/comms/reminders", {
+    eventId: SCRATCH_EVENT.id,
+    templateKey: c12Template.key,
+    recipientUserIds: [c12Speaker.id],
+    includeCalendarInvite: true,
+  }, admin);
+  const c12Dispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c12Template.id, recipient: c12Speaker.email },
+    select: { status: true, providerId: true, variables: true },
+  });
+  const c12Variables = c12Dispatch?.variables;
+  check(
+    "C12 reminder uses the task deadline and event timezone in forced mock mode",
+    c12Reminder.status === 200 &&
+      c12Dispatch?.status === "mocked" &&
+      c12Dispatch.providerId?.startsWith("mock:") &&
+      c12Variables?.dueDate === "Fri, May 1, 2026, 11:59 PM PDT" &&
+      typeof c12Variables?.slotTime === "string" && c12Variables.slotTime.endsWith("PDT") &&
+      c12Variables.calendarInviteNote === "A calendar invite is attached.",
+    c12Reminder.status,
+  );
+
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
   // the intended read models (no reviewer data or unplaced sessions).
   const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
