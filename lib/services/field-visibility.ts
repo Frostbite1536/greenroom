@@ -1,0 +1,137 @@
+import {
+  isHttpUrl,
+  type ConditionalLogic,
+  type LogicField,
+} from "@/lib/form-logic";
+import type { FormAnswerValue } from "@/lib/services/types";
+
+/**
+ * Server-side conditional visibility and typed answer checks (WAVE1-B2).
+ *
+ * `lib/form-logic.ts` has always documented that the server enforces the same
+ * rules; audit2#3 showed it did not, and that the mismatch actively broke valid
+ * submissions: the renderer only sends answers for *visible* fields, so a
+ * required field hidden by conditional logic arrived missing and was rejected.
+ *
+ * Rule evaluation is imported from `lib/form-logic.ts` rather than reimplemented
+ * here, so the client preview and the server can never disagree about what a
+ * rule means. What this module adds is the parts a server must own: cascading
+ * visibility, and type/option enforcement the client cannot be trusted for.
+ */
+
+export type FieldOption = { label: string; value: string };
+
+export { resolveVisibleFields } from "@/lib/form-logic";
+
+export type VisibilityField = LogicField & {
+  label: string;
+  options?: FieldOption[] | null;
+};
+
+/** Defensive parse of the `FormField.options` JSON column. */
+export function parseFieldOptions(raw: unknown): FieldOption[] | null {
+  if (!Array.isArray(raw)) return null;
+  const options: FieldOption[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as { label?: unknown; value?: unknown };
+    if (typeof candidate.value !== "string") continue;
+    options.push({
+      label: typeof candidate.label === "string" ? candidate.label : candidate.value,
+      value: candidate.value,
+    });
+  }
+  return options.length > 0 ? options : null;
+}
+
+/** Defensive parse of the `FormField.conditionalLogic` JSON column. */
+export function parseConditionalLogic(raw: unknown): ConditionalLogic | null {
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as { match?: unknown; rules?: unknown };
+  if (candidate.match !== "all" && candidate.match !== "any") return null;
+  if (!Array.isArray(candidate.rules) || candidate.rules.length === 0) return null;
+  const rules = candidate.rules.flatMap((rule) => {
+    if (!rule || typeof rule !== "object") return [];
+    const entry = rule as { fieldKey?: unknown; operator?: unknown; value?: unknown };
+    if (typeof entry.fieldKey !== "string" || typeof entry.operator !== "string") return [];
+    const value =
+      typeof entry.value === "string" ||
+      typeof entry.value === "number" ||
+      typeof entry.value === "boolean"
+        ? entry.value
+        : undefined;
+    return [{ fieldKey: entry.fieldKey, operator: entry.operator, value }];
+  });
+  return rules.length > 0 ? { match: candidate.match, rules } : null;
+}
+
+function isBlank(value: FormAnswerValue | undefined): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/**
+ * Type and option enforcement for one answered field. Returns a user-facing
+ * message or null. Empty values are the required check's job, not this one's.
+ *
+ * The client sends `<input>` values, so a numeric string is accepted for NUMBER
+ * exactly as the renderer's own validator accepts it; anything that is not a
+ * number at all is refused.
+ */
+export function validateAnswerType(
+  field: VisibilityField,
+  value: FormAnswerValue | undefined,
+): string | null {
+  if (field.type === "CHECKBOX") {
+    // A checkbox is only ever true/false; `null` means "not answered".
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "boolean") return "Answer this with a yes/no tick.";
+    return null;
+  }
+
+  if (isBlank(value)) return null;
+
+  switch (field.type) {
+    case "NUMBER": {
+      const numeric = typeof value === "number" ? value : Number(value);
+      if (typeof value === "boolean" || Array.isArray(value) || !Number.isFinite(numeric)) {
+        return "Enter a number.";
+      }
+      return null;
+    }
+    case "URL": {
+      if (typeof value !== "string" || !isHttpUrl(value)) {
+        return "Enter a valid link (including https://).";
+      }
+      return null;
+    }
+    case "SELECT": {
+      if (typeof value !== "string") return "Choose one of the listed options.";
+      const allowed = (field.options ?? []).map((option) => option.value);
+      if (!allowed.includes(value)) {
+        return "Choose one of the listed options.";
+      }
+      return null;
+    }
+    case "MULTI_SELECT": {
+      if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+        return "Choose from the listed options.";
+      }
+      const allowed = (field.options ?? []).map((option) => option.value);
+      if (value.some((entry) => !allowed.includes(entry))) {
+        return "Choose from the listed options.";
+      }
+      if (new Set(value).size !== value.length) return "Each option can only be chosen once.";
+      return null;
+    }
+    case "SHORT_TEXT":
+    case "LONG_TEXT": {
+      if (typeof value !== "string") return "Enter this as text.";
+      return null;
+    }
+    default:
+      return null;
+  }
+}

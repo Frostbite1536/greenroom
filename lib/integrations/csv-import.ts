@@ -5,6 +5,7 @@
  */
 
 import type { FormAnswerValue } from "@/lib/services/types";
+import { isHttpUrl } from "@/lib/form-logic";
 
 export type CsvImportMapping = {
   sourceField: string;
@@ -246,9 +247,7 @@ export function coerceCsvAnswer(value: string, field: CsvFormField): FormAnswerV
     }
   }
   if (field.type === "URL") {
-    try {
-      new URL(trimmed);
-    } catch {
+    if (!isHttpUrl(trimmed)) {
       throw new CsvImportError(`answers.${field.key} must be a valid URL.`);
     }
   }

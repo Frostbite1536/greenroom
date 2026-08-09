@@ -13,7 +13,8 @@ import {
   validateImportedAnswers,
   validateAbstractMappings,
 } from "@/lib/integrations/csv-import";
-import { validateSubmission } from "@/lib/services/form-validation";
+import { toFormFieldSpecs, validateSubmission } from "@/lib/services/form-validation";
+import { resolveVisibleFields } from "@/lib/services/field-visibility";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 export const dynamic = "force-dynamic";
@@ -146,7 +147,17 @@ export const POST = handle(async (req) => {
             coerceCsvAnswer(value, fieldsByKey.get(key)!),
           ]),
         ) as Record<string, FormAnswerValue>;
-        validateImportedAnswers(form.fields, answers);
+        // Conditionally hidden fields were never asked, so an import must not
+        // be held to them either (WAVE1-B2) — including the import-only rule
+        // that a required checkbox has to be ticked.
+        const fieldSpecs = toFormFieldSpecs(form.fields);
+        const visibleKeys = new Set(
+          resolveVisibleFields(fieldSpecs, answers).map((field) => field.key),
+        );
+        validateImportedAnswers(
+          form.fields.filter((field) => visibleKeys.has(field.key)),
+          answers,
+        );
         const validationError = validateSubmission(
           {
             // Admin imports must satisfy field and speaker requirements, but
@@ -157,12 +168,7 @@ export const POST = handle(async (req) => {
             minSpeakers: form.minSpeakers,
             maxSpeakers: form.maxSpeakers,
             maxBioLength: form.maxBioLength,
-            fields: form.fields.map((field) => ({
-              key: field.key,
-              label: field.label,
-              type: field.type,
-              required: field.required,
-            })),
+            fields: fieldSpecs,
           },
           { speakerCount: 1, answers },
         );

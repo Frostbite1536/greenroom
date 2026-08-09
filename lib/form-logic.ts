@@ -64,6 +64,48 @@ export function isFieldVisible(field: LogicField, answers: AnswerMap): boolean {
   return logic.match === "all" ? results.every(Boolean) : results.some(Boolean);
 }
 
+/**
+ * Resolve the full conditional cascade shared by authoring, public submission,
+ * speaker editing, imports, and server validation.
+ *
+ * Answers retained for a field that becomes hidden cannot keep a dependent
+ * field visible (or hidden). Re-evaluate with hidden answers masked until the
+ * visible key set settles. The pass count is bounded so malformed cycles never
+ * loop forever.
+ */
+export function resolveVisibleFields<T extends LogicField>(
+  fields: readonly T[],
+  answers: Readonly<AnswerMap>,
+): T[] {
+  let visibleKeys = new Set(fields.map((field) => field.key));
+
+  for (let pass = 0; pass <= fields.length; pass++) {
+    const effective: AnswerMap = { ...answers };
+    for (const field of fields) {
+      if (!visibleKeys.has(field.key)) delete effective[field.key];
+    }
+
+    const next = new Set<string>();
+    for (const field of fields) {
+      if (isFieldVisible(field, effective)) next.add(field.key);
+    }
+
+    const stable =
+      next.size === visibleKeys.size && [...next].every((key) => visibleKeys.has(key));
+    visibleKeys = next;
+    if (stable) break;
+  }
+
+  return fields.filter((field) => visibleKeys.has(field.key));
+}
+
+/** URL fields represent browser links, not arbitrary URI schemes. */
+export function isHttpUrl(value: string): boolean {
+  if (!URL.canParse(value)) return false;
+  const parsed = new URL(value);
+  return parsed.protocol === "http:" || parsed.protocol === "https:";
+}
+
 /** Validate one visible field, returning an error message or null. */
 export function validateField(field: LogicField, value: AnswerValue): string | null {
   const empty = field.type === "CHECKBOX" ? value !== true : isBlank(value);
@@ -73,15 +115,14 @@ export function validateField(field: LogicField, value: AnswerValue): string | n
   }
   if (empty) return null;
 
-  if (field.type === "URL" && typeof value === "string") {
-    try {
-      new URL(value);
-    } catch {
-      return "Enter a valid URL (including https://).";
-    }
+  if (field.type === "URL" && (typeof value !== "string" || !isHttpUrl(value))) {
+    return "Enter a valid URL (including https://).";
   }
-  if (field.type === "NUMBER" && typeof value === "string" && Number.isNaN(Number(value))) {
-    return "Enter a number.";
+  if (field.type === "NUMBER") {
+    const numeric = typeof value === "number" ? value : Number(value);
+    if (typeof value === "boolean" || Array.isArray(value) || !Number.isFinite(numeric)) {
+      return "Enter a number.";
+    }
   }
   return null;
 }

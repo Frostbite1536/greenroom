@@ -185,6 +185,9 @@ try {
       { key: "topics", label: "Topics", type: "MULTI_SELECT", required: false, options: [{ label: "AI", value: "ai" }, { label: "Community", value: "community" }], sortOrder: 4 },
       { key: "rating", label: "Rating", type: "NUMBER", required: false, sortOrder: 5 },
       { key: "website", label: "Website", type: "URL", required: false, sortOrder: 6 },
+      // B2: required, but only asked when audience = advanced.
+      { key: "workshop_needs", label: "Workshop needs", type: "SHORT_TEXT", required: true, sortOrder: 7,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "audience", operator: "equals", value: "advanced" }] } },
     ],
   };
   const form = await j("POST", "/api/cfp/forms", formPayload, admin);
@@ -269,6 +272,72 @@ try {
       importedAnswers.rating === 4.5 &&
       importedAnswers.website === "https://example.test/imported",
   );
+
+  // 2b. B2 — server-side conditional visibility + typed answers (audit2#3).
+  const b2Base = {
+    formConfigId: formId, title: "Conditional logic talk",
+    speakers: [{ email: "b2@scratch.test", name: "B2 Speaker", isPrimary: true }],
+    intent: "submit",
+  };
+  const b2Hidden = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, audience: "beginner" },
+  });
+  check("B2 a required field that was never shown does not block submission",
+    b2Hidden.status === 201, `${b2Hidden.status} ${JSON.stringify(b2Hidden.data?.error?.fieldErrors ?? {})}`);
+
+  const b2Revealed = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced" },
+  });
+  check("B2 the same field is required once its condition is met",
+    b2Revealed.status === 422 && !!b2Revealed.data?.error?.fieldErrors?.workshop_needs,
+    b2Revealed.data?.error?.code);
+
+  const b2Answered = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, audience: "advanced", workshop_needs: "Two power sockets" },
+  });
+  check("B2 answering the revealed field submits cleanly", b2Answered.status === 201, b2Answered.status);
+
+  const b2BadOption = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, audience: "smuggled-option" },
+  });
+  check("B2 a select answer outside the options is refused",
+    b2BadOption.status === 422 && !!b2BadOption.data?.error?.fieldErrors?.audience, b2BadOption.data?.error?.code);
+
+  const b2BadMulti = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, topics: ["ai", "quantum"] },
+  });
+  check("B2 a multi-select answer outside the options is refused",
+    b2BadMulti.status === 422 && !!b2BadMulti.data?.error?.fieldErrors?.topics, b2BadMulti.data?.error?.code);
+
+  const b2BadNumber = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, rating: "not a number" },
+  });
+  check("B2 a non-numeric answer to a number field is refused",
+    b2BadNumber.status === 422 && !!b2BadNumber.data?.error?.fieldErrors?.rating, b2BadNumber.data?.error?.code);
+
+  const b2BadUrl = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, website: "definitely not a url" },
+  });
+  check("B2 an invalid URL answer is refused",
+    b2BadUrl.status === 422 && !!b2BadUrl.data?.error?.fieldErrors?.website, b2BadUrl.data?.error?.code);
+
+  const b2UnsafeUrl = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: true, website: "javascript:alert(1)" },
+  });
+  check("B2 a non-HTTP URL scheme is refused",
+    b2UnsafeUrl.status === 422 && !!b2UnsafeUrl.data?.error?.fieldErrors?.website, b2UnsafeUrl.data?.error?.code);
+
+  const b2Unticked = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: false },
+  });
+  check("B2 a required checkbox must be ticked, not merely answered",
+    b2Unticked.status === 422 && !!b2Unticked.data?.error?.fieldErrors?.consent, b2Unticked.data?.error?.code);
+
+  const b2WrongType = await j("POST", "/api/cfp/submissions", {
+    ...b2Base, answers: { title_note: "n", consent: "yes" },
+  });
+  check("B2 a checkbox answered with a string is refused",
+    b2WrongType.status === 422 && !!b2WrongType.data?.error?.fieldErrors?.consent, b2WrongType.data?.error?.code);
 
   // 3. Reject submit with missing required field
   const bad = await j("POST", "/api/cfp/submissions", {
@@ -532,8 +601,34 @@ try {
     edit1.data?.data?.submission?.status === "SUBMITTED" &&
     edit1.data?.data?.submission?.submittedAt === r1SubmittedAt);
   check("R1 edit response carries the field spec for the renderer",
-    Array.isArray(edit1.data?.data?.form?.fields) && edit1.data?.data?.form?.fields.length === 7 &&
+    Array.isArray(edit1.data?.data?.form?.fields) && edit1.data?.data?.form?.fields.length === 8 &&
     !("isOpen" in (edit1.data?.data?.form ?? {})));
+
+  const b2EditReveal = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "advanced" },
+  }, speaker);
+  check("B2 speaker edit enforces a newly revealed required field",
+    b2EditReveal.status === 422 && !!b2EditReveal.data?.error?.fieldErrors?.workshop_needs,
+    b2EditReveal.data?.error?.code);
+
+  const b2EditAnswered = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "advanced", workshop_needs: "A projector" },
+  }, speaker);
+  check("B2 speaker edit accepts the revealed field once answered",
+    b2EditAnswered.status === 200, b2EditAnswered.status);
+
+  const b2EditHide = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { audience: "beginner" },
+  }, speaker);
+  check("B2 speaker edit ignores a now-hidden required field",
+    b2EditHide.status === 200, b2EditHide.status);
+
+  const b2EditHiddenForge = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
+    answers: { workshop_needs: ["forged"] },
+  }, speaker);
+  check("B2 speaker edit rejects a forged hidden answer with the wrong type",
+    b2EditHiddenForge.status === 422 && !!b2EditHiddenForge.data?.error?.fieldErrors?.workshop_needs,
+    b2EditHiddenForge.data?.error?.code);
 
   const clearRequired = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { answers: { title_note: null } }, speaker);
   check("R1 clearing a required answer refused (422 FIELD_ERRORS)",

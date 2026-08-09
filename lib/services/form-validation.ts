@@ -1,3 +1,11 @@
+import type { ConditionalLogic } from "@/lib/form-logic";
+import {
+  parseConditionalLogic,
+  parseFieldOptions,
+  resolveVisibleFields,
+  validateAnswerType,
+  type FieldOption,
+} from "@/lib/services/field-visibility";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 /**
@@ -10,6 +18,10 @@ export type FormFieldSpec = {
   label: string;
   type: string;
   required: boolean;
+  /** Allowed values for SELECT/MULTI_SELECT; answers outside them are refused. */
+  options?: FieldOption[] | null;
+  /** When present, the field is only asked while these rules match (WAVE1-B2). */
+  conditionalLogic?: ConditionalLogic | null;
 };
 
 export type FormSpec = {
@@ -22,9 +34,40 @@ export type FormSpec = {
   fields: FormFieldSpec[];
 };
 
+/**
+ * Map stored form fields onto the validation spec, parsing the JSON columns.
+ * Shared by the public submission route and the speaker edit route so the two
+ * cannot end up enforcing different rules on the same form.
+ */
+export function toFormFieldSpecs(
+  fields: readonly {
+    key: string;
+    label: string;
+    type: string;
+    required: boolean;
+    options?: unknown;
+    conditionalLogic?: unknown;
+  }[],
+): FormFieldSpec[] {
+  return fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    type: field.type,
+    required: field.required,
+    options: parseFieldOptions(field.options),
+    conditionalLogic: parseConditionalLogic(field.conditionalLogic),
+  }));
+}
+
 export type SubmissionInput = {
   speakerCount: number;
   answers: Record<string, FormAnswerValue>;
+  /**
+   * Keys supplied by this request. Visible answers are always checked; this
+   * additionally checks forged hidden answers without making an old, hidden
+   * stored value block an otherwise unrelated speaker edit.
+   */
+  answerKeysToValidate?: readonly string[];
   /** Field key treated as the speaker bio for max-length enforcement. */
   bioFieldKey?: string;
 };
@@ -94,14 +137,40 @@ export function validateSubmissionContent(
 
   const fieldErrors: Record<string, string[]> = {};
 
-  for (const field of form.fields) {
-    if (field.required && isEmpty(input.answers[field.key])) {
-      (fieldErrors[field.key] ??= []).push(`${field.label} is required.`);
+  // Only fields the submitter was actually asked are enforced. The renderer
+  // sends answers for visible fields only, so requiring a conditionally hidden
+  // field would reject a perfectly valid submission (audit2#3).
+  const visible = resolveVisibleFields(form.fields, input.answers);
+  const visibleKeys = new Set(visible.map((field) => field.key));
+
+  for (const field of visible) {
+    const value = input.answers[field.key];
+    // A required checkbox means "must be ticked", not merely "answered".
+    const missing = field.type === "CHECKBOX" ? value !== true : isEmpty(value);
+    if (field.required && missing) {
+      (fieldErrors[field.key] ??= []).push(
+        field.type === "CHECKBOX"
+          ? `${field.label} must be ticked.`
+          : `${field.label} is required.`,
+      );
+      continue;
     }
+    const typeError = validateAnswerType(field, value);
+    if (typeError) (fieldErrors[field.key] ??= []).push(typeError);
+  }
+
+  // A caller can forge an answer for a field the current conditions hide.
+  // It is not required, but any value newly supplied at the boundary must
+  // still match that field's type/options before a route may persist it.
+  const suppliedKeys = new Set(input.answerKeysToValidate ?? Object.keys(input.answers));
+  for (const field of form.fields) {
+    if (visibleKeys.has(field.key) || !suppliedKeys.has(field.key)) continue;
+    const typeError = validateAnswerType(field, input.answers[field.key]);
+    if (typeError) (fieldErrors[field.key] ??= []).push(typeError);
   }
 
   const bioKey =
-    input.bioFieldKey ?? form.fields.find((f) => BIO_KEYS.has(f.key))?.key ?? null;
+    input.bioFieldKey ?? visible.find((f) => BIO_KEYS.has(f.key))?.key ?? null;
   if (bioKey) {
     const value = input.answers[bioKey];
     if (typeof value === "string" && value.length > form.maxBioLength) {

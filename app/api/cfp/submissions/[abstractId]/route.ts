@@ -7,7 +7,11 @@ import {
   serializeEditFormSpec,
   serializeSpeakerSubmission,
 } from "@/lib/api/speaker-submission";
-import { validateSubmissionContent, type FormSpec } from "@/lib/services/form-validation";
+import {
+  toFormFieldSpecs,
+  validateSubmissionContent,
+  type FormSpec,
+} from "@/lib/services/form-validation";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
@@ -206,16 +210,12 @@ export function PATCH(req: Request, ctx: Params) {
         minSpeakers: form.minSpeakers,
         maxSpeakers: form.maxSpeakers,
         maxBioLength: form.maxBioLength,
-        fields: form.fields.map((f) => ({
-          key: f.key,
-          label: f.label,
-          type: f.type,
-          required: f.required,
-        })),
+        fields: toFormFieldSpecs(form.fields),
       };
       const error = validateSubmissionContent(spec, {
         speakerCount: patch.speakers ? patch.speakers.length : existing.speakers.length,
         answers: merged,
+        answerKeysToValidate: Object.keys(patch.answers ?? {}),
       });
       if (error) return fail(422, error.code, error.message, error.fieldErrors);
     }

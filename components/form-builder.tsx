@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import type { BuilderForm, FieldView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
-import { isFieldVisible, type AnswerMap } from "@/lib/form-logic";
+import { resolveVisibleFields, type AnswerMap } from "@/lib/form-logic";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import { zonedParts, zonedToUtcIso } from "@/lib/tz";
 import { Switch } from "@/components/ui";
@@ -575,7 +575,7 @@ function Preview({ draft }: { draft: Draft }) {
       })),
     [draft.fields],
   );
-  const visible = useMemo(() => asFields.filter((f) => isFieldVisible(f, answers)), [asFields, answers]);
+  const visible = useMemo(() => resolveVisibleFields(asFields, answers), [asFields, answers]);
   const hiddenCount = asFields.length - visible.length;
 
   return (
