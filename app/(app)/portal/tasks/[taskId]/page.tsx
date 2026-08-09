@@ -38,6 +38,7 @@ export default async function PortalTaskPage({
         select: {
           id: true,
           eventId: true,
+          event: { select: { timezone: true } },
           title: true,
           description: true,
           required: true,
@@ -74,11 +75,11 @@ export default async function PortalTaskPage({
       </header>
       <TaskForm
         taskId={assignment.task.id}
-        title={assignment.task.title}
         formName={assignment.task.formConfig?.name ?? null}
         required={assignment.task.required}
         dueAt={assignment.task.dueAt ? assignment.task.dueAt.toISOString() : null}
         status={assignment.status}
+        timezone={assignment.task.event.timezone}
         fields={fields}
         initialResponses={normalizeStoredResponses(assignment.responses)}
       />

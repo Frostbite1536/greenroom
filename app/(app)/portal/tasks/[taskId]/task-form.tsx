@@ -23,15 +23,16 @@ export function TaskForm({
   required,
   dueAt,
   status,
+  timezone,
   fields,
   initialResponses,
 }: {
   taskId: string;
-  title: string;
   formName: string | null;
   required: boolean;
   dueAt: string | null;
   status: string;
+  timezone: string;
   fields: TaskFormField[];
   initialResponses: TaskResponses;
 }) {
@@ -84,6 +85,9 @@ export function TaskForm({
   }
 
   const done = taskStatus === "COMPLETED";
+  const due = dueAt
+    ? new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", timeZone: timezone }).format(new Date(dueAt))
+    : null;
 
   if (fields.length === 0) {
     return (
@@ -101,7 +105,7 @@ export function TaskForm({
           <h2>{formName ?? "Your details"}</h2>
           <p>
             {required ? "Required" : "Optional"}
-            {dueAt ? ` · due ${new Date(dueAt).toLocaleDateString("en-US", { month: "long", day: "numeric" })}` : ""}
+            {due ? ` · due ${due}` : ""}
             {done ? " · completed" : ""}
           </p>
         </div>
@@ -119,16 +123,18 @@ export function TaskForm({
       ))}
 
       {message ? (
-        <p className={message.tone === "good" ? styles.saveNote : styles.saveError} role="status">
+        <p className={message.tone === "good" ? styles.saveNote : styles.saveError} role={message.tone === "good" ? "status" : "alert"}>
           {message.tone === "good" ? <Check size={14} aria-hidden="true" /> : null} {message.text}
         </p>
       ) : null}
 
       <div className={styles.formActions}>
         <Link className="ghost-button" href="/portal"><ArrowLeft size={15} aria-hidden="true" /> Back to your portal</Link>
-        <button className="ghost-button" type="button" onClick={() => save("IN_PROGRESS")} disabled={busy}>
-          <Save size={15} aria-hidden="true" /> Save progress
-        </button>
+        {done ? null : (
+          <button className="ghost-button" type="button" onClick={() => save("IN_PROGRESS")} disabled={busy}>
+            <Save size={15} aria-hidden="true" /> Save progress
+          </button>
+        )}
         <button className="primary-button" type="submit" disabled={busy}>
           <Check size={15} aria-hidden="true" /> {busy ? "Saving…" : done ? "Save changes" : "Save and mark done"}
         </button>
