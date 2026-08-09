@@ -202,7 +202,11 @@ export async function getAdminDecisionSummary(
   }
 
   const abstractIds = [...new Set(input.abstractIds)];
-  assertEventQueryBound(abstractIds, OPERATOR_QUERY_LIMITS.adminAbstracts, "abstracts");
+  assertEventQueryBound(
+    abstractIds,
+    OPERATOR_QUERY_LIMITS.adminDecisionAbstracts,
+    "decision-summary abstracts",
+  );
 
   return prisma.$transaction(async (tx) => {
     const plans = await tx.evaluationPlan.findMany({

@@ -6,6 +6,7 @@ import {
   resolveAdminDecisionPlan,
   summarizeCompletedDecisionReviews,
 } from "./admin-decision-summary";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 
 const plans = [
   { id: "plan-1", name: "First round", ordinal: 1 },
@@ -144,6 +145,33 @@ test("C15 service keeps its authorization, snapshot, and cap-plus-one boundaries
   assert.match(source, /assertEventQueryBound\(plans/);
   assert.match(source, /assertEventQueryBound\(\s*assignments/);
   assert.match(source, /assertEventQueryBound\(scores/);
+});
+
+test("decision summaries admit the 100-row page plus one separately selected older abstract", () => {
+  assert.equal(
+    OPERATOR_QUERY_LIMITS.adminDecisionAbstracts,
+    OPERATOR_QUERY_LIMITS.adminAbstracts + 1,
+  );
+  assert.doesNotThrow(() =>
+    assertEventQueryBound(
+      { length: OPERATOR_QUERY_LIMITS.adminDecisionAbstracts },
+      OPERATOR_QUERY_LIMITS.adminDecisionAbstracts,
+      "decision-summary abstracts",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertEventQueryBound(
+        { length: OPERATOR_QUERY_LIMITS.adminDecisionAbstracts + 1 },
+        OPERATOR_QUERY_LIMITS.adminDecisionAbstracts,
+        "decision-summary abstracts",
+      ),
+    (error: unknown) =>
+      error instanceof Error && "status" in error && "code" in error &&
+      error.status === 422 && error.code === "EVENT_QUERY_LIMIT_EXCEEDED",
+  );
+  const source = readFileSync(new URL("./admin-decision-summary.ts", import.meta.url), "utf8");
+  assert.match(source, /OPERATOR_QUERY_LIMITS\.adminDecisionAbstracts/);
 });
 
 test("C15 API is admin-only and sends selected-round summaries without raw scores or progress", () => {
