@@ -16,6 +16,9 @@ export const OPERATOR_QUERY_LIMITS = {
   importForms: 250,
   importCategories: 1_000,
   importFieldsPerForm: 250,
+  settingsRooms: 500,
+  settingsTracks: 250,
+  settingsCategories: 1_000,
 } as const;
 
 export function assertEventQueryBound(

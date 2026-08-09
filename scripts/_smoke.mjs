@@ -15,6 +15,11 @@ const SCRATCH_EVENT = {
   name: "Backend Scratch Event",
   slug: "scratch-backend",
 };
+const OTHER_SCRATCH_EVENT = {
+  id: "scratch-backend-other",
+  name: "Other Backend Scratch Event",
+  slug: "scratch-backend-other",
+};
 
 // Signed scratch-only identities (@scratch.test) so demo personas are never touched.
 const admin = {
@@ -133,7 +138,7 @@ async function resetScratchEvent() {
   if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
     throw new Error("Refusing to run: smoke must never target the demo event.");
   }
-  await prisma.event.deleteMany({ where: { id: SCRATCH_EVENT.id } });
+  await prisma.event.deleteMany({ where: { id: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } } });
   await prisma.event.create({
     data: {
       ...SCRATCH_EVENT,
@@ -152,6 +157,13 @@ async function resetScratchEvent() {
           { title: "Scratch task: send headshot", required: false, sortOrder: 1 },
         ],
       },
+    },
+  });
+  await prisma.event.create({
+    data: {
+      ...OTHER_SCRATCH_EVENT,
+      timezone: "UTC",
+      rooms: { create: [{ name: "Other Scratch Room", sortOrder: 0 }] },
     },
   });
   for (const identity of [admin, speaker, evalr]) {
@@ -229,6 +241,84 @@ try {
     JSON.stringify(pub.data?.data?.categories?.map((category) => category.name)) ===
       JSON.stringify(["AI", "Community", "Systems"]),
   );
+
+  // M5: active-event settings are admin-only and use event-local calendar
+  // dates, never the browser's timezone. Rooms are scoped server-side too.
+  const settingsAnonymous = await j("GET", "/api/admin/settings");
+  check("M5 settings require sign-in", settingsAnonymous.status === 401, settingsAnonymous.status);
+  const settingsSpeaker = await j("GET", "/api/admin/settings", null, speaker);
+  check("M5 settings refuse speakers", settingsSpeaker.status === 403, settingsSpeaker.status);
+  const settings = await j("GET", "/api/admin/settings", null, admin);
+  check("M5 settings returns only the active event plus rooms, tracks, and categories",
+    settings.status === 200 &&
+      settings.data?.data?.event?.id === SCRATCH_EVENT.id &&
+      settings.data?.data?.event?.timezone === "UTC" &&
+      settings.data?.data?.rooms?.length === 2 &&
+      settings.data?.data?.tracks?.[0]?.name === "Scratch Track" &&
+      JSON.stringify(settings.data?.data?.categories?.map((category) => category.name)) ===
+        JSON.stringify(["AI", "Community", "Systems"]),
+    JSON.stringify(settings.data?.data));
+  const badSettingsZone = await j("PATCH", "/api/admin/settings", { timezone: "Mars/Olympus_Mons" }, admin);
+  check("M5 invalid IANA timezone is refused", badSettingsZone.status === 422, badSettingsZone.status);
+  const badSettingsRange = await j("PATCH", "/api/admin/settings", {
+    startsOn: "2026-05-14", endsOn: "2026-05-12",
+  }, admin);
+  check("M5 event date range is ordered server-side", badSettingsRange.status === 422, badSettingsRange.status);
+  const forgedSettingsEvent = await j("PATCH", "/api/admin/settings", {
+    eventId: "demo-event", name: "Forged event update",
+  }, admin);
+  check("M5 settings derives event scope from the session, not a request id", forgedSettingsEvent.status === 422, forgedSettingsEvent.status);
+  const datedSettings = await j("PATCH", "/api/admin/settings", {
+    name: "Settings Scratch Event", timezone: "America/Los_Angeles", startsOn: "2026-05-12", endsOn: "2026-05-14",
+  }, admin);
+  check("M5 settings stores and serializes event-local dates",
+    datedSettings.status === 200 &&
+      datedSettings.data?.data?.event?.name === "Settings Scratch Event" &&
+      datedSettings.data?.data?.event?.timezone === "America/Los_Angeles" &&
+      datedSettings.data?.data?.event?.startsOn === "2026-05-12" &&
+      datedSettings.data?.data?.event?.endsOn === "2026-05-14",
+    JSON.stringify(datedSettings.data?.data));
+  const timezoneOnly = await j("PATCH", "/api/admin/settings", { timezone: "America/New_York" }, admin);
+  check("M5 timezone-only settings update preserves local event dates",
+    timezoneOnly.status === 200 &&
+      timezoneOnly.data?.data?.event?.timezone === "America/New_York" &&
+      timezoneOnly.data?.data?.event?.startsOn === "2026-05-12" &&
+      timezoneOnly.data?.data?.event?.endsOn === "2026-05-14",
+    JSON.stringify(timezoneOnly.data?.data));
+
+  const roomsBefore = await j("GET", "/api/admin/settings/rooms", null, admin);
+  check("M5 room read is event-scoped and stable", roomsBefore.status === 200 && roomsBefore.data?.data?.rooms?.length === 2, roomsBefore.status);
+  const roomSpeaker = await j("POST", "/api/admin/settings/rooms", { name: "No speaker room" }, speaker);
+  check("M5 room writes refuse speakers", roomSpeaker.status === 403, roomSpeaker.status);
+  const newRoom = await j("POST", "/api/admin/settings/rooms", {
+    name: "Settings Room", capacity: 42, sortOrder: 8,
+  }, admin);
+  const settingsRoomId = newRoom.data?.data?.room?.id;
+  check("M5 admin creates an event-scoped room", newRoom.status === 201 && !!settingsRoomId, newRoom.status);
+  const duplicateRoom = await j("POST", "/api/admin/settings/rooms", {
+    name: "Settings Room", capacity: 42,
+  }, admin);
+  check("M5 duplicate room names are refused", duplicateRoom.status === 409 && duplicateRoom.data?.error?.code === "ROOM_NAME_TAKEN", duplicateRoom.status);
+  const invalidRoom = await j("POST", "/api/admin/settings/rooms", { name: "Bad Room", capacity: 0 }, admin);
+  check("M5 invalid room capacity is refused", invalidRoom.status === 422, invalidRoom.status);
+  const updatedRoom = await j("PATCH", "/api/admin/settings/rooms", {
+    id: settingsRoomId, capacity: null, sortOrder: 9,
+  }, admin);
+  check("M5 admin updates the active event room", updatedRoom.status === 200 && updatedRoom.data?.data?.room?.capacity === null && updatedRoom.data?.data?.room?.sortOrder === 9, updatedRoom.status);
+  const otherRoom = await prisma.room.findFirstOrThrow({ where: { eventId: OTHER_SCRATCH_EVENT.id }, select: { id: true } });
+  const crossEventRoom = await j("PATCH", "/api/admin/settings/rooms", { id: otherRoom.id, name: "Nope" }, admin);
+  check("M5 room updates cannot target another event", crossEventRoom.status === 404 && crossEventRoom.data?.error?.code === "ROOM_NOT_FOUND", crossEventRoom.status);
+  const crossEventRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${otherRoom.id}`, null, admin);
+  const otherRoomAfterCrossEventDelete = await prisma.room.findUnique({ where: { id: otherRoom.id }, select: { id: true } });
+  check("M5 room deletion cannot target another event", crossEventRoomDelete.status === 404 && crossEventRoomDelete.data?.error?.code === "ROOM_NOT_FOUND" && otherRoomAfterCrossEventDelete?.id === otherRoom.id, crossEventRoomDelete.status);
+  const unusedRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${settingsRoomId}`, null, admin);
+  const deletedRoom = await prisma.room.findUnique({ where: { id: settingsRoomId }, select: { id: true } });
+  check("M5 admin deletes an unused event-scoped room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId && !deletedRoom, unusedRoomDelete.status);
+
+  const m5Category = await j("POST", "/api/cfp/categories", {
+    eventId: SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
+  }, admin);
+  check("M5 retains the existing admin category create path", m5Category.status === 201 && !!m5Category.data?.data?.id, m5Category.status);
 
   const importPayload = {
     eventId: SCRATCH_EVENT.id,
@@ -846,6 +936,20 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("place session on schedule", place.status === 200 && !!place.data?.data?.slot?.id, place.status);
+  const scheduledRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${roomA}`, null, admin);
+  const scheduledSlotAfterDeleteRefusal = await prisma.scheduleSlot.findUnique({
+    where: { id: place.data?.data?.slot?.id },
+    select: { id: true, roomId: true },
+  });
+  const scheduledRoomAfterDeleteRefusal = await prisma.room.findUnique({ where: { id: roomA }, select: { id: true } });
+  check(
+    "M5 refuses in-use room deletion without cascading its schedule slot",
+    scheduledRoomDelete.status === 409 &&
+      scheduledRoomDelete.data?.error?.code === "ROOM_IN_USE" &&
+      scheduledRoomAfterDeleteRefusal?.id === roomA &&
+      scheduledSlotAfterDeleteRefusal?.roomId === roomA,
+    scheduledRoomDelete.status,
+  );
 
   // 14. Room conflict: a second session in the same room at the same time
   const sub2 = await j("POST", "/api/cfp/submissions", {
