@@ -33,6 +33,7 @@ test("a still-valid invite derives the same bearer for recovery without storing 
   const first = createReviewerInviteToken(input, secret);
   assert.equal(createReviewerInviteToken(input, secret), first);
   assert.notEqual(createReviewerInviteToken({ ...input, version: 5 }, secret), first);
+  assert.notEqual(createReviewerInviteToken({ ...input, expiresAt: new Date(expiresAt.getTime() + 1_000) }, secret), first);
   assert.notEqual(createReviewerInviteToken(input, `${secret}-other`), first);
 });
 

@@ -62,7 +62,11 @@ test("reviewer invite acceptance is POST-only, no-store, structurally verifies b
   assert.ok(route.indexOf("lockExistingEventMembersForShare") < route.indexOf('FOR UPDATE'));
   assert.match(route, /"INVITE_NOT_FOUND"/);
   assert.match(route, /NextResponse\.redirect\(`\$\{appUrl\}\/admin\/evaluations`, 303\)/);
-  assert.match(route, /\[reviewer-invite\] accept body rejected/);
+  assert.match(
+    route,
+    /catch \(error\) \{[\s\S]*?error instanceof ApiError[\s\S]*?error instanceof Error[\s\S]*?console\.warn\("\[reviewer-invite\] accept body rejected", diagnostic\)/,
+  );
+  assert.doesNotMatch(route, /console\.warn\([^\n]*error\.message/);
   assert.doesNotMatch(route, /new URL\("\/admin\/evaluations", req\.url\)/);
   assert.match(route, /httpOnly: true/);
   assert.match(route, /sameSite: "lax"/);
