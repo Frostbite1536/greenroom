@@ -114,9 +114,19 @@ Status codes:
 Unauthenticated `POST /api/cfp/submissions` accepts `saveDraft` and `submit`; **both** require
 the selected form to be published and open. Its JSON body is capped at 128 KiB before parsing,
 and its strict, bounded answers and speaker roster reject duplicate normalized speaker emails.
-The durable limits are 20 public writes per IP per 10 minutes, plus for a submit 3 per primary
-email per 24 hours and 60 per event per hour. It still refuses any non-`DRAFT` `abstractId` with
-`409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or accepted proposal.
+The durable, HMAC-fingerprinted limits run in this scope order: 20 public writes per IP per 10
+minutes; 120 per event per hour across both drafts and submits; then, for a submit, 3 per primary
+email per 24 hours and 60 submitted proposals per event per hour. It still refuses any
+non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a
+submitted or accepted proposal.
+
+### Bounded admin proposal reads
+
+The event-scoped in-app `GET /api/cfp/submissions` list returns at most 100 proposals. It orders
+submitted proposals by `submittedAt` descending with nulls last, then by `createdAt` and `id`
+descending, so drafts trail submitted work. Its envelope carries the exact total for the applied
+status/form filters and `hasMore`; callers can narrow those filters rather than treating a capped
+result as a complete event export.
 
 ### Related app endpoints worth knowing
 
