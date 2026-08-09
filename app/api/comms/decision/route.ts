@@ -1,10 +1,13 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { dispatchEmail } from "@/lib/comms/send";
 import { buildDecisionEmail } from "@/lib/comms/notifications";
+import { issueDecisionPreviewToken, verifyDecisionPreviewToken } from "@/lib/comms/decision-preview";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
+import { getServerSigningSecret } from "@/lib/server-signing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +16,7 @@ const decisionEmailSchema = z.object({
   abstractId: z.string().trim().min(1).max(191),
   /** Preview first: nothing is sent and no dispatch row is written. */
   preview: z.boolean().default(true),
+  previewToken: z.string().trim().min(1).max(2_048).optional(),
   includeFeedback: z.boolean().default(true),
   personalNote: z.string().trim().max(4_000).nullish(),
 });
@@ -81,15 +85,31 @@ export const POST = handle(async (req) => {
   const recipients = [...new Map(
     [abstract.submitter, ...abstract.speakers.map((row) => row.user)].map((person) => [person.email.toLowerCase(), person]),
   ).values()];
-  const buildMailFor = (speaker: (typeof recipients)[number]) => buildDecisionEmail({
-    eventName: abstract.event.name,
-    speaker,
-    title: abstract.title,
-    decision,
-    personalNote: input.personalNote,
-    feedback,
-  });
-  const previewMail = buildMailFor(abstract.submitter);
+  const renderedMessages = recipients.map((speaker) => ({
+    recipient: speaker.email,
+    ...buildDecisionEmail({
+      eventName: abstract.event.name,
+      speaker,
+      title: abstract.title,
+      decision,
+      personalNote: input.personalNote,
+      feedback,
+    }),
+  }));
+  const previewMail = renderedMessages[0];
+  const contentDigest = createHash("sha256")
+    .update(JSON.stringify(renderedMessages))
+    .digest("base64url");
+  const previewIdentity = {
+    adminId: ctx.userId,
+    eventId: ctx.eventId,
+    abstractId: abstract.id,
+    contentDigest,
+  };
+  const signingSecret = getServerSigningSecret();
+  if (!signingSecret) {
+    throw new ApiError(503, "PREVIEW_UNAVAILABLE", "Decision email preview is unavailable until server signing is configured.");
+  }
 
   if (input.preview) {
     return ok({
@@ -100,7 +120,15 @@ export const POST = handle(async (req) => {
       recipients: recipients.map((person) => person.email),
       feedbackCount: feedback.length,
       willSend: !useMockIntegrations() && Boolean(process.env.RESEND_API_KEY) && Boolean(getResendFrom()),
+      previewToken: issueDecisionPreviewToken(previewIdentity, signingSecret),
     });
+  }
+  if (!input.previewToken || !verifyDecisionPreviewToken(input.previewToken, previewIdentity, signingSecret)) {
+    throw new ApiError(
+      409,
+      "PREVIEW_REQUIRED",
+      "Preview this exact decision email again before sending it.",
+    );
   }
 
   const template = await prisma.emailTemplate.findFirst({
@@ -118,12 +146,11 @@ export const POST = handle(async (req) => {
   let sent = 0;
   let mocked = 0;
   let failed = 0;
-  for (const person of recipients) {
-    const mail = buildMailFor(person);
+  for (const mail of renderedMessages) {
     const outcome = await dispatchEmail(prisma, {
       templateId: template.id,
       senderId: ctx.userId,
-      message: { to: person.email, subject: mail.subject, html: mail.html },
+      message: { to: mail.recipient, subject: mail.subject, html: mail.html },
       variables: { abstractId: abstract.id, kind: "decision", decision },
     });
     if (outcome.status === "sent") sent++;

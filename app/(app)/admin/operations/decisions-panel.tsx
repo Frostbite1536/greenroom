@@ -20,6 +20,7 @@ type Preview = {
   recipients: string[];
   feedbackCount: number;
   willSend: boolean;
+  previewToken: string;
 };
 
 type Result = { tone: "good" | "warn" | "bad"; headline: string; note?: string };
@@ -53,6 +54,7 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
         body: JSON.stringify({
           abstractId: selectedId,
           preview: previewOnly,
+          previewToken: previewOnly ? undefined : preview?.previewToken,
           includeFeedback,
           personalNote: personalNote.trim() ? personalNote : null,
         }),
@@ -75,7 +77,8 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
             : { tone: "good", headline: `Sent to ${recipients.join(", ")}.` },
       );
       setPreview(null);
-    } catch {
+    } catch (error) {
+      console.error("[comms] decision request failed", error);
       setResult({ tone: "bad", headline: "We couldn't reach the server. Check your connection and try again." });
     } finally {
       setBusy(false);

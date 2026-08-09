@@ -6,7 +6,7 @@ import {
   buildSubmissionAlert,
   buildSubmissionReceipt,
 } from "./notifications";
-import { canDeliverEmail, deliverEmail } from "./send";
+import { canDeliverEmail, deliverEmail, logicalEmailIdempotencyKey } from "./send";
 
 const speaker = { name: "Sofia Marques", email: "sofia@example.test" };
 const event = "Forward 2026";
@@ -114,6 +114,26 @@ test("a live send carries the idempotency key and the sender identity", async ()
   // Attachments are base64 for the provider, not raw text.
   const attachment = (seen.body as { attachments: { content: string }[] }).attachments[0];
   assert.equal(Buffer.from(attachment.content, "base64").toString("utf8"), "BEGIN:VCALENDAR");
+});
+
+test("logical email idempotency survives retries and changes with rendered content", () => {
+  const input = {
+    templateId: "template-1",
+    message: { to: "Speaker@Example.test", subject: "Decision", html: "<p>Accepted</p>" },
+    variables: { decision: "ACCEPTED", abstractId: "abstract-1" },
+  };
+  const first = logicalEmailIdempotencyKey(input, "Greenroom <hello@example.test>");
+  const reordered = logicalEmailIdempotencyKey({
+    ...input,
+    variables: { abstractId: "abstract-1", decision: "ACCEPTED" },
+  }, "Greenroom <hello@example.test>");
+  assert.equal(first, reordered);
+  assert.match(first, /^greenroom-[a-f0-9]{64}$/);
+  assert.notEqual(first, logicalEmailIdempotencyKey({
+    ...input,
+    message: { ...input.message, html: "<p>Rejected</p>" },
+  }, "Greenroom <hello@example.test>"));
+  assert.notEqual(first, logicalEmailIdempotencyKey(input, "Another sender <hello@example.test>"));
 });
 
 test("provider failures come back as outcomes, never as throws", async () => {

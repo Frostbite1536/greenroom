@@ -538,9 +538,35 @@ try {
     JSON.stringify(decisionPreview.data?.data?.recipients),
   );
 
+  const unpreviewedDecisionSend = await j("POST", "/api/comms/decision", {
+    abstractId,
+    preview: false,
+    includeFeedback: true,
+  }, admin);
+  check(
+    "O2 decision delivery refuses a send without server-issued preview proof",
+    unpreviewedDecisionSend.status === 409 &&
+      unpreviewedDecisionSend.data?.error?.code === "PREVIEW_REQUIRED",
+    unpreviewedDecisionSend.data?.error?.code,
+  );
+
+  const changedAfterPreview = await j("POST", "/api/comms/decision", {
+    abstractId,
+    preview: false,
+    previewToken: decisionPreview.data?.data?.previewToken,
+    includeFeedback: true,
+    personalNote: "This note was not in the preview.",
+  }, admin);
+  check(
+    "O2 preview proof is invalid when message content changes",
+    changedAfterPreview.status === 409 && changedAfterPreview.data?.error?.code === "PREVIEW_REQUIRED",
+    changedAfterPreview.data?.error?.code,
+  );
+
   const decisionSend = await j("POST", "/api/comms/decision", {
     abstractId,
     preview: false,
+    previewToken: decisionPreview.data?.data?.previewToken,
     includeFeedback: true,
   }, admin);
   check(

@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { createHash } from "node:crypto";
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
 
 /**
@@ -60,7 +61,7 @@ export async function deliverEmail(message: EmailMessage, config: DeliveryConfig
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
         "Content-Type": "application/json",
-        // Retrying the same dispatch row can never send the same email twice.
+        // Retrying the same logical email reuses this key.
         "Idempotency-Key": config.idempotencyKey,
       },
       signal: AbortSignal.timeout(config.timeoutMs ?? 10_000),
@@ -102,6 +103,27 @@ export type DispatchInput = {
 };
 
 /**
+ * Stable across retries of the same logical email, but changes with the
+ * recipient, rendered content, template variables, attachment, or sender.
+ */
+export function logicalEmailIdempotencyKey(input: DispatchInput, from?: string): string {
+  const variables = Object.fromEntries(
+    Object.entries(input.variables ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const logicalMessage = JSON.stringify({
+    v: 1,
+    templateId: input.templateId,
+    from: from ?? null,
+    to: input.message.to.trim().toLowerCase(),
+    subject: input.message.subject,
+    html: input.message.html,
+    attachments: input.message.attachments ?? [],
+    variables,
+  });
+  return `greenroom-${createHash("sha256").update(logicalMessage).digest("hex")}`;
+}
+
+/**
  * Record the intent, attempt delivery, record the result.
  *
  * The row is written *before* the provider call on purpose: if the process dies
@@ -123,11 +145,12 @@ export async function dispatchEmail(
     select: { id: true },
   });
 
+  const from = getResendFrom();
   const outcome = await deliverEmail(input.message, {
     mocked: useMockIntegrations(),
-    from: getResendFrom(),
+    from,
     apiKey: process.env.RESEND_API_KEY,
-    idempotencyKey: `greenroom-${dispatch.id}`,
+    idempotencyKey: logicalEmailIdempotencyKey(input, from),
     fetcher: input.fetcher,
   });
 

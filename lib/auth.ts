@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
+import { getServerSigningSecret } from "@/lib/server-signing";
 
 /**
  * Demo auth: a cookie-backed session with one-click personas.
@@ -26,13 +27,6 @@ export type MockSession = DemoSession;
 
 export const SESSION_COOKIE = "sb_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
-const SESSION_SECRET_MIN_LENGTH = 32;
-
-// This value is deliberately usable only outside production. It keeps local
-// one-click demo and isolated smoke runs runnable without a committed secret.
-// Production has no fallback: a missing/short SESSION_SECRET makes every
-// signed-cookie decode fail closed.
-const DEVELOPMENT_SESSION_SECRET = "greenroom-development-session-secret-not-for-production";
 
 export const DEMO_EVENT = {
   id: "demo-event",
@@ -73,12 +67,6 @@ export function homeForRole(role: UserRole): string {
 
 type SignedSession = DemoSession & { iat: number; exp: number };
 
-function getSessionSecret(): string | null {
-  const configured = process.env.SESSION_SECRET?.trim();
-  if (configured && configured.length >= SESSION_SECRET_MIN_LENGTH) return configured;
-  return process.env.NODE_ENV === "production" ? null : DEVELOPMENT_SESSION_SECRET;
-}
-
 function isSessionShape(parsed: unknown): parsed is SignedSession {
   if (!parsed || typeof parsed !== "object") return false;
   const value = parsed as Partial<SignedSession>;
@@ -101,7 +89,7 @@ function signatureFor(payload: string, secret: string): string {
 
 /** Create a signed, expiring cookie value. Throws in production without a valid secret. */
 export function encodeSession(session: DemoSession, now = Date.now()): string {
-  const secret = getSessionSecret();
+  const secret = getServerSigningSecret();
   if (!secret) throw new Error("SESSION_SECRET must be at least 32 characters in production.");
   const iat = Math.floor(now / 1_000);
   const payload = Buffer.from(JSON.stringify({ ...session, iat, exp: iat + SESSION_TTL_SECONDS }), "utf8").toString("base64url");
@@ -111,7 +99,7 @@ export function encodeSession(session: DemoSession, now = Date.now()): string {
 /** Validate signature and expiry before returning a session. Invalid configuration fails closed. */
 export function decodeSession(raw: string, now = Date.now()): DemoSession | null {
   try {
-    const secret = getSessionSecret();
+    const secret = getServerSigningSecret();
     const [payload, providedSignature, ...extra] = raw.split(".");
     if (!secret || !payload || !providedSignature || extra.length > 0) return null;
 
