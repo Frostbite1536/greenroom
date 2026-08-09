@@ -100,6 +100,74 @@ export const categoryInputSchema = z.object({
   sortOrder: z.number().int().nonnegative().default(0),
 });
 
+const eventDateKeySchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD.")
+  .refine((value) => {
+    const [year, month, day] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  }, "Use a real calendar date.");
+
+function isIanaTimeZone(value: string): boolean {
+  try {
+    Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Minimal, current-event-only settings update. Event creation/deletion stays out of M5. */
+export const eventSettingsUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(160).optional(),
+    timezone: z.string().trim().min(1).max(100).refine(isIanaTimeZone, "Use a valid IANA timezone.").optional(),
+    startsOn: eventDateKeySchema.nullable().optional(),
+    endsOn: eventDateKeySchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const datesProvided = value.startsOn !== undefined || value.endsOn !== undefined;
+    if (!value.name && !value.timezone && !datesProvided) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: "Provide at least one setting to update." });
+    }
+    if (datesProvided && (value.startsOn === undefined || value.endsOn === undefined)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["startsOn"], message: "Provide both event dates together." });
+      return;
+    }
+    if ((value.startsOn === null) !== (value.endsOn === null)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "Clear both event dates together." });
+    }
+    if (value.startsOn && value.endsOn && value.startsOn > value.endsOn) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "The event must end on or after its start date." });
+    }
+  });
+
+const roomNameSchema = z.string().trim().min(1).max(120);
+const roomCapacitySchema = z.number().int().positive().max(1_000_000).nullable();
+const roomSortOrderSchema = z.number().int().nonnegative().max(100_000);
+
+export const roomCreateSchema = z
+  .object({
+    name: roomNameSchema,
+    capacity: roomCapacitySchema.optional(),
+    sortOrder: roomSortOrderSchema.optional(),
+  })
+  .strict();
+
+export const roomUpdateSchema = z
+  .object({
+    id: idSchema,
+    name: roomNameSchema.optional(),
+    capacity: roomCapacitySchema.optional(),
+    sortOrder: roomSortOrderSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.capacity !== undefined || value.sortOrder !== undefined, {
+    message: "Provide at least one room field to update.",
+  });
+
 export const abstractUpsertSchema = z.object({
   formConfigId: idSchema,
   abstractId: idSchema.optional(),
