@@ -260,6 +260,47 @@ try {
   check("create form", form.status === 201 && form.data?.ok, form.status);
   const formId = form.data?.data?.id;
 
+  // S1: retained legacy eventId input cannot choose a different event for a
+  // form create; the server context is the sole event authority.
+  const s1ContextForm = await j("POST", "/api/cfp/forms", {
+    ...formPayload,
+    eventId: OTHER_SCRATCH_EVENT.id,
+    name: "S1 server-scoped form",
+    slug: `s1-server-scoped-${Date.now().toString(36)}`,
+    fields: [],
+  }, admin);
+  const s1ContextFormId = s1ContextForm.data?.data?.id;
+  const s1ContextStoredForm = s1ContextFormId
+    ? await prisma.formConfig.findUnique({ where: { id: s1ContextFormId }, select: { eventId: true } })
+    : null;
+  check(
+    "S1 form create derives event scope from the session, never the body",
+    s1ContextForm.status === 201 && s1ContextStoredForm?.eventId === SCRATCH_EVENT.id,
+    s1ContextForm.status,
+  );
+  const otherS1Form = await prisma.formConfig.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      name: "Other S1 form",
+      slug: `other-s1-${Date.now().toString(36)}`,
+    },
+  });
+  const s1CrossEventFormDelete = await j("DELETE", `/api/cfp/forms/${otherS1Form.id}`, null, admin);
+  const s1OtherFormAfterDelete = await prisma.formConfig.findUnique({ where: { id: otherS1Form.id }, select: { id: true } });
+  check(
+    "S1 form delete keeps unknown and cross-event ids indistinguishable",
+    s1CrossEventFormDelete.status === 404 &&
+      s1CrossEventFormDelete.data?.error?.code === "FORM_NOT_FOUND" &&
+      s1OtherFormAfterDelete?.id === otherS1Form.id,
+    s1CrossEventFormDelete.status,
+  );
+  const s1UnusedFormDelete = await j("DELETE", `/api/cfp/forms/${s1ContextFormId}`, null, admin);
+  check(
+    "S1 form delete removes only an unused locked active-event form",
+    s1UnusedFormDelete.status === 200 && s1UnusedFormDelete.data?.data?.id === s1ContextFormId,
+    s1UnusedFormDelete.status,
+  );
+
   // 1b. Create-new-form guards (the admin "New form" flow depends on these)
   const dupSlug = await j("POST", "/api/cfp/forms", { ...formPayload, name: "Duplicate slug" }, admin);
   check("duplicate slug refused (409 SLUG_TAKEN)", dupSlug.status === 409 && dupSlug.data?.error?.code === "SLUG_TAKEN", dupSlug.status);
@@ -578,6 +619,14 @@ try {
       m5Category.data?.data?.eventId === SCRATCH_EVENT.id &&
       !!m5Category.data?.data?.id,
     m5Category.status);
+  const duplicateM5Category = await j("POST", "/api/cfp/categories", {
+    eventId: OTHER_SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
+  }, admin);
+  check(
+    "S1 category duplicate-name races return an actionable conflict",
+    duplicateM5Category.status === 409 && duplicateM5Category.data?.error?.code === "CATEGORY_NAME_TAKEN",
+    duplicateM5Category.status,
+  );
   const otherCategory = await prisma.category.create({
     data: { eventId: OTHER_SCRATCH_EVENT.id, name: "Other Event Category", sortOrder: 0 },
   });
@@ -701,6 +750,13 @@ try {
   const b2WrongType = await b2Submit({ answers: { title_note: "n", consent: "yes" } });
   check("B2 a checkbox answered with a string is refused",
     b2WrongType.status === 422 && !!b2WrongType.data?.error?.fieldErrors?.consent, b2WrongType.data?.error?.code);
+
+  const s1UsedFormDelete = await j("DELETE", `/api/cfp/forms/${formId}`, null, admin);
+  check(
+    "S1 form delete re-runs the existing Abstract-use guard while locked",
+    s1UsedFormDelete.status === 409 && s1UsedFormDelete.data?.error?.code === "FORM_HAS_ABSTRACTS",
+    s1UsedFormDelete.status,
+  );
 
   // 2c. B5 — form edits must not silently delete submitted answers (audit2#1).
   // At this point b2Hidden/b2Answered have answered title_note, consent and audience.
@@ -1104,6 +1160,29 @@ try {
       comment: strandedLegacyComment,
     },
   });
+  const s1OtherTemplate = await prisma.emailTemplate.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      key: "s1-other-template",
+      subject: "Other template",
+      htmlBody: "<p>Other scratch only</p>",
+    },
+  });
+  const s1CrossEventTemplate = await j("PATCH", `/api/comms/templates/${s1OtherTemplate.id}`, {
+    subject: "Not allowed",
+    htmlBody: "<p>Not allowed</p>",
+  }, admin);
+  const s1OtherTemplateAfterPatch = await prisma.emailTemplate.findUnique({
+    where: { id: s1OtherTemplate.id },
+    select: { subject: true },
+  });
+  check(
+    "S1 template update keeps unknown and cross-event ids indistinguishable",
+    s1CrossEventTemplate.status === 404 &&
+      s1CrossEventTemplate.data?.error?.code === "TEMPLATE_NOT_FOUND" &&
+      s1OtherTemplateAfterPatch?.subject === "Other template",
+    s1CrossEventTemplate.status,
+  );
   const strandedEvaluatorQueue = await fetch(`${BASE}/admin/evaluations`, {
     headers: { cookie: cookie(evalr) },
   });

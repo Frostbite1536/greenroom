@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { categoryInputSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
-import { handle, ok, parseBody } from "@/lib/api/http";
+import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
+import { classifyCategoryMutationError } from "@/lib/services/category-mutation-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -27,16 +28,26 @@ export const POST = handle(async (req) => {
     defaultTeamKey: input.defaultTeamKey ?? null,
     sortOrder: input.sortOrder,
   };
-  const category = input.id
-    ? await prisma.$transaction(async (tx) => {
-        // Lock and authorize the stored row, not the caller-controlled body
-        // eventId. This holds the ownership check through the following write.
-        const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
-          SELECT "id", "eventId" FROM "Category" WHERE "id" = ${input.id} FOR UPDATE
-        `;
-        const owned = requireEventOwnedRow(existing, ctx.eventId, "CATEGORY_NOT_FOUND", "Category");
-        return tx.category.update({ where: { id: owned.id }, data });
-      })
-    : await prisma.category.create({ data: { eventId: ctx.eventId, ...data } });
+  let category;
+  try {
+    category = input.id
+      ? await prisma.$transaction(async (tx) => {
+          // Lock and authorize the stored row, not the caller-controlled body
+          // eventId. This holds the ownership check through the following write.
+          const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
+            SELECT "id", "eventId" FROM "Category" WHERE "id" = ${input.id} FOR UPDATE
+          `;
+          const owned = requireEventOwnedRow(existing, ctx.eventId, "CATEGORY_NOT_FOUND", "Category");
+          return tx.category.update({ where: { id: owned.id }, data });
+        })
+      : await prisma.category.create({ data: { eventId: ctx.eventId, ...data } });
+  } catch (error) {
+    if (classifyCategoryMutationError(error) === "CATEGORY_NAME_TAKEN") {
+      throw new ApiError(409, "CATEGORY_NAME_TAKEN", "Another category in this event already uses that name.", {
+        name: ["This category name is already in use."],
+      });
+    }
+    throw error;
+  }
   return ok(category, input.id ? 200 : 201);
 });

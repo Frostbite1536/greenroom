@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formConfigInputSchema } from "@/types/api";
-import { requireContext, assertEventScope } from "@/lib/api/context";
+import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeForm } from "@/lib/api/form-serialize";
 import {
@@ -45,7 +45,6 @@ export const GET = handle(async () => {
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, formConfigInputSchema);
-  assertEventScope(ctx, input.eventId);
 
   // Reconciliation upserts by key, so duplicates would silently collapse into
   // one field and drop the operator's edit. Refuse at the boundary instead.
@@ -109,7 +108,9 @@ export const POST = handle(async (req) => {
     const saved = await tx.formConfig.upsert({
       where: { id: input.id ?? "__new__" },
       update: data,
-      create: { eventId: input.eventId, ...data },
+      // A body may retain its legacy eventId for compatibility, but event
+      // ownership is always derived from the resolved server context.
+      create: { eventId: ctx.eventId, ...data },
     });
 
     // B5 (audit2#1): `FormAnswer` cascades from `FormField`, so the delete

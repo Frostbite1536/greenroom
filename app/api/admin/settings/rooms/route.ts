@@ -4,6 +4,7 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { decideRoomDeletion } from "@/lib/services/room-deletion";
+import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import { classifyRoomMutationError } from "@/lib/services/room-mutation-errors";
 
 export const dynamic = "force-dynamic";
@@ -53,18 +54,24 @@ export const POST = handle(async (req) => {
 export const PATCH = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, roomUpdateSchema);
-  const existing = await prisma.room.findFirst({ where: { id: input.id, eventId: ctx.eventId }, select: { id: true } });
-  if (!existing) throw new ApiError(404, "ROOM_NOT_FOUND", "Room not found.");
 
   try {
-    const room = await prisma.room.update({
-      where: { id: existing.id },
-      data: {
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        ...(input.capacity !== undefined ? { capacity: input.capacity } : {}),
-        ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
-      },
-      select: roomSelect,
+    const room = await prisma.$transaction(async (tx) => {
+      // Read the stored event under the same exclusive lock as the write. A
+      // caller-controlled room id can never authorize a cross-event update.
+      const [existing] = await tx.$queryRaw<{ id: string; eventId: string }[]>`
+        SELECT "id", "eventId" FROM "Room" WHERE "id" = ${input.id} FOR UPDATE
+      `;
+      const owned = requireEventOwnedRow(existing, ctx.eventId, "ROOM_NOT_FOUND", "Room");
+      return tx.room.update({
+        where: { id: owned.id },
+        data: {
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.capacity !== undefined ? { capacity: input.capacity } : {}),
+          ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {}),
+        },
+        select: roomSelect,
+      });
     });
     return ok({ room });
   } catch (error) {
