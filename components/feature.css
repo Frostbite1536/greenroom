@@ -233,6 +233,14 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .detail-drawer { display: grid; gap: 14px; }
 .detail-drawer .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px; font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .detail-drawer .kv span:first-child { color: var(--muted); }
+.review-notes { margin-top: 18px; }
+.review-notes h3 { margin: 0 0 4px; font-size: 14px; }
+.review-notes > .hint { margin: 0; }
+.review-note-list { display: grid; gap: 8px; margin: 10px 0 0; padding: 0; list-style: none; }
+.review-note { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; }
+.review-note h4 { margin: 0 0 6px; font-size: 13px; }
+.review-note p, .review-note ul { margin: 0; white-space: pre-wrap; }
+.review-note ul { padding-left: 18px; display: grid; gap: 6px; }
 
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: none; background: white; padding: 7px 12px; font: inherit; cursor: pointer; color: var(--muted); border-left: 1px solid var(--line); display: inline-flex; align-items: center; gap: 6px; }

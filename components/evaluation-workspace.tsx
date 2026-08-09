@@ -1,11 +1,19 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ClipboardCheck, EyeOff, Inbox } from "lucide-react";
 import type { EvaluationView, QueueRow } from "@/lib/data/reads";
 import { apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
+import {
+  planReviewCommentUpdate,
+  planReviewScoreEntries,
+  reconcileReviewCommentDraft,
+  reconcileSubmittedReviewCommentDraft,
+  reviewCommentDraftForRow,
+  type ReviewCommentDraft,
+} from "@/lib/review-comment-draft";
 
 const STATUS_TONE: Record<string, string> = {
   ASSIGNED: "info",
@@ -32,7 +40,8 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   );
   // Local score edits layered over the server state, keyed by abstract id.
   const [edits, setEdits] = useState<Record<string, Record<string, number>>>({});
-  const [comment, setComment] = useState("");
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, ReviewCommentDraft>>({});
+  const commentDraftsRef = useRef<Record<string, ReviewCommentDraft>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -47,6 +56,34 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   const active: QueueRow | null =
     view.queue.find((q) => q.abstractId === activeId) ?? view.queue[0] ?? null;
   const scores = active ? { ...active.myScores, ...(edits[active.abstractId] ?? {}) } : {};
+  const commentServerSignature = JSON.stringify(view.queue.map((row) => [row.abstractId, row.myComment]));
+
+  // RSC refreshes are authoritative only for comment drafts the evaluator has
+  // not changed locally. A primitive signature avoids an object-identity reset.
+  useEffect(() => {
+    const serverComments = new Map(view.queue.map((row) => [row.abstractId, row.myComment]));
+    const current = commentDraftsRef.current;
+    let next: Record<string, ReviewCommentDraft> | null = null;
+
+    for (const [abstractId, draft] of Object.entries(current)) {
+      if (!serverComments.has(abstractId)) continue;
+      const reconciled = reconcileReviewCommentDraft(draft, serverComments.get(abstractId) ?? null);
+      if (reconciled.baseline !== draft.baseline || reconciled.draft !== draft.draft) {
+        next ??= { ...current };
+        next[abstractId] = reconciled;
+      }
+    }
+
+    if (next) {
+      commentDraftsRef.current = next;
+      setCommentDrafts(next);
+    }
+  }, [commentServerSignature]);
+
+  const commentDraft = active
+    ? reviewCommentDraftForRow(commentDrafts, active.abstractId, active.myComment)
+    : null;
+  const commentUpdate = commentDraft ? planReviewCommentUpdate(commentDraft) : undefined;
 
   const weightedTotal = useMemo(() => {
     let sum = 0;
@@ -105,24 +142,38 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
 
   function selectRow(row: QueueRow) {
     setActiveId(row.abstractId);
-    setComment("");
     setError(null);
+    setNotice(null);
+  }
+
+  function setCommentDraft(value: string) {
+    if (!active) return;
+    const current = reviewCommentDraftForRow(
+      commentDraftsRef.current,
+      active.abstractId,
+      active.myComment,
+    );
+    const next = { ...commentDraftsRef.current, [active.abstractId]: { ...current, draft: value } };
+    commentDraftsRef.current = next;
+    setCommentDrafts(next);
     setNotice(null);
   }
 
   async function submitScores() {
     // Declared above the early returns, so it cannot rely on their narrowing.
     if (!plan || !active) return;
+    const submittedCommentDraft = reviewCommentDraftForRow(
+      commentDraftsRef.current,
+      active.abstractId,
+      active.myComment,
+    );
+    const submittedCommentUpdate = planReviewCommentUpdate(submittedCommentDraft);
     setBusy(true);
     setError(null);
     const res = await apiPost("/api/evaluations/scores", {
       planId: plan.id,
       abstractId: active.abstractId,
-      scores: plan.rubric.map((c) => ({
-        rubricKey: c.key,
-        score: scores[c.key],
-        ...(comment.trim() && c.key === plan.rubric[0].key ? { comment: comment.trim() } : {}),
-      })),
+      scores: planReviewScoreEntries(plan.rubric, scores, submittedCommentUpdate),
       complete: true,
     });
     setBusy(false);
@@ -130,8 +181,18 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
       setError(res.error.message);
       return;
     }
-    setNotice("Review submitted.");
-    setComment("");
+    const currentCommentDraft = reviewCommentDraftForRow(
+      commentDraftsRef.current,
+      active.abstractId,
+      active.myComment,
+    );
+    const nextCommentDrafts = {
+      ...commentDraftsRef.current,
+      [active.abstractId]: reconcileSubmittedReviewCommentDraft(currentCommentDraft, submittedCommentDraft),
+    };
+    commentDraftsRef.current = nextCommentDrafts;
+    setCommentDrafts(nextCommentDrafts);
+    setNotice(submittedCommentUpdate === null ? "Review submitted and note cleared." : "Review submitted.");
     const nextRow = view.queue.find(
       (q) => q.status !== "COMPLETED"
         && q.abstractStatus !== "WITHDRAWN"
@@ -249,20 +310,32 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
               ))}
             </div>
 
-            <label className="stack" style={{ marginTop: 8 }}>
-              <span className="field-label">Comments (optional)</span>
+            <div className="stack" style={{ marginTop: 8 }}>
+              <label className="field-label" htmlFor={`review-comment-${active.abstractId}`}>Review note (optional)</label>
               <textarea
+                id={`review-comment-${active.abstractId}`}
                 className="text-input"
                 name="reviewComment"
                 autoComplete="off"
                 maxLength={2000}
                 rows={3}
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
+                value={commentDraft?.draft ?? ""}
+                onChange={(e) => setCommentDraft(e.target.value)}
                 placeholder="Feedback for the program committee…"
+                aria-describedby={commentUpdate === null ? "review-comment-help review-comment-clear-state" : "review-comment-help"}
               />
-              {active.myComment && !comment ? <span className="hint">Previously: “{active.myComment}”</span> : null}
-            </label>
+              <span className="hint" id="review-comment-help">
+                Leave this note unchanged to keep it. Remove its text and update the review to clear it.
+              </span>
+              {commentUpdate === null ? (
+                <span className="hint" id="review-comment-clear-state" role="status">
+                  This note will be removed when you update the review.
+                </span>
+              ) : null}
+              {commentDraft?.draft ? (
+                <button className="link-button" type="button" onClick={() => setCommentDraft("")}>Clear note</button>
+              ) : null}
+            </div>
 
             {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
             {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
