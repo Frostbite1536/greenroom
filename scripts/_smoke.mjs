@@ -1856,6 +1856,190 @@ try {
     clearRequired.status === 422 && !!clearRequired.data?.error?.fieldErrors?.title_note,
     clearRequired.data?.error?.code);
 
+  // S16: an editable speaker writer takes the same FormConfig -> FormField
+  // locks as a public writer before it joins the per-Abstract lock. Hold that
+  // final lock so both compatible form locks are observable while the PATCH is
+  // still pending, then prove a public submit can finish before release.
+  const s16OrderSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S16 ordered writer",
+    speakers: [
+      { email: "s16-order@scratch.test", name: "S16 Order", isPrimary: true },
+      { email: speaker.user.email, name: speaker.user.name, isPrimary: false },
+    ],
+    answers: { title_note: "ordered", consent: true }, intent: "submit",
+  });
+  const s16OrderId = s16OrderSubmit.data?.data?.id;
+  check("S16 order setup: submitted proposal created", s16OrderSubmit.status === 201 && !!s16OrderId);
+  const countRowShareLocks = async (relation) => {
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count"
+      FROM pg_locks
+      WHERE relation = ${relation}::regclass
+        AND mode = 'RowShareLock'
+        AND granted
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const waitForSpeakerFormLocks = async ({ baselineFormConfigShares, baselineFormFieldShares }) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (
+        await countRowShareLocks('"FormConfig"') > baselineFormConfigShares &&
+        await countRowShareLocks('"FormField"') > baselineFormFieldShares
+      ) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return false;
+  };
+  let signalS16AbstractLock;
+  let releaseS16AbstractLock;
+  const s16AbstractLockHeld = new Promise((resolve) => { signalS16AbstractLock = resolve; });
+  const s16AbstractLockRelease = new Promise((resolve) => { releaseS16AbstractLock = resolve; });
+  const s16AbstractHolder = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${s16OrderId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    signalS16AbstractLock();
+    await s16AbstractLockRelease;
+  });
+  await s16AbstractLockHeld;
+  const s16OrderLockBaseline = {
+    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
+    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+  };
+  const waitingSpeakerEdit = j("PATCH", `/api/cfp/submissions/${s16OrderId}`, {
+    title: "S16 ordered edit",
+  }, speaker);
+  const speakerHeldFormLocksBeforeAbstract = await waitForSpeakerFormLocks(s16OrderLockBaseline);
+  const compatiblePublicSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S16 concurrent public writer",
+    speakers: [{ email: "s16-public@scratch.test", name: "S16 Public", isPrimary: true }],
+    answers: { title_note: "public", consent: true }, intent: "submit",
+  });
+  releaseS16AbstractLock();
+  await s16AbstractHolder;
+  const waitingSpeakerEditResult = await waitingSpeakerEdit;
+  check("S16 speaker locks FormConfig and fields before the Abstract advisory lock",
+    speakerHeldFormLocksBeforeAbstract && waitingSpeakerEditResult.status === 200,
+    waitingSpeakerEditResult.status);
+  check("S16 compatible public writer completes while speaker waits on Abstract",
+    compatiblePublicSubmit.status === 201,
+    compatiblePublicSubmit.status);
+
+  // The Session and editability checks are also post-lock facts. A competing
+  // programme writer makes this formerly submitted abstract ACCEPTED and links
+  // a Session before committing. The pre-lock roster check would have allowed
+  // a destructive roster mutation; the fresh read must refuse it instead.
+  const s16SessionSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S16 fresh session",
+    speakers: [
+      { email: "s16-session@scratch.test", name: "S16 Session", isPrimary: true },
+      { email: speaker.user.email, name: speaker.user.name, isPrimary: false },
+    ],
+    answers: { title_note: "session", consent: true }, intent: "submit",
+  });
+  const s16SessionId = s16SessionSubmit.data?.data?.id;
+  check("S16 session setup: submitted proposal created", s16SessionSubmit.status === 201 && !!s16SessionId);
+  let signalS16SessionWriter;
+  let releaseS16SessionWriter;
+  const s16SessionWriterReady = new Promise((resolve) => { signalS16SessionWriter = resolve; });
+  const s16SessionWriterRelease = new Promise((resolve) => { releaseS16SessionWriter = resolve; });
+  const s16SessionWriter = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${s16SessionId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.abstract.update({
+      where: { id: s16SessionId },
+      data: { status: "ACCEPTED", decidedAt: new Date() },
+    });
+    await tx.session.create({
+      data: {
+        eventId: SCRATCH_EVENT.id,
+        sourceAbstractId: s16SessionId,
+        title: "S16 fresh session",
+        durationMinutes: 30,
+      },
+    });
+    signalS16SessionWriter();
+    await s16SessionWriterRelease;
+  });
+  await s16SessionWriterReady;
+  const s16SessionLockBaseline = {
+    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
+    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+  };
+  const staleSessionRosterEdit = j("PATCH", `/api/cfp/submissions/${s16SessionId}`, {
+    speakers: [
+      { email: speaker.user.email, name: speaker.user.name, isPrimary: true },
+    ],
+  }, speaker);
+  const sessionEditTookFormLocks = await waitForSpeakerFormLocks(s16SessionLockBaseline);
+  releaseS16SessionWriter();
+  await s16SessionWriter;
+  const staleSessionRosterEditResult = await staleSessionRosterEdit;
+  const s16SessionAfter = await prisma.session.findUnique({
+    where: { sourceAbstractId: s16SessionId },
+    include: { sourceAbstract: { include: { speakers: true } } },
+  });
+  check("S16 fresh linked-Session check refuses a roster edit after the writer commits",
+    sessionEditTookFormLocks && staleSessionRosterEditResult.status === 409 &&
+      staleSessionRosterEditResult.data?.error?.code === "SPEAKERS_LOCKED",
+    staleSessionRosterEditResult.status);
+  check("S16 linked-Session refusal preserves the fresh accepted status and roster",
+    s16SessionAfter?.sourceAbstract?.status === "ACCEPTED" &&
+      s16SessionAfter.sourceAbstract.speakers.length === 2,
+    s16SessionAfter?.sourceAbstract?.status);
+
+  // A terminal writer uses the same final lock. The route read occurs before
+  // that writer commits, so this makes stale terminal-state enforcement
+  // deterministic rather than relying on request timing.
+  const s16TerminalSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "S16 fresh terminal",
+    speakers: [
+      { email: "s16-terminal@scratch.test", name: "S16 Terminal", isPrimary: true },
+      { email: speaker.user.email, name: speaker.user.name, isPrimary: false },
+    ],
+    answers: { title_note: "terminal", consent: true }, intent: "submit",
+  });
+  const s16TerminalId = s16TerminalSubmit.data?.data?.id;
+  check("S16 terminal setup: submitted proposal created", s16TerminalSubmit.status === 201 && !!s16TerminalId);
+  let signalS16TerminalWriter;
+  let releaseS16TerminalWriter;
+  const s16TerminalWriterReady = new Promise((resolve) => { signalS16TerminalWriter = resolve; });
+  const s16TerminalWriterRelease = new Promise((resolve) => { releaseS16TerminalWriter = resolve; });
+  const s16TerminalWriter = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${s16TerminalId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.abstract.update({
+      where: { id: s16TerminalId },
+      data: { status: "REJECTED", decidedAt: new Date() },
+    });
+    signalS16TerminalWriter();
+    await s16TerminalWriterRelease;
+  });
+  await s16TerminalWriterReady;
+  const s16TerminalLockBaseline = {
+    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
+    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+  };
+  const staleTerminalEdit = j("PATCH", `/api/cfp/submissions/${s16TerminalId}`, {
+    title: "S16 stale terminal attempt",
+  }, speaker);
+  const terminalEditTookFormLocks = await waitForSpeakerFormLocks(s16TerminalLockBaseline);
+  releaseS16TerminalWriter();
+  await s16TerminalWriter;
+  const staleTerminalEditResult = await staleTerminalEdit;
+  const s16TerminalAfter = await prisma.abstract.findUnique({
+    where: { id: s16TerminalId },
+    select: { status: true, title: true },
+  });
+  check("S16 fresh terminal-state check refuses content edited from a stale read",
+    terminalEditTookFormLocks && staleTerminalEditResult.status === 409 &&
+      staleTerminalEditResult.data?.error?.code === "ABSTRACT_LOCKED",
+    staleTerminalEditResult.status);
+  check("S16 terminal refusal preserves the competing writer's state and content",
+    s16TerminalAfter?.status === "REJECTED" && s16TerminalAfter.title === "S16 fresh terminal",
+    s16TerminalAfter?.status);
+
   // Terminal statuses stay locked.
   const r1Reject = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Rejected talk",

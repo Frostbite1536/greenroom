@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireContext, type ApiContext } from "@/lib/api/context";
-import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
+import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import {
   answersByKey,
   serializeEditFormSpec,
@@ -24,7 +24,7 @@ import {
   withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import type { FormAnswerValue } from "@/lib/services/types";
-import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
+import { lockSpeakerContentWrite } from "@/lib/services/speaker-edit-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -112,26 +112,13 @@ export function PATCH(req: Request, ctx: Params) {
     const apiCtx = await requireContext();
     const { abstractId } = await ctx.params;
     const existing = await loadOwnSubmission(apiCtx, abstractId);
-
-    if (!isEditableStatus(existing.status)) {
-      throw new ApiError(
-        409,
-        "ABSTRACT_LOCKED",
-        lockReasonFor(existing.status) ?? "This submission can no longer be edited.",
-      );
-    }
-
     const patch = await parseBody(req, speakerSubmissionPatchSchema);
-    const form = existing.formConfig;
 
     // W1: self-withdraw. Status-only, so it skips content validation entirely —
     // a speaker must be able to pull an incomplete proposal. Runs under the same
     // per-abstract advisory lock as decisions and conversion, so it cannot
     // interleave with an admin accepting the talk between check and write.
     if (patch.status === "WITHDRAWN") {
-      const refusal = withdrawRefusal(existing.status, Boolean(existing.session));
-      if (refusal) throw new ApiError(409, refusal.code, refusal.message);
-
       const withdrawn = await prisma.$transaction(async (tx) => {
         await lockAbstractForWrite(tx, existing.id);
         const fresh = await tx.abstract.findUniqueOrThrow({
@@ -164,92 +151,38 @@ export function PATCH(req: Request, ctx: Params) {
       return ok(await submissionPayload(withdrawn));
     }
 
-    // A converted abstract's roster was copied onto the confirmed Session, so
-    // changing it here would leave the two records disagreeing. This pre-check
-    // gives a fast, friendly failure; the authoritative re-check runs inside
-    // the locked transaction below.
-    const rosterEdit =
-      patch.speakers !== undefined &&
-      rosterChanged(
-        existing.speakers.map((s) => ({ email: s.user.email, isPrimary: s.isPrimary })),
-        patch.speakers,
-      );
-    if (rosterEdit && existing.session) {
-      throw new ApiError(
-        409,
-        "SPEAKERS_LOCKED",
-        "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
-      );
-    }
-
-    const primary = patch.speakers
-      ? (patch.speakers.find((s) => s.isPrimary) ?? patch.speakers[0])
-      : null;
-    if (patch.speakers && !primary) {
-      throw new ApiError(422, "NO_PRIMARY_SPEAKER", "A primary speaker is required.");
-    }
-
-    if (patch.categoryId) {
-      const category = await prisma.category.findUnique({ where: { id: patch.categoryId } });
-      if (!category || category.eventId !== existing.eventId) {
-        throw new ApiError(422, "INVALID_CATEGORY", "Selected category is not valid for this event.");
-      }
-    }
-
-    const knownKeys = new Set(form.fields.map((f) => f.key));
-    const stored = answersByKey(existing.answers, form.fields);
-    const merged = mergeAnswers(stored, patch.answers as Record<string, FormAnswerValue>, knownKeys);
-
-    // A DRAFT is incomplete by definition, so draft edits skip content rules
-    // exactly like a public draft save does. Everything already submitted must
-    // stay valid against the form it was submitted to.
-    if (existing.status !== "DRAFT") {
-      const spec: FormSpec = {
-        published: form.published,
-        opensAt: form.opensAt,
-        closesAt: form.closesAt,
-        minSpeakers: form.minSpeakers,
-        maxSpeakers: form.maxSpeakers,
-        maxBioLength: form.maxBioLength,
-        fields: toFormFieldSpecs(form.fields),
-      };
-      const error = validateSubmissionContent(spec, {
-        speakerCount: patch.speakers ? patch.speakers.length : existing.speakers.length,
-        answers: merged,
-        answerKeysToValidate: Object.keys(patch.answers ?? {}),
-      });
-      if (error) return fail(422, error.code, error.message, error.fieldErrors);
-    }
-
-    const fieldByKey = new Map(form.fields.map((f) => [f.key, f]));
-
     const saved = await prisma.$transaction(async (tx) => {
-      // Serialize against concurrent decisions and conversion, then re-read the
-      // row: the pre-transaction status/session checks could otherwise go
-      // stale between read and write (e.g. an admin rejects or converts this
-      // abstract mid-request) and commit an edit against a terminal record.
-      await lockAbstractForWrite(tx, existing.id);
-      const formIsCurrent = await lockFormFieldsForAnswerWrite(
-        tx,
-        new Map([[form.id, form.fields]]),
-      );
-      if (!formIsCurrent) {
+      // LOCK-ORDER-v1: FormConfig, sorted current FormFields, then Abstract.
+      // The earlier load supplies only immutable lock locators; every mutable
+      // authority, form, session, roster, answer, and status fact is re-read
+      // below after the final lock.
+      const locks = await lockSpeakerContentWrite(tx, {
+        formConfigId: existing.formConfigId,
+        abstractId: existing.id,
+      });
+      if (!locks) {
         throw new ApiError(
           409,
           "FORM_CHANGED",
           "This form changed while your proposal was being saved. Review the latest questions and try again.",
         );
       }
-      const fresh = await tx.abstract.findUniqueOrThrow({
+      const fresh = await tx.abstract.findUnique({
         where: { id: existing.id },
-        select: {
-          status: true,
-          session: { select: { id: true } },
-          speakers: { select: { userId: true } },
-        },
+        include: submissionInclude,
       });
-      // Re-verify membership after the lock: a serialized earlier edit may
-      // have removed this caller from the roster, revoking their access.
+      if (!fresh || fresh.eventId !== apiCtx.eventId) {
+        throw new ApiError(404, "ABSTRACT_NOT_FOUND", "We couldn't find that submission.");
+      }
+      if (fresh.formConfigId !== locks.form.id || locks.form.eventId !== fresh.eventId) {
+        throw new ApiError(
+          409,
+          "FORM_CHANGED",
+          "This form changed while your proposal was being saved. Review the latest questions and try again.",
+        );
+      }
+      // Re-verify membership after the final lock: a serialized earlier roster
+      // edit may have removed this caller from the submission.
       if (!isAbstractSpeaker(apiCtx.userId, fresh.speakers)) {
         throw new ApiError(403, "NOT_YOUR_SUBMISSION", "You are not a speaker on this submission.");
       }
@@ -260,6 +193,12 @@ export function PATCH(req: Request, ctx: Params) {
           lockReasonFor(fresh.status) ?? "This submission can no longer be edited.",
         );
       }
+      const rosterEdit =
+        patch.speakers !== undefined &&
+        rosterChanged(
+          fresh.speakers.map((speaker) => ({ email: speaker.user.email, isPrimary: speaker.isPrimary })),
+          patch.speakers,
+        );
       if (rosterEdit && fresh.session) {
         throw new ApiError(
           409,
@@ -267,9 +206,48 @@ export function PATCH(req: Request, ctx: Params) {
           "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
         );
       }
+      const primary = patch.speakers
+        ? (patch.speakers.find((speaker) => speaker.isPrimary) ?? patch.speakers[0])
+        : null;
+      if (patch.speakers && !primary) {
+        throw new ApiError(422, "NO_PRIMARY_SPEAKER", "A primary speaker is required.");
+      }
+      if (patch.categoryId) {
+        const category = await tx.category.findUnique({ where: { id: patch.categoryId } });
+        if (!category || category.eventId !== fresh.eventId) {
+          throw new ApiError(422, "INVALID_CATEGORY", "Selected category is not valid for this event.");
+        }
+      }
+
+      const knownKeys = new Set(locks.fields.map((field) => field.key));
+      const stored = answersByKey(fresh.answers, locks.fields);
+      const merged = mergeAnswers(stored, patch.answers as Record<string, FormAnswerValue>, knownKeys);
+
+      // A DRAFT is incomplete by definition, so draft edits skip content rules
+      // exactly like a public draft save does. Every submitted status validates
+      // against the current FormConfig and field rows held above.
+      if (fresh.status !== "DRAFT") {
+        const spec: FormSpec = {
+          published: locks.form.published,
+          opensAt: locks.form.opensAt,
+          closesAt: locks.form.closesAt,
+          minSpeakers: locks.form.minSpeakers,
+          maxSpeakers: locks.form.maxSpeakers,
+          maxBioLength: locks.form.maxBioLength,
+          fields: toFormFieldSpecs(locks.fields),
+        };
+        const error = validateSubmissionContent(spec, {
+          speakerCount: patch.speakers ? patch.speakers.length : fresh.speakers.length,
+          answers: merged,
+          answerKeysToValidate: Object.keys(patch.answers ?? {}),
+        });
+        if (error) throw new ApiError(422, error.code, error.message, error.fieldErrors);
+      }
+
+      const fieldByKey = new Map(locks.fields.map((field) => [field.key, field]));
 
       await tx.abstract.update({
-        where: { id: existing.id },
+        where: { id: fresh.id },
         data: {
           // `status`, `submittedAt`, `decidedAt`, `submitterId`, and the form
           // link are deliberately absent: an edit never changes the record's
@@ -299,14 +277,14 @@ export function PATCH(req: Request, ctx: Params) {
         );
         const keepUserIds = speakerUsers.map((u) => u.id);
         await tx.abstractSpeaker.deleteMany({
-          where: { abstractId: existing.id, userId: { notIn: keepUserIds } },
+          where: { abstractId: fresh.id, userId: { notIn: keepUserIds } },
         });
         for (let i = 0; i < patch.speakers.length; i++) {
           const isPrimary = patch.speakers[i] === primary;
           await tx.abstractSpeaker.upsert({
-            where: { abstractId_userId: { abstractId: existing.id, userId: speakerUsers[i].id } },
+            where: { abstractId_userId: { abstractId: fresh.id, userId: speakerUsers[i].id } },
             update: { isPrimary },
-            create: { abstractId: existing.id, userId: speakerUsers[i].id, isPrimary },
+            create: { abstractId: fresh.id, userId: speakerUsers[i].id, isPrimary },
           });
         }
       }
@@ -318,14 +296,14 @@ export function PATCH(req: Request, ctx: Params) {
         const stored =
           value === null ? Prisma.JsonNull : (value as Prisma.InputJsonValue);
         await tx.formAnswer.upsert({
-          where: { abstractId_formFieldId: { abstractId: existing.id, formFieldId: field.id } },
+          where: { abstractId_formFieldId: { abstractId: fresh.id, formFieldId: field.id } },
           update: { value: stored },
-          create: { abstractId: existing.id, formFieldId: field.id, value: stored },
+          create: { abstractId: fresh.id, formFieldId: field.id, value: stored },
         });
       }
 
       return tx.abstract.findUniqueOrThrow({
-        where: { id: existing.id },
+        where: { id: fresh.id },
         include: submissionInclude,
       });
     });
