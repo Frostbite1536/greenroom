@@ -34,6 +34,69 @@ export type PublishedPublicForm = Prisma.FormConfigGetPayload<{
 
 export type LegacyPublicFormCandidate = PublicFormScope;
 
+type ResolverEvent = { id: string };
+
+type LegacyExactPublicForm = {
+  published: boolean;
+  slug: string;
+  event: { slug: string };
+};
+
+type LegacySlugPublicForm = {
+  slug: string;
+  event: { slug: string };
+};
+
+/**
+ * Small typed data seam for public-form resolution. Production delegates to
+ * Prisma below; tests can execute the resolver against a behavioral fake
+ * without opening a database connection.
+ */
+export type PublicFormResolverClient = {
+  findEventBySlug(eventSlug: string): Promise<ResolverEvent | null>;
+  findEventOwnedFormBySlug(input: {
+    eventId: string;
+    formSlug: string;
+  }): Promise<PublishedPublicForm | null>;
+  findLegacyFormById(formId: string): Promise<LegacyExactPublicForm | null>;
+  findPublishedFormsBySlug(formSlug: string, take: 2): Promise<readonly LegacySlugPublicForm[]>;
+};
+
+const prismaPublicFormResolverClient: PublicFormResolverClient = {
+  async findEventBySlug(eventSlug) {
+    return prisma.event.findUnique({
+      where: { slug: eventSlug },
+      select: { id: true },
+    });
+  },
+  async findEventOwnedFormBySlug({ eventId, formSlug }) {
+    return prisma.formConfig.findUnique({
+      where: { eventId_slug: { eventId, slug: formSlug } },
+      include: publicFormInclude,
+    });
+  },
+  async findLegacyFormById(formId) {
+    return prisma.formConfig.findUnique({
+      where: { id: formId },
+      select: {
+        published: true,
+        slug: true,
+        event: { select: { slug: true } },
+      },
+    });
+  },
+  async findPublishedFormsBySlug(formSlug, take) {
+    return prisma.formConfig.findMany({
+      where: { slug: formSlug, published: true },
+      select: {
+        slug: true,
+        event: { select: { slug: true } },
+      },
+      take,
+    });
+  },
+};
+
 function encodePathSegment(value: string): string {
   return encodeURIComponent(value);
 }
@@ -54,17 +117,12 @@ export function canonicalPublicFormApiPath(scope: PublicFormScope): string {
  */
 export async function resolvePublishedPublicForm(
   scope: PublicFormScope,
+  client: PublicFormResolverClient = prismaPublicFormResolverClient,
 ): Promise<PublishedPublicForm | null> {
-  const event = await prisma.event.findUnique({
-    where: { slug: scope.eventSlug },
-    select: { id: true },
-  });
+  const event = await client.findEventBySlug(scope.eventSlug);
   if (!event) return null;
 
-  const form = await prisma.formConfig.findUnique({
-    where: { eventId_slug: { eventId: event.id, slug: scope.formSlug } },
-    include: publicFormInclude,
-  });
+  const form = await client.findEventOwnedFormBySlug({ eventId: event.id, formSlug: scope.formSlug });
   return form?.published ? form : null;
 }
 
@@ -89,15 +147,9 @@ export function selectLegacyPublicFormScope(args: {
  */
 export async function resolveLegacyPublishedPublicForm(
   legacyFormIdOrSlug: string,
+  client: PublicFormResolverClient = prismaPublicFormResolverClient,
 ): Promise<LegacyPublicFormCandidate | null> {
-  const exact = await prisma.formConfig.findUnique({
-    where: { id: legacyFormIdOrSlug },
-    select: {
-      published: true,
-      slug: true,
-      event: { select: { slug: true } },
-    },
-  });
+  const exact = await client.findLegacyFormById(legacyFormIdOrSlug);
 
   // An ID-shaped existing form has ID precedence even when unpublished: do
   // not reinterpret it as a potentially unrelated legacy slug.
@@ -107,14 +159,7 @@ export async function resolveLegacyPublishedPublicForm(
       : null;
   }
 
-  const slugMatches = await prisma.formConfig.findMany({
-    where: { slug: legacyFormIdOrSlug, published: true },
-    select: {
-      slug: true,
-      event: { select: { slug: true } },
-    },
-    take: 2,
-  });
+  const slugMatches = await client.findPublishedFormsBySlug(legacyFormIdOrSlug, 2);
   return selectLegacyPublicFormScope({
     exactId: null,
     slugMatches: slugMatches.map((form) => ({ eventSlug: form.event.slug, formSlug: form.slug })),
