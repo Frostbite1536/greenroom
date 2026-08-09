@@ -73,13 +73,14 @@ the current merged tree and should be documented only after it lands.
 
 ## Product decision: one track per submission
 
-A CFP form can offer several track options, but each submitted abstract stores
-one selected category/track. This is a deliberate product call, not an
-unadvertised many-to-many capability: it keeps reviewer routing and programme
-placement unambiguous. The organizer clarification recorded in
-`REQUIREMENTS-AUDIT-2026-08-08.md`, Partials #5, line 116 — “single form w one
-or more track options is great” — supports the form design. It does not change
-the fact that a single submission has one chosen track.
+A CFP form can offer several track options, but each submitted `Abstract`
+stores one selected `Category` for CFP track routing to the appropriate review
+team. This is a deliberate product call, not an unadvertised many-to-many
+capability. The later agenda `Track` is a separate `ScheduleSlot` placement
+choice; it is not the submission's selected `Category`. The organizer
+clarification in `REQUIREMENTS-DELTA-2026-08-08.md`, Q&A #1 — “single form w
+one or more track options is great” — supports the form design. It does not
+change the fact that a single submission has one chosen Category.
 
 ## Reimbursement evidence
 
