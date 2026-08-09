@@ -17,7 +17,7 @@ function windowLabel(form: { closesAt: string | null; isOpen: boolean; published
 }
 
 export default async function FormsPage() {
-  const { eventId, forms } = await getFormsList();
+  const { eventId, eventSlug, forms } = await getFormsList();
   const published = forms.filter((f) => f.published).length;
   const totalSubs = forms.reduce((n, f) => n + f.submissionCount, 0);
 
@@ -27,7 +27,7 @@ export default async function FormsPage() {
         eyebrow="Collect & review"
         title="Submission Forms"
         description="Collect abstract, session, and participant information with conditional logic and category-based routing."
-        actions={<NewFormDialog eventId={eventId} existingSlugs={forms.map((f) => f.slug)} />}
+        actions={<NewFormDialog eventId={eventId} eventSlug={eventSlug} existingSlugs={forms.map((f) => f.slug)} />}
       />
 
       <div className="metric-grid">

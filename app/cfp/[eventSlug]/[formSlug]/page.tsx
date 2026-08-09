@@ -5,19 +5,17 @@ import { getPublicForm } from "@/lib/data/reads";
 
 export const dynamic = "force-dynamic";
 
-export async function generateMetadata({ params }: { params: Promise<{ formId: string }> }) {
-  const { formId } = await params;
-  const form = await getPublicForm(formId);
+type Params = Promise<{ eventSlug: string; formSlug: string }>;
+
+export async function generateMetadata({ params }: { params: Params }) {
+  const { eventSlug, formSlug } = await params;
+  const form = await getPublicForm(eventSlug, formSlug);
   return { title: form ? `${form.name} · ${form.eventName}` : "Submit a proposal" };
 }
 
-export default async function PublicCfpPage({
-  params,
-}: {
-  params: Promise<{ formId: string }>;
-}) {
-  const { formId } = await params;
-  const form = await getPublicForm(formId);
+export default async function CanonicalPublicCfpPage({ params }: { params: Params }) {
+  const { eventSlug, formSlug } = await params;
+  const form = await getPublicForm(eventSlug, formSlug);
   if (!form) notFound();
 
   const closesAt = form.closesAt ? new Date(form.closesAt) : null;
