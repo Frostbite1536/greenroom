@@ -2,9 +2,10 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarPlus, EyeOff, FileStack, Search, Star, X } from "lucide-react";
-import type { AbstractRow } from "@/lib/data/reads";
+import { useRouter, useSearchParams } from "next/navigation";
+import { AlertTriangle, CalendarPlus, FileStack, Search, X } from "lucide-react";
+import type { AbstractRow, AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/data/reads";
+import { formatDecisionScore } from "@/lib/decision-summary-display";
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
@@ -64,6 +65,7 @@ export function AbstractsTable({
   initialChanging = false,
   total = abstracts.length,
   hasMore = false,
+  decisionSummary,
 }: {
   abstracts: AbstractRow[];
   /** A valid older deep-link target, intentionally separate from the newest table page. */
@@ -72,7 +74,10 @@ export function AbstractsTable({
   initialChanging?: boolean;
   total?: number;
   hasMore?: boolean;
+  decisionSummary: AdminDecisionSummary;
 }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
@@ -102,6 +107,14 @@ export function AbstractsTable({
     ?? (selectedId === initialSelectedAbstract?.id ? initialSelectedAbstract : null);
   const loadedLabel = "loaded proposals";
 
+  function changeDecisionPlan(planId: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (planId) params.set("planId", planId);
+    else params.delete("planId");
+    const query = params.toString();
+    router.push(query ? `/admin/abstracts?${query}` : "/admin/abstracts");
+  }
+
   return (
     <div className="card">
       {warning ? (
@@ -123,6 +136,7 @@ export function AbstractsTable({
       ) : null}
 
       <div style={{ padding: "6px 8px 0" }}>
+        <DecisionRoundControl decisionSummary={decisionSummary} onChange={changeDecisionPlan} />
         <div className="tabs" role="group" aria-label={`Status filter for ${loadedLabel}`}>
           {TABS.map((t) => (
             <button
@@ -177,8 +191,8 @@ export function AbstractsTable({
                 <th>Title</th>
                 <th>Category</th>
                 <th>Speakers</th>
-                <th>Reviews</th>
-                <th>Score</th>
+                <th>Decision reviews</th>
+                <th>Decision score</th>
                 <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
@@ -205,28 +219,22 @@ export function AbstractsTable({
                     </td>
                     <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                     <td>
-                      {a.identityHidden ? (
-                        <span className="muted row" style={{ gap: 5 }}>
-                          <EyeOff size={12} aria-hidden="true" /> Profiles hidden — blind review
-                        </span>
-                      ) : (
-                        <>
-                          {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
-                          {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
-                        </>
-                      )}
+                      {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
+                      {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
                     </td>
                     <td>
-                      {a.reviewsTotal > 0 ? `${a.reviewsComplete}/${a.reviewsTotal}` : <span className="muted">—</span>}
+                      <DecisionReviewCount
+                        summary={a.decisionSummary}
+                        selectedPlan={decisionSummary.selectedPlan}
+                        selectionRequired={decisionSummary.selectionRequired}
+                      />
                     </td>
                     <td>
-                      {a.avgScore !== null ? (
-                        <span className="row" style={{ gap: 4 }}>
-                          <Star size={13} fill="#e8a13a" color="#e8a13a" /> {a.avgScore.toFixed(1)}
-                        </span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
+                      <DecisionScoreCell
+                        summary={a.decisionSummary}
+                        selectedPlan={decisionSummary.selectedPlan}
+                        selectionRequired={decisionSummary.selectionRequired}
+                      />
                     </td>
                     <td>
                       <button
@@ -252,6 +260,9 @@ export function AbstractsTable({
         <AbstractDrawer
           abstract={selected}
           initialChanging={selectedId === initialSelectedId && initialChanging}
+          decisionSummary={selected.decisionSummary}
+          selectedPlan={decisionSummary.selectedPlan}
+          selectionRequired={decisionSummary.selectionRequired}
           onClose={() => setSelectedId(null)}
           onProgrammeWarning={setWarning}
         />
@@ -260,14 +271,110 @@ export function AbstractsTable({
   );
 }
 
+function planLabel(plan: AdminDecisionSummary["plans"][number]) {
+  return `Round ${plan.ordinal} — ${plan.name}`;
+}
+
+function DecisionRoundControl({
+  decisionSummary,
+  onChange,
+}: {
+  decisionSummary: AdminDecisionSummary;
+  onChange: (planId: string) => void;
+}) {
+  const headingId = "decision-round-heading";
+  const helpId = "decision-round-help";
+  const { plans, selectedPlan, selectionRequired } = decisionSummary;
+
+  if (plans.length === 0) {
+    return (
+      <section className="setup-note" aria-labelledby={headingId} role="status" style={{ margin: "8px 0 12px" }}>
+        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>No decision round available</h2>
+        <p className="hint" style={{ margin: 0 }}>Create a review round before using scores to inform a decision.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="table-toolbar" aria-labelledby={headingId} style={{ margin: "8px 0 12px" }}>
+      <div>
+        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>
+          {selectionRequired ? "Choose a decision round" : "Decision round"}
+        </h2>
+        <p className="hint" id={helpId} style={{ margin: 0 }}>
+          {selectionRequired
+            ? "This event has multiple review rounds. Choose one before using review scores to inform a decision."
+            : "Decision scores include only valid, completed reviews from this round."}
+        </p>
+      </div>
+      <label className="field-label" htmlFor="decision-round-select">
+        <span className="sr-only">Decision round</span>
+        <select
+          id="decision-round-select"
+          className="text-input"
+          value={selectedPlan?.id ?? ""}
+          onChange={(event) => onChange(event.target.value)}
+          aria-describedby={helpId}
+        >
+          {selectionRequired ? <option value="">Choose a round</option> : null}
+          {plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan)}</option>)}
+        </select>
+      </label>
+    </section>
+  );
+}
+
+function DecisionScoreCell({
+  summary,
+  selectedPlan,
+  selectionRequired,
+}: {
+  summary: AdminDecisionAbstractSummary | null;
+  selectedPlan: AdminDecisionSummary["selectedPlan"];
+  selectionRequired: boolean;
+}) {
+  if (!selectedPlan) {
+    return <span className="muted">{selectionRequired ? "Choose a round" : "No review round"}</span>;
+  }
+  const score = formatDecisionScore(summary?.weightedAverage ?? null);
+  if (score === null) return <span className="muted">No included reviews</span>;
+  return (
+    <>
+      <strong>{score}</strong>
+      <div className="cell-sub">{summary?.includedReviews ?? 0}/{summary?.completedAssignments ?? 0} completed reviews included</div>
+    </>
+  );
+}
+
+function DecisionReviewCount({
+  summary,
+  selectedPlan,
+  selectionRequired,
+}: {
+  summary: AdminDecisionAbstractSummary | null;
+  selectedPlan: AdminDecisionSummary["selectedPlan"];
+  selectionRequired: boolean;
+}) {
+  if (!selectedPlan) {
+    return <span className="muted">{selectionRequired ? "Choose a round" : "No review round"}</span>;
+  }
+  return <span>{summary?.includedReviews ?? 0}/{summary?.completedAssignments ?? 0} included</span>;
+}
+
 function AbstractDrawer({
   abstract,
   initialChanging,
+  decisionSummary,
+  selectedPlan,
+  selectionRequired,
   onClose,
   onProgrammeWarning,
 }: {
   abstract: AbstractRow;
   initialChanging: boolean;
+  decisionSummary: AdminDecisionAbstractSummary | null;
+  selectedPlan: AdminDecisionSummary["selectedPlan"];
+  selectionRequired: boolean;
   onClose: () => void;
   onProgrammeWarning: (warning: ProgrammeWarning) => void;
 }) {
@@ -381,14 +488,8 @@ function AbstractDrawer({
           <div className="kv"><span>Duration</span><span>{abstract.durationMinutes ? `${abstract.durationMinutes} min` : "—"}</span></div>
           <div className="kv">
             <span>Speakers</span>
-            <span>
-              {abstract.identityHidden
-                ? "Speaker profiles hidden for blind review. Proposal text may still identify a speaker."
-                : abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}
-            </span>
+            <span>{abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}</span>
           </div>
-          <div className="kv"><span>Reviews</span><span>{abstract.reviewsTotal > 0 ? `${abstract.reviewsComplete}/${abstract.reviewsTotal} complete` : "Not assigned"}</span></div>
-          <div className="kv"><span>Avg score</span><span>{abstract.avgScore !== null ? abstract.avgScore.toFixed(2) : "Not scored"}</span></div>
           <div className="kv"><span>Submitted</span><span>{abstract.submittedAt ? new Date(abstract.submittedAt).toLocaleString() : "—"}</span></div>
           <div className="kv">
             <span>Programme</span>
@@ -403,6 +504,13 @@ function AbstractDrawer({
             </span>
           </div>
         </div>
+
+        <DecisionSummaryDetails
+          summary={decisionSummary}
+          selectedPlan={selectedPlan}
+          selectionRequired={selectionRequired}
+          abstractId={abstract.id}
+        />
 
         <OrganizerReviewNotes id={abstract.id} reviewComments={abstract.reviewComments} />
         <SubmissionAnswers abstract={abstract} />
@@ -469,6 +577,40 @@ function AbstractDrawer({
  * evaluators, so this component never receives hidden identities, scores, or
  * criterion labels to conceal in the browser.
  */
+function DecisionSummaryDetails({
+  summary,
+  selectedPlan,
+  selectionRequired,
+  abstractId,
+}: {
+  summary: AdminDecisionAbstractSummary | null;
+  selectedPlan: AdminDecisionSummary["selectedPlan"];
+  selectionRequired: boolean;
+  abstractId: string;
+}) {
+  const headingId = `decision-summary-heading-${abstractId}`;
+  const score = formatDecisionScore(summary?.weightedAverage ?? null);
+
+  return (
+    <section aria-labelledby={headingId} style={{ marginTop: 18 }}>
+      <h3 id={headingId} style={{ fontSize: 13, margin: "0 0 8px" }}>Decision summary</h3>
+      {!selectedPlan ? (
+        <p className="hint" style={{ margin: 0 }}>
+          {selectionRequired
+            ? "Choose a decision round to see completed review results for this proposal."
+            : "No review round is available for a decision score."}
+        </p>
+      ) : (
+        <dl className="detail-drawer">
+          <div className="kv"><dt>Decision round</dt><dd>{planLabel(selectedPlan)}</dd></div>
+          <div className="kv"><dt>Decision score</dt><dd>{score ?? "No included reviews"}</dd></div>
+          <div className="kv"><dt>Included reviews</dt><dd>{summary?.includedReviews ?? 0} of {summary?.completedAssignments ?? 0} completed</dd></div>
+        </dl>
+      )}
+    </section>
+  );
+}
+
 function OrganizerReviewNotes({ id, reviewComments }: Pick<AbstractRow, "id" | "reviewComments">) {
   if (!reviewComments || reviewComments.length === 0) return null;
   const headingId = `review-notes-heading-${id}`;
@@ -516,11 +658,7 @@ function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
         ) : null}
       </h3>
 
-      {abstract.answersHidden ? (
-        <p className="hint">
-          Form answers are available to event admins. Reviewers use their assigned review queue.
-        </p>
-      ) : abstract.answersUnavailable ? (
+      {abstract.answersUnavailable ? (
         <p className="hint">
           This proposal has too many answers to load safely in this view. Its answers are unavailable rather than partially shown.
         </p>

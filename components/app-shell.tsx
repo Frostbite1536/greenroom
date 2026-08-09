@@ -44,7 +44,7 @@ const EVERYONE: Role[] = ["ADMIN", "EVALUATOR", "SPEAKER"];
  */
 const navigation: { href: string; label: string; icon: typeof FileText; roles: Role[] }[] = [
   { href: "/admin/forms", label: "CFP forms", icon: FileText, roles: ["ADMIN"] },
-  { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN", "EVALUATOR"] },
+  { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN"] },
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"] },
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard, roles: ["ADMIN"] },
   { href: "/admin/speakers", label: "Speaker onboarding", icon: UserCheck, roles: ["ADMIN"] },

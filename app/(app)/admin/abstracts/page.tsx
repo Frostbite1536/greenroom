@@ -1,7 +1,10 @@
 import "@/components/feature.css";
+import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { AbstractsTable } from "@/components/abstracts-table";
 import { getAdminAbstracts } from "@/lib/data/reads";
+import { getApiContext } from "@/lib/api/context";
+import { ApiError } from "@/lib/api/http";
 
 export const metadata = { title: "Abstracts" };
 export const dynamic = "force-dynamic";
@@ -9,16 +12,36 @@ export const dynamic = "force-dynamic";
 export default async function AbstractsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ abstractId?: string | string[]; mode?: string | string[] }>;
+  searchParams: Promise<{ abstractId?: string | string[]; mode?: string | string[]; planId?: string | string[] }>;
 }) {
-  const params = await searchParams;
+  // Resolve the persisted role before starting the proposal read. An evaluator
+  // belongs only in the assignment-scoped workspace; redirecting here means
+  // the global pipeline never serializes a proposal row into their response.
+  const paramsPromise = searchParams;
+  const ctx = await getApiContext();
+  if (!ctx) redirect("/login");
+  if (ctx.role === "EVALUATOR") redirect("/admin/evaluations");
+  if (ctx.role !== "ADMIN") redirect("/login");
+
+  const params = await paramsPromise;
   // A selected proposal is a useful review deep link and lets the server render
   // the accessible drawer from the first response. Never trust the URL alone:
   // it must name an abstract already scoped by getAdminAbstracts(). Older
   // proposals are intentionally outside the newest bounded table page, but a
   // valid event-scoped deep link still gets its own drawer record.
   const requestedId = typeof params.abstractId === "string" ? params.abstractId : null;
-  const { abstracts, selectedAbstract, total, hasMore, metrics } = await getAdminAbstracts(requestedId);
+  const requestedPlanId = typeof params.planId === "string" ? params.planId : null;
+  const view = await (async () => {
+    try {
+      return await getAdminAbstracts(requestedId, requestedPlanId);
+    } catch (error) {
+      // The summary service scopes explicit plan ids to this event. Turn its
+      // indistinguishable invalid/cross-event result into a route-level 404.
+      if (error instanceof ApiError && error.code === "PLAN_NOT_FOUND") notFound();
+      throw error;
+    }
+  })();
+  const { abstracts, selectedAbstract, total, hasMore, metrics, decisionSummary } = view;
   const initialSelectedId = requestedId && (selectedAbstract?.id === requestedId || abstracts.some((abstract) => abstract.id === requestedId))
     ? requestedId
     : null;
@@ -43,6 +66,7 @@ export default async function AbstractsPage({
         initialChanging={initialChanging}
         total={total}
         hasMore={hasMore}
+        decisionSummary={decisionSummary}
       />
     </section>
   );

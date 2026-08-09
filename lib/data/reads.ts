@@ -33,6 +33,12 @@ import {
   adminAbstractListWhere,
   toAdminAbstractListEnvelope,
 } from "@/lib/api/admin-abstract-list";
+import {
+  getAdminDecisionSummary,
+  type AdminDecisionAbstractSummary,
+  type AdminDecisionSummary,
+} from "@/lib/services/admin-decision-summary";
+export type { AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/services/admin-decision-summary";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
@@ -357,20 +363,11 @@ export type AbstractRow = {
   categoryName: string | null;
   formName: string;
   speakers: { name: string; isPrimary: boolean }[];
-  /**
-   * True when speaker profiles were withheld because the caller is an evaluator
-   * and the proposal is covered by a blind round. `speakers` is empty in that
-   * case — profile identity is never sent to the client, not just hidden.
-   */
-  identityHidden: boolean;
   submittedAt: string | null;
-  reviewsComplete: number;
-  reviewsTotal: number;
-  avgScore: number | null;
+  /** Server-computed only for the explicitly selected decision round. */
+  decisionSummary: AdminDecisionAbstractSummary | null;
   /** Custom CFP answers, in form order. Empty when the form had no extra questions. */
   answers: AnswerRow[];
-  /** True when answers are intentionally withheld from evaluator-facing reads. */
-  answersHidden: boolean;
   /**
    * True when this event has more stored answers than one page read will
    * materialize, so this row's answers were not loaded. Surfaced in the UI
@@ -384,12 +381,6 @@ export type AbstractRow = {
   sessionId: string | null;
   /** True when that talk also holds a schedule slot, i.e. it is on the public programme. */
   sessionScheduled: boolean;
-};
-
-type AssignmentProgressGroup = {
-  abstractId: string;
-  status: string;
-  _count: { _all: number };
 };
 
 type AbstractStatusCountGroup = {
@@ -412,28 +403,6 @@ export function summarizeAdminAbstractMetrics(groups: readonly AbstractStatusCou
   return { total, accepted, pending };
 }
 
-/** Keep a malformed aggregate value out of the RSC payload and score display. */
-export function toFiniteAverageScore(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-  try {
-    const score = Number(value);
-    return Number.isFinite(score) ? score : null;
-  } catch {
-    return null;
-  }
-}
-
-export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup[]) {
-  const progressByAbstract = new Map<string, { reviewsTotal: number; reviewsComplete: number }>();
-  for (const group of groups) {
-    const progress = progressByAbstract.get(group.abstractId) ?? { reviewsTotal: 0, reviewsComplete: 0 };
-    progress.reviewsTotal += group._count._all;
-    if (group.status === "COMPLETED") progress.reviewsComplete += group._count._all;
-    progressByAbstract.set(group.abstractId, progress);
-  }
-  return progressByAbstract;
-}
-
 export type AdminAbstractsView = {
   eventId: string;
   /** The newest bounded page only; client tabs/search intentionally apply here. */
@@ -443,6 +412,7 @@ export type AdminAbstractsView = {
   total: number;
   hasMore: boolean;
   metrics: { total: number; accepted: number; pending: number };
+  decisionSummary: AdminDecisionSummary;
 };
 
 const adminAbstractSelect = {
@@ -456,8 +426,8 @@ const adminAbstractSelect = {
   category: { select: { name: true } },
   formConfig: { select: { name: true } },
   speakers: {
-    // Email is not rendered on this surface, so it never enters the RSC
-    // payload for either admins or evaluators.
+    // Email is not needed for this organizer surface, so it never enters the
+    // RSC payload.
     select: { isPrimary: true, user: { select: { name: true } } },
   },
   // `scheduleSlot` tells the admin table whether the confirmed talk is
@@ -473,8 +443,11 @@ export const ADMIN_ABSTRACT_SNAPSHOT_OPTIONS = {
   isolationLevel: "RepeatableRead",
 } as const;
 
-export async function getAdminAbstracts(requestedAbstractId?: string | null): Promise<AdminAbstractsView> {
-  const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+export async function getAdminAbstracts(
+  requestedAbstractId?: string | null,
+  planId?: string | null,
+): Promise<AdminAbstractsView> {
+  const ctx = await pageContext(["ADMIN"]);
   const parentWhere = adminAbstractListWhere({ eventId: ctx.eventId });
 
   // The parent page, its global summary, and one optional deep link start
@@ -517,6 +490,10 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
   const materializedIds = materializedAbstracts.map((abstract) => abstract.id);
 
   if (materializedIds.length === 0) {
+    const decisionSummary = await getAdminDecisionSummary(ctx, {
+      abstractIds: materializedIds,
+      ...(planId ? { planId } : {}),
+    });
     return {
       eventId: ctx.eventId,
       abstracts: [],
@@ -524,6 +501,7 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
       total: newest.total,
       hasMore: newest.hasMore,
       metrics,
+      decisionSummary,
     };
   }
 
@@ -531,42 +509,32 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
   // Child collections are deliberately scoped to the at-most-100 newest rows
   // plus the one event-scoped drawer target. Nothing below scans a flooded
   // event-wide answer/review/assignment collection.
-  const answerCountsPromise = ctx.role === "ADMIN"
-    ? prisma.formAnswer.groupBy({
-        by: ["abstractId"],
-        where: childWhere,
-        _count: { _all: true },
-      })
-    : Promise.resolve([]);
-  const assignmentGroupsPromise = prisma.reviewAssignment.groupBy({
-    by: ["abstractId", "status"],
+  const answerCountsPromise = prisma.formAnswer.groupBy({
+    by: ["abstractId"],
     where: childWhere,
     _count: { _all: true },
   });
-  const scoreRowsPromise = prisma.reviewScore.groupBy({
-    by: ["abstractId"],
-    where: childWhere,
-    _avg: { score: true },
+  const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> = prisma.reviewScore.findMany({
+    where: { ...childWhere, comment: { not: null } },
+    orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
+    take: OPERATOR_QUERY_LIMITS.adminReviewComments + 1,
+    select: { abstractId: true, evaluatorId: true, rubricKey: true, comment: true },
   });
-  const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> =
-    ctx.role === "ADMIN"
-      ? prisma.reviewScore.findMany({
-          where: { ...childWhere, comment: { not: null } },
-          orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
-          take: OPERATOR_QUERY_LIMITS.adminReviewComments + 1,
-          select: { abstractId: true, evaluatorId: true, rubricKey: true, comment: true },
-        })
-      : Promise.resolve([]);
-  const blindRowsPromise = ctx.role === "EVALUATOR"
-    ? prisma.reviewAssignment.findMany({
-        where: { ...childWhere, plan: { eventId: ctx.eventId, isBlind: true } },
-        select: { abstractId: true },
-        distinct: ["abstractId"],
-      })
-    : Promise.resolve([]);
+  // Await the plan-scoped service alongside the independent bounded child
+  // reads. An invalid explicit plan id is therefore handled by the page's 404
+  // boundary immediately, never left to reject while an answer read is still
+  // in flight.
+  const [answerCounts, decisionSummary, reviewCommentRows] = await Promise.all([
+    answerCountsPromise,
+    getAdminDecisionSummary(ctx, {
+      abstractIds: materializedIds,
+      ...(planId ? { planId } : {}),
+    }),
+    reviewCommentRowsPromise,
+  ]);
 
-  const answerPlan = planAdminAnswerRead(materializedIds, await answerCountsPromise);
-  const answerRowsPromise: Promise<StoredAnswerProjection[]> = ctx.role === "ADMIN" && answerPlan.queryAbstractIds.length > 0
+  const answerPlan = planAdminAnswerRead(materializedIds, answerCounts);
+  const answerRowsPromise: Promise<StoredAnswerProjection[]> = answerPlan.queryAbstractIds.length > 0
     ? prisma.formAnswer.findMany({
         where: { abstractId: { in: answerPlan.queryAbstractIds } },
         orderBy: [
@@ -583,27 +551,16 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
       })
     : Promise.resolve([]);
 
-  const [assignmentGroups, scoreRows, reviewCommentRows, blindRows, answerRows] = await Promise.all([
-    assignmentGroupsPromise,
-    scoreRowsPromise,
-    reviewCommentRowsPromise,
-    blindRowsPromise,
-    answerRowsPromise,
-  ]);
+  const answerRows = await answerRowsPromise;
 
-  const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
-  const avgByAbstract = new Map(scoreRows.map((r) => [r.abstractId, r._avg.score]));
-  const blindCovered = new Set(blindRows.map((row) => row.abstractId));
   const answerIndex = indexAdminAnswers(
     answerRows,
     answerPlan.expectedAnswerCounts,
     answerPlan.unavailableAbstractIds,
   );
-  const reviewCommentsByAbstract = indexOrganizerReviewComments(ctx.role, reviewCommentRows);
+  const reviewCommentsByAbstract = indexOrganizerReviewComments("ADMIN", reviewCommentRows);
 
   const rowsById = new Map(materializedAbstracts.map((a) => {
-    const reviewProgress = assignmentProgressByAbstract.get(a.id) ?? { reviewsTotal: 0, reviewsComplete: 0 };
-    const avg = avgByAbstract.get(a.id);
     const row: AbstractRow = {
       id: a.id,
       title: a.title,
@@ -613,23 +570,15 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
       durationMinutes: a.durationMinutes,
       categoryName: a.category?.name ?? null,
       formName: a.formConfig.name,
-      speakers: blindCovered.has(a.id)
-        ? []
-        : a.speakers.map((s) => ({
-            name: s.user.name,
-            isPrimary: s.isPrimary,
-          })),
-      identityHidden: blindCovered.has(a.id),
+      speakers: a.speakers.map((s) => ({
+        name: s.user.name,
+        isPrimary: s.isPrimary,
+      })),
       submittedAt: a.submittedAt?.toISOString() ?? null,
-      reviewsComplete: reviewProgress.reviewsComplete,
-      reviewsTotal: reviewProgress.reviewsTotal,
-      avgScore: toFiniteAverageScore(avg),
+      decisionSummary: decisionSummary.summariesByAbstractId[a.id] ?? null,
       answers: answerIndex.byAbstract.get(a.id) ?? [],
-      answersHidden: ctx.role !== "ADMIN",
       answersUnavailable: answerIndex.unavailableAbstractIds.has(a.id),
-      ...(reviewCommentsByAbstract
-        ? { reviewComments: reviewCommentsByAbstract.get(a.id) ?? [] }
-        : {}),
+      reviewComments: reviewCommentsByAbstract?.get(a.id) ?? [],
       hasSession: a.session !== null,
       sessionId: a.session?.id ?? null,
       sessionScheduled: a.session?.scheduleSlot != null,
@@ -644,6 +593,7 @@ export async function getAdminAbstracts(requestedAbstractId?: string | null): Pr
     total: newest.total,
     hasMore: newest.hasMore,
     metrics,
+    decisionSummary,
   };
 }
 
