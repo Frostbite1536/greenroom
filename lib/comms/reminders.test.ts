@@ -78,3 +78,25 @@ test("calendar invitation uses RFC 5545 REQUEST semantics", () => {
     logicalEmailIdempotencyKey(dispatch(retriedInvite!.content), "Greenroom <hello@example.test>"),
   );
 });
+
+test("calendar invitation bytes are stable when database row order changes", () => {
+  const secondSession = {
+    id: "session-2",
+    title: "Difference Engines",
+    description: null,
+    startsAt: new Date("2026-05-12T10:00:00.000Z"),
+    endsAt: new Date("2026-05-12T10:30:00.000Z"),
+    roomName: "Hall B",
+    calendarUpdatedAt: new Date("2026-04-21T12:00:00.000Z"),
+  };
+  const forward = buildSpeakerCalendarInvite(
+    { ...speaker, sessions: [speaker.sessions[0], secondSession] },
+    "Forward 2026",
+  );
+  const reversed = buildSpeakerCalendarInvite(
+    { ...speaker, sessions: [secondSession, speaker.sessions[0]] },
+    "Forward 2026",
+  );
+  assert.equal(forward?.content, reversed?.content);
+  assert.ok(forward?.content.includes("DTSTAMP:20260421T120000Z"));
+});

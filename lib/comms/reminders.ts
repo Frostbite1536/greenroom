@@ -41,6 +41,16 @@ export type EligibleSpeaker = {
 
 export type RenderedEmail = { subject: string; html: string };
 
+/** Stable order for message variables and byte-identical calendar retries. */
+export function orderReminderSessions(sessions: ReminderSession[]): ReminderSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftStart = left.startsAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    const rightStart = right.startsAt?.getTime() ?? Number.MAX_SAFE_INTEGER;
+    if (leftStart !== rightStart) return leftStart - rightStart;
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  });
+}
+
 /**
  * Select event speakers without silently accepting ids from another event.
  * Routes turn `invalidUserIds` into a stable 422 response before dispatching.
@@ -96,7 +106,7 @@ export function buildSpeakerCalendarInvite(
   eventName: string,
   appUrl?: string,
 ): { filename: string; content: string } | null {
-  const scheduled = speaker.sessions
+  const scheduled = orderReminderSessions(speaker.sessions)
     .filter((session): session is ReminderSession & { startsAt: Date; endsAt: Date; roomName: string } =>
       Boolean(session.startsAt && session.endsAt && session.roomName),
     );

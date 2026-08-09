@@ -6,6 +6,7 @@ import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { canDeliverEmail, dispatchEmail } from "@/lib/comms/send";
 import {
   buildSpeakerCalendarInvite,
+  orderReminderSessions,
   reminderRequestSchema,
   renderEmailTemplate,
   selectEligibleSpeakers,
@@ -83,6 +84,9 @@ export const POST = handle(async (req) => {
       calendarUpdatedAt: row.session.scheduleSlot?.updatedAt ?? null,
     });
     grouped.set(row.user.id, existing);
+  }
+  for (const speaker of grouped.values()) {
+    speaker.sessions = orderReminderSessions(speaker.sessions);
   }
 
   const { recipients, invalidUserIds } = selectEligibleSpeakers([...grouped.values()], input.recipientUserIds);
