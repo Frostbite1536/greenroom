@@ -467,6 +467,11 @@ try {
   // lib/answer-display.test.ts.
   check("admin page ships select option labels for slug resolution",
     afterConvert.text.includes("Beginner"));
+  const evaluatorAbstracts = await req("GET", "/admin/abstracts", null, evaluator);
+  check("evaluator abstracts page withholds custom answer values",
+    !evaluatorAbstracts.text.includes("Three takeaways."));
+  check("evaluator abstracts page withholds custom field labels",
+    !evaluatorAbstracts.text.includes("Audience level") && !evaluatorAbstracts.text.includes("What will attendees learn?"));
 
   const placeConverted = await req("POST", "/api/agenda/slots", {
     eventId: EVENT_ID,

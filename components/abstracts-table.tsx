@@ -404,7 +404,11 @@ function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
         ) : null}
       </h3>
 
-      {abstract.answersUnavailable ? (
+      {abstract.answersHidden ? (
+        <p className="hint">
+          Form answers are available to event admins. Reviewers use their assigned review queue.
+        </p>
+      ) : abstract.answersUnavailable ? (
         <p className="hint">
           This event stores too many answers to load safely in this view. No partial answer set is shown.
         </p>

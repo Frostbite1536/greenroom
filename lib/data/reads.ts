@@ -248,6 +248,8 @@ export type AbstractRow = {
   avgScore: number | null;
   /** Custom CFP answers, in form order. Empty when the form had no extra questions. */
   answers: AnswerRow[];
+  /** True when answers are intentionally withheld from evaluator-facing reads. */
+  answersHidden: boolean;
   /**
    * True when this event has more stored answers than one page read will
    * materialize, so this row's answers were not loaded. Surfaced in the UI
@@ -280,6 +282,28 @@ export function indexAssignmentProgress(groups: readonly AssignmentProgressGroup
 
 export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts: AbstractRow[] }> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
+
+  // Custom answers can contain self-identifying free text. Until the C15 blind
+  // boundary can apply assignment-scoped field policy, only event admins may
+  // receive this payload. An empty result for an evaluator must not be confused
+  // with a proposal that genuinely has no saved answers.
+  const answerRowsPromise: Promise<StoredAnswerProjection[]> =
+    ctx.role === "ADMIN"
+      ? prisma.formAnswer.findMany({
+          where: { abstract: { eventId: ctx.eventId } },
+          orderBy: [
+            { abstractId: "asc" },
+            { formField: { sortOrder: "asc" } },
+            { formFieldId: "asc" },
+          ],
+          take: ADMIN_ANSWER_LIMIT + 1,
+          select: {
+            abstractId: true,
+            value: true,
+            formField: { select: { id: true, label: true, type: true, options: true } },
+          },
+        })
+      : Promise.resolve([]);
 
   const [abstracts, assignmentGroups, scoreRows, answerRows] = await Promise.all([
     prisma.abstract.findMany({
@@ -315,19 +339,9 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
       where: { abstract: { eventId: ctx.eventId } },
       _avg: { score: true },
     }),
-    // The drawer shows what the speaker actually answered. One bounded query for
-    // the whole event beats a per-abstract read when the drawer opens, and the
-    // deterministic ordering makes the truncation cut reproducible.
-    prisma.formAnswer.findMany({
-      where: { abstract: { eventId: ctx.eventId } },
-      orderBy: [{ abstractId: "asc" }, { formField: { sortOrder: "asc" } }, { formFieldId: "asc" }],
-      take: ADMIN_ANSWER_LIMIT + 1,
-      select: {
-        abstractId: true,
-        value: true,
-        formField: { select: { id: true, label: true, type: true, options: true } },
-      },
-    }),
+    // One bounded admin-only read for the whole event beats a per-drawer query;
+    // deterministic ordering makes the all-or-nothing cutoff reproducible.
+    answerRowsPromise,
   ]);
 
   const assignmentProgressByAbstract = indexAssignmentProgress(assignmentGroups);
@@ -361,6 +375,7 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
         answers: answerIndex.byAbstract.get(a.id) ?? [],
+        answersHidden: ctx.role !== "ADMIN",
         answersUnavailable: answerIndex.unavailable,
         hasSession: a.session !== null,
         sessionId: a.session?.id ?? null,
