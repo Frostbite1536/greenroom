@@ -9,8 +9,9 @@ export const PUBLIC_RATE_EXPIRED_BUCKET_CLEANUP_LIMIT = 100;
 
 export const PUBLIC_SUBMISSION_RATE_LIMITS = {
   writeIp: { scope: "public_write_ip_10m", limit: 20, windowMs: 10 * 60 * 1_000, order: 10 },
-  submitPrimaryEmail: { scope: "submit_primary_email_24h", limit: 3, windowMs: 24 * 60 * 60 * 1_000, order: 20 },
-  submitEvent: { scope: "submit_event_1h", limit: 60, windowMs: 60 * 60 * 1_000, order: 30 },
+  writeEvent: { scope: "public_write_event_1h", limit: 120, windowMs: 60 * 60 * 1_000, order: 20 },
+  submitPrimaryEmail: { scope: "submit_primary_email_24h", limit: 3, windowMs: 24 * 60 * 60 * 1_000, order: 30 },
+  submitEvent: { scope: "submit_event_1h", limit: 60, windowMs: 60 * 60 * 1_000, order: 40 },
 } as const;
 
 type RateRule = (typeof PUBLIC_SUBMISSION_RATE_LIMITS)[keyof typeof PUBLIC_SUBMISSION_RATE_LIMITS];
@@ -78,6 +79,9 @@ export function publicSubmissionRatePlan(input: {
   const now = input.now ?? new Date();
   const plans = [
     planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeIp, "ip", input.clientIp, now),
+    // This event-wide bucket applies to drafts as well as submits, so a client
+    // cannot bypass the public intake ceiling simply by rotating IP addresses.
+    planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent, "event", input.eventId, now),
   ];
   if (input.intent === "submit") {
     plans.push(

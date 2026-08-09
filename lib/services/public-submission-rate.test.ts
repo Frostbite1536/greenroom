@@ -19,10 +19,19 @@ test("public rate plans use the named limits and HMAC-only fingerprints", () => 
   const submit = publicSubmissionRatePlan({
     eventId: "event-1", intent: "submit", primaryEmail: "primary@example.test", clientIp: "203.0.113.10", secret, now,
   });
-  assert.equal(draft.length, 1);
-  assert.equal(submit.length, 3);
+  assert.deepEqual(draft.map((plan) => plan.scope), [
+    PUBLIC_SUBMISSION_RATE_LIMITS.writeIp.scope,
+    PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent.scope,
+  ]);
+  assert.deepEqual(submit.map((plan) => plan.scope), [
+    PUBLIC_SUBMISSION_RATE_LIMITS.writeIp.scope,
+    PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent.scope,
+    PUBLIC_SUBMISSION_RATE_LIMITS.submitPrimaryEmail.scope,
+    PUBLIC_SUBMISSION_RATE_LIMITS.submitEvent.scope,
+  ]);
   assert.deepEqual(submit.map((plan) => plan.limit), [
     PUBLIC_SUBMISSION_RATE_LIMITS.writeIp.limit,
+    PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent.limit,
     PUBLIC_SUBMISSION_RATE_LIMITS.submitPrimaryEmail.limit,
     PUBLIC_SUBMISSION_RATE_LIMITS.submitEvent.limit,
   ]);
@@ -42,12 +51,17 @@ test("public client IP accepts only one validated Vercel address and never parse
   assert.equal(publicClientIp(new Headers({ "x-vercel-forwarded-for": "203.0.113.10, 198.51.100.2" })), "unknown");
 });
 
-test("rate locks have stable broad scope order and the bucket mutation is atomic", () => {
+test("rate locks have exact IP, event, primary-email, then submit-event order and the bucket mutation is atomic", () => {
   const plans = publicSubmissionRatePlan({
     eventId: "event-1", intent: "submit", primaryEmail: "primary@example.test", clientIp: "unknown", secret, now,
   });
   const keys = publicSubmissionRateLockKeys("event-1", [...plans].reverse());
-  assert.deepEqual(keys, [...keys].sort());
+  assert.deepEqual(keys, [
+    "public-submission-rate:event-1:010:public_write_ip_10m",
+    "public-submission-rate:event-1:020:public_write_event_1h",
+    "public-submission-rate:event-1:030:submit_primary_email_24h",
+    "public-submission-rate:event-1:040:submit_event_1h",
+  ]);
   const source = readFileSync(new URL("./public-submission-rate.ts", import.meta.url), "utf8");
   assert.match(source, /INSERT INTO "PublicSubmissionRateBucket"[\s\S]*ON CONFLICT[\s\S]*"count" = "PublicSubmissionRateBucket"\."count" \+ 1[\s\S]*RETURNING "count"/);
   assert.match(source, /throw new ApiError\(429, "PUBLIC_SUBMISSION_RATE_LIMITED"/);

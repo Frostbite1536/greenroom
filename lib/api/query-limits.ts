@@ -19,6 +19,7 @@ export const OPERATOR_QUERY_LIMITS = {
   settingsRooms: 500,
   settingsTracks: 250,
   settingsCategories: 1_000,
+  adminAbstracts: 100,
   adminReviewComments: 5_000,
 } as const;
 
