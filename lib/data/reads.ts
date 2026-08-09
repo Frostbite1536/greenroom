@@ -783,3 +783,166 @@ export async function getEmbedTargets(): Promise<EmbedTargets> {
   ]);
   return { event, scheduledSessions, publicSpeakers };
 }
+
+// ---- Evaluation setup (admin) ---------------------------------------------
+
+export type SetupPlan = {
+  id: string;
+  name: string;
+  ordinal: number;
+  isBlind: boolean;
+  rubric: RubricCriterionView[];
+  assignmentCount: number;
+  completedCount: number;
+};
+
+export type SetupEvaluator = {
+  userId: string;
+  name: string;
+  role: UserRole;
+  /** Assignments in each plan, keyed by planId. */
+  loadByPlan: Record<string, number>;
+};
+
+export type SetupAbstract = {
+  id: string;
+  title: string;
+  status: AbstractStatus;
+  /** Mirrors the S5 write contract; terminal proposals remain coverage-only. */
+  assignable: boolean;
+  categoryId: string | null;
+  categoryName: string | null;
+  /** Routing team inherited from the abstract's category, if configured. */
+  defaultTeamKey: string | null;
+  /** Reviewers assigned in each plan, keyed by planId. */
+  assignedByPlan: Record<string, number>;
+  /** Completed reviews in each plan, keyed by planId. */
+  completedByPlan: Record<string, number>;
+};
+
+export type EvaluationSetupView = {
+  eventId: string;
+  plans: SetupPlan[];
+  evaluators: SetupEvaluator[];
+  abstracts: SetupAbstract[];
+  categories: { id: string; name: string; defaultTeamKey: string | null }[];
+  /** True when the event has categories but none carry a routing team. */
+  routingUnconfigured: boolean;
+};
+
+/**
+ * Everything the admin evaluation setup panel needs, in six event-scoped
+ * projection/aggregate queries.
+ *
+ * Assignment detail is read as aggregates rather than rows: the panel only ever
+ * needs "how many reviewers on this proposal" and "how loaded is this
+ * reviewer", and an event with 40 proposals x 5 reviewers x 3 rounds would
+ * otherwise materialize 600 rows to render two counts.
+ */
+export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
+  const ctx = await pageContext(["ADMIN"]);
+
+  const [plans, members, abstracts, categories, byAbstract, byEvaluator] = await Promise.all([
+    prisma.evaluationPlan.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { ordinal: "asc" },
+    }),
+    prisma.eventMember.findMany({
+      where: { eventId: ctx.eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
+      include: { user: { select: { id: true, name: true } } },
+      orderBy: { user: { name: "asc" } },
+    }),
+    prisma.abstract.findMany({
+      // DRAFTs are not submissions. Decisions remain visible for historical
+      // coverage, but `assignable` below keeps them out of the picker.
+      where: {
+        eventId: ctx.eventId,
+        status: { in: ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED"] },
+      },
+      orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        category: { select: { id: true, name: true, defaultTeamKey: true } },
+      },
+    }),
+    prisma.category.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, name: true, defaultTeamKey: true },
+    }),
+    prisma.reviewAssignment.groupBy({
+      by: ["planId", "abstractId", "status"],
+      where: { plan: { eventId: ctx.eventId } },
+      _count: { _all: true },
+    }),
+    prisma.reviewAssignment.groupBy({
+      by: ["planId", "evaluatorId"],
+      where: { plan: { eventId: ctx.eventId } },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const assignedByPlan = new Map<string, Record<string, number>>();
+  const completedByPlan = new Map<string, Record<string, number>>();
+  const planTotals = new Map<string, { assigned: number; completed: number }>();
+  for (const row of byAbstract) {
+    const n = row._count._all;
+    const assigned = assignedByPlan.get(row.abstractId) ?? {};
+    assigned[row.planId] = (assigned[row.planId] ?? 0) + n;
+    assignedByPlan.set(row.abstractId, assigned);
+
+    const totals = planTotals.get(row.planId) ?? { assigned: 0, completed: 0 };
+    totals.assigned += n;
+    if (row.status === "COMPLETED") {
+      totals.completed += n;
+      const completed = completedByPlan.get(row.abstractId) ?? {};
+      completed[row.planId] = (completed[row.planId] ?? 0) + n;
+      completedByPlan.set(row.abstractId, completed);
+    }
+    planTotals.set(row.planId, totals);
+  }
+
+  const loadByEvaluator = new Map<string, Record<string, number>>();
+  for (const row of byEvaluator) {
+    const load = loadByEvaluator.get(row.evaluatorId) ?? {};
+    load[row.planId] = row._count._all;
+    loadByEvaluator.set(row.evaluatorId, load);
+  }
+
+  return {
+    eventId: ctx.eventId,
+    plans: plans.map((p) => {
+      const totals = planTotals.get(p.id) ?? { assigned: 0, completed: 0 };
+      return {
+        id: p.id,
+        name: p.name,
+        ordinal: p.ordinal,
+        isBlind: p.isBlind,
+        rubric: Array.isArray(p.rubric) ? (p.rubric as unknown as RubricCriterionView[]) : [],
+        assignmentCount: totals.assigned,
+        completedCount: totals.completed,
+      };
+    }),
+    evaluators: members.map((m) => ({
+      userId: m.user.id,
+      name: m.user.name,
+      role: m.role,
+      loadByPlan: loadByEvaluator.get(m.user.id) ?? {},
+    })),
+    abstracts: abstracts.map((a) => ({
+      id: a.id,
+      title: a.title,
+      status: a.status,
+      assignable: a.status === "SUBMITTED" || a.status === "UNDER_REVIEW",
+      categoryId: a.category?.id ?? null,
+      categoryName: a.category?.name ?? null,
+      defaultTeamKey: a.category?.defaultTeamKey ?? null,
+      assignedByPlan: assignedByPlan.get(a.id) ?? {},
+      completedByPlan: completedByPlan.get(a.id) ?? {},
+    })),
+    categories,
+    routingUnconfigured: categories.length > 0 && categories.every((c) => !c.defaultTeamKey),
+  };
+}
