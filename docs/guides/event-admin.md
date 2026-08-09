@@ -47,12 +47,14 @@ point.
 
 ## 2. Read what came in
 
-**Abstracts** loads the newest 100 proposals for the event: submitted proposals are newest first,
-then drafts. When there are more, the page says exactly how many of the event total are loaded.
-Its filter chips (All / Submitted / Under review / Accepted / Declined / Drafts) and search box
-apply only to those loaded proposals; the summary metrics still cover the whole event. Select a
-row to read the proposal itself — title, description, form, category, session type and length,
-who is speaking, how many reviews are complete, and the score so far.
+**Abstracts** is the event-admin pipeline. Evaluators use their own assignment-scoped
+**Evaluations** workspace rather than this global proposal list. Abstracts loads the newest 100
+proposals for the event: submitted proposals are newest first, then drafts. When there are more,
+the page says exactly how many of the event total are loaded. Its filter chips (All / Submitted /
+Under review / Accepted / Declined / Drafts) and search box apply only to those loaded proposals;
+the summary metrics still cover the whole event. Select a row to read the proposal itself — title,
+description, form, category, session type and length, who is speaking, how many reviews are
+complete, and the decision score where one is available.
 
 A known direct proposal link can open one older proposal in its drawer when it belongs to the
 same event. That drawer does not add the older proposal to the table, its tab counts, or its
@@ -68,8 +70,13 @@ Two useful facts:
 The panel also renders the form's custom answers with their question labels and field types.
 Links are clickable only for safe HTTP(S) values. If one proposal's answers are too large to load
 within the bound, or change while they are being read, that proposal's answers are withheld rather
-than partially shown; unaffected proposals remain visible. The score figure is still a plain
-average of every stored score; a weighted, completed-review decision score remains future work.
+than partially shown; unaffected proposals remain visible.
+
+Use **Decision round** to choose the event-owned round whose scores should inform a decision. A
+single round is selected automatically; with multiple rounds, choose one explicitly. The shown
+score is a weighted average of only completed reviews that have exactly one valid, in-range score
+for every criterion in that round's current rubric. The included/completed count makes exclusions
+visible: malformed, partial, duplicate, or out-of-rubric reviews do not contribute.
 
 ---
 

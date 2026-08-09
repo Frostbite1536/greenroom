@@ -60,7 +60,7 @@ new row.*
 > its original question label. Evaluators do not receive these private form
 > answers.”
 
-*Open* **Evaluations**. *Select the active round, select the new proposal and
+*Open* **Evaluations**. *Select the seeded review round, select the new proposal and
 Ravi Patel, then choose* **Assign**.
 
 > “Admins create review rounds and rubrics here, then assign submitted work to
@@ -198,7 +198,7 @@ curl.exe -i "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 
 - **CFP closed:** stop. Fix dates/reseed only in the announced writer window.
 - **New proposal is absent from Ravi’s queue:** return as admin and verify the
-  exact proposal/evaluator pair was assigned in the active round.
+  exact proposal/evaluator pair was assigned in the intended review round.
 - **Accepted talk is absent from the backlog:** reload Abstracts and Agenda. Do
   not look for a second Create session step; acceptance already provisioned it.
 - **Task form data differs:** stop and confirm the consolidated production seed

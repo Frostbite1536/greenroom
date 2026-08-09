@@ -122,11 +122,18 @@ with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or
 
 ### Bounded admin proposal reads
 
-The event-scoped in-app `GET /api/cfp/submissions` list returns at most 100 proposals. It orders
-submitted proposals by `submittedAt` descending with nulls last, then by `createdAt` and `id`
-descending, so drafts trail submitted work. Its envelope carries the exact total for the applied
-status/form filters and `hasMore`; callers can narrow those filters rather than treating a capped
-result as a complete event export.
+The event-scoped in-app `GET /api/cfp/submissions` list, like `/admin/abstracts`, is **ADMIN-only**.
+Evaluators use their own assignment-scoped `/admin/evaluations` workspace instead. The list returns
+at most 100 proposals. It orders submitted proposals by `submittedAt` descending with nulls last,
+then by `createdAt` and `id` descending, so drafts trail submitted work. Its envelope carries the
+exact total for the applied status/form filters and `hasMore`; callers can narrow those filters
+rather than treating a capped result as a complete event export.
+
+The same response includes an organizer decision summary. An explicit `planId` selects an
+event-owned review round; one available round is selected automatically, while multiple rounds
+require that choice. Its weighted score includes only completed reviews with one valid score for
+every current rubric criterion; malformed or partial reviews are excluded, and the response shows
+included and completed-review counts.
 
 ### Related app endpoints worth knowing
 
