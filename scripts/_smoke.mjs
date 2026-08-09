@@ -1165,10 +1165,15 @@ try {
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
 
-  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } });
-  const m4TaskTemplates = await prisma.onboardingTask.count({ where: { eventId: SCRATCH_EVENT.id } });
-  const m4SessionSpeakers = await prisma.sessionSpeaker.count({ where: { sessionId } });
-  const expectedM4Backfill = (m4TaskTemplates * m4SessionSpeakers) - m4TasksBeforeMaybe;
+  const m4TaskIds = (await prisma.onboardingTask.findMany({
+    where: { eventId: SCRATCH_EVENT.id }, select: { id: true },
+  })).map((task) => task.id);
+  const m4SpeakerIds = (await prisma.sessionSpeaker.findMany({
+    where: { sessionId }, select: { userId: true },
+  })).map((speakerRow) => speakerRow.userId);
+  const m4CohortWhere = { taskId: { in: m4TaskIds }, userId: { in: m4SpeakerIds } };
+  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: m4CohortWhere });
+  const expectedM4Backfill = (m4TaskIds.length * m4SpeakerIds.length) - m4TasksBeforeMaybe;
 
   // A later MAYBE never deletes or re-provisions an already confirmed (and
   // potentially public) Session. The response keeps the linkage for the UI's
@@ -1185,7 +1190,7 @@ try {
     JSON.stringify(scheduledMaybe.data?.data));
   check("M4 ACCEPTED to MAYBE leaves the confirmed session and task cohort intact",
     await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
-      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === m4TasksBeforeMaybe);
+      await prisma.speakerTask.count({ where: m4CohortWhere }) === m4TasksBeforeMaybe);
   const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("M4 MAYBE can return to ACCEPTED without duplicate Session provisioning and still reconcile missing tasks",
     restoredAccepted.status === 200 &&
@@ -1195,7 +1200,7 @@ try {
       restoredAccepted.data?.data?.sessionCreated === false &&
       restoredAccepted.data?.data?.tasksAssigned === expectedM4Backfill &&
       await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
-      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) ===
+      await prisma.speakerTask.count({ where: m4CohortWhere }) ===
         m4TasksBeforeMaybe + expectedM4Backfill,
     JSON.stringify(restoredAccepted.data?.data));
 
