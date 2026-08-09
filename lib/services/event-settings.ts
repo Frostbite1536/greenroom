@@ -8,6 +8,12 @@ export type EventSettingsPatch = {
   startsOn?: string | null;
   endsOn?: string | null;
 };
+export type EventSettingsUpdate = {
+  name?: string;
+  timezone?: string;
+  startsAt?: Date | null;
+  endsAt?: Date | null;
+};
 
 function localDate(date: Date | null, timezone: string): string | null {
   return date ? zonedParts(date.toISOString(), timezone).dateKey : null;
@@ -26,10 +32,12 @@ export function serializeSettingsEvent(event: SettingsEvent) {
 }
 
 /**
- * Plan the minimal event update. Timezone-only changes preserve local calendar
- * dates, so a May 12–14 event remains May 12–14 for its organisers.
+ * Plan only the supplied event settings. The caller locks and re-reads the
+ * event before calling this, so omitted fields can never restore a stale
+ * snapshot over a concurrent update. Timezone-only changes preserve local
+ * calendar dates, so a May 12–14 event remains May 12–14 for its organisers.
  */
-export function planEventSettingsUpdate(event: SettingsEvent, patch: EventSettingsPatch) {
+export function planEventSettingsUpdate(event: SettingsEvent, patch: EventSettingsPatch): EventSettingsUpdate {
   const timezone = patch.timezone ?? event.timezone;
   const datesProvided = patch.startsOn !== undefined || patch.endsOn !== undefined;
   const startsOn = datesProvided ? patch.startsOn ?? null : localDate(event.startsAt, event.timezone);
@@ -39,10 +47,12 @@ export function planEventSettingsUpdate(event: SettingsEvent, patch: EventSettin
     throw new RangeError("The event must end on or after its start date.");
   }
 
-  return {
-    name: patch.name ?? event.name,
-    timezone,
-    startsAt: startsOn ? new Date(zonedToUtcIso(startsOn, "00:00", timezone)) : null,
-    endsAt: endsOn ? new Date(zonedToUtcIso(endsOn, "23:59", timezone)) : null,
-  };
+  const update: EventSettingsUpdate = {};
+  if (patch.name !== undefined) update.name = patch.name;
+  if (patch.timezone !== undefined) update.timezone = timezone;
+  if (datesProvided || patch.timezone !== undefined) {
+    update.startsAt = startsOn ? new Date(zonedToUtcIso(startsOn, "00:00", timezone)) : null;
+    update.endsAt = endsOn ? new Date(zonedToUtcIso(endsOn, "23:59", timezone)) : null;
+  }
+  return update;
 }

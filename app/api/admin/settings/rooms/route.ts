@@ -1,18 +1,15 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { roomCreateSchema, roomUpdateSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { decideRoomDeletion } from "@/lib/services/room-deletion";
+import { classifyRoomMutationError } from "@/lib/services/room-mutation-errors";
 
 export const dynamic = "force-dynamic";
 
 const roomOrder = [{ sortOrder: "asc" as const }, { name: "asc" as const }, { id: "asc" as const }];
 const roomSelect = { id: true, name: true, capacity: true, sortOrder: true } as const;
-
-function roomNameTaken(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
 
 /** GET /api/admin/settings/rooms — active-event rooms, stable for settings UI. */
 export const GET = handle(async () => {
@@ -20,8 +17,10 @@ export const GET = handle(async () => {
   const rooms = await prisma.room.findMany({
     where: { eventId: ctx.eventId },
     orderBy: roomOrder,
+    take: OPERATOR_QUERY_LIMITS.settingsRooms + 1,
     select: roomSelect,
   });
+  assertEventQueryBound(rooms, OPERATOR_QUERY_LIMITS.settingsRooms, "rooms in event settings");
   return ok({ rooms });
 });
 
@@ -41,7 +40,7 @@ export const POST = handle(async (req) => {
     });
     return ok({ room }, 201);
   } catch (error) {
-    if (roomNameTaken(error)) {
+    if (classifyRoomMutationError(error) === "ROOM_NAME_TAKEN") {
       throw new ApiError(409, "ROOM_NAME_TAKEN", "Another room in this event already uses that name.", {
         name: ["This room name is already in use."],
       });
@@ -69,10 +68,16 @@ export const PATCH = handle(async (req) => {
     });
     return ok({ room });
   } catch (error) {
-    if (roomNameTaken(error)) {
+    const mutationError = classifyRoomMutationError(error);
+    if (mutationError === "ROOM_NAME_TAKEN") {
       throw new ApiError(409, "ROOM_NAME_TAKEN", "Another room in this event already uses that name.", {
         name: ["This room name is already in use."],
       });
+    }
+    // The scoped preflight may be invalidated by a concurrent delete. Keep
+    // that race indistinguishable from an unknown or cross-event room ID.
+    if (mutationError === "ROOM_NOT_FOUND") {
+      throw new ApiError(404, "ROOM_NOT_FOUND", "Room not found.");
     }
     throw error;
   }

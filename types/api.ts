@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIanaTimeZone } from "@/lib/tz";
 
 // NOTE: relaxed from z.string().cuid() by the backend worker to accept the
 // seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
@@ -108,15 +109,6 @@ const eventDateKeySchema = z
     const date = new Date(Date.UTC(year, month - 1, day));
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, "Use a real calendar date.");
-
-function isIanaTimeZone(value: string): boolean {
-  try {
-    Intl.DateTimeFormat("en-US", { timeZone: value });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Minimal, current-event-only settings update. Event creation/deletion stays out of M5. */
 export const eventSettingsUpdateSchema = z

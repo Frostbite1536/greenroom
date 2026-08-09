@@ -33,6 +33,29 @@ export function tzOffsetMinutes(date: Date, timeZone: string): number {
   return Math.round((asUtc - date.getTime()) / 60000);
 }
 
+type DateTimeFormatFactory = (
+  locales?: string | string[],
+  options?: Intl.DateTimeFormatOptions,
+) => Intl.DateTimeFormat;
+
+/**
+ * Validate an IANA identifier without logging ordinary invalid user input.
+ * ECMA-402 specifies RangeError for an invalid time zone; other formatter
+ * failures are operational faults and must not be mistaken for bad input.
+ */
+export function isIanaTimeZone(
+  value: string,
+  createFormatter: DateTimeFormatFactory = Intl.DateTimeFormat,
+): boolean {
+  try {
+    createFormatter("en-US", { timeZone: value });
+    return true;
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
+  }
+}
+
 export type ZonedParts = { dateKey: string; hour: number; minute: number; minutesOfDay: number };
 
 /** Break a UTC ISO string into event-local calendar parts. */
