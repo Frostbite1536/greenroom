@@ -1089,8 +1089,9 @@ try {
     wStranger.status === 403 && wStranger.data?.error?.code === "NOT_YOUR_SUBMISSION", wStranger.status);
 
   const wDraw = await j("PATCH", `/api/cfp/submissions/${wId}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 speaker withdraws an UNDER_REVIEW proposal",
-    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN", wDraw.status);
+  check("M6 portal contract: speaker withdraws an UNDER_REVIEW proposal",
+    wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN" &&
+    wDraw.data?.data?.submission?.canEdit === false, wDraw.status);
   check("W1 withdrawing does not stamp a programme decision",
     wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
 
@@ -1126,8 +1127,9 @@ try {
     wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN", wQueueRow?.abstract?.status);
 
   const wAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { status: "WITHDRAWN" }, speaker);
-  check("W1 an accepted, converted talk cannot be self-withdrawn",
-    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED", wAccepted.status);
+  check("M6 accepted/converted talk refusal is an actionable 409",
+    wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED" &&
+    /contact the program team/i.test(wAccepted.data?.error?.message ?? ""), wAccepted.status);
 
   // 23. W2 — a decision reports the session it leaves behind, so the admin UI
   // can prompt to unschedule (no auto-deletion: INV-DOMAIN-001).
