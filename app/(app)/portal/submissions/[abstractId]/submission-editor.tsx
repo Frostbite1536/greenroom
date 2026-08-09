@@ -213,7 +213,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
 
       <div className={styles.field}>
         <label className="field-label" htmlFor="sub-abstract">Description</label>
-        <p className="hint">This is what attendees read in the program.</p>
+        <p className="hint">This is the description on your proposal record.</p>
         <textarea
           className="text-input" id="sub-abstract" value={abstract} disabled={readOnly}
           onChange={(e) => setAbstract(e.target.value)}
@@ -266,6 +266,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
           <>
             <p className="hint">
               Everyone listed here can edit this proposal. The main contact is who we reply to.
+              Names for existing people come from their profiles; enter a name when adding a new email.
             </p>
             {speakers.map((speaker, index) => (
               <div className={styles.sessionItem} key={index}>
@@ -273,6 +274,10 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
                   <label className="field-label" htmlFor={`speaker-name-${index}`}>Name</label>
                   <input
                     className="text-input" id={`speaker-name-${index}`} value={speaker.name}
+                    readOnly={submission.speakers.some(
+                      (existing) => existing.email.toLowerCase() === speaker.email.trim().toLowerCase(),
+                    )}
+                    required
                     onChange={(e) => updateSpeaker(index, { name: e.target.value })}
                   />
                 </div>
@@ -280,6 +285,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
                   <label className="field-label" htmlFor={`speaker-email-${index}`}>Email</label>
                   <input
                     className="text-input" id={`speaker-email-${index}`} type="email" value={speaker.email}
+                    required
                     onChange={(e) => updateSpeaker(index, { email: e.target.value })}
                   />
                 </div>
