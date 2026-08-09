@@ -58,3 +58,18 @@ export function serializeAbstract(abstract: AbstractWithRelations) {
     avgScore: averageScore,
   };
 }
+
+/**
+ * The admin decision surface receives a selected-round summary separately.
+ * Never expose the legacy raw all-round average there: it mixes plans and
+ * partial criteria, and is not a safe decision metric.
+ */
+export function serializeAdminAbstract(abstract: AbstractWithRelations) {
+  const {
+    avgScore: _avgScore,
+    reviewsComplete: _reviewsComplete,
+    reviewsTotal: _reviewsTotal,
+    ...serialized
+  } = serializeAbstract(abstract);
+  return serialized;
+}

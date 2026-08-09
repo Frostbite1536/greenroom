@@ -20,6 +20,13 @@ export const OPERATOR_QUERY_LIMITS = {
   settingsTracks: 250,
   settingsCategories: 1_000,
   adminAbstracts: 100,
+  // Decision summaries are calculated only for the capped parent page. Each
+  // dependent event read is cap-plus-one and fails closed rather than silently
+  // reporting a partial organizer decision number.
+  adminDecisionPlans: 100,
+  adminDecisionRubricCriteria: 250,
+  adminDecisionAssignments: 5_000,
+  adminDecisionScores: 25_000,
   adminReviewComments: 5_000,
 } as const;
 

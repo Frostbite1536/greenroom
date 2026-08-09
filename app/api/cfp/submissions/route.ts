@@ -10,7 +10,8 @@ import {
   toAdminAbstractListEnvelope,
 } from "@/lib/api/admin-abstract-list";
 import { parseBoundedJson } from "@/lib/api/bounded-json";
-import { serializeAbstract } from "@/lib/api/abstract-serialize";
+import { serializeAbstract, serializeAdminAbstract } from "@/lib/api/abstract-serialize";
+import { getAdminDecisionSummary } from "@/lib/services/admin-decision-summary";
 import { notifyAbstractSubmitted } from "@/lib/comms/notify-service";
 import {
   toFormFieldSpecs,
@@ -28,15 +29,17 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/cfp/submissions — bounded list for the caller's event (admin or
- * evaluator). Supports `?status=` (comma-separated) and `?formConfigId=`.
+ * admin). Supports `?status=` (comma-separated), `?formConfigId=`,
+ * and explicit `?planId=` decision-summary selection.
  * The explicit envelope prevents a large event from silently exhausting an
  * operator read while preserving an honest filtered total for the UI.
  */
 export const GET = handle(async (req) => {
-  const ctx = await requireContext(["ADMIN", "EVALUATOR"]);
+  const ctx = await requireContext(["ADMIN"]);
   const url = new URL(req.url);
   const statusParam = url.searchParams.get("status");
   const formConfigId = url.searchParams.get("formConfigId") ?? undefined;
+  const planId = url.searchParams.get("planId") ?? undefined;
 
   const statuses = statusParam
     ? statusParam
@@ -58,8 +61,6 @@ export const GET = handle(async (req) => {
           category: true,
           speakers: { include: { user: true } },
           answers: true,
-          reviewAssignments: { select: { status: true } },
-          reviewScores: { select: { score: true } },
         },
         orderBy: adminAbstractListOrderBy,
       }),
@@ -68,7 +69,12 @@ export const GET = handle(async (req) => {
     // Rows and the filtered total must observe one PostgreSQL snapshot.
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
   );
-  return ok(toAdminAbstractListEnvelope(abstracts.map(serializeAbstract), total));
+  const page = toAdminAbstractListEnvelope(abstracts.map(serializeAdminAbstract), total);
+  const decisionSummary = await getAdminDecisionSummary(ctx, {
+    abstractIds: page.abstracts.map((abstract) => abstract.id),
+    planId,
+  });
+  return ok({ ...page, decisionSummary });
 });
 
 /**

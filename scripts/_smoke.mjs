@@ -868,7 +868,21 @@ try {
 
   // 5. Admin lists abstracts
   const list = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, admin);
-  check("admin lists submitted abstracts", list.status === 200 && list.data?.data?.abstracts?.some((item) => item.id === abstractId));
+  check(
+    "C15 admin list has an honest zero-plan decision state",
+    list.status === 200 &&
+      list.data?.data?.abstracts?.some((item) => item.id === abstractId) &&
+      list.data?.data?.decisionSummary?.plans?.length === 0 &&
+      list.data?.data?.decisionSummary?.selectedPlan === null &&
+      list.data?.data?.decisionSummary?.selectionRequired === false,
+    list.status,
+  );
+  const evaluatorGlobalAbstracts = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, evalr);
+  check(
+    "C15 evaluator global submission GET is forbidden",
+    evaluatorGlobalAbstracts.status === 403,
+    evaluatorGlobalAbstracts.status,
+  );
 
   // 6. Create evaluation plan
   const plan = await j("POST", "/api/evaluations/plans", {
@@ -878,6 +892,15 @@ try {
   check("S1 plan create derives event scope from the session, never the body",
     plan.status === 201 && plan.data?.data?.eventId === SCRATCH_EVENT.id, plan.status);
   const planId = plan.data?.data?.id;
+  const onePlanList = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, admin);
+  check(
+    "C15 exactly one plan auto-selects without a numeric score before review",
+    onePlanList.status === 200 &&
+      onePlanList.data?.data?.decisionSummary?.selectedPlan?.id === planId &&
+      onePlanList.data?.data?.decisionSummary?.selectionRequired === false &&
+      onePlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === null,
+    onePlanList.status,
+  );
   const otherPlan = await prisma.evaluationPlan.create({
     data: {
       eventId: OTHER_SCRATCH_EVENT.id,
@@ -983,7 +1006,15 @@ try {
   check("create assignment", assign.status === 201 && assign.data?.data?.assignments === 1, assign.status);
 
   const queue = await j("GET", `/api/evaluations/assignments?planId=${planId}`, null, evalr);
-  check("evaluator sees own queue", queue.status === 200 && queue.data?.data?.some(a => a.abstractId === abstractId));
+  const ownQueueAssignment = queue.data?.data?.find((assignment) => assignment.abstractId === abstractId);
+  check(
+    "C15 evaluator sees only its non-blind assignment without evaluator identity",
+    queue.status === 200 &&
+      queue.data?.data?.every((assignment) => !Object.hasOwn(assignment, "evaluator")) &&
+      !String(queue.data).includes(evalr.user.email) &&
+      ownQueueAssignment?.abstract?.speakers?.length === 2,
+    queue.status,
+  );
 
   // 9. Scoring: out-of-range rejected, unassigned evaluator rejected, valid accepted
   const badScore = await j("POST", "/api/evaluations/scores", {
@@ -1225,11 +1256,80 @@ try {
   const reviewedList = await j("GET", "/api/cfp/submissions", null, admin);
   const reviewedAbstract = reviewedList.data?.data?.abstracts?.find((item) => item.id === abstractId);
   check(
-    "abstract list includes completed review progress and average score",
+    "C15 one selected plan reports only its weighted decision summary",
     reviewedList.status === 200 &&
-      reviewedAbstract?.reviewsComplete === 1 &&
-      reviewedAbstract?.reviewsTotal === 1 &&
-      reviewedAbstract?.avgScore === 4,
+      !Object.hasOwn(reviewedAbstract ?? {}, "reviewsComplete") &&
+      !Object.hasOwn(reviewedAbstract ?? {}, "reviewsTotal") &&
+      !Object.hasOwn(reviewedAbstract ?? {}, "avgScore") &&
+      reviewedList.data?.data?.decisionSummary?.selectedPlan?.id === planId &&
+      reviewedList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.completedAssignments === 1 &&
+      reviewedList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.includedReviews === 1 &&
+      reviewedList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === 4,
+  );
+
+  const blindDecisionPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      name: "Round 2 Blind Decision Smoke",
+      ordinal: 2,
+      isBlind: true,
+      rubric: [
+        { key: "impact", label: "Impact", min: 1, max: 5, weight: 2 },
+        { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 1 },
+      ],
+    },
+  });
+  const blindDecisionAssignment = await j("POST", "/api/evaluations/assignments", {
+    planId: blindDecisionPlan.id,
+    abstractIds: [abstractId],
+    evaluatorIds: [evaluatorId],
+  }, admin);
+  const blindQueue = await j("GET", `/api/evaluations/assignments?planId=${blindDecisionPlan.id}`, null, evalr);
+  const blindQueueAssignment = blindQueue.data?.data?.find((assignment) => assignment.abstractId === abstractId);
+  check(
+    "C15 evaluator blind policy is taken from this assignment plan",
+    blindDecisionAssignment.status === 201 &&
+      blindQueue.status === 200 &&
+      blindQueue.data?.data?.every((assignment) => !Object.hasOwn(assignment, "evaluator")) &&
+      blindQueueAssignment?.abstract?.speakers?.length === 0,
+    `${blindDecisionAssignment.status}/${blindQueue.status}`,
+  );
+  const blindDecisionScore = await j("POST", "/api/evaluations/scores", {
+    planId: blindDecisionPlan.id,
+    abstractId,
+    scores: [
+      { rubricKey: "impact", score: 2 },
+      { rubricKey: "clarity", score: 5 },
+    ],
+    complete: true,
+  }, evalr);
+  const multiplePlanList = await j("GET", "/api/cfp/submissions", null, admin);
+  check(
+    "C15 multiple plans require an explicit selection and return no numeric decision",
+    blindDecisionScore.status === 200 &&
+      multiplePlanList.status === 200 &&
+      multiplePlanList.data?.data?.decisionSummary?.plans?.map((plan) => plan.id).join(",") ===
+        [planId, blindDecisionPlan.id].join(",") &&
+      multiplePlanList.data?.data?.decisionSummary?.selectedPlan === null &&
+      multiplePlanList.data?.data?.decisionSummary?.selectionRequired === true &&
+      multiplePlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === null,
+    multiplePlanList.status,
+  );
+  const selectedBlindPlanList = await j("GET", `/api/cfp/submissions?planId=${blindDecisionPlan.id}`, null, admin);
+  check(
+    "C15 explicit event plan returns its completed weighted decision result",
+    selectedBlindPlanList.status === 200 &&
+      selectedBlindPlanList.data?.data?.decisionSummary?.selectedPlan?.id === blindDecisionPlan.id &&
+      selectedBlindPlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.completedAssignments === 1 &&
+      selectedBlindPlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.includedReviews === 1 &&
+      selectedBlindPlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === 3,
+    selectedBlindPlanList.status,
+  );
+  const crossEventDecisionPlan = await j("GET", `/api/cfp/submissions?planId=${otherPlan.id}`, null, admin);
+  check(
+    "C15 unknown and cross-event selected plans are indistinguishable",
+    crossEventDecisionPlan.status === 404 && crossEventDecisionPlan.data?.error?.code === "PLAN_NOT_FOUND",
+    crossEventDecisionPlan.status,
   );
 
   // M4: MAYBE is a non-final, evaluable decision state. It creates neither a
