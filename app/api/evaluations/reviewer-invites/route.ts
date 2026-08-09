@@ -5,6 +5,7 @@ import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { reviewerInviteCreateSchema } from "@/types/api";
 import { renderEmailTemplate } from "@/lib/comms/reminders";
 import { dispatchEmail } from "@/lib/comms/send";
+import { missingRequiredTemplateVariables } from "@/lib/comms/template-edit";
 import {
   REVIEWER_INVITE_DEFAULT_TEMPLATE,
   REVIEWER_INVITE_TEMPLATE_KEY,
@@ -135,6 +136,33 @@ export const POST = handle(async (req) => {
       throw new ApiError(429, "INVITE_RESEND_COOLDOWN", "Wait ten minutes before resending this reviewer invite.");
     }
 
+    // A manually-created or legacy row may predate the template PATCH guard.
+    // Ensure its stored, editable truth remains deliverable before consuming a
+    // rate reservation or rotating the bearer token.
+    const ensuredTemplate = await tx.emailTemplate.upsert({
+      where: { eventId_key: { eventId: ctx.eventId, key: REVIEWER_INVITE_TEMPLATE_KEY } },
+      create: { eventId: ctx.eventId, key: REVIEWER_INVITE_TEMPLATE_KEY, ...REVIEWER_INVITE_DEFAULT_TEMPLATE },
+      update: {},
+      select: { id: true, subject: true, htmlBody: true },
+    });
+    const lockedTemplateRows = await tx.$queryRaw<{ id: string; subject: string; htmlBody: string }[]>`
+      SELECT "id", "subject", "htmlBody" FROM "EmailTemplate" WHERE "id" = ${ensuredTemplate.id} FOR SHARE
+    `;
+    const template = lockedTemplateRows[0];
+    if (!template) throw new ApiError(422, "INVALID_INVITE_TEMPLATE", "Reviewer invite template is unavailable.");
+    const missingTemplateVariables = missingRequiredTemplateVariables(
+      REVIEWER_INVITE_TEMPLATE_KEY,
+      template.subject,
+      template.htmlBody,
+    );
+    if (missingTemplateVariables.length > 0) {
+      throw new ApiError(
+        422,
+        "INVALID_INVITE_TEMPLATE",
+        `This reviewer invite template must include ${missingTemplateVariables.map((variable) => `{{${variable}}}`).join(", ")}.`,
+      );
+    }
+
     const countRows = await tx.$queryRaw<{ count: bigint | number }[]>`
       SELECT COALESCE(SUM("sendWindowCount"), 0) AS "count"
       FROM "ReviewerInvite"
@@ -172,12 +200,6 @@ export const POST = handle(async (req) => {
     if (!target) {
       await tx.eventMember.create({ data: { eventId: ctx.eventId, userId: user.id, role: "EVALUATOR" } });
     }
-    const template = await tx.emailTemplate.upsert({
-      where: { eventId_key: { eventId: ctx.eventId, key: REVIEWER_INVITE_TEMPLATE_KEY } },
-      create: { eventId: ctx.eventId, key: REVIEWER_INVITE_TEMPLATE_KEY, ...REVIEWER_INVITE_DEFAULT_TEMPLATE },
-      update: {},
-      select: { id: true, subject: true, htmlBody: true },
-    });
     const token = createReviewerInviteToken({ inviteId: invite.id, version: invite.tokenVersion, expiresAt: invite.expiresAt }, secret);
     return {
       response: inviteView(invite, "invited", "pending"),

@@ -1347,6 +1347,140 @@ try {
       await prisma.emailDispatch.count({ where: { recipient: c17Email } }) === c17DispatchCountBeforeIdempotent,
     `${c17Active.status}/${c17Active.data?.data?.state}`,
   );
+  const [c17Missing, c17Empty, c17Wrong, c17WrongType, c17Expired] = await Promise.all([
+    postReviewerInviteAccept(),
+    postReviewerInviteAccept(""),
+    postReviewerInviteAccept("v1.not-a-real-invite.1.9999999999." + "r".repeat(43) + "." + "x".repeat(43)),
+    postReviewerInviteAccept({ token: "wrong-type" }),
+    postReviewerInviteAccept(reviewerInviteBearer({ ...c17StoredInvite, expiresAt: new Date(Date.now() - 1_000) })),
+  ]);
+  const c17CrossUser = await prisma.user.upsert({
+    where: { email: "reviewer-cross-event@scratch.test" },
+    update: {},
+    create: { email: "reviewer-cross-event@scratch.test", name: "Cross Event Reviewer" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: OTHER_SCRATCH_EVENT.id, userId: c17CrossUser.id } },
+    update: { role: "EVALUATOR" },
+    create: { eventId: OTHER_SCRATCH_EVENT.id, userId: c17CrossUser.id, role: "EVALUATOR" },
+  });
+  const c17CrossInvite = {
+    id: `c17-cross-${Date.now()}`,
+    tokenVersion: 1,
+    expiresAt: new Date(Date.now() + 86_400_000),
+  };
+  await prisma.$executeRaw`
+    INSERT INTO "ReviewerInvite" ("id", "eventId", "userId", "tokenVersion", "expiresAt")
+    VALUES (${c17CrossInvite.id}, ${SCRATCH_EVENT.id}, ${c17CrossUser.id}, ${c17CrossInvite.tokenVersion}, ${c17CrossInvite.expiresAt})
+  `;
+  const c17Cross = await postReviewerInviteAccept(reviewerInviteBearer(c17CrossInvite));
+  const c17GenericFailures = [c17Missing, c17Empty, c17Wrong, c17WrongType, c17Expired, c17Cross];
+  check(
+    "C17 malformed, wrong, expired, and cross-event membership accept attempts are identical no-store 404s",
+    c17GenericFailures.every((result) =>
+      result.status === 404 && result.data?.error?.code === "INVITE_NOT_FOUND" &&
+      result.headers.get("cache-control") === "no-store" && result.headers.get("referrer-policy") === "no-referrer",
+    ),
+    c17GenericFailures.map((result) => `${result.status}/${result.data?.error?.code}`).join(","),
+  );
+  await prisma.$executeRaw`
+    UPDATE "ReviewerInvite" SET "lastSentAt" = ${new Date(Date.now() - 660_000)}
+    WHERE "id" = ${c17StoredInvite.id}
+  `;
+  const c17Renew = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17Email, name: "Attempted Rename", resend: true,
+  }, admin);
+  const c17Renewed = await prisma.$queryRaw`
+    SELECT "tokenVersion", "acceptedVersion", "sendWindowCount", "lastDeliveryState"
+    FROM "ReviewerInvite" WHERE "id" = ${c17StoredInvite.id}
+  `;
+  check(
+    "C17 explicit resend after cooldown rotates access while preserving global identity",
+    c17Renew.status === 200 && c17Renew.data?.data?.state === "invited" && c17Renew.data?.data?.delivery === "mocked" &&
+      c17Renewed[0]?.tokenVersion === 2 && c17Renewed[0]?.acceptedVersion === null &&
+      c17Renewed[0]?.sendWindowCount === 2 && c17Renewed[0]?.lastDeliveryState === "MOCKED" &&
+      (await prisma.user.findUnique({ where: { email: c17Email }, select: { name: true } }))?.name === "Fresh Reviewer",
+    `${c17Renew.status}/${c17Renew.data?.data?.state}/${c17Renewed[0]?.tokenVersion}`,
+  );
+  const c17Template = await prisma.emailTemplate.findUnique({
+    where: { eventId_key: { eventId: SCRATCH_EVENT.id, key: "reviewer-invite" } },
+    select: { id: true, subject: true, htmlBody: true, trigger: true },
+  });
+  const c17TemplateBefore = await prisma.$queryRaw`
+    SELECT COALESCE(SUM("sendWindowCount"), 0)::int AS "count"
+    FROM "ReviewerInvite" WHERE "eventId" = ${SCRATCH_EVENT.id} AND "sendWindowStart" = date_trunc('hour', NOW())
+  `;
+  await prisma.emailTemplate.update({
+    where: { id: c17Template.id },
+    data: { subject: "Broken legacy reviewer invite", htmlBody: "<p>No link</p>" },
+  });
+  const c17BrokenTemplateEmail = "broken-template-reviewer@scratch.test";
+  const c17BrokenTemplate = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17BrokenTemplateEmail, name: "Broken Template Reviewer", resend: false,
+  }, admin);
+  const c17TemplateAfter = await prisma.$queryRaw`
+    SELECT COALESCE(SUM("sendWindowCount"), 0)::int AS "count"
+    FROM "ReviewerInvite" WHERE "eventId" = ${SCRATCH_EVENT.id} AND "sendWindowStart" = date_trunc('hour', NOW())
+  `;
+  await prisma.emailTemplate.update({
+    where: { id: c17Template.id },
+    data: { subject: c17Template.subject, htmlBody: c17Template.htmlBody, trigger: c17Template.trigger },
+  });
+  check(
+    "C17 a legacy reviewer template without inviteUrl fails before reservation, identity, membership, or delivery",
+    c17BrokenTemplate.status === 422 && c17BrokenTemplate.data?.error?.code === "INVALID_INVITE_TEMPLATE" &&
+      await prisma.user.count({ where: { email: c17BrokenTemplateEmail } }) === 0 &&
+      await prisma.eventMember.count({ where: { eventId: SCRATCH_EVENT.id, user: { email: c17BrokenTemplateEmail } } }) === 0 &&
+      c17TemplateBefore[0]?.count === c17TemplateAfter[0]?.count,
+    `${c17BrokenTemplate.status}/${c17BrokenTemplate.data?.error?.code}/${c17TemplateBefore[0]?.count}->${c17TemplateAfter[0]?.count}`,
+  );
+  const c17RoleRaceEmail = "reviewer-role-race@scratch.test";
+  const c17RoleRaceInvite = await j("POST", "/api/evaluations/reviewer-invites", {
+    email: c17RoleRaceEmail, name: "Role Race Reviewer", resend: false,
+  }, admin);
+  const c17RoleRaceUser = await prisma.user.findUnique({ where: { email: c17RoleRaceEmail }, select: { id: true } });
+  const c17RoleRaceRows = await prisma.$queryRaw`
+    SELECT "id", "tokenVersion", "expiresAt", "acceptedVersion" FROM "ReviewerInvite"
+    WHERE "eventId" = ${SCRATCH_EVENT.id} AND "userId" = ${c17RoleRaceUser.id}
+  `;
+  const c17RoleRaceStored = c17RoleRaceRows[0];
+  let signalC17RoleRaceHeld;
+  let releaseC17RoleRace;
+  const c17RoleRaceHeld = new Promise((resolve) => { signalC17RoleRaceHeld = resolve; });
+  const c17RoleRaceRelease = new Promise((resolve) => { releaseC17RoleRace = resolve; });
+  const heldC17RoleDowngrade = prisma.$transaction(async (tx) => {
+    const key = `event-member-authority:${SCRATCH_EVENT.id}:${c17RoleRaceUser.id}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.$queryRaw`
+      SELECT "userId" FROM "EventMember"
+      WHERE "eventId" = ${SCRATCH_EVENT.id} AND "userId" = ${c17RoleRaceUser.id} FOR UPDATE
+    `;
+    await tx.eventMember.update({
+      where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: c17RoleRaceUser.id } },
+      data: { role: "ADMIN" },
+    });
+    signalC17RoleRaceHeld();
+    await c17RoleRaceRelease;
+  }, { timeout: 15_000 });
+  await c17RoleRaceHeld;
+  let c17RoleRaceAcceptFinished = false;
+  const waitingC17RoleRaceAccept = postReviewerInviteAccept(reviewerInviteBearer(c17RoleRaceStored))
+    .finally(() => { c17RoleRaceAcceptFinished = true; });
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const c17RoleRaceWaited = !c17RoleRaceAcceptFinished;
+  releaseC17RoleRace();
+  await heldC17RoleDowngrade;
+  const c17RoleRaceAccept = await waitingC17RoleRaceAccept;
+  const c17RoleRaceAfter = await prisma.$queryRaw`
+    SELECT "acceptedVersion" FROM "ReviewerInvite" WHERE "id" = ${c17RoleRaceStored.id}
+  `;
+  check(
+    "C17 accept shares member authority, waits for an ADMIN role change, then fresh-rejects without consuming",
+    c17RoleRaceInvite.status === 200 && c17RoleRaceWaited && c17RoleRaceAccept.status === 404 &&
+      c17RoleRaceAccept.data?.error?.code === "INVITE_NOT_FOUND" && c17RoleRaceAfter[0]?.acceptedVersion === null &&
+      (await prisma.eventMember.findUnique({ where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: c17RoleRaceUser.id } } }))?.role === "ADMIN",
+    `${c17RoleRaceAccept.status}/${c17RoleRaceWaited}/${c17RoleRaceAfter[0]?.acceptedVersion}`,
+  );
   const c17SpeakerConflict = await j("POST", "/api/evaluations/reviewer-invites", {
     email: speaker.user.email, name: "Do Not Change", resend: false,
   }, admin);

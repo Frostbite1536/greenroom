@@ -24,6 +24,7 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.ok(action.indexOf("tx.user.upsert") < action.indexOf("lockEventMemberAuthorities"));
   assert.ok(action.indexOf("lockEventMemberAuthorities") < action.indexOf("lockExistingEventMembersForUpdate"));
   assert.ok(action.indexOf("lockExistingEventMembersForUpdate") < action.indexOf('FROM "ReviewerInvite"'));
+  assert.ok(action.indexOf("missingRequiredTemplateVariables") < action.indexOf('SELECT COALESCE(SUM("sendWindowCount"), 0)'));
   assert.match(route, /update:\s*\{\}/);
   assert.doesNotMatch(route, /update:\s*\{\s*name:/);
   assert.match(route, /sendWindowCount/);
@@ -38,11 +39,15 @@ test("reviewer invite acceptance is POST-only, no-store, structurally verifies b
   assert.doesNotMatch(route, /export const GET/);
   assert.match(route, /REVIEWER_INVITE_JSON_MAX_BYTES/);
   assert.match(route, /Cache-Control", "no-store/);
+  assert.match(route, /Referrer-Policy", "no-referrer/);
+  assert.match(route, /trustedReviewerInviteAppUrl\(\)/);
+  assert.ok(route.indexOf("trustedReviewerInviteAppUrl") < route.indexOf("prisma.$transaction"));
   assert.ok(route.indexOf("verifyReviewerInviteToken") < route.indexOf("prisma.$transaction"));
   assert.ok(route.indexOf("lockEventMemberAuthorities") < route.indexOf("lockExistingEventMembersForShare"));
   assert.ok(route.indexOf("lockExistingEventMembersForShare") < route.indexOf('FOR UPDATE'));
   assert.match(route, /"INVITE_NOT_FOUND"/);
-  assert.match(route, /NextResponse\.redirect\(new URL\("\/admin\/evaluations", req\.url\), 303\)/);
+  assert.match(route, /NextResponse\.redirect\(`\$\{appUrl\}\/admin\/evaluations`, 303\)/);
+  assert.doesNotMatch(route, /new URL\("\/admin\/evaluations", req\.url\)/);
   assert.match(route, /httpOnly: true/);
   assert.match(route, /sameSite: "lax"/);
 });

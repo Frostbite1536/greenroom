@@ -7,6 +7,7 @@ import { reviewerInviteAcceptSchema } from "@/types/api";
 import {
   REVIEWER_INVITE_JSON_MAX_BYTES,
   reviewerInviteSigningSecret,
+  trustedReviewerInviteAppUrl,
   verifyReviewerInviteToken,
 } from "@/lib/services/reviewer-invite";
 import {
@@ -30,6 +31,7 @@ function inviteNotFound(): ApiError {
 
 function noStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
+  response.headers.set("Referrer-Policy", "no-referrer");
   return response;
 }
 
@@ -45,7 +47,8 @@ const accept = handle(async (req) => {
   // invalid invite state. There is no invitation or identity lookup yet.
   if (!parsed.success) throw inviteNotFound();
   const secret = reviewerInviteSigningSecret();
-  if (!secret) throw new ApiError(503, "INVITE_UNAVAILABLE", "Reviewer invites are temporarily unavailable.");
+  const appUrl = trustedReviewerInviteAppUrl();
+  if (!secret || !appUrl) throw new ApiError(503, "INVITE_UNAVAILABLE", "Reviewer invites are temporarily unavailable.");
   const token = verifyReviewerInviteToken(parsed.data.token, secret);
   if (!token) throw inviteNotFound();
 
@@ -103,7 +106,9 @@ const accept = handle(async (req) => {
     };
   });
 
-  const response = NextResponse.redirect(new URL("/admin/evaluations", req.url), 303);
+  // Never use the request origin for an authentication redirect: an invite is
+  // a bearer capability, so the configured APP_URL is the only trusted base.
+  const response = NextResponse.redirect(`${appUrl}/admin/evaluations`, 303);
   response.cookies.set(SESSION_COOKIE, encodeSession(session), {
     httpOnly: true,
     sameSite: "lax",

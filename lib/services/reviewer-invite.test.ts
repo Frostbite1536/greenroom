@@ -7,6 +7,7 @@ import {
   isReviewerInvitePending,
   planReviewerInviteSend,
   reviewerInviteEventHourLockKey,
+  trustedReviewerInviteAppUrl,
   reviewerInviteWindowStart,
   verifyReviewerInviteToken,
 } from "./reviewer-invite";
@@ -77,4 +78,24 @@ test("invite cap lock key is event-hour scoped and UTC-normalized", () => {
   const window = reviewerInviteWindowStart(now);
   assert.equal(window.toISOString(), "2026-08-10T12:00:00.000Z");
   assert.equal(reviewerInviteEventHourLockKey("event-a", window), "reviewer-invite-event-hour:event-a:2026-08-10T12:00:00.000Z");
+});
+
+test("trusted reviewer invite origins never derive from request data and production fails closed", () => {
+  const env = process.env as Record<string, string | undefined>;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalAppUrl = process.env.APP_URL;
+  try {
+    env.NODE_ENV = "production";
+    delete env.APP_URL;
+    assert.equal(trustedReviewerInviteAppUrl(), null);
+    env.APP_URL = "https://greenroom-hq.com/ignored-path";
+    assert.equal(trustedReviewerInviteAppUrl(), "https://greenroom-hq.com");
+    env.APP_URL = "http://unsafe.example";
+    assert.equal(trustedReviewerInviteAppUrl(), null);
+  } finally {
+    if (originalNodeEnv === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = originalNodeEnv;
+    if (originalAppUrl === undefined) delete env.APP_URL;
+    else env.APP_URL = originalAppUrl;
+  }
 });
