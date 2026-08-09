@@ -15,9 +15,10 @@ export const dynamic = "force-dynamic";
  * existing session.
  *
  * Accepting an abstract now provisions this automatically (WAVE1-B1), so this
- * endpoint remains for two jobs: converting with an explicit duration, and
- * acting as the manual backfill for talks accepted before that existed — the
- * idempotent branch still tops up missing onboarding assignments.
+ * endpoint remains for two jobs: converting a legacy accepted abstract that
+ * has no Session yet (using the requested duration), and acting as the manual
+ * checklist backfill for existing Sessions. A requested duration never mutates
+ * a Session that already exists; scheduling owns later duration changes.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);

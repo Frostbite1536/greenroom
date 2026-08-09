@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Prisma } from "@prisma/client";
 import {
+  assignOnboardingTasks,
   DEFAULT_SESSION_MINUTES,
   planTaskAssignments,
   resolveSessionDuration,
@@ -52,4 +54,26 @@ test("the plan is stable across retries", () => {
   const once = planTaskAssignments(["t1", "t2"], ["u1", "u2"]);
   const twice = planTaskAssignments(["t1", "t2"], ["u1", "u2"]);
   assert.deepEqual(once, twice);
+});
+
+test("task assignment never silently truncates a large event checklist", async () => {
+  const tasks = Array.from({ length: 101 }, (_, index) => ({ id: `task-${index}` }));
+  const tx = {
+    onboardingTask: {
+      findMany: async (args: Record<string, unknown>) => {
+        assert.equal("take" in args, false);
+        return tasks;
+      },
+    },
+    sessionSpeaker: {
+      findMany: async () => [{ userId: "speaker-a" }, { userId: "speaker-b" }],
+    },
+    speakerTask: {
+      createMany: async ({ data }: { data: { taskId: string; userId: string }[] }) => ({
+        count: data.length,
+      }),
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  assert.equal(await assignOnboardingTasks(tx, "event-1", "session-1"), 202);
 });

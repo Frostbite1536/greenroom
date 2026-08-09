@@ -15,8 +15,8 @@ export const dynamic = "force-dynamic";
  * whole thing in one locked transaction (WAVE1-B1, director requirement #4):
  * the confirmed `Session` (with its speakers) and every speaker's onboarding
  * checklist. Both steps are idempotent, so re-accepting tops up what is missing
- * instead of duplicating. `/api/evaluations/convert` remains for explicit
- * durations and manual backfill.
+ * instead of duplicating. `/api/evaluations/convert` remains for legacy
+ * accepted abstracts without Sessions and for manual checklist backfill.
  *
  * Reversing a decision deliberately does NOT delete the Session built from the
  * abstract: the session is the confirmed record, and silently pulling a talk

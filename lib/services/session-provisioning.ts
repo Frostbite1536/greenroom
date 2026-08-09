@@ -17,9 +17,6 @@ import type { Prisma } from "@prisma/client";
 /** Fallback length for an auto-created session when the proposal never stated one. */
 export const DEFAULT_SESSION_MINUTES = 30;
 
-/** Sane ceiling on a single event's onboarding checklist (bounded fan-out). */
-export const MAX_ONBOARDING_TASKS = 100;
-
 /**
  * Session length: what the caller asked for, else what the speaker proposed,
  * else the house default. Accepting a talk must never fail merely because the
@@ -116,7 +113,6 @@ export async function assignOnboardingTasks(
       where: { eventId },
       select: { id: true },
       orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
-      take: MAX_ONBOARDING_TASKS,
     }),
     // The confirmed session's roster is authoritative for a talk that is on the
     // programme, and it is what the portal reads.
