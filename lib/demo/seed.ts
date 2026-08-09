@@ -292,10 +292,10 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
           { key: "needs_hotel", label: "Do you need a hotel room?", type: "SELECT", required: true, sortOrder: 0,
             helpText: "We cover two nights for speakers travelling from outside the Bay Area.",
             options: [{ label: "Yes, please book a room", value: "yes" }, { label: "No, I'll arrange my own", value: "no" }] },
-          { key: "check_in", label: "Check-in date", type: "SHORT_TEXT", required: false, sortOrder: 1,
+          { key: "check_in", label: "Check-in date", type: "SHORT_TEXT", required: true, sortOrder: 1,
             helpText: "For example: 11 May 2026.",
             conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] } },
-          { key: "check_out", label: "Check-out date", type: "SHORT_TEXT", required: false, sortOrder: 2,
+          { key: "check_out", label: "Check-out date", type: "SHORT_TEXT", required: true, sortOrder: 2,
             conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] } },
           { key: "room_preference", label: "Room preference", type: "SELECT", required: false, sortOrder: 3,
             options: [{ label: "No preference", value: "any" }, { label: "Quiet floor", value: "quiet" }, { label: "Accessible room", value: "accessible" }],
@@ -321,15 +321,15 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
         create: [
           { key: "claiming_travel", label: "Are you claiming travel costs?", type: "SELECT", required: true, sortOrder: 0,
             options: [{ label: "Yes", value: "yes" }, { label: "No, my employer covers it", value: "no" }] },
-          { key: "departure_city", label: "Departure city", type: "SHORT_TEXT", required: false, sortOrder: 1,
+          { key: "departure_city", label: "Departure city", type: "SHORT_TEXT", required: true, sortOrder: 1,
             conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
-          { key: "amount", label: "Total amount (USD)", type: "NUMBER", required: false, sortOrder: 2,
+          { key: "amount", label: "Total amount (USD)", type: "NUMBER", required: true, sortOrder: 2,
             helpText: "Economy fares up to $800 are reimbursed in full.",
             conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
-          { key: "receipt_url", label: "Link to your receipt", type: "URL", required: false, sortOrder: 3,
+          { key: "receipt_url", label: "Link to your receipt", type: "URL", required: true, sortOrder: 3,
             helpText: "A shared link to a PDF or photo is fine.",
             conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
-          { key: "payee_email", label: "Where should we send confirmation?", type: "SHORT_TEXT", required: false, sortOrder: 4,
+          { key: "payee_email", label: "Where should we send confirmation?", type: "SHORT_TEXT", required: true, sortOrder: 4,
             conditionalLogic: { match: "all", rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }] } },
         ],
       },
@@ -511,24 +511,24 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   // examples (requirements delta #2, answer 5): both are FORMS a speaker fills
   // in, not checkboxes, because the programme team needs the answers.
   const taskDefs = [
-    { title: "Complete your speaker profile", required: true, formConfigId: null as string | null,
+    { title: "Complete your speaker profile", required: true, formConfigId: null as string | null, dueDate: "2026-04-17",
       description: "Add your bio, company and headshot so we can publish your session." },
-    { title: "Tell us about your hotel stay", required: true, formConfigId: hotelForm.id,
+    { title: "Tell us about your hotel stay", required: true, formConfigId: hotelForm.id, dueDate: "2026-04-24",
       description: "We book speaker rooms as a block — tell us which nights you need." },
-    { title: "Claim your flight reimbursement", required: true, formConfigId: flightForm.id,
+    { title: "Claim your flight reimbursement", required: true, formConfigId: flightForm.id, dueDate: "2026-05-01",
       description: "Send us your travel costs and where to pay them." },
-    { title: "Submit A/V & logistics form", required: true, formConfigId: avForm.id,
+    { title: "Submit A/V & logistics form", required: true, formConfigId: avForm.id, dueDate: "2026-05-04",
       description: "Shirt size, A/V needs and arrival details for the stage crew." },
-    { title: "Confirm your session details", required: true, formConfigId: null,
-      description: "Check the title and description we will print in the programme." },
-    { title: "Upload your slide deck", required: false, formConfigId: null,
+    { title: "Confirm your session details", required: true, formConfigId: null, dueDate: "2026-05-06",
+      description: "Review the public schedule and tell the programme team about any corrections." },
+    { title: "Upload your slide deck", required: false, formConfigId: null, dueDate: "2026-05-11",
       description: "Optional, but it helps the crew test your slides in advance." },
   ];
   const tasks = [];
   for (const [i, t] of taskDefs.entries()) {
     const row = await db.onboardingTask.create({
       data: { eventId, title: t.title, required: t.required, formConfigId: t.formConfigId, sortOrder: i,
-        dueAt: new Date("2026-04-15T00:00:00.000Z"),
+        dueAt: new Date(zonedToUtcIso(t.dueDate, "23:59", DEMO_EVENT.timezone)),
         description: t.description },
     });
     tasks.push(row);
