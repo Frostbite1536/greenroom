@@ -27,6 +27,8 @@ export type ReminderSession = {
   startsAt: Date | null;
   endsAt: Date | null;
   roomName: string | null;
+  /** Stable source for invitation DTSTAMP and retry idempotency. */
+  calendarUpdatedAt?: Date | null;
 };
 
 export type EligibleSpeaker = {
@@ -94,11 +96,11 @@ export function buildSpeakerCalendarInvite(
   eventName: string,
   appUrl?: string,
 ): { filename: string; content: string } | null {
-  const events: IcsEvent[] = speaker.sessions
+  const scheduled = speaker.sessions
     .filter((session): session is ReminderSession & { startsAt: Date; endsAt: Date; roomName: string } =>
       Boolean(session.startsAt && session.endsAt && session.roomName),
-    )
-    .map((session) => ({
+    );
+  const events: IcsEvent[] = scheduled.map((session) => ({
       uid: `${session.id}@greenroom`,
       title: session.title,
       description: session.description,
@@ -109,8 +111,15 @@ export function buildSpeakerCalendarInvite(
     }));
 
   if (events.length === 0) return null;
+  // A fresh wall-clock DTSTAMP would change the attachment bytes on every
+  // retry and defeat the provider's logical-send idempotency key. Schedule-slot
+  // updatedAt is stable until the invitation data changes; startsAt is a
+  // deterministic fallback for callers that do not carry persistence metadata.
+  const stamp = new Date(Math.max(
+    ...scheduled.map((session) => session.calendarUpdatedAt?.getTime() ?? session.startsAt.getTime()),
+  ));
   return {
     filename: icsFilename(`${eventName}-invite`),
-    content: buildIcsCalendar(events, { method: "REQUEST", calendarName: eventName }),
+    content: buildIcsCalendar(events, { method: "REQUEST", calendarName: eventName, now: stamp }),
   };
 }

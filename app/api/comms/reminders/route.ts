@@ -41,7 +41,7 @@ export const POST = handle(async (req) => {
         } } },
         session: { select: {
           id: true, title: true, description: true,
-          scheduleSlot: { select: { startsAt: true, endsAt: true, room: { select: { name: true } } } },
+          scheduleSlot: { select: { startsAt: true, endsAt: true, updatedAt: true, room: { select: { name: true } } } },
         } },
       },
       orderBy: { user: { email: "asc" } },
@@ -80,6 +80,7 @@ export const POST = handle(async (req) => {
       startsAt: row.session.scheduleSlot?.startsAt ?? null,
       endsAt: row.session.scheduleSlot?.endsAt ?? null,
       roomName: row.session.scheduleSlot?.room.name ?? null,
+      calendarUpdatedAt: row.session.scheduleSlot?.updatedAt ?? null,
     });
     grouped.set(row.user.id, existing);
   }

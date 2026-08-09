@@ -7,6 +7,7 @@ import {
   selectEligibleSpeakers,
   type EligibleSpeaker,
 } from "./reminders";
+import { logicalEmailIdempotencyKey } from "./send";
 
 const speaker: EligibleSpeaker = {
   userId: "speaker-1",
@@ -20,6 +21,7 @@ const speaker: EligibleSpeaker = {
     startsAt: new Date("2026-05-12T09:00:00.000Z"),
     endsAt: new Date("2026-05-12T09:30:00.000Z"),
     roomName: "Hall A",
+    calendarUpdatedAt: new Date("2026-04-20T12:00:00.000Z"),
   }],
 };
 
@@ -52,8 +54,27 @@ test("rendering sanitizes authored HTML and escapes runtime variables", () => {
 
 test("calendar invitation uses RFC 5545 REQUEST semantics", () => {
   const invite = buildSpeakerCalendarInvite(speaker, "Forward 2026", "https://greenroom.example");
+  const retriedInvite = buildSpeakerCalendarInvite(speaker, "Forward 2026", "https://greenroom.example");
   assert.ok(invite);
   assert.equal(invite?.filename, "forward-2026-invite.ics");
   assert.ok(invite?.content.includes("METHOD:REQUEST"));
   assert.ok(invite?.content.includes("UID:session-1@greenroom"));
+  assert.ok(invite?.content.includes("DTSTAMP:20260420T120000Z"));
+  assert.equal(
+    invite?.content,
+    retriedInvite?.content,
+  );
+  const dispatch = (content: string) => ({
+    templateId: "reminder-template",
+    message: {
+      to: speaker.email,
+      subject: "Reminder",
+      html: "<p>See you there</p>",
+      attachments: [{ filename: invite!.filename, content }],
+    },
+  });
+  assert.equal(
+    logicalEmailIdempotencyKey(dispatch(invite!.content), "Greenroom <hello@example.test>"),
+    logicalEmailIdempotencyKey(dispatch(retriedInvite!.content), "Greenroom <hello@example.test>"),
+  );
 });
