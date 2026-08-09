@@ -799,7 +799,6 @@ export type SetupPlan = {
 export type SetupEvaluator = {
   userId: string;
   name: string;
-  email: string;
   role: UserRole;
   /** Assignments in each plan, keyed by planId. */
   loadByPlan: Record<string, number>;
@@ -809,6 +808,8 @@ export type SetupAbstract = {
   id: string;
   title: string;
   status: AbstractStatus;
+  /** Mirrors the S5 write contract; terminal proposals remain coverage-only. */
+  assignable: boolean;
   categoryId: string | null;
   categoryName: string | null;
   /** Routing team inherited from the abstract's category, if configured. */
@@ -830,7 +831,8 @@ export type EvaluationSetupView = {
 };
 
 /**
- * Everything the admin evaluation setup panel needs, in five bounded queries.
+ * Everything the admin evaluation setup panel needs, in six event-scoped
+ * projection/aggregate queries.
  *
  * Assignment detail is read as aggregates rather than rows: the panel only ever
  * needs "how many reviewers on this proposal" and "how loaded is this
@@ -847,11 +849,12 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     }),
     prisma.eventMember.findMany({
       where: { eventId: ctx.eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
-      include: { user: { select: { id: true, name: true, email: true } } },
+      include: { user: { select: { id: true, name: true } } },
       orderBy: { user: { name: "asc" } },
     }),
     prisma.abstract.findMany({
-      // DRAFTs are not submissions yet, and terminal states are not reviewable.
+      // DRAFTs are not submissions. Decisions remain visible for historical
+      // coverage, but `assignable` below keeps them out of the picker.
       where: {
         eventId: ctx.eventId,
         status: { in: ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED"] },
@@ -925,7 +928,6 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     evaluators: members.map((m) => ({
       userId: m.user.id,
       name: m.user.name,
-      email: m.user.email,
       role: m.role,
       loadByPlan: loadByEvaluator.get(m.user.id) ?? {},
     })),
@@ -933,6 +935,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       id: a.id,
       title: a.title,
       status: a.status,
+      assignable: a.status === "SUBMITTED" || a.status === "UNDER_REVIEW",
       categoryId: a.category?.id ?? null,
       categoryName: a.category?.name ?? null,
       defaultTeamKey: a.category?.defaultTeamKey ?? null,

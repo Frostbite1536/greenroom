@@ -631,6 +631,8 @@ try {
   check("admin sees the assignment panel", setupPage.text.includes("Assign proposals to reviewers"));
   check("admin sees review coverage", setupPage.text.includes("Review coverage"));
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
+  check("evaluation setup payload omits unused reviewer emails",
+    !setupPage.text.includes("ravi@greenroom.demo"));
 
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
@@ -661,30 +663,47 @@ try {
   check("a fresh event with a round but no proposals says so",
     freshAfterRound.text.includes("No proposals to review yet"));
 
-  // Assigning must move SUBMITTED proposals to UNDER_REVIEW, with the team key
-  // routed from the abstract's category (teamKey omitted on purpose).
-  const submittedId = submit.data?.data?.id;
-  await req("POST", "/api/evaluations/decisions", { abstractId: submittedId, decision: "ACCEPTED" }, admin);
+  // Assigning must move a genuinely SUBMITTED proposal to UNDER_REVIEW, with
+  // the team key routed from its category (teamKey omitted on purpose). S5 now
+  // correctly refuses the inherited smoke's old ACCEPTED fixture.
+  const setupAbstract = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID,
+      formConfigId: fx.form.id,
+      submitterId: fx.users.speaker,
+      title: "Scratch: Ready for reviewer assignment",
+      abstract: "A submitted proposal for the setup panel.",
+      categoryId: fx.category.id,
+      status: "SUBMITTED",
+      submittedAt: new Date(),
+      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
   const freshAssign = await req("POST", "/api/evaluations/assignments", {
     planId: fx.plan.id,
-    abstractIds: [fx.acceptedAbstract.id],
+    abstractIds: [setupAbstract.id],
     evaluatorIds: [fx.users.evaluator],
   }, admin);
   check("setup panel can assign reviewers → 201", freshAssign.status === 201,
     `${freshAssign.status} ${JSON.stringify(freshAssign.data?.error ?? "")}`);
+  check("assignment moves the submitted proposal to UNDER_REVIEW",
+    (await prisma.abstract.findUnique({
+      where: { id: setupAbstract.id },
+      select: { status: true },
+    }))?.status === "UNDER_REVIEW");
   check("assignment inherits the category's review team",
     (await prisma.reviewAssignment.findFirst({
-      where: { planId: fx.plan.id, abstractId: fx.acceptedAbstract.id },
+      where: { planId: fx.plan.id, abstractId: setupAbstract.id },
       select: { teamKey: true },
     }))?.teamKey === "team-ai");
   check("re-assigning the same pair is idempotent",
     (await req("POST", "/api/evaluations/assignments", {
       planId: fx.plan.id,
-      abstractIds: [fx.acceptedAbstract.id],
+      abstractIds: [setupAbstract.id],
       evaluatorIds: [fx.users.evaluator],
     }, admin)).status === 201
     && (await prisma.reviewAssignment.count({
-      where: { planId: fx.plan.id, abstractId: fx.acceptedAbstract.id },
+      where: { planId: fx.plan.id, abstractId: setupAbstract.id },
     })) === 1);
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---

@@ -51,17 +51,31 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const assignableAbstracts = useMemo(
+    () => view.abstracts.filter((abstract) => abstract.assignable),
+    [view.abstracts],
+  );
+
   const visible = useMemo(() => {
-    return view.abstracts.filter((a) => {
+    return assignableAbstracts.filter((a) => {
       if (categoryFilter !== "all" && a.categoryId !== categoryFilter) return false;
       if (onlyUnassigned && plan && (a.assignedByPlan[plan.id] ?? 0) > 0) return false;
       return true;
     });
-  }, [view.abstracts, categoryFilter, onlyUnassigned, plan]);
+  }, [assignableAbstracts, categoryFilter, onlyUnassigned, plan]);
 
   const unassignedCount = plan
-    ? view.abstracts.filter((a) => (a.assignedByPlan[plan.id] ?? 0) === 0).length
-    : view.abstracts.length;
+    ? assignableAbstracts.filter((a) => (a.assignedByPlan[plan.id] ?? 0) === 0).length
+    : assignableAbstracts.length;
+
+  function selectPlan(nextPlanId: string) {
+    setPlanId(nextPlanId);
+    setPicked(new Set());
+    setReviewers(new Set());
+    setTeamKey("");
+    setError(null);
+    setNotice(null);
+  }
 
   function toggle(set: Set<string>, id: string, apply: (s: Set<string>) => void) {
     const next = new Set(set);
@@ -88,7 +102,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
       return;
     }
     setNotice(
-      `Assigned ${picked.size} proposal${picked.size === 1 ? "" : "s"} to ${reviewers.size} reviewer${reviewers.size === 1 ? "" : "s"}. Submitted proposals are now under review.`,
+      `Assigned ${picked.size} proposal${picked.size === 1 ? "" : "s"} to ${reviewers.size} reviewer${reviewers.size === 1 ? "" : "s"}. Any newly submitted proposal is now under review.`,
     );
     setPicked(new Set());
     startTransition(() => router.refresh());
@@ -147,7 +161,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
               key={p.id}
               className={`round-card ${p.id === plan?.id ? "active" : ""}`}
               aria-pressed={p.id === plan?.id}
-              onClick={() => setPlanId(p.id)}
+              onClick={() => selectPlan(p.id)}
             >
               <div className="row wrap" style={{ gap: 8 }}>
                 <strong>Round {p.ordinal}</strong>
@@ -189,6 +203,11 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
               <Link href="/admin/forms">Check your CFP form is published</Link> and its window is
               open.
             </EmptyState>
+          ) : assignableAbstracts.length === 0 ? (
+            <EmptyState icon={<ClipboardCheck size={22} />} title="No proposals ready for review">
+              Every submitted proposal has already reached a decision. Their historical coverage
+              remains visible below.
+            </EmptyState>
           ) : (
             <>
               {view.routingUnconfigured ? (
@@ -205,8 +224,12 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     <span className="spacer" />
                     <select
                       className="select-input"
+                      name="proposalCategoryFilter"
                       value={categoryFilter}
-                      onChange={(e) => setCategoryFilter(e.target.value)}
+                      onChange={(e) => {
+                        setCategoryFilter(e.target.value);
+                        setPicked(new Set());
+                      }}
                       aria-label="Filter by category"
                     >
                       <option value="all">All categories</option>
@@ -217,8 +240,12 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     <label className="row" style={{ gap: 6 }}>
                       <input
                         type="checkbox"
+                        name="onlyUnassigned"
                         checked={onlyUnassigned}
-                        onChange={(e) => setOnlyUnassigned(e.target.checked)}
+                        onChange={(e) => {
+                          setOnlyUnassigned(e.target.checked);
+                          setPicked(new Set());
+                        }}
                       />
                       <span className="hint">Needs reviewers only</span>
                     </label>
@@ -252,6 +279,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                           <label className="pick-row" key={a.id}>
                             <input
                               type="checkbox"
+                              name="proposalIds"
                               checked={picked.has(a.id)}
                               onChange={() => toggle(picked, a.id, setPicked)}
                             />
@@ -283,6 +311,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                       <label className="pick-row" key={e.userId}>
                         <input
                           type="checkbox"
+                          name="reviewerIds"
                           checked={reviewers.has(e.userId)}
                           onChange={() => toggle(reviewers, e.userId, setReviewers)}
                         />
@@ -303,8 +332,11 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     <span className="field-label">Review team (optional)</span>
                     <input
                       className="text-input"
+                      name="reviewTeam"
+                      autoComplete="off"
+                      maxLength={120}
+                      spellCheck={false}
                       value={teamKey}
-                      placeholder="Leave blank to use each category’s team"
                       onChange={(e) => setTeamKey(e.target.value)}
                     />
                     <span className="hint">
@@ -331,7 +363,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     ? "Pick at least one proposal."
                     : reviewers.size === 0
                       ? "Pick at least one reviewer."
-                      : `${picked.size * reviewers.size} review${picked.size * reviewers.size === 1 ? "" : "s"} will be created.`}
+                      : `${picked.size * reviewers.size} assignment combination${picked.size * reviewers.size === 1 ? "" : "s"} will be applied.`}
                 </span>
               </div>
             </>
@@ -346,7 +378,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
             <h2>Review coverage — round {plan.ordinal}</h2>
             <p className="hint">
               {unassignedCount === 0
-                ? "Every proposal in this round has at least one reviewer."
+                ? "Every proposal that still needs review has at least one reviewer."
                 : `${unassignedCount} proposal${unassignedCount === 1 ? "" : "s"} still need a reviewer.`}
             </p>
           </div>
@@ -371,10 +403,12 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                       <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                       <td>{STATUS_LABEL[a.status] ?? a.status}</td>
                       <td>
-                        {assigned === 0 ? (
+                        {assigned === 0 && a.assignable ? (
                           <span className="programme-alert">
                             <AlertTriangle size={11} aria-hidden="true" /> None
                           </span>
+                        ) : assigned === 0 ? (
+                          <span className="muted">Not needed</span>
                         ) : (
                           assigned
                         )}
@@ -438,6 +472,10 @@ function RoundDialog({
     setCriteria((list) => list.map((c, j) => (j === i ? { ...c, ...next } : c)));
   }
 
+  function closeDialog() {
+    if (!busy) dialogRef.current?.close();
+  }
+
   async function create() {
     const labelled = criteria.filter((c) => c.label.trim() !== "");
     if (labelled.length === 0) {
@@ -447,6 +485,16 @@ function RoundDialog({
     const bad = labelled.find((c) => c.min >= c.max);
     if (bad) {
       setError(`“${bad.label}”: the highest score must be greater than the lowest.`);
+      return;
+    }
+    const nonIntegerRange = labelled.find((c) => !Number.isInteger(c.min) || !Number.isInteger(c.max));
+    if (nonIntegerRange) {
+      setError(`“${nonIntegerRange.label}”: lowest and highest scores must be whole numbers.`);
+      return;
+    }
+    const badWeight = labelled.find((c) => !Number.isFinite(c.weight) || c.weight <= 0);
+    if (badWeight) {
+      setError(`“${badWeight.label}”: weight must be greater than zero.`);
       return;
     }
 
@@ -482,9 +530,11 @@ function RoundDialog({
       className="app-dialog round-dialog"
       aria-label="New review round"
       onClose={onClose}
-      onCancel={onClose}
+      onCancel={(event) => {
+        if (busy) event.preventDefault();
+      }}
       onMouseDown={(event) => {
-        if (event.target === dialogRef.current) onClose();
+        if (event.target === dialogRef.current) closeDialog();
       }}
     >
       <div>
@@ -499,25 +549,36 @@ function RoundDialog({
         <div className="grid-2" style={{ marginTop: 14 }}>
           <label className="stack">
             <span className="field-label">Round name</span>
-            <input className="text-input" value={name} maxLength={160} onChange={(e) => setName(e.target.value)} />
+            <input
+              className="text-input"
+              name="roundName"
+              autoComplete="off"
+              value={name}
+              maxLength={160}
+              onChange={(e) => setName(e.target.value)}
+            />
           </label>
           <label className="stack">
             <span className="field-label">Round number</span>
             <input
               className="text-input"
+              name="roundOrdinal"
               type="number"
+              inputMode="numeric"
               min={1}
               value={ordinal}
-              onChange={(e) => setOrdinal(Math.max(1, Number(e.target.value) || 1))}
+              onChange={(e) => setOrdinal(Math.max(1, Math.trunc(Number(e.target.value) || 1)))}
             />
           </label>
         </div>
 
         <div className="row" style={{ marginTop: 14, gap: 10 }}>
-          <Switch checked={isBlind} onChange={setIsBlind} label="Hide speaker names from reviewers" />
+          <Switch checked={isBlind} onChange={setIsBlind} label="Hide speaker profiles in reviewer queues" />
           <div>
             <span className="field-label">Blind review</span>
-            <p className="hint">Reviewers will not see who submitted the proposal.</p>
+            <p className="hint">
+              Assigned review queues hide speaker profiles. Proposal text can still identify a speaker.
+            </p>
           </div>
         </div>
 
@@ -528,21 +589,41 @@ function RoundDialog({
 
         {criteria.map((c, i) => (
           <div className="criterion-row" key={i}>
-            <label className="stack">
-              <span className="field-label">Criterion</span>
-              <input className="text-input" value={c.label} onChange={(e) => patch(i, { label: e.target.value })} />
-            </label>
+            <div className="criterion-main">
+              <label className="stack">
+                <span className="field-label">Criterion</span>
+                <input
+                  className="text-input"
+                  name={`criterion-${i}-label`}
+                  autoComplete="off"
+                  maxLength={120}
+                  value={c.label}
+                  onChange={(e) => patch(i, { label: e.target.value })}
+                />
+              </label>
+              <label className="stack">
+                <span className="field-label">Description (optional)</span>
+                <input
+                  className="text-input"
+                  name={`criterion-${i}-description`}
+                  autoComplete="off"
+                  maxLength={500}
+                  value={c.description}
+                  onChange={(e) => patch(i, { description: e.target.value })}
+                />
+              </label>
+            </div>
             <label className="stack">
               <span className="field-label">Lowest</span>
-              <input className="text-input" type="number" value={c.min} onChange={(e) => patch(i, { min: Number(e.target.value) || 0 })} />
+              <input className="text-input" name={`criterion-${i}-min`} type="number" inputMode="numeric" step={1} value={c.min} onChange={(e) => patch(i, { min: Number(e.target.value) || 0 })} />
             </label>
             <label className="stack">
               <span className="field-label">Highest</span>
-              <input className="text-input" type="number" value={c.max} onChange={(e) => patch(i, { max: Number(e.target.value) || 0 })} />
+              <input className="text-input" name={`criterion-${i}-max`} type="number" inputMode="numeric" step={1} value={c.max} onChange={(e) => patch(i, { max: Number(e.target.value) || 0 })} />
             </label>
             <label className="stack">
               <span className="field-label">Weight</span>
-              <input className="text-input" type="number" min={0.1} step={0.5} value={c.weight} onChange={(e) => patch(i, { weight: Number(e.target.value) || 1 })} />
+              <input className="text-input" name={`criterion-${i}-weight`} type="number" inputMode="decimal" min={0.1} step={0.5} value={c.weight} onChange={(e) => patch(i, { weight: Number(e.target.value) || 1 })} />
             </label>
             <button
               type="button"
@@ -551,7 +632,7 @@ function RoundDialog({
               disabled={criteria.length === 1}
               onClick={() => setCriteria((list) => list.filter((_, j) => j !== i))}
             >
-              <Trash2 size={15} />
+              <Trash2 size={15} aria-hidden="true" />
             </button>
           </div>
         ))}
@@ -566,7 +647,7 @@ function RoundDialog({
         </button>
 
         <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 22, gap: 8 }}>
-          <button className="ghost-button" type="button" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="ghost-button" type="button" onClick={closeDialog} disabled={busy}>Cancel</button>
           <button className="primary-button" type="button" onClick={create} disabled={busy}>
             {busy ? "Creating…" : "Create round"}
           </button>
@@ -579,8 +660,8 @@ function RoundDialog({
 /** Small header stat block shared by the evaluations page. */
 export function SetupSummary({ view, plan }: { view: EvaluationSetupView; plan: SetupPlan | null }) {
   const needing = plan
-    ? view.abstracts.filter((a) => (a.assignedByPlan[plan.id] ?? 0) === 0).length
-    : view.abstracts.length;
+    ? view.abstracts.filter((a) => a.assignable && (a.assignedByPlan[plan.id] ?? 0) === 0).length
+    : view.abstracts.filter((a) => a.assignable).length;
   return (
     <div className="metric-grid">
       <div className="metric"><span>Rounds</span><strong>{view.plans.length}</strong></div>
