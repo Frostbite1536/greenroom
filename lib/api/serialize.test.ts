@@ -56,8 +56,8 @@ test("serializeAbstract derives review progress and an average score from includ
     durationMinutes: null,
     categoryId: null,
     status: "UNDER_REVIEW",
-    draftCapabilityHash: null,
-    draftRevision: 0,
+    draftCapabilityHash: "a".repeat(64),
+    draftRevision: 42,
     submittedAt: null,
     decidedAt: null,
     createdAt: new Date(),
@@ -80,6 +80,8 @@ test("serializeAbstract derives review progress and an average score from includ
   assert.equal(result.reviewsComplete, 1);
   assert.equal(result.reviewsTotal, 2);
   assert.equal(result.avgScore, 4);
+  assert.equal("draftCapabilityHash" in result, false);
+  assert.equal("draftRevision" in result, false);
 });
 
 test("serializeAbstract preserves the non-final MAYBE state and its null final-decision timestamp", () => {
@@ -94,8 +96,8 @@ test("serializeAbstract preserves the non-final MAYBE state and its null final-d
     durationMinutes: null,
     categoryId: null,
     status: "MAYBE",
-    draftCapabilityHash: null,
-    draftRevision: 0,
+    draftCapabilityHash: "b".repeat(64),
+    draftRevision: 7,
     submittedAt: new Date("2026-08-01T00:00:00.000Z"),
     decidedAt: null,
     createdAt: new Date(),
@@ -119,8 +121,8 @@ test("serializeAdminAbstract omits legacy cross-round score and progress fields"
     durationMinutes: null,
     categoryId: null,
     status: "UNDER_REVIEW",
-    draftCapabilityHash: null,
-    draftRevision: 0,
+    draftCapabilityHash: "c".repeat(64),
+    draftRevision: 99,
     submittedAt: null,
     decidedAt: null,
     createdAt: new Date(),
@@ -136,4 +138,6 @@ test("serializeAdminAbstract omits legacy cross-round score and progress fields"
   assert.equal("avgScore" in result, false);
   assert.equal("reviewsComplete" in result, false);
   assert.equal("reviewsTotal" in result, false);
+  assert.equal("draftCapabilityHash" in result, false);
+  assert.equal("draftRevision" in result, false);
 });

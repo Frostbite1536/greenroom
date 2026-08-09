@@ -152,6 +152,22 @@ function stopServer() {
 
 function cleanup() {
   cleanupPromise ??= (async () => {
+    try {
+      await prisma.publicSubmissionRateBucket.deleteMany({
+        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+      });
+      const remainingRateBuckets = await prisma.publicSubmissionRateBucket.count({
+        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+      });
+      check(
+        "scratch-owned public rate buckets are cleared at final teardown",
+        remainingRateBuckets === 0,
+        remainingRateBuckets,
+      );
+    } catch (error) {
+      cleanupFailed = true;
+      console.error("[smoke] scratch rate-bucket cleanup failed", error);
+    }
     await prisma.$disconnect().catch((error) => {
       cleanupFailed = true;
       console.error("[smoke] Prisma cleanup failed", error);
@@ -1011,6 +1027,33 @@ try {
     `${s17NonDraft.status}/${s17Legacy.status}/${JSON.stringify(s17NoWriteAfterLegacyFailures)}`,
   );
 
+  const s17ResumeNoWriteBefore = await publicDraftCoreCounts();
+  const s17ResumeFailures = [];
+  for (const draftCapability of [undefined, "", "C".repeat(43), { wrong: true }]) {
+    s17ResumeFailures.push(await j("POST", "/api/cfp/submissions/resume", {
+      formConfigId: formId,
+      abstractId: s17DraftId,
+      ...(draftCapability === undefined ? {} : { draftCapability }),
+    }));
+  }
+  const s17ResumeCrossForm = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: s19ClosedForm.id, abstractId: s17DraftId, draftCapability: s17Capability,
+  });
+  const s17ResumeNonDraft = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId, draftCapability: s17Capability,
+  });
+  const s17ResumeLegacy = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId: s17LegacyDraft?.id, draftCapability: s17Capability,
+  });
+  const s17ResumeNoWriteAfter = await publicDraftCoreCounts();
+  check(
+    "S17 resume missing, empty, wrong, wrong-type, cross-form, non-DRAFT, and legacy-null paths are generic no-write 404s",
+    s17ResumeFailures.every(isDraftNotFound) && isDraftNotFound(s17ResumeCrossForm) &&
+      isDraftNotFound(s17ResumeNonDraft) && isDraftNotFound(s17ResumeLegacy) &&
+      JSON.stringify(s17ResumeNoWriteAfter) === JSON.stringify(s17ResumeNoWriteBefore),
+    `${s17ResumeFailures.map((response) => response.status).join(",")}/${s17ResumeCrossForm.status}/${s17ResumeNonDraft.status}/${s17ResumeLegacy.status}`,
+  );
+
   // Hold the final class, turn the draft terminal, then release the waiting
   // public writer. Its fresh post-lock read must refuse without any mutation.
   const s17ContentionCreate = await j("POST", "/api/cfp/submissions", {
@@ -1111,6 +1154,16 @@ try {
     "S17 revoked-capability replay is generic 404 and cannot duplicate the receipt or core writes",
     isDraftNotFound(s17Replay) && JSON.stringify(s17ReplayCoreAfter) === JSON.stringify(s17ReplayCoreBefore),
     `${s17Replay.status}/${JSON.stringify(s17ReplayCoreAfter)}`,
+  );
+  const s17ResumeRevokedBefore = await publicDraftCoreCounts();
+  const s17ResumeRevoked = await j("POST", "/api/cfp/submissions/resume", {
+    formConfigId: formId, abstractId: s17DraftId, draftCapability: s17Capability,
+  });
+  const s17ResumeRevokedAfter = await publicDraftCoreCounts();
+  check(
+    "S17 resume after an actual submit sees a revoked capability as the same no-write 404",
+    isDraftNotFound(s17ResumeRevoked) && JSON.stringify(s17ResumeRevokedAfter) === JSON.stringify(s17ResumeRevokedBefore),
+    `${s17ResumeRevoked.status}/${JSON.stringify(s17ResumeRevokedAfter)}`,
   );
 
   // 5. Admin lists abstracts
@@ -2378,15 +2431,15 @@ try {
   }, speaker);
   check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
 
-  // Regression guard: an anonymous edit remains refused. The S20 window gate
-  // now correctly wins once a form is closed, before the draft-status check.
+  // Regression guard: capability/DRAFT authorization precedes window policy,
+  // so a cap-less anonymous edit never learns whether this form is closed.
   const publicOverwrite = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, abstractId: r1Id, title: "Anonymous overwrite",
     speakers: [{ email: "attacker@scratch.test", name: "Attacker", isPrimary: true }],
     answers: {}, intent: "saveDraft",
   });
-  check("R1 public path still refuses an anonymous edit after the form closes",
-    publicOverwrite.status === 422 && publicOverwrite.data?.error?.code === "FORM_CLOSED",
+  check("R1 cap-less anonymous edit after close stays the generic draft 404",
+    publicOverwrite.status === 404 && publicOverwrite.data?.error?.code === "DRAFT_NOT_FOUND",
     publicOverwrite.data?.error?.code);
 
   // 22. W1 — speaker self-withdraw, and the states it makes reachable for the
@@ -2536,8 +2589,8 @@ try {
   fatalError = true;
   console.error("SMOKE ERROR", e);
 } finally {
+  await cleanup();
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
-  await cleanup();
   process.exit(fatalError || failed.length || cleanupFailed ? 1 : 0);
 }
