@@ -16,6 +16,7 @@ import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 const prisma = new PrismaClient();
 const EVENT_ID = "scratch-frontend";
 const BLIND_SPEAKER_EMAIL = "blind-boundary@scratch.test";
+const SECOND_EVALUATOR_EMAIL = "second-evaluator@scratch.test";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -35,6 +36,7 @@ if (probe) {
 const ev = { id: EVENT_ID, name: "Scratch Frontend", slug: EVENT_ID };
 const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom.demo" }, event: ev, role: "ADMIN" };
 const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom.demo" }, event: ev, role: "EVALUATOR" };
+const evaluatorTwo = { user: { id: "x", name: "Casey Morgan", email: SECOND_EVALUATOR_EMAIL }, event: ev, role: "EVALUATOR" };
 const speaker = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "SPEAKER" };
 const cookie = cookieForSession;
 
@@ -55,7 +57,7 @@ async function req(method, path, body, sess) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: BLIND_SPEAKER_EMAIL } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -73,14 +75,16 @@ async function resetScratch() {
   for (const [key, [email, name]] of Object.entries({
     admin: ["maya@greenroom.demo", "Maya Chen"],
     evaluator: ["ravi@greenroom.demo", "Ravi Patel"],
+    evaluatorTwo: [SECOND_EVALUATOR_EMAIL, "Casey Morgan"],
     speaker: ["sofia@greenroom.demo", "Sofia Marques"],
   })) {
+    const role = key === "admin" ? "ADMIN" : key.startsWith("evaluator") ? "EVALUATOR" : "SPEAKER";
     const u = await prisma.user.upsert({ where: { email }, update: { name }, create: { email, name } });
     users[key] = u.id;
     await prisma.eventMember.upsert({
       where: { eventId_userId: { eventId: EVENT_ID, userId: u.id } },
-      update: { role: key === "admin" ? "ADMIN" : key === "evaluator" ? "EVALUATOR" : "SPEAKER" },
-      create: { eventId: EVENT_ID, userId: u.id, role: key === "admin" ? "ADMIN" : key === "evaluator" ? "EVALUATOR" : "SPEAKER" },
+      update: { role },
+      create: { eventId: EVENT_ID, userId: u.id, role },
     });
   }
 
@@ -148,6 +152,9 @@ async function resetScratch() {
   });
   await prisma.reviewAssignment.create({
     data: { planId: plan.id, abstractId: abstract.id, evaluatorId: users.evaluator, teamKey: "team-ai", status: "ASSIGNED" },
+  });
+  await prisma.reviewAssignment.create({
+    data: { planId: plan.id, abstractId: abstract.id, evaluatorId: users.evaluatorTwo, teamKey: "team-ai", status: "ASSIGNED" },
   });
 
   // An accepted abstract to convert, plus two sessions to schedule/conflict.
@@ -234,7 +241,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: BLIND_SPEAKER_EMAIL } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -694,6 +701,111 @@ try {
   }, evaluator);
   check("score submission → 200", score.status === 200, `${score.status} ${JSON.stringify(score.data?.error ?? "")}`);
 
+  const scoreOmission = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: fx.abstract.id,
+    scores: [
+      { rubricKey: "relevance", score: 4 },
+      { rubricKey: "clarity", score: 5 },
+    ],
+    complete: true,
+  }, evaluator);
+  check("omitted review comment preserves the saved note", scoreOmission.status === 200
+    && (await prisma.reviewScore.findUnique({
+      where: { planId_abstractId_evaluatorId_rubricKey: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator, rubricKey: "relevance" } },
+      select: { comment: true },
+    }))?.comment === "Strong.");
+
+  const textareaValue = (html) => html.match(/<textarea\b[^>]*name="reviewComment"[^>]*>([\s\S]*?)<\/textarea>/)?.[1] ?? null;
+  const reviewNotesSection = (html) => {
+    const start = html.indexOf('<section class="review-notes"');
+    if (start === -1) return null;
+    const end = html.indexOf("</section>", start);
+    return end === -1 ? null : html.slice(start, end + "</section>".length);
+  };
+  const renderedText = (html) => html
+    ?.replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[^;]+;/g, "")
+    .trim() ?? null;
+  const evaluatorCommentPage = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator textarea pre-fills the recovered own comment",
+    evaluatorCommentPage.status === 200 && textareaValue(evaluatorCommentPage.text) === "Strong.");
+
+  const organizerCommentDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin);
+  const organizerReviewNotes = reviewNotesSection(organizerCommentDrawer.text);
+  const organizerReviewNotesText = renderedText(organizerReviewNotes);
+  check("organizer drawer renders a de-identified review block",
+    organizerCommentDrawer.status === 200
+    && organizerReviewNotesText?.includes("Review notes")
+    && organizerReviewNotesText.includes("Review 1")
+    && organizerReviewNotesText.includes("Strong.")
+    && !organizerReviewNotesText.includes("Ravi Patel"));
+  const evaluatorCommentDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, evaluator);
+  check("evaluator abstract drawer excludes organizer review notes",
+    evaluatorCommentDrawer.status === 200
+    && !evaluatorCommentDrawer.text.includes("Review notes")
+    && !evaluatorCommentDrawer.text.includes("Strong."));
+
+  const scoreClear = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: fx.abstract.id,
+    scores: [
+      { rubricKey: "relevance", score: 4, comment: null },
+      { rubricKey: "clarity", score: 5 },
+    ],
+    complete: true,
+  }, evaluator);
+  check("explicit null clears the evaluator review comment", scoreClear.status === 200
+    && (await prisma.reviewScore.count({
+      where: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator, comment: { not: null } },
+    })) === 0);
+
+  // Simulate a pre-C5 evaluator review with divergent criterion comments. The
+  // organizer must keep both texts in one de-identified review block, while a
+  // normal second evaluator remains a separate block.
+  await prisma.reviewScore.update({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator, rubricKey: "relevance" } },
+    data: { comment: "Legacy first note" },
+  });
+  await prisma.reviewScore.update({
+    where: { planId_abstractId_evaluatorId_rubricKey: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator, rubricKey: "clarity" } },
+    data: { comment: "Legacy second note" },
+  });
+  const secondReviewerScore = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: fx.abstract.id,
+    scores: [
+      { rubricKey: "relevance", score: 3, comment: "Second review note" },
+      { rubricKey: "clarity", score: 3 },
+    ],
+    complete: true,
+  }, evaluatorTwo);
+  check("second evaluator review submission → 200", secondReviewerScore.status === 200,
+    `${secondReviewerScore.status} ${JSON.stringify(secondReviewerScore.data?.error ?? "")}`);
+
+  const groupedOrganizerDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin);
+  const groupedOrganizerReviewNotes = reviewNotesSection(groupedOrganizerDrawer.text);
+  const groupedOrganizerReviewNotesText = renderedText(groupedOrganizerReviewNotes);
+  check("organizer drawer groups legacy texts by de-identified review",
+    groupedOrganizerDrawer.status === 200
+    && groupedOrganizerReviewNotesText?.includes("Review 1")
+    && groupedOrganizerReviewNotesText.includes("Review 2")
+    && groupedOrganizerReviewNotesText.includes("Legacy first note")
+    && groupedOrganizerReviewNotesText.includes("Legacy second note")
+    && groupedOrganizerReviewNotesText.includes("Second review note")
+    && !groupedOrganizerReviewNotesText.includes("Ravi Patel")
+    && !groupedOrganizerReviewNotesText.includes("Casey Morgan"));
+  const recoveredEvaluatorPage = await req("GET", "/admin/evaluations", null, evaluator);
+  check("evaluator textarea recovers the evaluator-owned legacy comment",
+    textareaValue(recoveredEvaluatorPage.text) === "Legacy first note");
+  const hiddenEvaluatorDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, evaluator);
+  check("evaluator payload still excludes every organizer comment",
+    !hiddenEvaluatorDrawer.text.includes("Review notes")
+    && !hiddenEvaluatorDrawer.text.includes("Legacy first note")
+    && !hiddenEvaluatorDrawer.text.includes("Legacy second note")
+    && !hiddenEvaluatorDrawer.text.includes("Second review note"));
+
   const outOfRange = await req("POST", "/api/evaluations/scores", {
     planId: fx.plan.id, abstractId: fx.abstract.id,
     scores: [{ rubricKey: "relevance", score: 99 }], complete: false,
@@ -921,8 +1033,17 @@ try {
   check("withdrawn proposal remains visible as historical coverage",
     Object.values(historyMarkers).every(Boolean),
     JSON.stringify(historyMarkers));
+  const activeAssignments = await prisma.reviewAssignment.groupBy({
+    by: ["status"],
+    where: { planId: fx.plan.id, abstract: { status: { not: "WITHDRAWN" } } },
+    _count: { _all: true },
+  });
+  const activeAssignmentCount = activeAssignments.reduce((total, row) => total + row._count._all, 0);
+  const completedAssignmentCount = activeAssignments
+    .filter((row) => row.status === "COMPLETED")
+    .reduce((total, row) => total + row._count._all, 0);
   check("withdrawn assignment does not keep round progress incomplete",
-    withdrawnSetup.text.includes("1/1 reviews done"));
+    withdrawnSetup.text.includes(`${completedAssignmentCount}/${activeAssignmentCount} reviews done`));
   await prisma.abstract.update({ where: { id: setupAbstract.id }, data: { status: "UNDER_REVIEW" } });
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
