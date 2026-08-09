@@ -53,7 +53,7 @@ you can sanity-check the overall impression — Relevance counts half again as m
 others here, which is why the average is not a plain average.
 
 Add a **comment** if you want to say something to the programme team. It is optional and does
-not appear in the speaker portal. An admin may choose to include written feedback in the
+not appear in the speaker portal. An organiser may choose to share written feedback in a
 decision email, but Greenroom never includes scores or reviewer identities.
 
 Choose **Submit review** when every criterion has a score. The button stays disabled until
@@ -63,10 +63,9 @@ then, with a reminder telling you what is missing.
 
 ## Changing your mind
 
-Reopen any proposal in your queue, adjust the scores, and choose **Update review**. Your
-previous comment is shown underneath the empty box. Leaving that box empty while you change
-scores keeps the saved comment; entering a new comment replaces it. This screen does not yet
-offer a separate clear-comment action.
+Reopen any proposal in your queue, adjust the scores, and choose **Update review**. Each
+proposal opens with its own current note. Leave it unchanged to keep it; edit it to replace it.
+To remove a saved note, choose **Clear note**, then choose **Update review**.
 
 ---
 

@@ -9,8 +9,9 @@ setup appears on camera.
 - Coordinate an Architect-announced demo write window. The walkthrough creates
   one proposal, review assignment, Session, and schedule slot; do not rehearse it
   against `demo-event` outside that window.
-- Use only Jeremy-approved deliverable test addresses. A submitted proposal now
-  triggers real receipt/co-speaker/admin mail when production delivery is live.
+- Use only Jeremy-approved deliverable test addresses. A submitted proposal records one
+  primary-submitter receipt attempt when an event template is available; this walkthrough does
+  not treat a received email as proof of live provider delivery.
 - Use a clean browser profile at 1440×900 or larger.
 - Have the app and a terminal ready. Load the judge-scoped read-only API key into
   `GREENROOM_API_KEY` off-camera; never paste, echo, or record its value.
@@ -42,9 +43,8 @@ questions, and co-speaker area.*
 *Use the approved test address, fill every visible required field, and submit.*
 
 > “The server validates the same rules the page shows, including questions that
-> become required only after another answer. The demo event has email templates,
-> so the proposal is saved first; then Greenroom records the submitter receipt,
-> co-speaker notices, and admin alert.”
+> become required only after another answer. The proposal is saved first; then
+> Greenroom records one receipt attempt for its saved primary submitter.”
 
 *Pause on the thank-you screen.*
 

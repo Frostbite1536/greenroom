@@ -116,9 +116,9 @@ tests and smokes never contact Resend.
 Current mail-producing paths are:
 
 - public proposal submit: when the event has an email template, after the database transaction
-  commits a receipt goes to the submitter, each distinct co-speaker gets an
-  added-to-proposal notice, and event admins get an alert. Notification failure is deliberately
-  non-throwing, so a saved proposal stays saved;
+  commits one receipt goes to the persisted primary submitter. Co-speakers and event admins do
+  not receive submission fan-out. Notification failure is deliberately non-throwing, so a saved
+  proposal stays saved;
 - `POST /api/comms/decision`: ADMIN-only, decided proposals only. Preview is the default and a
   short-lived signed token binds the subsequent send to the exact recipients/content. Optional
   feedback includes written reviewer comments only—never scores or reviewer identities;
