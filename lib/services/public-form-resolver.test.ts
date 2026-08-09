@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 import {
   canonicalPublicFormApiPath,
@@ -55,10 +57,23 @@ function resolverFake(options: ResolverFakeOptions = {}) {
   return { client, calls };
 }
 
+const source = (path: string) => readFileSync(resolve(process.cwd(), path), "utf8");
+
 test("canonical public form paths preserve event and form scope as path segments", () => {
   const scope = { eventSlug: "green room", formSlug: "call/for talks" };
   assert.equal(canonicalPublicFormPath(scope), "/cfp/green%20room/call%2Ffor%20talks");
   assert.equal(canonicalPublicFormApiPath(scope), "/api/cfp/public/green%20room/call%2Ffor%20talks");
+});
+
+test("public API route tree uses one first-segment dynamic name and keeps legacy input opaque", () => {
+  const publicRouteRoot = resolve(process.cwd(), "app/api/cfp/public");
+  assert.equal(existsSync(resolve(publicRouteRoot, "[formId]/route.ts")), false);
+  assert.equal(existsSync(resolve(publicRouteRoot, "[eventSlug]/route.ts")), true);
+  assert.equal(existsSync(resolve(publicRouteRoot, "[eventSlug]/[formSlug]/route.ts")), true);
+
+  const legacyRoute = source("app/api/cfp/public/[eventSlug]/route.ts");
+  assert.match(legacyRoute, /\{ eventSlug: legacyToken \} = await ctx\.params/);
+  assert.match(legacyRoute, /resolveLegacyPublishedPublicForm\(legacyToken\)/);
 });
 
 test("canonical resolver stops at an unknown event without an event-owned form lookup", async () => {
