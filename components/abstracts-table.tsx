@@ -382,6 +382,7 @@ function AbstractDrawer({
           </div>
         </div>
 
+        <OrganizerReviewNotes id={abstract.id} reviewComments={abstract.reviewComments} />
         <SubmissionAnswers abstract={abstract} />
 
         {isProgrammeMismatch(abstract) ? (
@@ -438,6 +439,41 @@ function AbstractDrawer({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * This projection exists only for the organizer read. The server omits it for
+ * evaluators, so this component never receives hidden identities, scores, or
+ * criterion labels to conceal in the browser.
+ */
+function OrganizerReviewNotes({ id, reviewComments }: Pick<AbstractRow, "id" | "reviewComments">) {
+  if (!reviewComments || reviewComments.length === 0) return null;
+  const headingId = `review-notes-heading-${id}`;
+
+  return (
+    <section className="review-notes" aria-labelledby={headingId}>
+      <h3 id={headingId}>Review notes</h3>
+      <p className="hint">Written feedback from each review, without reviewer names or scores.</p>
+      <ol className="review-note-list">
+        {reviewComments.map((review, reviewIndex) => (
+          <li className="review-note" key={`review-${reviewIndex}`}>
+            <article aria-labelledby={`review-note-${id}-${reviewIndex + 1}`}>
+              <h4 id={`review-note-${id}-${reviewIndex + 1}`}>Review {reviewIndex + 1}</h4>
+              {review.comments.length === 1 ? (
+                <p>{review.comments[0]}</p>
+              ) : (
+                <ul aria-label={`Notes from review ${reviewIndex + 1}`}>
+                  {review.comments.map((comment, commentIndex) => (
+                    <li key={`review-${reviewIndex}-note-${commentIndex}`}>{comment}</li>
+                  ))}
+                </ul>
+              )}
+            </article>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
