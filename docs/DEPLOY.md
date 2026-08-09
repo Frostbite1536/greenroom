@@ -165,7 +165,7 @@ Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
 scores, 13 sessions (incl. a guaranteed keynote), 11 schedule slots **with one
 deliberate room conflict**, **6 onboarding tasks (three carry a form:
 hotel stay, flight reimbursement, A/V logistics)**, per-speaker task status,
-4 email templates, 2 resources. Persona users are upserted by email so
+5 email templates, 2 resources. Persona users are upserted by email so
 fixed-persona access survives a reseed. The speaker persona
 (`sofia@greenroom.demo`) owns a confirmed session and is at **3/6 tasks** — with
 one completed task form to review and the flight reimbursement still
