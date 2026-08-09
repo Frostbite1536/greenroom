@@ -40,8 +40,8 @@ stateDiagram-v2
 
 | From | To | Route / file | Notes |
 | --- | --- | --- | --- |
-| — | `DRAFT` | `POST /api/cfp/submissions`, `app/api/cfp/submissions/route.ts` | `intent: "draft"`. Unauthenticated: the public CFP page posts this. Returns 201. |
-| — | `SUBMITTED` | same route, `intent: "submit"` | Runs the full INV-FORM-001 check (published, window, speaker count, required fields, bio length) and sets `submittedAt`. Returns 201. |
+| — | `DRAFT` | `POST /api/cfp/submissions`, `app/api/cfp/submissions/route.ts` | `intent: "draft"`. Unauthenticated: the public CFP page posts this. Both public intents require a published, open form. Returns 201. |
+| — | `SUBMITTED` | same route, `intent: "submit"` | Runs the full INV-FORM-001 check (published, window, speaker count, required fields, bio length), sets `submittedAt`, and after commit attempts one receipt to the persisted primary submitter when an event template is available. Returns 201. |
 | — | `SUBMITTED` | `POST /api/integrations/import`, `app/api/integrations/import/route.ts` | CSV/JSON import creates rows already `SUBMITTED`. Existing rows are only updated when they are `DRAFT` or `SUBMITTED`; anything further along is **skipped**, not overwritten. |
 | `DRAFT` | `SUBMITTED` | `POST /api/cfp/submissions` with `abstractId` | The same handler refuses any non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`. That check is what stops an anonymous caller rewriting a submitted proposal, so it is deliberately *not* relaxed for R1. |
 | `SUBMITTED` | `UNDER_REVIEW` | `POST /api/evaluations/assignments`, `app/api/evaluations/assignments/route.ts` | Only when the abstract is currently `SUBMITTED`; assigning an already `UNDER_REVIEW`/decided abstract creates the assignment without touching status. Admin only. |

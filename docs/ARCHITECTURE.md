@@ -93,7 +93,9 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   resolved from the persisted `EventMember` row on each request (`lib/api/context.ts`,
   `getResolvedSession`), so a forged role claim buys nothing.
 - Every API verifies event membership and role server-side (INV-EVENT-001).
-- Public form reads/submissions are scoped to a published form and its event.
+- Public form reads are scoped to a published form and its event. Anonymous CFP draft and submit
+  writes both require that form to be open, use a 128 KiB bounded body plus strict bounded
+  answers/roster, reject duplicate normalized speaker emails, and pass durable rate limits.
 - Resource HTML must be sanitized before persistence or rendering.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
 - Schedule conflict checks and writes happen in one transaction (INV-SCHEDULE-001).
