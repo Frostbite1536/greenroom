@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { EvaluationSetupView, SetupPlan } from "@/lib/data/reads";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
+import { EVALUATION_SETUP_STATUS_LABELS } from "@/lib/evaluation-setup-status";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
 import { EmptyState, Pill, Switch } from "@/components/ui";
 
@@ -25,14 +26,6 @@ const STARTER_CRITERIA = [
 ];
 
 type DraftCriterion = { label: string; description: string; min: number; max: number; weight: number };
-
-const STATUS_LABEL: Record<string, string> = {
-  SUBMITTED: "Submitted",
-  UNDER_REVIEW: "Under review",
-  ACCEPTED: "Accepted",
-  REJECTED: "Declined",
-  WITHDRAWN: "Withdrawn",
-};
 
 export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const router = useRouter();
@@ -287,7 +280,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                             <span style={{ minWidth: 0, flex: 1 }}>
                               <span className="cell-title">{a.title}</span>
                               <span className="cell-sub">
-                                {a.categoryName ?? "No category"} · {STATUS_LABEL[a.status] ?? a.status}
+                                {a.categoryName ?? "No category"} · {EVALUATION_SETUP_STATUS_LABELS[a.status]}
                                 {a.defaultTeamKey ? ` · routes to ${a.defaultTeamKey}` : ""}
                               </span>
                             </span>
@@ -402,7 +395,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     <tr key={a.id}>
                       <td className="cell-title">{a.title}</td>
                       <td>{a.categoryName ?? <span className="muted">—</span>}</td>
-                      <td>{STATUS_LABEL[a.status] ?? a.status}</td>
+                      <td>{EVALUATION_SETUP_STATUS_LABELS[a.status]}</td>
                       <td>
                         {a.status === "WITHDRAWN" && assigned > 0 ? (
                           <span className="muted">{`${assigned} archived`}</span>

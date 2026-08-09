@@ -44,6 +44,10 @@ import {
   canonicalPublicFormPath,
   resolvePublishedPublicForm,
 } from "@/lib/services/public-form-resolver";
+import {
+  EVALUATION_SETUP_VISIBLE_STATUSES,
+  isEvaluationSetupAssignable,
+} from "@/lib/evaluation-setup-status";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { zonedParts } from "@/lib/tz";
@@ -1149,7 +1153,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       // for historical coverage, but `assignable` keeps them out of the picker.
       where: {
         eventId: ctx.eventId,
-        status: { in: ["SUBMITTED", "UNDER_REVIEW", "ACCEPTED", "REJECTED", "WITHDRAWN"] },
+        status: { in: EVALUATION_SETUP_VISIBLE_STATUSES },
       },
       orderBy: [{ submittedAt: "desc" }, { createdAt: "desc" }],
       select: {
@@ -1237,7 +1241,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       id: a.id,
       title: a.title,
       status: a.status,
-      assignable: a.status === "SUBMITTED" || a.status === "UNDER_REVIEW",
+      assignable: isEvaluationSetupAssignable(a.status),
       categoryId: a.category?.id ?? null,
       categoryName: a.category?.name ?? null,
       defaultTeamKey: a.category?.defaultTeamKey ?? null,
