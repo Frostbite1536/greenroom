@@ -5,10 +5,10 @@ import { requireContext, assertEventScope } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeForm } from "@/lib/api/form-serialize";
 import {
-  answerOptionValues,
   describeDestructiveChange,
   findDestructiveFieldChanges,
   findDuplicateFieldKeys,
+  findUsedRemovedOptions,
 } from "@/lib/services/form-config";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 
@@ -165,8 +165,7 @@ export const POST = handle(async (req) => {
   return ok(serializeForm(form), input.id ? 200 : 201);
 });
 
-/** Bounded read: enough answers to prove a field is in use and which options it uses. */
-const MAX_ANSWERS_SCANNED = 2000;
+const ANSWER_SCAN_PAGE_SIZE = 500;
 
 /**
  * Refuse edits that would delete or invalidate answers people already gave
@@ -181,6 +180,18 @@ async function assertAnswersNotDestroyed(
   formConfigId: string,
   incoming: readonly { key: string; type: string; options?: { value: string }[] }[],
 ): Promise<void> {
+  // Lock every existing field in a deterministic order before inspecting its
+  // answers. A concurrent answer insert holds a conflicting FK key-share lock:
+  // it either commits before this read (and is seen) or waits until this form
+  // edit finishes. Concurrent form saves serialize on the same ordered rows.
+  await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "FormField"
+    WHERE "formConfigId" = ${formConfigId}
+    ORDER BY "id"
+    FOR UPDATE
+  `;
+
   const stored = await tx.formField.findMany({
     where: { formConfigId },
     select: { id: true, key: true, label: true, type: true, options: true },
@@ -201,41 +212,61 @@ async function assertAnswersNotDestroyed(
   const affectedIds = changes
     .map((change) => affected.get(change.key)?.id)
     .filter((id): id is string => Boolean(id));
+  if (affectedIds.length === 0) return;
 
-  const answers = await tx.formAnswer.findMany({
+  const counts = await tx.formAnswer.groupBy({
+    by: ["formFieldId"],
     where: { formFieldId: { in: affectedIds } },
-    select: { formFieldId: true, value: true },
-    take: MAX_ANSWERS_SCANNED,
+    _count: { _all: true },
   });
-  if (answers.length === 0) return;
+  const answerCountByFieldId = new Map(
+    counts.map((row) => [row.formFieldId, row._count._all]),
+  );
+  if (answerCountByFieldId.size === 0) return;
 
-  const answersByFieldId = new Map<string, unknown[]>();
-  for (const answer of answers) {
-    const bucket = answersByFieldId.get(answer.formFieldId) ?? [];
-    bucket.push(answer.value);
-    answersByFieldId.set(answer.formFieldId, bucket);
+  const removedByFieldId = new Map<string, ReadonlySet<string>>();
+  for (const change of changes) {
+    if (change.kind !== "optionsRemoved") continue;
+    const field = affected.get(change.key);
+    if (field && answerCountByFieldId.has(field.id)) {
+      removedByFieldId.set(field.id, new Set(change.removed));
+    }
   }
+  const optionFieldIds = [...removedByFieldId.keys()];
+  const usedRemoved = await findUsedRemovedOptions(
+    removedByFieldId,
+    (afterId, take) => tx.formAnswer.findMany({
+      where: {
+        formFieldId: { in: optionFieldIds },
+        ...(afterId ? { id: { gt: afterId } } : {}),
+      },
+      orderBy: { id: "asc" },
+      take,
+      select: { id: true, formFieldId: true, value: true },
+    }),
+    ANSWER_SCAN_PAGE_SIZE,
+  );
 
   const fieldErrors: Record<string, string[]> = {};
   for (const change of changes) {
     const field = affected.get(change.key);
     if (!field) continue;
-    const values = answersByFieldId.get(field.id) ?? [];
-    if (values.length === 0) continue;
+    const answerCount = answerCountByFieldId.get(field.id) ?? 0;
+    if (answerCount === 0) continue;
 
     if (change.kind === "optionsRemoved") {
       // Only refuse when a removed option was actually chosen by someone.
-      const used = new Set(values.flatMap((value) => answerOptionValues(value)));
+      const used = usedRemoved.get(field.id) ?? new Set<string>();
       const stillUsed = change.removed.filter((value) => used.has(value));
       if (stillUsed.length === 0) continue;
       (fieldErrors[change.key] ??= []).push(
-        describeDestructiveChange({ ...change, removed: stillUsed }, field.label, values.length),
+        describeDestructiveChange({ ...change, removed: stillUsed }, field.label, answerCount),
       );
       continue;
     }
 
     (fieldErrors[change.key] ??= []).push(
-      describeDestructiveChange(change, field.label, values.length),
+      describeDestructiveChange(change, field.label, answerCount),
     );
   }
 

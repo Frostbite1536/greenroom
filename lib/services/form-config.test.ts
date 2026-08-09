@@ -5,6 +5,7 @@ import {
   describeDestructiveChange,
   findDestructiveFieldChanges,
   findDuplicateFieldKeys,
+  findUsedRemovedOptions,
 } from "@/lib/services/form-config";
 
 test("findDuplicateFieldKeys returns nothing for distinct keys", () => {
@@ -87,6 +88,40 @@ test("answerOptionValues reads single and multi answers, ignoring other shapes",
   assert.deepEqual(answerOptionValues(null), []);
   assert.deepEqual(answerOptionValues(42), []);
   assert.deepEqual(answerOptionValues(["ai", 7]), ["ai"]);
+});
+
+test("removed-option evidence is exhaustive beyond the former 2,000-answer boundary", async () => {
+  const rows = Array.from({ length: 2_001 }, (_, index) => ({
+    id: String(index).padStart(4, "0"),
+    formFieldId: "audience-field",
+    value: index === 2_000 ? "advanced" : "beginner",
+  }));
+  const pageStarts: Array<string | null> = [];
+
+  const used = await findUsedRemovedOptions(
+    new Map([["audience-field", new Set(["advanced"])]]),
+    async (afterId, take) => {
+      pageStarts.push(afterId);
+      const start = afterId === null ? 0 : rows.findIndex((row) => row.id === afterId) + 1;
+      return rows.slice(start, start + take);
+    },
+    500,
+  );
+
+  assert.deepEqual([...used.get("audience-field") ?? []], ["advanced"]);
+  assert.deepEqual(pageStarts, [null, "0499", "0999", "1499", "1999"]);
+});
+
+test("removed-option scanning fails closed when a cursor page cannot advance", async () => {
+  const repeated = [{ id: "same", formFieldId: "audience-field", value: "beginner" }];
+  await assert.rejects(
+    () => findUsedRemovedOptions(
+      new Map([["audience-field", new Set(["advanced"])]]),
+      async () => repeated,
+      1,
+    ),
+    /cursor did not advance/i,
+  );
 });
 
 test("refusal copy names the question and stays free of jargon", () => {

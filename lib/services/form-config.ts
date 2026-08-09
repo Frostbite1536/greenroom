@@ -91,6 +91,59 @@ export function answerOptionValues(value: unknown): string[] {
   return [];
 }
 
+export type AnswerOptionRow = {
+  id: string;
+  formFieldId: string;
+  value: unknown;
+};
+
+/**
+ * Exhaustively find which candidate option values are already used.
+ *
+ * The caller supplies deterministic cursor pages so this stays database-free
+ * and testable. Only candidate values are retained in memory. If all removed
+ * options are found, scanning can stop early; otherwise every page is read so
+ * an option used after an arbitrary boundary cannot be missed.
+ */
+export async function findUsedRemovedOptions(
+  removedByFieldId: ReadonlyMap<string, ReadonlySet<string>>,
+  loadPage: (afterId: string | null, take: number) => Promise<readonly AnswerOptionRow[]>,
+  pageSize = 500,
+): Promise<Map<string, Set<string>>> {
+  if (pageSize < 1) throw new Error("Answer scan page size must be positive.");
+
+  const used = new Map<string, Set<string>>();
+  let remaining = [...removedByFieldId.values()].reduce((total, values) => total + values.size, 0);
+  let afterId: string | null = null;
+
+  while (remaining > 0) {
+    const page = await loadPage(afterId, pageSize);
+    if (page.length === 0) break;
+
+    for (const answer of page) {
+      const candidates = removedByFieldId.get(answer.formFieldId);
+      if (!candidates) continue;
+      const found = used.get(answer.formFieldId) ?? new Set<string>();
+      for (const value of answerOptionValues(answer.value)) {
+        if (candidates.has(value) && !found.has(value)) {
+          found.add(value);
+          remaining -= 1;
+        }
+      }
+      if (found.size > 0) used.set(answer.formFieldId, found);
+    }
+
+    if (remaining === 0 || page.length < pageSize) break;
+    const nextAfterId = page[page.length - 1]?.id ?? null;
+    if (!nextAfterId || nextAfterId === afterId) {
+      throw new Error("Answer scan cursor did not advance.");
+    }
+    afterId = nextAfterId;
+  }
+
+  return used;
+}
+
 /**
  * Plain-language explanation for a refused change — these users are event
  * professionals, not engineers, and this message is the entire fix from their
