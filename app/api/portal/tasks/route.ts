@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
+import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
 import type { ApiResponse } from "@/types/api";
 import {
   completionBlocked,
@@ -52,11 +53,12 @@ export async function PATCH(request: Request) {
       id: true,
       formConfig: {
         select: {
+          id: true,
           maxBioLength: true,
           fields: {
             select: {
               id: true, key: true, label: true, helpText: true, type: true,
-              required: true, options: true, conditionalLogic: true, sortOrder: true,
+              required: true, options: true, conditionalLogic: true, sortOrder: true, updatedAt: true,
             },
             orderBy: { sortOrder: "asc" },
           },
@@ -69,7 +71,7 @@ export async function PATCH(request: Request) {
   // Only update an assignment that already belongs to this speaker.
   const existing = await prisma.speakerTask.findUnique({
     where: { taskId_userId: { taskId, userId: user.id } },
-    select: { taskId: true, responses: true },
+    select: { taskId: true },
   });
   if (!existing) return fail("NOT_ASSIGNED", "That task is not assigned to you.", 403);
 
@@ -80,36 +82,98 @@ export async function PATCH(request: Request) {
   if (responses && !hasForm) {
     return fail("NO_TASK_FORM", "This task does not have a form to fill in.", 422);
   }
-  const mergedResponses = hasForm
-    ? pruneToFields(mergeTaskResponses(existing.responses, responses), fields)
-    : null;
+  const result = await prisma.$transaction(async (tx) => {
+    // Task-form answers live in a JSON column, so they do not acquire an FK
+    // lock automatically. Join B5's explicit protocol before re-reading and
+    // validating: a concurrent shape edit either finishes first (409) or
+    // waits until this answer write commits.
+    if (task.formConfig) {
+      const formIsCurrent = await lockFormFieldsForAnswerWrite(
+        tx,
+        new Map([[task.formConfig.id, task.formConfig.fields]]),
+      );
+      if (!formIsCurrent) {
+        return {
+          ok: false,
+          error: {
+            code: "FORM_CHANGED",
+            message: "This form changed while your answers were being saved. Review the latest questions and try again.",
+            status: 409,
+          },
+        } as const;
+      }
+    }
 
-  const blocked = completionBlocked({
-    hasForm,
-    nextStatus: status,
-    fields,
-    responses: mergedResponses ?? {},
+    // Serialize two tabs updating the same assignment so partial response
+    // maps merge against the latest committed row instead of losing answers.
+    await tx.$queryRaw<Array<{ taskId: string }>>`
+      SELECT "taskId"
+      FROM "SpeakerTask"
+      WHERE "taskId" = ${taskId} AND "userId" = ${user.id}
+      FOR UPDATE
+    `;
+    const fresh = await tx.speakerTask.findUnique({
+      where: { taskId_userId: { taskId, userId: user.id } },
+      select: { responses: true },
+    });
+    if (!fresh) {
+      return {
+        ok: false,
+        error: {
+          code: "NOT_ASSIGNED",
+          message: "That task is no longer assigned to you.",
+          status: 403,
+        },
+      } as const;
+    }
+
+    const mergedResponses = hasForm
+      ? pruneToFields(mergeTaskResponses(fresh.responses, responses), fields)
+      : null;
+    const blocked = completionBlocked({
+      hasForm,
+      nextStatus: status,
+      fields,
+      responses: mergedResponses ?? {},
+      answerKeysToValidate: Object.keys(responses ?? {}),
+      maxBioLength: task.formConfig?.maxBioLength,
+    });
+    if (blocked) {
+      return {
+        ok: false,
+        error: {
+          code: blocked.code,
+          message: status === "COMPLETED"
+            ? "Finish the form before marking this task done."
+            : blocked.message,
+          status: 422,
+          fieldErrors: blocked.fieldErrors,
+        },
+      } as const;
+    }
+
+    const updated = await tx.speakerTask.update({
+      where: { taskId_userId: { taskId, userId: user.id } },
+      data: {
+        status,
+        artifactUrl: artifactUrl ?? undefined,
+        notes: notes ?? undefined,
+        ...(mergedResponses ? { responses: mergedResponses as never } : {}),
+        completedAt: status === "COMPLETED" ? new Date() : null,
+      },
+      select: { taskId: true, status: true, artifactUrl: true, notes: true, responses: true, completedAt: true },
+    });
+    return { ok: true, data: updated } as const;
   });
-  if (blocked) {
+
+  if (!result.ok) {
     return fail(
-      blocked.code,
-      "Finish the form before marking this task done.",
-      422,
-      blocked.fieldErrors,
+      result.error.code,
+      result.error.message,
+      result.error.status,
+      "fieldErrors" in result.error ? result.error.fieldErrors : undefined,
     );
   }
 
-  const updated = await prisma.speakerTask.update({
-    where: { taskId_userId: { taskId, userId: user.id } },
-    data: {
-      status,
-      artifactUrl: artifactUrl ?? undefined,
-      notes: notes ?? undefined,
-      ...(mergedResponses ? { responses: mergedResponses as never } : {}),
-      completedAt: status === "COMPLETED" ? new Date() : null,
-    },
-    select: { taskId: true, status: true, artifactUrl: true, notes: true, responses: true, completedAt: true },
-  });
-
-  return NextResponse.json<ApiResponse<typeof updated>>({ ok: true, data: updated });
+  return NextResponse.json<ApiResponse<typeof result.data>>({ ok: true, data: result.data });
 }

@@ -91,6 +91,13 @@ export function answerOptionValues(value: unknown): string[] {
   return [];
 }
 
+/** Whether a JSON task-form value represents an answer worth protecting. */
+export function hasAnswerValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string" || Array.isArray(value)) return value.length > 0;
+  return typeof value === "number" || typeof value === "boolean";
+}
+
 export type AnswerOptionRow = {
   id: string;
   formFieldId: string;
@@ -153,15 +160,20 @@ export function describeDestructiveChange(
   change: DestructiveFieldChange,
   label: string,
   answerCount: number,
+  source: "submission" | "saved response" = "submission",
 ): string {
-  const people = `${answerCount} ${answerCount === 1 ? "submission has" : "submissions have"}`;
+  const people = source === "submission"
+    ? `${answerCount} ${answerCount === 1 ? "submission has already answered" : "submissions have already answered"}`
+    : `${answerCount} saved ${answerCount === 1 ? "response contains an answer to" : "responses contain answers to"}`;
   switch (change.kind) {
     case "removed":
-      return `${people} already answered “${label}”. Deleting or renaming this question would delete those answers. You can still reword its label and help text, or close the form to new submissions.`;
+      return `${people} “${label}”. Deleting or renaming this question would delete those answers. You can still reword its label and help text, or close the form to new submissions.`;
     case "retyped":
-      return `${people} already answered “${label}”, so the kind of answer it accepts can no longer change. Add a new question instead.`;
+      return `${people} “${label}”, so the kind of answer it accepts can no longer change. Add a new question instead.`;
     case "optionsRemoved":
-      return `${people} already chosen ${change.removed.map((value) => `“${value}”`).join(", ")} for “${label}”. Removing an option someone has picked would leave their answer invalid.`;
+      return source === "submission"
+        ? `${answerCount} ${answerCount === 1 ? "submission has" : "submissions have"} already chosen ${change.removed.map((value) => `“${value}”`).join(", ")} for “${label}”. Removing an option someone has picked would leave their answer invalid.`
+        : `${answerCount} saved ${answerCount === 1 ? "response uses" : "responses use"} ${change.removed.map((value) => `“${value}”`).join(", ")} for “${label}”. Removing an option someone has picked would leave their answer invalid.`;
   }
 }
 

@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { speakerTaskUpdateSchema } from "@/types/api";
-import { validateSubmissionContent, type FormSpec } from "@/lib/services/form-validation";
+import {
+  toFormFieldSpecs,
+  validateSubmissionContent,
+  type FormSpec,
+} from "@/lib/services/form-validation";
 import type { FormAnswerValue } from "@/lib/services/types";
 
 /**
@@ -34,13 +38,22 @@ export type TaskResponses = Record<string, FormAnswerValue>;
  * shared contract stays the single source of truth for status/artifact/notes and
  * this file only adds the responses map (`types/api.ts` is Architect-owned).
  */
+const taskResponseValueSchema = z.union([
+  z.string().max(5_000),
+  z.number().finite(),
+  z.boolean(),
+  z.array(z.string().max(500)).max(50),
+  z.null(),
+]);
+
+const taskResponsesSchema = z
+  .record(z.string().regex(/^[a-z][a-z0-9_]*$/), taskResponseValueSchema)
+  .refine((responses) => Object.keys(responses).length <= 200, {
+    message: "A task form cannot contain more than 200 answers.",
+  });
+
 export const taskUpdateWithResponsesSchema = speakerTaskUpdateSchema.extend({
-  responses: z
-    .record(
-      z.string().regex(/^[a-z][a-z0-9_]*$/),
-      z.union([z.string().max(5_000), z.number(), z.boolean(), z.array(z.string().max(500)).max(50), z.null()]),
-    )
-    .optional(),
+  responses: taskResponsesSchema.optional(),
 });
 
 export type TaskUpdateWithResponses = z.infer<typeof taskUpdateWithResponsesSchema>;
@@ -48,7 +61,9 @@ export type TaskUpdateWithResponses = z.infer<typeof taskUpdateWithResponsesSche
 /** Stored responses are untyped JSON; normalize before anything reads them. */
 export function normalizeStoredResponses(value: unknown): TaskResponses {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as TaskResponses;
+  return Object.fromEntries(
+    Object.entries(value).filter(([, answer]) => taskResponseValueSchema.safeParse(answer).success),
+  ) as TaskResponses;
 }
 
 /**
@@ -80,18 +95,34 @@ export type TaskFormValidationError = { code: string; message: string; fieldErro
 export function validateTaskResponses(
   fields: TaskFormField[],
   responses: TaskResponses,
-  limits: { maxBioLength?: number } = {},
+  options: {
+    maxBioLength?: number;
+    answerKeysToValidate?: readonly string[];
+    requireComplete?: boolean;
+  } = {},
 ): TaskFormValidationError | null {
+  const requireComplete = options.requireComplete ?? true;
   const spec: FormSpec = {
     published: true,
     opensAt: null,
     closesAt: null,
     minSpeakers: 0,
     maxSpeakers: Number.MAX_SAFE_INTEGER,
-    maxBioLength: limits.maxBioLength ?? 5_000,
-    fields: fields.map((field) => ({ key: field.key, label: field.label, type: field.type, required: field.required })),
+    maxBioLength: options.maxBioLength ?? 5_000,
+    // B2 owns parsing of stored option/conditional JSON. Reuse that exact
+    // mapping here so task forms cannot drift from CFP validation.
+    fields: toFormFieldSpecs(fields).map((field) => ({
+      ...field,
+      // Progress saves may be incomplete, but supplied values still have to
+      // satisfy their type/options contract.
+      required: requireComplete ? field.required : false,
+    })),
   };
-  return validateSubmissionContent(spec, { speakerCount: 1, answers: responses });
+  return validateSubmissionContent(spec, {
+    speakerCount: 1,
+    answers: responses,
+    answerKeysToValidate: options.answerKeysToValidate,
+  });
 }
 
 /**
@@ -106,7 +137,13 @@ export function completionBlocked(input: {
   nextStatus: string;
   fields: TaskFormField[];
   responses: TaskResponses;
+  answerKeysToValidate?: readonly string[];
+  maxBioLength?: number;
 }): TaskFormValidationError | null {
-  if (!input.hasForm || input.nextStatus !== "COMPLETED") return null;
-  return validateTaskResponses(input.fields, input.responses);
+  if (!input.hasForm) return null;
+  return validateTaskResponses(input.fields, input.responses, {
+    answerKeysToValidate: input.answerKeysToValidate,
+    maxBioLength: input.maxBioLength,
+    requireComplete: input.nextStatus === "COMPLETED",
+  });
 }

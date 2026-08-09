@@ -58,6 +58,70 @@ test("saving progress is always allowed, even with a blank form", () => {
   assert.equal(completionBlocked({ hasForm: true, nextStatus: "TODO", fields: hotelFields, responses: {} }), null);
 });
 
+test("task completion inherits B2 conditional required-field rules", () => {
+  const fields = [
+    field("needs_hotel", true, {
+      type: "SELECT",
+      options: [
+        { label: "Yes", value: "yes" },
+        { label: "No", value: "no" },
+      ],
+    }),
+    field("check_in", true, {
+      conditionalLogic: {
+        match: "all",
+        rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }],
+      },
+    }),
+  ];
+
+  assert.equal(
+    completionBlocked({ hasForm: true, nextStatus: "COMPLETED", fields, responses: { needs_hotel: "no" } }),
+    null,
+  );
+  const missingVisible = completionBlocked({
+    hasForm: true,
+    nextStatus: "COMPLETED",
+    fields,
+    responses: { needs_hotel: "yes" },
+  });
+  assert.ok(missingVisible?.fieldErrors?.check_in);
+});
+
+test("progress saves still enforce B2 types, options, and forged hidden answers", () => {
+  const fields = [
+    field("claiming_travel", true, {
+      type: "SELECT",
+      options: [{ label: "No", value: "no" }, { label: "Yes", value: "yes" }],
+    }),
+    field("receipt_url", false, {
+      type: "URL",
+      conditionalLogic: {
+        match: "all",
+        rules: [{ fieldKey: "claiming_travel", operator: "equals", value: "yes" }],
+      },
+    }),
+  ];
+
+  const badOption = completionBlocked({
+    hasForm: true,
+    nextStatus: "IN_PROGRESS",
+    fields,
+    responses: { claiming_travel: "maybe" },
+    answerKeysToValidate: ["claiming_travel"],
+  });
+  assert.ok(badOption?.fieldErrors?.claiming_travel);
+
+  const forgedHidden = completionBlocked({
+    hasForm: true,
+    nextStatus: "IN_PROGRESS",
+    fields,
+    responses: { claiming_travel: "no", receipt_url: "javascript:alert(1)" },
+    answerKeysToValidate: ["claiming_travel", "receipt_url"],
+  });
+  assert.ok(forgedHidden?.fieldErrors?.receipt_url);
+});
+
 test("a task without a form is completed the ordinary way", () => {
   assert.equal(completionBlocked({ hasForm: false, nextStatus: "COMPLETED", fields: [], responses: {} }), null);
 });
@@ -85,6 +149,14 @@ test("oversized answers are refused before they reach the database", () => {
   );
   assert.equal(
     taskUpdateWithResponsesSchema.safeParse({ taskId: "t", status: "TODO", responses: { tags: Array.from({ length: 51 }, () => "a") } }).success,
+    false,
+  );
+  assert.equal(
+    taskUpdateWithResponsesSchema.safeParse({
+      taskId: "t",
+      status: "TODO",
+      responses: Object.fromEntries(Array.from({ length: 201 }, (_, index) => [`field_${index}`, "x"])),
+    }).success,
     false,
   );
 });

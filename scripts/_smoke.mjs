@@ -617,6 +617,105 @@ try {
   const conv2 = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
   check("convert is idempotent", conv2.data?.data?.created === false && conv2.data?.data?.sessionId === sessionId);
 
+  // O3: a linked onboarding form renders, merges validated progress, gates
+  // completion, and is protected from destructive form-builder edits.
+  const taskFormPayload = {
+    eventId: SCRATCH_EVENT.id,
+    name: "Scratch hotel form",
+    slug: "scratch-hotel-" + Date.now().toString(36),
+    minSpeakers: 1,
+    maxSpeakers: 1,
+    maxBioLength: 500,
+    published: false,
+    fields: [
+      {
+        key: "needs_hotel", label: "Do you need a room?", type: "SELECT", required: true, sortOrder: 0,
+        options: [{ label: "Yes", value: "yes" }, { label: "No", value: "no" }],
+      },
+      {
+        key: "check_in", label: "Check-in date", type: "SHORT_TEXT", required: true, sortOrder: 1,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] },
+      },
+      {
+        key: "receipt_url", label: "Receipt", type: "URL", required: false, sortOrder: 2,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "yes" }] },
+      },
+    ],
+  };
+  const taskFormCreate = await j("POST", "/api/cfp/forms", taskFormPayload, admin);
+  check("O3 setup: unpublished task form created", taskFormCreate.status === 201, taskFormCreate.status);
+  const taskFormId = taskFormCreate.data?.data?.id;
+  const taskTemplate = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "Scratch task: hotel form",
+      description: "Tell us which nights you need.",
+      required: true,
+      formConfigId: taskFormId,
+      sortOrder: 3,
+    },
+  });
+  const taskSpeaker = await prisma.user.findUniqueOrThrow({ where: { email: speaker.user.email } });
+  await prisma.speakerTask.create({
+    data: { taskId: taskTemplate.id, userId: taskSpeaker.id, status: "TODO" },
+  });
+
+  const taskPage = await j("GET", `/portal/tasks/${taskTemplate.id}`, null, speaker);
+  check("O3 assigned speaker can render the linked task form",
+    taskPage.status === 200 && String(taskPage.data).includes("Scratch hotel form"), taskPage.status);
+  const otherTaskPage = await j("GET", `/portal/tasks/${taskTemplate.id}`, null, admin);
+  check("O3 someone else's task is not disclosed", otherTaskPage.status === 404, otherTaskPage.status);
+
+  const emptyTaskComplete = await j("PATCH", "/api/portal/tasks", {
+    taskId: taskTemplate.id, status: "COMPLETED", responses: {},
+  }, speaker);
+  check("O3 empty task form cannot be marked complete",
+    emptyTaskComplete.status === 422 && !!emptyTaskComplete.data?.error?.fieldErrors?.needs_hotel,
+    emptyTaskComplete.data?.error?.code);
+
+  const invalidTaskProgress = await j("PATCH", "/api/portal/tasks", {
+    taskId: taskTemplate.id, status: "IN_PROGRESS", responses: { needs_hotel: "maybe" },
+  }, speaker);
+  check("O3 progress saves still enforce stored select options",
+    invalidTaskProgress.status === 422 && !!invalidTaskProgress.data?.error?.fieldErrors?.needs_hotel,
+    invalidTaskProgress.data?.error?.code);
+
+  const taskProgress = await j("PATCH", "/api/portal/tasks", {
+    taskId: taskTemplate.id, status: "IN_PROGRESS", responses: { needs_hotel: "yes" },
+  }, speaker);
+  check("O3 partial task-form progress is saved without requiring the revealed follow-up",
+    taskProgress.status === 200 && taskProgress.data?.data?.responses?.needs_hotel === "yes",
+    taskProgress.status);
+
+  const destructiveTaskFormEdit = await j("POST", "/api/cfp/forms", {
+    ...taskFormPayload,
+    id: taskFormId,
+    fields: [
+      { ...taskFormPayload.fields[0], options: [{ label: "No", value: "no" }] },
+      ...taskFormPayload.fields.slice(1),
+    ],
+  }, admin);
+  check("O3 task responses participate in B5 option-removal protection",
+    destructiveTaskFormEdit.status === 409 && destructiveTaskFormEdit.data?.error?.code === "FIELD_IN_USE",
+    destructiveTaskFormEdit.data?.error?.code);
+
+  const taskComplete = await j("PATCH", "/api/portal/tasks", {
+    taskId: taskTemplate.id,
+    status: "COMPLETED",
+    responses: { check_in: "May 11", receipt_url: "https://example.com/receipt.pdf", unknown_key: "drop me" },
+  }, speaker);
+  check("O3 valid completion merges prior answers and prunes unknown keys",
+    taskComplete.status === 200 &&
+    taskComplete.data?.data?.status === "COMPLETED" &&
+    taskComplete.data?.data?.responses?.needs_hotel === "yes" &&
+    taskComplete.data?.data?.responses?.check_in === "May 11" &&
+    !("unknown_key" in (taskComplete.data?.data?.responses ?? {})),
+    taskComplete.status);
+
+  const taskPortal = await j("GET", "/portal", null, speaker);
+  check("O3 completed task form becomes reviewable from the portal",
+    taskPortal.status === 200 && String(taskPortal.data).includes("Review your answers"), taskPortal.status);
+
   // 12. Agenda: rooms come from the builder read
   const agenda = await j("GET", "/api/agenda", null, admin);
   check("agenda read exposes rooms + backlog", agenda.status === 200 && agenda.data?.data?.rooms?.length > 0, agenda.data?.data?.rooms?.length);
