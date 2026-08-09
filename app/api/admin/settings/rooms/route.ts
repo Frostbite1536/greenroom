@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { roomCreateSchema, roomUpdateSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import { decideRoomDeletion } from "@/lib/services/room-deletion";
 
 export const dynamic = "force-dynamic";
 
@@ -75,4 +76,45 @@ export const PATCH = handle(async (req) => {
     }
     throw error;
   }
+});
+
+/**
+ * DELETE /api/admin/settings/rooms?roomId= — remove an unused active-event room.
+ *
+ * A Room owns its ScheduleSlots with `onDelete: Cascade`. Locking and re-reading
+ * the scoped Room before checking slot use keeps that cascade unreachable: a
+ * concurrent slot insert's FK key-share lock waits for this transaction, then
+ * can only proceed after this transaction has either refused or deleted the row.
+ */
+export const DELETE = handle(async (req) => {
+  const ctx = await requireContext(["ADMIN"]);
+  const roomId = new URL(req.url).searchParams.get("roomId");
+  if (!roomId) throw new ApiError(400, "MISSING_ROOM", "roomId is required.");
+
+  const room = await prisma.$transaction(async (tx) => {
+    // Scope is part of the locked query: cross-event and unknown IDs produce
+    // the same result and never reveal whether another event owns the row.
+    const [lockedRoom] = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id"
+      FROM "Room"
+      WHERE "id" = ${roomId} AND "eventId" = ${ctx.eventId}
+      FOR UPDATE
+    `;
+    if (!lockedRoom) throw new ApiError(404, "ROOM_NOT_FOUND", "Room not found.");
+
+    const scheduleSlot = await tx.scheduleSlot.findFirst({
+      where: { roomId: lockedRoom.id },
+      select: { id: true },
+    });
+    const decision = decideRoomDeletion(!!scheduleSlot);
+    if (!decision.allowed) {
+      throw new ApiError(409, decision.code, decision.message, {
+        roomId: ["Move or unschedule the room's sessions before removing it."],
+      });
+    }
+
+    return tx.room.delete({ where: { id: lockedRoom.id }, select: roomSelect });
+  });
+
+  return ok({ room });
 });

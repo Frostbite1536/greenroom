@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { eventSettingsUpdateSchema, roomCreateSchema, roomUpdateSchema } from "@/types/api";
 import { planEventSettingsUpdate, serializeSettingsEvent, type SettingsEvent } from "@/lib/services/event-settings";
+import { decideRoomDeletion } from "@/lib/services/room-deletion";
 
 const event: SettingsEvent = {
   id: "event-1",
@@ -65,4 +66,13 @@ test("room contracts reject blank names, invalid capacity, and empty updates", (
   assert.equal(roomCreateSchema.safeParse({ eventId: "another-event", name: "Main Hall" }).success, false);
   assert.equal(roomUpdateSchema.safeParse({ id: "room-1" }).success, false);
   assert.equal(roomUpdateSchema.safeParse({ id: "room-1", capacity: null }).success, true);
+});
+
+test("room deletion policy permits unused rooms and refuses scheduled rooms before cascade", () => {
+  assert.deepEqual(decideRoomDeletion(false), { allowed: true });
+  assert.deepEqual(decideRoomDeletion(true), {
+    allowed: false,
+    code: "ROOM_IN_USE",
+    message: "This room is scheduled. Move or unschedule its sessions before removing it.",
+  });
 });

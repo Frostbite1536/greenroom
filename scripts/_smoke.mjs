@@ -308,6 +308,12 @@ try {
   const otherRoom = await prisma.room.findFirstOrThrow({ where: { eventId: OTHER_SCRATCH_EVENT.id }, select: { id: true } });
   const crossEventRoom = await j("PATCH", "/api/admin/settings/rooms", { id: otherRoom.id, name: "Nope" }, admin);
   check("M5 room updates cannot target another event", crossEventRoom.status === 404 && crossEventRoom.data?.error?.code === "ROOM_NOT_FOUND", crossEventRoom.status);
+  const crossEventRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${otherRoom.id}`, null, admin);
+  const otherRoomAfterCrossEventDelete = await prisma.room.findUnique({ where: { id: otherRoom.id }, select: { id: true } });
+  check("M5 room deletion cannot target another event", crossEventRoomDelete.status === 404 && crossEventRoomDelete.data?.error?.code === "ROOM_NOT_FOUND" && otherRoomAfterCrossEventDelete?.id === otherRoom.id, crossEventRoomDelete.status);
+  const unusedRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${settingsRoomId}`, null, admin);
+  const deletedRoom = await prisma.room.findUnique({ where: { id: settingsRoomId }, select: { id: true } });
+  check("M5 admin deletes an unused event-scoped room", unusedRoomDelete.status === 200 && unusedRoomDelete.data?.data?.room?.id === settingsRoomId && !deletedRoom, unusedRoomDelete.status);
 
   const m5Category = await j("POST", "/api/cfp/categories", {
     eventId: SCRATCH_EVENT.id, name: "Settings Category", sortOrder: 9,
@@ -904,6 +910,20 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("place session on schedule", place.status === 200 && !!place.data?.data?.slot?.id, place.status);
+  const scheduledRoomDelete = await j("DELETE", `/api/admin/settings/rooms?roomId=${roomA}`, null, admin);
+  const scheduledSlotAfterDeleteRefusal = await prisma.scheduleSlot.findUnique({
+    where: { id: place.data?.data?.slot?.id },
+    select: { id: true, roomId: true },
+  });
+  const scheduledRoomAfterDeleteRefusal = await prisma.room.findUnique({ where: { id: roomA }, select: { id: true } });
+  check(
+    "M5 refuses in-use room deletion without cascading its schedule slot",
+    scheduledRoomDelete.status === 409 &&
+      scheduledRoomDelete.data?.error?.code === "ROOM_IN_USE" &&
+      scheduledRoomAfterDeleteRefusal?.id === roomA &&
+      scheduledSlotAfterDeleteRefusal?.roomId === roomA,
+    scheduledRoomDelete.status,
+  );
 
   // 14. Room conflict: a second session in the same room at the same time
   const sub2 = await j("POST", "/api/cfp/submissions", {
