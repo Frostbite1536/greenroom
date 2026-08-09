@@ -1256,6 +1256,52 @@ try {
       where: { planId, abstractId, evaluatorId: speakerUserId },
     }) === 0);
 
+  // Unknown and cross-event assignment references deliberately use the same
+  // response code for each protected object class. None may create an
+  // assignment or move the known submitted proposal into review.
+  const crossEventAssignmentAbstract = await prisma.abstract.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      formConfigId: otherS1Form.id,
+      submitterId: adminUserId,
+      title: "Cross-event assignment proposal",
+      status: "SUBMITTED",
+    },
+  });
+  const crossEventEvaluator = await prisma.user.upsert({
+    where: { email: "assignment-other-event@scratch.test" },
+    update: { name: "Other Event Evaluator" },
+    create: { email: "assignment-other-event@scratch.test", name: "Other Event Evaluator" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: OTHER_SCRATCH_EVENT.id, userId: crossEventEvaluator.id } },
+    update: { role: "EVALUATOR" },
+    create: { eventId: OTHER_SCRATCH_EVENT.id, userId: crossEventEvaluator.id, role: "EVALUATOR" },
+  });
+  const [missingPlanAssignment, crossPlanAssignment, missingAbstractAssignment, crossAbstractAssignment, missingEvaluatorAssignment, crossEvaluatorAssignment] = await Promise.all([
+    j("POST", "/api/evaluations/assignments", { planId: "missing-assignment-plan", abstractIds: [abstractId], evaluatorIds: [evaluatorId] }, admin),
+    j("POST", "/api/evaluations/assignments", { planId: otherPlan.id, abstractIds: [abstractId], evaluatorIds: [evaluatorId] }, admin),
+    j("POST", "/api/evaluations/assignments", { planId, abstractIds: ["missing-assignment-abstract"], evaluatorIds: [evaluatorId] }, admin),
+    j("POST", "/api/evaluations/assignments", { planId, abstractIds: [crossEventAssignmentAbstract.id], evaluatorIds: [evaluatorId] }, admin),
+    j("POST", "/api/evaluations/assignments", { planId, abstractIds: [abstractId], evaluatorIds: ["missing-assignment-evaluator"] }, admin),
+    j("POST", "/api/evaluations/assignments", { planId, abstractIds: [abstractId], evaluatorIds: [crossEventEvaluator.id] }, admin),
+  ]);
+  const assignmentScopeAfterRefusals = await prisma.abstract.findUnique({
+    where: { id: abstractId },
+    select: { status: true },
+  });
+  check(
+    "S5 unknown and cross-event plan, abstract, and reviewer references are indistinguishable and do not mutate",
+    missingPlanAssignment.status === 404 && missingPlanAssignment.data?.error?.code === "PLAN_NOT_FOUND" &&
+      crossPlanAssignment.status === 404 && crossPlanAssignment.data?.error?.code === "PLAN_NOT_FOUND" &&
+      missingAbstractAssignment.status === 422 && missingAbstractAssignment.data?.error?.code === "INVALID_ABSTRACTS" &&
+      crossAbstractAssignment.status === 422 && crossAbstractAssignment.data?.error?.code === "INVALID_ABSTRACTS" &&
+      missingEvaluatorAssignment.status === 422 && missingEvaluatorAssignment.data?.error?.code === "INVALID_EVALUATORS" &&
+      crossEvaluatorAssignment.status === 422 && crossEvaluatorAssignment.data?.error?.code === "INVALID_EVALUATORS" &&
+      assignmentScopeAfterRefusals?.status === "SUBMITTED",
+    `${missingPlanAssignment.status}/${crossPlanAssignment.status}/${missingAbstractAssignment.status}/${crossAbstractAssignment.status}/${missingEvaluatorAssignment.status}/${crossEvaluatorAssignment.status}`,
+  );
+
   // Deterministic TOCTOU regression: a competing terminal writer owns the
   // shared abstract lock and updates the status without committing yet. The
   // assignment request starts while that row still looks SUBMITTED to another
@@ -1298,6 +1344,91 @@ try {
       await prisma.reviewAssignment.count({
         where: { planId, abstractId: raceAbstractId, evaluatorId: adminUserId },
       }) === 0);
+
+  // S5 authority race: the assignment route must take EventMember FOR SHARE
+  // before its Abstract lock. Hold a target row FOR UPDATE with an uncommitted
+  // downgrade. The request can reach the compatible relation lock, but cannot
+  // read authority until the downgrade commits; its fresh post-lock role check
+  // must then refuse without altering the submitted proposal.
+  const memberRaceUser = await prisma.user.upsert({
+    where: { email: "assignment-member-race@scratch.test" },
+    update: { name: "Assignment Member Race" },
+    create: { email: "assignment-member-race@scratch.test", name: "Assignment Member Race" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: memberRaceUser.id } },
+    update: { role: "EVALUATOR" },
+    create: { eventId: SCRATCH_EVENT.id, userId: memberRaceUser.id, role: "EVALUATOR" },
+  });
+  const memberRaceSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Assignment membership race proposal",
+    speakers: [{ email: "assignment-member-race-speaker@scratch.test", name: "Member Race Speaker", isPrimary: true }],
+    answers: { title_note: "member race", consent: true }, intent: "submit",
+  });
+  const memberRaceAbstractId = memberRaceSubmit.data?.data?.id;
+  let signalMemberUpdateHeld;
+  let releaseMemberUpdate;
+  const memberUpdateHeld = new Promise((resolve) => { signalMemberUpdateHeld = resolve; });
+  const memberUpdateRelease = new Promise((resolve) => { releaseMemberUpdate = resolve; });
+  const heldMemberDowngrade = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`
+      SELECT "userId" FROM "EventMember"
+      WHERE "eventId" = ${SCRATCH_EVENT.id} AND "userId" = ${memberRaceUser.id}
+      FOR UPDATE
+    `;
+    await tx.eventMember.update({
+      where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: memberRaceUser.id } },
+      data: { role: "SPEAKER" },
+    });
+    signalMemberUpdateHeld();
+    await memberUpdateRelease;
+  }, { timeout: 15_000 });
+  await memberUpdateHeld;
+  const countEventMemberRowShareLocks = async () => {
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count"
+      FROM pg_locks
+      WHERE relation = '"EventMember"'::regclass
+        AND mode = 'RowShareLock'
+        AND granted
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const baselineMemberRowShareLocks = await countEventMemberRowShareLocks();
+  const waitingMemberAssignment = j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [memberRaceAbstractId], evaluatorIds: [memberRaceUser.id],
+  }, admin);
+  let assignmentReachedMembershipLock = false;
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await countEventMemberRowShareLocks() > baselineMemberRowShareLocks) {
+        assignmentReachedMembershipLock = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  } finally {
+    releaseMemberUpdate();
+    await heldMemberDowngrade;
+  }
+  const memberRaceAssignment = await waitingMemberAssignment;
+  const [memberRaceAbstractAfter, memberRaceAssignmentCount] = await Promise.all([
+    prisma.abstract.findUnique({
+      where: { id: memberRaceAbstractId },
+      select: { status: true, decidedAt: true },
+    }),
+    prisma.reviewAssignment.count({
+      where: { planId, abstractId: memberRaceAbstractId, evaluatorId: memberRaceUser.id },
+    }),
+  ]);
+  check(
+    "S5 held membership downgrade makes assignment wait, fresh-reject, and preserve proposal state",
+    memberRaceSubmit.status === 201 && assignmentReachedMembershipLock &&
+      memberRaceAssignment.status === 422 && memberRaceAssignment.data?.error?.code === "INVALID_EVALUATORS" &&
+      memberRaceAbstractAfter?.status === "SUBMITTED" && memberRaceAbstractAfter.decidedAt === null &&
+      memberRaceAssignmentCount === 0,
+    `${memberRaceAssignment.status}/${memberRaceAssignment.data?.error?.code}/${memberRaceAssignmentCount}`,
+  );
 
   // 8. Assign the abstract to the evaluator -> abstract moves to UNDER_REVIEW
   const assign = await j("POST", "/api/evaluations/assignments", {
