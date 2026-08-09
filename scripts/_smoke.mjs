@@ -627,11 +627,11 @@ try {
     includeFeedback: true,
   }, admin);
   check(
-    "O2 decision preview includes comments but never scores or reviewer identities",
+    "O2 decision preview includes the latest comments but never scores or reviewer identities",
     decisionPreview.status === 200 &&
       decisionPreview.data?.data?.preview === true &&
       decisionPreview.data?.data?.feedbackCount === 1 &&
-      decisionPreview.data?.data?.html?.includes("strong") &&
+      decisionPreview.data?.data?.html?.includes("worth a closer look") &&
       !decisionPreview.data?.data?.html?.includes("5/5") &&
       !/reviewer|evaluator/i.test(decisionPreview.data?.data?.html ?? ""),
     decisionPreview.status,
@@ -1165,6 +1165,11 @@ try {
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
 
+  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } });
+  const m4TaskTemplates = await prisma.onboardingTask.count({ where: { eventId: SCRATCH_EVENT.id } });
+  const m4SessionSpeakers = await prisma.sessionSpeaker.count({ where: { sessionId } });
+  const expectedM4Backfill = (m4TaskTemplates * m4SessionSpeakers) - m4TasksBeforeMaybe;
+
   // A later MAYBE never deletes or re-provisions an already confirmed (and
   // potentially public) Session. The response keeps the linkage for the UI's
   // programme warning; re-acceptance stays idempotent afterwards.
@@ -1180,15 +1185,18 @@ try {
     JSON.stringify(scheduledMaybe.data?.data));
   check("M4 ACCEPTED to MAYBE leaves the confirmed session and task cohort intact",
     await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
-      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === 6);
+      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === m4TasksBeforeMaybe);
   const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
-  check("M4 MAYBE can return to ACCEPTED without duplicate provisioning",
+  check("M4 MAYBE can return to ACCEPTED without duplicate Session provisioning and still reconcile missing tasks",
     restoredAccepted.status === 200 &&
       restoredAccepted.data?.data?.status === "ACCEPTED" &&
       typeof restoredAccepted.data?.data?.decidedAt === "string" &&
       restoredAccepted.data?.data?.session?.id === sessionId &&
       restoredAccepted.data?.data?.sessionCreated === false &&
-      restoredAccepted.data?.data?.tasksAssigned === 0,
+      restoredAccepted.data?.data?.tasksAssigned === expectedM4Backfill &&
+      await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) ===
+        m4TasksBeforeMaybe + expectedM4Backfill,
     JSON.stringify(restoredAccepted.data?.data));
 
   const reversed = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "REJECTED" }, admin);
