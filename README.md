@@ -12,13 +12,15 @@ public embeds for your event site.
 2. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
    email); drafts and validation included.
 3. **Evaluation** — review teams score abstracts against a weighted rubric
-   through evaluation plans, routed by category. A round can be marked blind,
-   which hides speaker names in the evaluator's scoring queue.
-4. **Accept → Session** — accepted abstracts convert into confirmed, schedulable
-   sessions (at most one session per abstract).
+   through evaluation plans, routed by category. A round can be marked blind;
+   assigned evaluators then lose speaker profiles, while the UI warns that
+   proposal text can still identify its author.
+4. **Accept → Session** — accepting an abstract atomically provisions its one
+   confirmed, unscheduled session and every onboarding-task assignment for its
+   speakers. The legacy conversion endpoint safely backfills older records.
 5. **Speaker edits after acceptance** — speakers keep editing their own proposal
    while it is in draft, in review, or accepted; rejected and withdrawn
-   proposals are read-only, and a converted talk's speaker list is fixed.
+   proposals are read-only, and a confirmed talk's speaker list is fixed.
 6. **Speaker onboarding** — a speaker portal with profile, status, and task
    checklists (tasks can carry forms), plus an admin dashboard at
    `/admin/speakers` showing who is behind.
@@ -55,41 +57,41 @@ This path is rehearsed end-to-end from a clean clone and empty database in
 
 ## Deployed demo
 
-**Canonical production URL:** <https://greenroom-omega-dusky.vercel.app>
+**Canonical production URL:** <https://greenroom-hq.com>
 
 The demo runs on Vercel + Neon; pushes to `main` auto-deploy.
 
 ### Production golden-path walkthrough
 
 The public CFP uses the stable seeded slug
-[`/cfp/call-for-speakers`](https://greenroom-omega-dusky.vercel.app/cfp/call-for-speakers).
+[`/cfp/call-for-speakers`](https://greenroom-hq.com/cfp/call-for-speakers).
 Use a distinctive, throwaway talk title so it is easy to find in the admin
 pipeline.
 
 1. Open the public CFP, complete its required fields, and submit it while
    logged out.
-2. Go to [`/login`](https://greenroom-omega-dusky.vercel.app/login) and choose
+2. Go to [`/login`](https://greenroom-hq.com/login) and choose
    the **Event admin** persona. Open **Abstracts**, select the submitted row,
-   then choose **Accept**.
-3. With that row still selected after refresh, choose **Create session**.
-4. Open **Agenda**. In the **Unscheduled backlog**, select the new session,
+   then choose **Accept**. Acceptance creates the confirmed session and its
+   speaker onboarding checklists; it does not schedule the talk.
+3. Open **Agenda**. In the **Unscheduled backlog**, select the new session,
    choose an available date, time, room, and optional track, then choose
    **Schedule**. The server prevents room and speaker overlaps.
    - Switch to the **Day** tab and drag a session block to another room or time
      — the move is re-checked on the server and refused if it collides.
    - Switch to the **Week** tab for a read-only overview of the whole event.
-5. Open **Speaker onboarding** (`/admin/speakers`) to see profile completeness,
+4. Open **Speaker onboarding** (`/admin/speakers`) to see profile completeness,
    settled tasks, and unscheduled sessions per speaker, and **Website embeds**
    (`/admin/embeds`) to copy the `<iframe>` snippets for your event site.
-6. Sign in as the **Speaker** persona (Sofia) and open the speaker portal. Her
+5. Sign in as the **Speaker** persona (Sofia) and open the speaker portal. Her
    accepted proposal is still editable — content changes are saved against the
-   original form; the speaker list of a converted talk is locked.
-7. Verify the result while logged out at
-   [`/embed/schedule`](https://greenroom-omega-dusky.vercel.app/embed/schedule).
+   original form; the speaker list of a confirmed talk is locked.
+6. Verify the result while logged out at
+   [`/embed/schedule`](https://greenroom-hq.com/embed/schedule).
    The demo event can also be selected explicitly with
-   [`?event=forward-2026`](https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026).
+   [`?event=forward-2026`](https://greenroom-hq.com/embed/schedule?event=forward-2026).
    The scheduled speaker lineup is available at
-   [`/embed/speakers`](https://greenroom-omega-dusky.vercel.app/embed/speakers?event=forward-2026).
+   [`/embed/speakers`](https://greenroom-hq.com/embed/speakers?event=forward-2026).
 
 Non-technical walkthroughs of the same ground, one per role, live in
 [`docs/guides/`](docs/guides/): [event admin](docs/guides/event-admin.md),
@@ -116,7 +118,7 @@ npm test
 npm run typecheck
 npm run build
 node --env-file=.env scripts/_frontend-smoke.mjs
-node scripts/prod-verify.mjs https://greenroom-omega-dusky.vercel.app
+node scripts/prod-verify.mjs https://greenroom-hq.com
 ```
 
 The frontend smoke creates and removes only its `scratch-frontend` event. For

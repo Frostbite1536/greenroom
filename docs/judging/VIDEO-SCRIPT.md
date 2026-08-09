@@ -1,211 +1,181 @@
 # Walkthrough video — shot list and narration
 
 For Jeremy's voice-narrated fallback video. **Target: 8–9 minutes.** Everything
-below is on the deployed demo, `https://greenroom-omega-dusky.vercel.app`; no
-local setup appears on camera.
+below is on the canonical deployed demo, `https://greenroom-hq.com`; no local
+setup appears on camera.
 
-**Before recording**
-- Use a clean browser profile (no other logins), window at 1440×900 or larger.
-- Have two tabs ready: the app, and a terminal for the one API shot (§8).
-- Pick a distinctive throwaway talk title and use it every time it is typed.
-  Suggested: **"Backstage: Running a 3,000-Person Conference"**.
-- Recording adds one abstract → session → schedule slot to the demo event. That
-  is fine and repeatable; the Architect can reseed afterwards.
-- Speak to a **non-technical event professional**, not an engineer. Say
-  "submission", "reviewer", "programme", not "endpoint", "schema", "invariant".
+## Before recording
+
+- Coordinate an Architect-announced demo write window. The walkthrough creates
+  one proposal, review assignment, Session, and schedule slot; do not rehearse it
+  against `demo-event` outside that window.
+- Use only Jeremy-approved deliverable test addresses. A submitted proposal now
+  triggers real receipt/co-speaker/admin mail when production delivery is live.
+- Use a clean browser profile at 1440×900 or larger.
+- Have the app and a terminal ready. Load the judge-scoped read-only API key into
+  `GREENROOM_API_KEY` off-camera; never paste, echo, or record its value.
+- Pick one distinctive title and reuse it. Suggested: **“Backstage: Running a
+  3,000-Person Conference”**.
+- Speak to a non-technical event professional: say “submission”, “reviewer”, and
+  “programme”, not “endpoint”, “schema”, or “invariant”.
 
 Narration lines are written to be read aloud. Stage directions are in *italics*.
 
 ---
 
-## 1. Cold open — the public call for speakers (0:00–0:50)
+## 1. Public call for speakers (0:00–0:45)
 
 *Start logged out on* `/cfp/call-for-speakers`.
 
-> "This is Greenroom — open-source event program management. Everything you're
-> about to see is the real deployed app, and I'm starting completely logged out,
-> exactly like a speaker who just clicked a link in your call for papers."
+> “This is Greenroom—open-source event program management. I’m starting on the
+> real deployed app, completely logged out, exactly like a speaker following a
+> call-for-papers link.”
 
-*Scroll the form slowly: title, abstract, track/category dropdown, custom
-questions, co-speaker fields.*
+*Scroll through the core and custom fields, category selector, conditional
+questions, and co-speaker area.*
 
-> "The programme team built this form themselves — the questions, the track
-> options, the speaker limits. One form can carry as many tracks as you need."
+> “The programme team controls the questions, track options, conditions, dates,
+> and speaker limits. One call can serve several tracks.”
 
-## 2. Submit a proposal (0:50–1:40)
+## 2. Submit a proposal (0:45–1:30)
 
-*Fill in the title, a short abstract, pick a track, answer the required
-questions, add your name and email as the speaker. Submit.*
+*Use the approved test address, fill every visible required field, and submit.*
 
-> "I'll submit a proposal the same way a speaker would."
+> “The server validates the same rules the page shows, including questions that
+> become required only after another answer. The proposal is saved first; then
+> Greenroom records the submitter receipt, co-speaker notices, and admin alert.”
 
-*Land on the thank-you screen.*
+*Pause on the thank-you screen.*
 
-> "That's it. No account, no password. The team is notified by email — we
-> deliberately don't promise speakers a login they don't have yet."
+> “A mail-provider problem can’t erase the proposal, and an email address never
+> creates portal access by itself.”
 
-## 3. The proposal arrives for review (1:40–2:40)
+## 3. Inspect and assign it (1:30–2:45)
 
-*Go to* `/login`*, click the* **Event admin** *one-click persona.*
+*Go to* `/login`*, choose* **Event admin**, *open* **Abstracts**, *and select the
+new row.*
 
-> "Now I'm the event admin. These one-click personas exist so you can see every
-> role without me typing passwords on camera."
+> “The admin sees the proposal’s standard fields and every custom answer, with
+> its original question label. Evaluators do not receive these private form
+> answers.”
 
-*Open* **Abstracts** *from the sidebar. Find the new submission — sort or scan
-for the distinctive title.*
+*Open* **Evaluations**. *Select the active round, select the new proposal and
+Ravi Patel, then choose* **Assign**.
 
-> "Here's the submission that just came in, alongside forty others in the demo
-> event, at every stage of the pipeline."
+> “Admins create review rounds and rubrics here, then assign submitted work to
+> event evaluators. Coverage remains visible for the whole round, and assigning
+> the same pair twice cannot create duplicates.”
 
-*Select the row; show the detail drawer with the answers and speaker.*
+*Point to the blind-round copy without changing the seeded round.*
 
-> "Everything the speaker typed, including your custom questions, in one place."
+> “Blind rounds hide speaker profiles in assigned reviewer surfaces. Greenroom
+> is honest that a title or free text can still identify someone.”
 
-## 4. Review and score (2:40–3:40)
+## 4. Review and score (2:45–3:40)
 
-*Sign out; log in as the* **Evaluator** *persona. Open* **Evaluations**.
+*Sign out, choose the* **Evaluator** *persona, and open* **Evaluations**. *Select
+the new assignment, score every rubric criterion, add a short comment, and
+submit.*
 
-> "Reviewers get their own queue. This is Ravi, one of the programme committee."
+> “Reviewers see only their queue. Scores are checked against this round’s
+> rubric and weighted for the reviewer’s running total; nobody can score work
+> they were not assigned.”
 
-*Open an assigned abstract, score it against the rubric criteria, save.*
+> “If a speaker withdraws, the item becomes archived: no scoring form, no new
+> assignment, and no distortion of active progress.”
 
-> "The rubric is defined per review round — criteria, weights, and score ranges.
-> Scores are checked against that rubric on the server, so a reviewer can't
-> submit a seven out of five, and nobody can score a proposal they weren't
-> assigned."
+## 5. Accept and preview the decision (3:40–4:40)
 
-## 5. Accept and turn it into a session (3:40–4:30)
+*Return as* **Event admin** → **Abstracts** → *select the new row* → **Accept**.
 
-*Back to the* **Event admin** *persona →* **Abstracts** *→ select the new row →*
-**Accept** *→ then* **Create session**.
+> “Acceptance is the commitment point. In one transaction Greenroom creates the
+> confirmed, unscheduled Session, copies its speakers, and assigns each speaker
+> the event’s onboarding checklist. Repeating the action tops up missing rows
+> without duplicating anything.”
 
-> "The admin accepts the proposal. Accepting doesn't schedule anything — it
-> creates a confirmed session, which is the thing that goes on the agenda. We
-> keep those two ideas separate on purpose: a proposal is what the speaker sent,
-> a session is what you've committed to run."
+*Open* **Operations**, *select the decided proposal, and preview its decision
+email. Do not press Send unless this recording is the approved live-send proof.*
 
-## 6. Schedule it — and let it refuse a conflict (4:30–6:00)
+> “Decision mail is preview-first. The send is cryptographically tied to this
+> exact content and recipient set. An admin can include written feedback, but
+> never scores or reviewer identities.”
 
-*Open* **Agenda builder***. Show the* **Day** *and* **Week** *tabs, then the*
-**Unscheduled backlog** *with the new session in it.*
+## 6. Schedule it and show a refusal (4:40–6:00)
 
-> "Here's the programme. Day view, week view, tracks, and a conflicts view."
+*Open* **Agenda builder**. *Show Day and Week, then find the new Session in the
+Unscheduled backlog.*
 
-*Deliberately schedule the new session into a room and time that is already
-occupied. Let the conflict message appear.*
+> “Accepting confirmed the talk; it did not invent a room or time. That separate
+> scheduling decision starts here.”
 
-> "Watch this — I'm going to put it in a room that's already booked."
+*Try an occupied room/time and pause on the conflict response. Then choose a
+free slot.*
 
-*Pause on the refusal.*
+> “The server refuses a room or speaker overlap inside the same transaction that
+> writes the slot. A free placement lands; a collision never becomes a warning
+> someone can ignore.”
 
-> "The server refuses it and tells me exactly what it collides with. That check
-> runs inside the database transaction, so two people scheduling at the same
-> time still can't double-book a room or a speaker. This is the failure mode
-> that ruins real conferences, so we made it impossible rather than merely
-> discouraged."
+## 7. Speaker onboarding (6:00–7:05)
 
-*Now drag the session into a free slot (or use the form).*
+*Sign out, choose* **Speaker** *(Sofia), and open the portal.*
 
-> "In a free slot, it just lands."
+> “Speakers see profile completeness, confirmed sessions, editable proposals,
+> resources, and the exact onboarding tasks the admin is tracking.”
 
-## 7. The speaker's side (6:00–6:50)
+*Open a form-carrying task such as flight reimbursement. Show a conditional
+question appearing, save a partial response, then complete every visible
+required field and choose* **Save and mark done**.
 
-*Sign out; log in as the* **Speaker** *persona (Sofia). Land on* `/portal`.
+> “Partial answers survive a closed tab. A form task cannot be checked off while
+> its required visible answers are empty or invalid, so completion means the
+> programme team actually has the information.”
 
-> "Speakers get their own workspace: profile completeness, their confirmed
-> sessions, their submissions, and the onboarding tasks you need from them."
+*Open Sofia’s accepted proposal and show that text/answers remain editable while
+the speaker roster is locked.*
 
-*Tick a task off; show the progress update. Then open* **Claim your flight
-reimbursement** *— it says* Fill in the form.
+> “Speakers can still correct what attendees will read after acceptance. The
+> confirmed lineup is fixed; changing presenters is a programme decision.”
 
-> "Some tasks are just a checkbox. The ones that matter are forms — hotel stay,
-> flight reimbursement — because the programme team needs the answers, not a
-> tick."
+*Return as admin and open* **Speaker onboarding**.
 
-*Try to tick it off from the portal first: the checkbox is disabled. Open the
-form, choose* **Yes** *for claiming travel, show the conditional questions
-appearing, fill every revealed required field, then choose* **Save and mark
-done**.
+> “The programme team gets the other side of that workflow: profile gaps, open
+> tasks, and unscheduled sessions, ordered as a chase list.”
 
-> "And it won't let a speaker mark it done while it's empty. That's the whole
-> point — a task list full of ticks that nobody filled in is worse than no task
-> list at all."
+## 8. Public embeds and calendar export (7:05–8:00)
 
-*Scroll to* **Your submissions***. Open the accepted proposal — Sofia's is
-"Scaling Vector Search" — via* **Update this proposal***.*
+*Sign out. Open* `/embed/schedule?event=forward-2026`, *download one `.ics`, then
+open* `/embed/speakers?event=forward-2026`.
 
-> "And because plans change, an accepted speaker can still edit their own
-> proposal — the title, the description, the answers to your custom questions."
+> “The public programme works without a login and can be embedded in an existing
+> event site. Calendar files contain the real room when one is assigned.”
 
-*Change a word in the description and save; show the confirmation.*
+*As admin, show the copyable iframe snippets under* **Website embeds**.
 
-> "That updates what attendees will read. The one thing they can't change here is
-> who's presenting — the talk is already on the schedule, so the speaker list is
-> fixed and it tells them to contact the programme team. That's deliberate: a
-> speaker quietly rewriting the line-up after you've built the agenda is a
-> problem, not a feature."
+## 9. Read-only API (8:00–8:35)
 
-*Then navigate to* `/admin/speakers` *(type the URL) as the admin persona.*
+*In PowerShell, with the key already loaded off-camera, run:*
 
-> "And the programme team sees the other side of that — who's onboarded, who
-> hasn't uploaded a headshot, whose sessions still aren't scheduled. This is the
-> chase list, sorted so the people who need a nudge are at the top."
-
-## 8. Public embeds and calendar export (6:50–8:00)
-
-*Sign out. Open* `/embed/schedule?event=forward-2026` *while logged out.*
-
-> "This is the public schedule, and I'm signed out — this is what your attendees
-> see. It's built to be embedded in your existing event site."
-
-*Click* **Add to calendar** *on a session; show the downloaded `.ics` opening in
-the calendar app, with the room in the location field.*
-
-> "Every session exports to a calendar file. If a room has been assigned it comes
-> through as the location; if it hasn't, we leave it out rather than invent one."
-
-*Open* `/embed/speakers?event=forward-2026`.
-
-> "Same for the speaker lineup."
-
-*As admin, open* **Embeds** *in the sidebar and show the copyable iframe snippet.*
-
-> "The team copies one line of HTML to put either of those on their own site."
-
-## 9. The public API (8:00–8:40)
-
-*Switch to the terminal. Run:*
-
-```bash
-curl -H "Authorization: Bearer gr_live_WXOfTCCYVp9zZQ8QQCqZ-YxGhNbf_P0x" \
-  "https://greenroom-omega-dusky.vercel.app/api/v1/schedule?event=forward-2026"
+```powershell
+curl.exe -H "Authorization: Bearer $env:GREENROOM_API_KEY" `
+  "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 ```
 
-> "There's also a read-only API, so the schedule can feed a mobile app or a
-> website build."
+> “The same schedule can feed a mobile app or website build through a scoped,
+> read-only API.”
 
-*(That bearer token is the demo-scope API key intentionally shared with the
-judges — see `docs/API.md`. It authorizes read-only access to demo data only
-and is rotated after judging.)*
+*Then omit the header:*
 
-*Then run the same URL with no key:*
-
-```bash
-curl -i "https://greenroom-omega-dusky.vercel.app/api/v1/schedule?event=forward-2026"
+```powershell
+curl.exe -i "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 ```
 
-> "Without a key, it's a 401. It fails closed — if no key is configured at all,
-> the API stays switched off instead of becoming public."
+> “Without the key it fails closed. The event selector is mandatory, too.”
 
-**Note:** `?event=forward-2026` is required; without it the API answers 400
-`EVENT_REQUIRED`. Judges receive this key deliberately; it is demo-scope only.
+## 10. Close (8:35–9:00)
 
-## 10. Close (8:40–9:00)
-
-> "Call for papers, review, acceptance, speaker onboarding, a conflict-safe
-> agenda, public embeds, calendar export, and an API — the whole life of a
-> conference programme, open source, and it installs from a clean clone in about
-> four minutes."
+> “Call for papers, review setup, scoring, acceptance, communications, speaker
+> onboarding, a conflict-safe agenda, public embeds, calendar export, and an
+> API—the whole life of a conference programme, open source.”
 
 ---
 
@@ -213,23 +183,25 @@ curl -i "https://greenroom-omega-dusky.vercel.app/api/v1/schedule?event=forward-
 
 | # | Shot | Must be visible |
 | --- | --- | --- |
-| 1 | Public CFP, logged out | custom questions, track dropdown |
-| 2 | Submission + thank-you | the distinctive title |
-| 3 | Admin → Abstracts | the new row among the 40 seeded |
-| 4 | Evaluator → Evaluations | rubric scoring saved |
-| 5 | Accept → Create session | both actions |
-| 6 | Agenda | **the refused conflict**, then a clean placement |
-| 7 | Portal + `/admin/speakers` | a task ticked; **an accepted proposal edited and saved**; the locked speaker list; the chase list |
-| 8 | `/embed/*` logged out + `.ics` | signed-out state, downloaded file, Embeds snippet |
-| 9 | Terminal | 200 with key, 401 without |
+| 1 | Public CFP, logged out | custom/conditional questions and category |
+| 2 | Submission | distinctive title and thank-you state |
+| 3 | Admin Abstracts + Evaluations | custom answers and new reviewer assignment |
+| 4 | Evaluator queue | rubric review saved |
+| 5 | Accept + Operations | one Accept action; exact decision preview |
+| 6 | Agenda | refused conflict, then clean placement |
+| 7 | Portal + Speaker onboarding | gated task form, accepted edit, locked roster, chase list |
+| 8 | Public embeds + `.ics` | signed-out state and iframe snippet |
+| 9 | Terminal | 200 with environment-held key, 401 without; no secret visible |
 
 ## If something goes wrong on camera
 
-- **The CFP says submissions are closed** — the seeded window drifted; stop and
-  tell the team before recording (it needs a reseed, not a retake).
-- **A row won't accept** — reload; the abstracts table refreshes after the
-  decision, and the row must still be selected for **Create session**.
-- **The conflict doesn't trigger** — pick a slot you can see is occupied in the
-  Day view; the demo event ships exactly one deliberate room conflict already.
-- **`/admin/speakers` isn't in the sidebar** — it is reached by URL; the nav
-  entry is a queued change.
+- **CFP closed:** stop. Fix dates/reseed only in the announced writer window.
+- **New proposal is absent from Ravi’s queue:** return as admin and verify the
+  exact proposal/evaluator pair was assigned in the active round.
+- **Accepted talk is absent from the backlog:** reload Abstracts and Agenda. Do
+  not look for a second Create session step; acceptance already provisioned it.
+- **Task form data differs:** stop and confirm the consolidated production seed
+  completed before recording.
+- **Conflict does not trigger:** choose a visibly occupied room/time in Day view.
+- **API returns 401 with the header:** confirm the environment variable is set
+  off-camera; never paste the credential into the command or recording.

@@ -103,8 +103,8 @@ Status codes:
 | `403 NOT_YOUR_SUBMISSION` | signed in, but not a speaker on that abstract |
 | `404 ABSTRACT_NOT_FOUND` | no such abstract in the caller's event (checked before ownership, so it never confirms another event's records) |
 | `409 ABSTRACT_LOCKED` | the abstract is `REJECTED` or `WITHDRAWN` |
-| `409 SPEAKERS_LOCKED` | the roster was changed after the abstract was converted to a session |
-| `409 WITHDRAW_NOT_ALLOWED` | self-withdraw attempted on an accepted or already-converted proposal |
+| `409 SPEAKERS_LOCKED` | the roster was changed after a session exists (normally from acceptance) |
+| `409 WITHDRAW_NOT_ALLOWED` | self-withdraw attempted on an accepted or Session-linked proposal |
 | `422 VALIDATION_ERROR` | the body itself is malformed (field errors keyed by body path) |
 | `422 FIELD_ERRORS` / `TOO_FEW_SPEAKERS` / `TOO_MANY_SPEAKERS` | the merged result fails the form's own content rules; `FIELD_ERRORS` carries `fieldErrors` keyed by form-field key |
 | `422 NO_PRIMARY_SPEAKER` / `INVALID_CATEGORY` | a supplied roster has no primary speaker, or the category is not in this event |
@@ -115,11 +115,27 @@ rewrite a submitted or accepted proposal.
 
 ### Related app endpoints worth knowing
 
-- `POST /api/evaluations/decisions` (admin) returns the decided abstract plus an additive
-  `session` key — `{ id, title, isScheduled, scheduledAt, roomName }` or `null` — so the UI
-  can warn when a declined or withdrawn proposal still has a talk on the programme (W2).
-  Nothing is auto-deleted (INV-DOMAIN-001).
+- `POST /api/evaluations/decisions` (admin) atomically provisions the Session and the
+  onboarding-task × session-speaker assignments when accepting. It returns the decided
+  abstract plus additive `session`, `sessionCreated`, and `tasksAssigned` keys. `session` is
+  `{ id, title, isScheduled, scheduledAt, roomName }` or `null`, so the UI can also warn when
+  a later decline still leaves a talk on the programme. Nothing is auto-deleted
+  (INV-DOMAIN-001).
+- `POST /api/evaluations/convert` (admin) is the idempotent compatibility/backfill path for
+  an accepted abstract whose Session or speaker-task assignments are missing. It returns 201
+  for a newly created Session and 200 for an existing one.
+- `POST /api/comms/decision` (admin) defaults to preview and requires the signed proof of that
+  exact preview before send. It refuses undecided proposals. Optional reviewer feedback
+  contains written comments only—never scores or reviewer identities—and all listed speakers
+  receive the result.
+- A successful public submit records and attempts a receipt for the submitter and co-speakers,
+  plus an event-admin alert, after the abstract transaction commits. Delivery failure is
+  non-throwing, so it cannot erase a saved proposal.
 - `POST /api/evaluations/scores` refuses `409 ABSTRACT_WITHDRAWN` once a speaker has withdrawn.
+- `PATCH /api/portal/tasks` accepts speaker-owned `TODO`, `IN_PROGRESS`, or `COMPLETED`
+  updates and an optional `responses` map. Task-form answers merge with saved answers, run
+  through the same conditional/type-aware validator as CFP answers, and block completion
+  until every visible required answer is valid. Speakers cannot self-waive assignments.
 
 Full transition rules — including which route performs each status change — are in
 [`LIFECYCLE.md`](LIFECYCLE.md).

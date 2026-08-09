@@ -52,35 +52,43 @@ Two useful facts:
 - Proposals brought in from a spreadsheet (CSV import) land here as **Submitted**, exactly
   like ones typed into the form.
 
-> **Coming soon:** the answers to your own custom questions inside this panel (today you see
-> the proposal's standard fields there), and a score that is weighted by your rubric and counts
-> only completed reviews — the figure shown now is a plain average of every score recorded so
-> far.
+The panel also renders the form's custom answers with their question labels and field types.
+Links are clickable only for safe HTTP(S) values, and very large answer sets fail closed rather
+than showing a misleading partial result. The score figure is still a plain average of every
+stored score; a weighted, completed-review decision score remains future work.
 
 ---
 
 ## 3. Get proposals reviewed
 
-**Evaluations** is where scoring happens. An evaluation round ("plan") holds the scoring
-rubric and the list of who is reviewing what. Assign proposals to your review team, and each
-assigned proposal moves to **In review** automatically.
+**Evaluations** is where setup and scoring happen. Create a review round, define each rubric
+criterion and its weight/range, then select submitted or in-review proposals and the event
+evaluators who should receive them. The page shows coverage for the whole round; newly
+assigned submitted proposals move to **In review** automatically. Assigning the same pair
+twice is harmless.
 
 If a proposal's category has a review team attached, assignments are routed to that team by
 default — you do not have to remember who covers what.
 
-Rounds can be **blind**: evaluators then see the proposal without the speaker's name.
+Rounds can be **blind**: speaker profiles are withheld from an evaluator's assigned queue and
+from their proposal list for blind-covered work. The proposal title and free text can still
+identify its author, so the setup dialog says this explicitly; evaluators never receive custom
+form answers. Withdrawn and decided proposals remain visible as history but cannot receive new
+assignments.
 
 ---
 
-## 4. Accept, then create the session
+## 4. Accept and confirm the session
 
 Back in **Abstracts**, open a proposal and choose **Accept** or **Decline** (offered on
-proposals that are Submitted or Under review). Accepting does not put anything on the schedule
-yet — that is deliberate: deciding and scheduling stay separate steps.
+proposals that are Submitted or Under review). **Accept** atomically creates the confirmed,
+unscheduled Session, copies its speakers, and assigns every event onboarding task to each
+speaker. Repeating acceptance is idempotent: missing checklist rows are topped up, never
+duplicated. A legacy **Create session** action appears only for older accepted data that is
+missing its Session.
 
-Once a proposal is accepted, the same panel offers **Create session**. That creates
-the confirmed talk: one session per proposal, carrying its title, description, format, and
-speakers. Pressing it twice is harmless — you get the same session back, never a duplicate.
+Accepting still does not put anything on the schedule. Deciding and choosing a room/time are
+separate steps.
 
 From this point the talk's **speaker list is fixed**. Speakers can still fix typos in their
 own text (see the [speaker guide](speaker.md)), but they cannot add or remove co-speakers;
@@ -126,6 +134,16 @@ people who need chasing first.
 A task counts as settled when the speaker finishes it **or** when it has been waived, so
 someone who genuinely does not need a task is not a permanent red mark.
 
+Tasks can carry forms for details such as hotel stay, flight reimbursement, or A/V logistics.
+Speakers can save partial answers, see them again, and cannot mark that task done until every
+visible required answer is valid. The checklist therefore reflects collected information, not
+just a tick.
+
+Use **Operations** to preview decision emails, optionally include the review team's written
+comments, and then send the exact previewed content to every listed speaker. Scores and
+reviewer identities are never included. Submission receipts/alerts and reminders use the same
+audited delivery log; the page identifies mock mode before an operator sends.
+
 ---
 
 ## 7. Put the programme on your website
@@ -155,11 +173,11 @@ the proposal shows a **"Still on the programme"** warning with a link to the Age
 Nothing is deleted behind your back — take it off the schedule there, or change the decision
 back if it should run after all.
 
-**Someone wants to withdraw a proposal.** A speaker can withdraw anything that has not been
-accepted yet (their portal button is on the way — until then, do it for them). Once you have
-accepted a talk, only you can take it off the programme: decline it and unschedule it. A
-withdrawn proposal can no longer be scored — a reviewer who tries is told the speaker pulled
-it.
+**Someone wants to withdraw a proposal.** The speaker-owned API permits withdrawal before
+acceptance, but the portal button has not shipped yet, so coordinate the request with them
+instead of promising an on-page control. Once you have accepted a talk, change the programme
+decision and unschedule it. A withdrawn proposal cannot receive new assignments or scores;
+existing review coverage stays visible as archived history.
 
 **Can two talks share a room deliberately?** The schedule refuses overlaps by design. If you
 genuinely need one (a demo of the conflict view, for instance), that is an administrator

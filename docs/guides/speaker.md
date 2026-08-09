@@ -19,7 +19,9 @@ You do **not** need an account to submit. The event gives you a link — for For
   silently.
 
 If something is missing, the page highlights the exact fields — nothing is lost. After
-submitting you see the event's thank-you message.
+submitting you see the event's thank-you message. Greenroom records and attempts an email
+receipt to the submitter, an added-to-proposal notice to each co-speaker, and an alert to the
+event admins. A mail-provider problem never rolls back the saved proposal.
 
 ---
 
@@ -68,10 +70,12 @@ Your portal home has three things the programme team is watching:
 
 **Your tasks.** The event's checklist — for Forward 2026: complete your profile, upload a
 headshot, submit the A/V & logistics form, confirm your session details, and (optional) upload
-your slide deck. Mark each one as in progress or done as you go; you can move one back if you
-were too optimistic. If a task does not apply to you, the programme team can waive it.
-A task with a **Form** badge means the team needs extra details from you — today they will
-ask you for those directly; filling the form in here is coming soon.
+your slide deck. Mark each plain checklist item as done as you go; you can move one back if you
+were too optimistic. A task with a **Form** badge opens the questions the team needs—for
+example hotel stay, flight reimbursement, or A/V logistics. Partial answers are saved and
+shown when you return. The task cannot be marked done until every question currently visible
+and required for your choices is valid. A waiver can be displayed when an organiser has
+prepared one, but speakers cannot waive their own required work.
 
 **Your sessions.** Your confirmed talks and when they are scheduled — date, time and room once
 the programme team places them. Before that it simply says "Not scheduled yet".
@@ -88,12 +92,16 @@ else the event has published.
 ## Common questions
 
 **I cannot sign in, but I am a co-speaker.** Portal access is granted per event. Co-speakers
-are contacted by email and do not automatically get an account — ask the programme team to add
-you if you need one.
+receive an email notice but do not automatically get an account — ask the programme team to
+add you if you need one.
 
 **I want to withdraw my talk.** Ask the programme team and they will withdraw it for you.
 A withdraw button in your portal is on the way; either way, a talk that has already been
 accepted has to be taken off the programme by the team rather than by you.
+
+**Will I receive the decision by email?** An event admin can preview and send the decision to
+every listed speaker. They may include written reviewer feedback, but never the reviewers'
+names or scores.
 
 **Will editing my accepted talk un-accept it?** No. Editing never changes your status or your
 place on the programme.

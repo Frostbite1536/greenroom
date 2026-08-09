@@ -19,21 +19,25 @@ row shows the talk title, its category and review team, and where you are with i
 | **Done** | you submitted your review (you can still change it) |
 | **Declined** | you are not reviewing this one |
 
-A progress bar above the queue shows how many of yours are scored. Greenroom opens the first
-unscored proposal for you, and after each submitted review it jumps to the next one — so you
-can work straight down the list without hunting.
+A progress bar above the queue shows how many active assignments are scored. Greenroom opens
+the first unscored, reviewable proposal and, after each submitted review, jumps to the next
+one — so you can work straight down the list without hunting. If a speaker withdraws, that row
+is labelled **Withdrawn**, excluded from progress, and shown without a scoring form.
 
-If the round is **blind**, a "Blind" badge appears and speaker names are hidden in your queue
-and on the proposal you are scoring, so you judge the talk rather than the person. (Blind
-rounds are opt-in per round; Forward 2026's seeded round is not blind, so you will see names
-there.)
+If the round is **blind**, a "Blind" badge appears and speaker profiles are hidden in your
+queue and on the proposal you are scoring. The same boundary hides identities on your
+proposal list for work covered by a blind plan. Proposal titles and free text can still name a
+speaker, so Greenroom warns rather than promising full anonymity. Custom form answers are
+withheld from evaluators in both blind and non-blind rounds. (Forward 2026's seeded round is
+not blind.)
 
 ---
 
 ## Scoring one proposal
 
 The right-hand panel shows the proposal: title, category, the abstract itself, and the
-speakers (unless the round is blind).
+speakers (unless the round is blind). It does not include the submitter's custom form answers;
+those stay with event admins.
 
 Underneath is the rubric. Forward 2026 uses four criteria, each scored 1–5:
 
@@ -48,8 +52,9 @@ Click a number for each criterion. A running **weighted score** appears at the t
 you can sanity-check the overall impression — Relevance counts half again as much as the
 others here, which is why the average is not a plain average.
 
-Add a **comment** if you want to say something to the programme team. It is optional, and it
-is for the committee — speakers never see review scores or comments, on any screen.
+Add a **comment** if you want to say something to the programme team. It is optional and does
+not appear in the speaker portal. An admin may choose to include written feedback in the
+decision email, but Greenroom never includes scores or reviewer identities.
 
 Choose **Submit review** when every criterion has a score. The button stays disabled until
 then, with a reminder telling you what is missing.
@@ -59,7 +64,8 @@ then, with a reminder telling you what is missing.
 ## Changing your mind
 
 Reopen any proposal in your queue, adjust the scores, and choose **Update review**. Your
-previous comment is shown underneath the box so you can see what you said last time.
+previous comment is shown underneath the empty box. If it should remain on the review,
+re-enter it before updating; comment-preserving update semantics are still queued work.
 
 ---
 

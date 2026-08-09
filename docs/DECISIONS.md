@@ -26,9 +26,11 @@ under the new persona emails.
 ## Abstract vs Session are distinct models
 An `Abstract` is an evaluated CFP proposal; a `Session` is a confirmed,
 schedulable talk (linked via `sourceAbstractId`, or created directly for e.g.
-invited keynotes). Keeping them separate makes the accept→convert step an
-explicit state transition, lets sessions exist without CFP provenance, and
-keeps evaluation data (scores, assignments) off the schedulable entity.
+invited keynotes). Keeping them separate lets acceptance atomically create a
+confirmed-but-unscheduled record, lets sessions exist without CFP provenance,
+and keeps evaluation data (scores, assignments) off the schedulable entity.
+`POST /api/evaluations/convert` remains an idempotent compatibility/backfill
+path for accepted records created before automatic provisioning.
 
 ## Demo auth: signed, fixed personas with persisted authorization
 `sb_session` is an HMAC-signed, seven-day cookie for the three fixed seeded
