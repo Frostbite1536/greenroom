@@ -109,9 +109,14 @@ Status codes:
 | `422 FIELD_ERRORS` / `TOO_FEW_SPEAKERS` / `TOO_MANY_SPEAKERS` | the merged result fails the form's own content rules; `FIELD_ERRORS` carries `fieldErrors` keyed by form-field key |
 | `422 NO_PRIMARY_SPEAKER` / `INVALID_CATEGORY` | a supplied roster has no primary speaker, or the category is not in this event |
 
-The **public** `POST /api/cfp/submissions` path is unchanged and still refuses any non-`DRAFT`
-abstract with `409 ABSTRACT_LOCKED`: it is unauthenticated, so it must never be a way to
-rewrite a submitted or accepted proposal.
+### Public CFP write boundary
+
+Unauthenticated `POST /api/cfp/submissions` accepts `saveDraft` and `submit`; **both** require
+the selected form to be published and open. Its JSON body is capped at 128 KiB before parsing,
+and its strict, bounded answers and speaker roster reject duplicate normalized speaker emails.
+The durable limits are 20 public writes per IP per 10 minutes, plus for a submit 3 per primary
+email per 24 hours and 60 per event per hour. It still refuses any non-`DRAFT` `abstractId` with
+`409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or accepted proposal.
 
 ### Related app endpoints worth knowing
 
@@ -128,9 +133,10 @@ rewrite a submitted or accepted proposal.
   exact preview before send. It refuses undecided proposals. Optional reviewer feedback
   contains written comments only—never scores or reviewer identities—and all listed speakers
   receive the result.
-- With an event email template available, a successful public submit records and attempts a
-  receipt for the submitter and co-speakers plus an event-admin alert after the abstract
-  transaction commits. Delivery failure is non-throwing, so it cannot erase a saved proposal.
+- With an event email template available, a successful public submit records and attempts one
+  receipt to the persisted primary submitter after the abstract transaction commits. There is no
+  co-speaker or event-admin notification fan-out. Delivery failure is non-throwing, so it cannot
+  erase a saved proposal.
 - `POST /api/evaluations/scores` refuses `409 ABSTRACT_WITHDRAWN` once a speaker has withdrawn.
 - `PATCH /api/portal/tasks` accepts speaker-owned `TODO`, `IN_PROGRESS`, or `COMPLETED`
   updates and an optional `responses` map. Task-form answers merge with saved answers, run
