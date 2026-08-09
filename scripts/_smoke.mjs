@@ -468,6 +468,73 @@ try {
   const eva = await j("GET", "/api/evaluations/evaluators", null, admin);
   const evaluatorId = eva.data?.data?.find((e) => e.email === evalr.user.email.toLowerCase())?.userId;
   check("resolve evaluator id", eva.status === 200 && !!evaluatorId, evaluatorId);
+  const [adminMembership, speakerMembership] = await Promise.all([
+    prisma.eventMember.findFirst({
+      where: { eventId: SCRATCH_EVENT.id, user: { email: admin.user.email } },
+      select: { userId: true },
+    }),
+    prisma.eventMember.findFirst({
+      where: { eventId: SCRATCH_EVENT.id, user: { email: speaker.user.email } },
+      select: { userId: true },
+    }),
+  ]);
+  const adminUserId = adminMembership?.userId;
+  const speakerUserId = speakerMembership?.userId;
+  check("resolve assignment-role fixtures", !!adminUserId && !!speakerUserId);
+
+  const assignSpeaker = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [abstractId], evaluatorIds: [speakerUserId],
+  }, admin);
+  check("S5 speaker event member cannot be assigned as reviewer",
+    assignSpeaker.status === 422 && assignSpeaker.data?.error?.code === "INVALID_EVALUATORS",
+    assignSpeaker.data?.error?.code);
+  check("S5 refused speaker assignment creates no row",
+    await prisma.reviewAssignment.count({
+      where: { planId, abstractId, evaluatorId: speakerUserId },
+    }) === 0);
+
+  // Deterministic TOCTOU regression: a competing terminal writer owns the
+  // shared abstract lock and updates the status without committing yet. The
+  // assignment request starts while that row still looks SUBMITTED to another
+  // transaction; it must wait, then re-read REJECTED and refuse the write.
+  const raceSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Assignment race proposal",
+    speakers: [{ email: "race-speaker@scratch.test", name: "Race Speaker", isPrimary: true }],
+    answers: { title_note: "race", consent: true }, intent: "submit",
+  });
+  const raceAbstractId = raceSubmit.data?.data?.id;
+  check("S5 race setup: submitted proposal created", raceSubmit.status === 201 && !!raceAbstractId);
+
+  let signalLockHeld;
+  let releaseTerminalWriter;
+  const lockHeld = new Promise((resolve) => { signalLockHeld = resolve; });
+  const terminalWriterGate = new Promise((resolve) => { releaseTerminalWriter = resolve; });
+  const terminalWriter = prisma.$transaction(async (tx) => {
+    const key = `abstract-write:${raceAbstractId}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.abstract.update({
+      where: { id: raceAbstractId },
+      data: { status: "REJECTED", decidedAt: new Date() },
+    });
+    signalLockHeld();
+    await terminalWriterGate;
+  });
+  await lockHeld;
+  const racingAssignment = j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [raceAbstractId], evaluatorIds: [adminUserId],
+  }, admin);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  releaseTerminalWriter();
+  await terminalWriter;
+  const raceResult = await racingAssignment;
+  check("S5 assignment waits for a competing decision and then refuses",
+    raceResult.status === 409 && raceResult.data?.error?.code === "ABSTRACT_NOT_REVIEWABLE",
+    raceResult.data?.error?.code);
+  check("S5 race preserves the decision and creates no assignment",
+    (await prisma.abstract.findUnique({ where: { id: raceAbstractId }, select: { status: true } }))?.status === "REJECTED" &&
+      await prisma.reviewAssignment.count({
+        where: { planId, abstractId: raceAbstractId, evaluatorId: adminUserId },
+      }) === 0);
 
   // 8. Assign the abstract to the evaluator -> abstract moves to UNDER_REVIEW
   const assign = await j("POST", "/api/evaluations/assignments", {
@@ -516,6 +583,18 @@ try {
   // 11. Accept, then convert to a Session
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
+
+  const assignAccepted = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
+  }, admin);
+  check("S5 accepted proposal cannot gain a new assignment",
+    assignAccepted.status === 409 && assignAccepted.data?.error?.code === "ABSTRACT_NOT_REVIEWABLE",
+    assignAccepted.data?.error?.code);
+  check("S5 accepted status and assignments survive the refused write",
+    (await prisma.abstract.findUnique({ where: { id: abstractId }, select: { status: true } }))?.status === "ACCEPTED" &&
+      await prisma.reviewAssignment.count({
+        where: { planId, abstractId, evaluatorId: adminUserId },
+      }) === 0);
 
   const decisionPreview = await j("POST", "/api/comms/decision", {
     abstractId,
@@ -1011,6 +1090,18 @@ try {
     wDraw.status === 200 && wDraw.data?.data?.submission?.status === "WITHDRAWN", wDraw.status);
   check("W1 withdrawing does not stamp a programme decision",
     wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
+
+  const assignWithdrawn = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [wId], evaluatorIds: [adminUserId],
+  }, admin);
+  check("S5 withdrawn proposal cannot gain a new assignment",
+    assignWithdrawn.status === 409 && assignWithdrawn.data?.error?.code === "ABSTRACT_NOT_REVIEWABLE",
+    assignWithdrawn.data?.error?.code);
+  check("S5 withdrawn status and assignments survive the refused write",
+    (await prisma.abstract.findUnique({ where: { id: wId }, select: { status: true } }))?.status === "WITHDRAWN" &&
+      await prisma.reviewAssignment.count({
+        where: { planId, abstractId: wId, evaluatorId: adminUserId },
+      }) === 0);
 
   const wReEdit = await j("PATCH", `/api/cfp/submissions/${wId}`, { title: "Back from the dead" }, speaker);
   check("W1 a withdrawn proposal is locked for further edits",
