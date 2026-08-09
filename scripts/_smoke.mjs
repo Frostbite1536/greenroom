@@ -715,6 +715,95 @@ try {
   check("C5 score correction with an omitted comment preserves saved feedback",
     correctedScore.status === 200 && correctedReviewScore?.score?.toString() === "4" && correctedReviewScore.comment === "strong",
     correctedScore.status);
+  const parallelScoreSubmission = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId,
+    title: "Parallel score lock check",
+    speakers: [{ email: "parallel-score@scratch.test", name: "Parallel Scorer", isPrimary: true }],
+    answers: { title_note: "parallel", consent: true },
+    intent: "submit",
+  });
+  const parallelScoreAbstractId = parallelScoreSubmission.data?.data?.id;
+  const parallelScoreAssignment = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [parallelScoreAbstractId], evaluatorIds: [evaluatorId],
+  }, admin);
+  check("C5 plan-lock concurrency setup creates a second assigned abstract",
+    parallelScoreSubmission.status === 201 && parallelScoreAssignment.status === 201 && !!parallelScoreAbstractId,
+    parallelScoreAssignment.status);
+
+  let signalSharedPlanLock;
+  let releaseSharedPlanLock;
+  const sharedPlanLockHeld = new Promise((resolve) => { signalSharedPlanLock = resolve; });
+  const sharedPlanLockRelease = new Promise((resolve) => { releaseSharedPlanLock = resolve; });
+  const sharedPlanLock = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "EvaluationPlan" WHERE "id" = ${planId} FOR SHARE`;
+    signalSharedPlanLock();
+    await sharedPlanLockRelease;
+  });
+  await sharedPlanLockHeld;
+  const parallelScore = j("POST", "/api/evaluations/scores", {
+    planId, abstractId: parallelScoreAbstractId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  const parallelScoreBeforeRelease = await Promise.race([
+    parallelScore,
+    new Promise((resolve) => setTimeout(() => resolve(null), 500)),
+  ]);
+  releaseSharedPlanLock();
+  await sharedPlanLock;
+  const parallelScoreResult = parallelScoreBeforeRelease ?? await parallelScore;
+  check("C5 concurrent scorers share the plan lock before distinct abstract locks",
+    parallelScoreBeforeRelease?.status === 200 && parallelScoreResult?.status === 200,
+    parallelScoreResult?.status);
+
+  let signalPlanUpdateShareLock;
+  let releasePlanUpdateShareLock;
+  const planUpdateShareLockHeld = new Promise((resolve) => { signalPlanUpdateShareLock = resolve; });
+  const planUpdateShareLockRelease = new Promise((resolve) => { releasePlanUpdateShareLock = resolve; });
+  const planUpdateShareLock = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "EvaluationPlan" WHERE "id" = ${planId} FOR SHARE`;
+    signalPlanUpdateShareLock();
+    await planUpdateShareLockRelease;
+  });
+  await planUpdateShareLockHeld;
+  const waitingPlanUpdate = j("POST", "/api/evaluations/plans", {
+    id: planId,
+    eventId: SCRATCH_EVENT.id,
+    name: "Round 1 Smoke concurrent lock check",
+    ordinal: 1,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 }],
+  }, admin);
+  const planUpdatedBeforeShareRelease = await Promise.race([
+    waitingPlanUpdate.then(() => true),
+    new Promise((resolve) => setTimeout(() => resolve(false), 150)),
+  ]);
+  releasePlanUpdateShareLock();
+  await planUpdateShareLock;
+  const completedPlanUpdate = await waitingPlanUpdate;
+  check("C5 plan FOR UPDATE excludes active shared scorer locks",
+    planUpdatedBeforeShareRelease === false && completedPlanUpdate.status === 200,
+    completedPlanUpdate.status);
+  const rejectedRubricReorder = await j("POST", "/api/evaluations/plans", {
+    id: planId,
+    eventId: SCRATCH_EVENT.id,
+    name: "Round 1 Smoke concurrent lock check",
+    ordinal: 1,
+    rubric: [
+      { key: "impact", label: "Impact", min: 1, max: 5, weight: 1 },
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 },
+    ],
+  }, admin);
+  const [planAfterRejectedReorder, commentAfterRejectedReorder] = await Promise.all([
+    prisma.evaluationPlan.findUnique({ where: { id: planId }, select: { rubric: true } }),
+    prisma.reviewScore.findUnique({
+      where: { planId_abstractId_evaluatorId_rubricKey: { planId, abstractId, evaluatorId, rubricKey: "relevance" } },
+      select: { comment: true },
+    }),
+  ]);
+  check("C5 rubric reorder preserves the authoritative comment key and visible feedback",
+    rejectedRubricReorder.status === 409 &&
+      rejectedRubricReorder.data?.error?.code === "REVIEW_COMMENT_KEY_IN_USE" &&
+      planAfterRejectedReorder?.rubric?.[0]?.key === "relevance" &&
+      commentAfterRejectedReorder?.comment === "strong",
+    rejectedRubricReorder.data?.error?.code);
   const clearedScore = await j("POST", "/api/evaluations/scores", {
     planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: null }], complete: true,
   }, evalr);

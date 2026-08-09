@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { reviewScoreInputSchema } from "@/types/api";
 import {
+  overallReviewCommentKeyChanged,
   resolveOverallReviewComment,
   reviewScoreCreateData,
   reviewScoreUpdateData,
@@ -37,6 +38,17 @@ test("new score writes allow one overall comment only on the first rubric key", 
       (error: unknown) => error instanceof ApiError && error.status === 422 && error.code === "INVALID_REVIEW_COMMENT",
     );
   }
+});
+
+test("a rubric reorder is detectable only when it moves the overall comment key", () => {
+  const current = [
+    { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 1 },
+    { key: "impact", label: "Impact", min: 1, max: 5, weight: 1 },
+  ];
+
+  assert.equal(overallReviewCommentKeyChanged(current, current), false);
+  assert.equal(overallReviewCommentKeyChanged(current, [current[1], current[0]]), true);
+  assert.equal(overallReviewCommentKeyChanged([], current), true);
 });
 
 test("review score comments accept nonblank text or null, never an ambiguous blank", () => {

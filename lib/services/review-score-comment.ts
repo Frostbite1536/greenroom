@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api/http";
+import { parseRubric } from "@/lib/services/rubric";
 
 type ReviewScoreCommentInput = {
   score: number;
@@ -13,6 +14,18 @@ export type OverallReviewComment = {
   rubricKey: string;
   comment: string | null;
 };
+
+/**
+ * Overall comments are persisted on the first rubric criterion. Moving that
+ * key would make existing comments disappear from the evaluator projection,
+ * so plan updates use this pure comparison before they write a new rubric.
+ */
+export function overallReviewCommentKeyChanged(
+  currentRubric: unknown,
+  nextRubric: readonly { key: string }[],
+): boolean {
+  return (parseRubric(currentRubric)[0]?.key ?? null) !== (nextRubric[0]?.key ?? null);
+}
 
 /**
  * A review has one overall comment, stored on the plan's first rubric key.
