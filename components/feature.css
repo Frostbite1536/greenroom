@@ -233,6 +233,8 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .detail-drawer { display: grid; gap: 14px; }
 .detail-drawer .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px; font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .detail-drawer .kv span:first-child { color: var(--muted); }
+.abstract-overflow-notice { margin: 12px 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f7faf9; color: var(--ink); font-size: 13px; line-height: 1.5; }
+.abstract-overflow-notice strong { font-weight: 700; }
 .review-notes { margin-top: 18px; }
 .review-notes h3 { margin: 0 0 4px; font-size: 14px; }
 .review-notes > .hint { margin: 0; }

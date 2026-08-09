@@ -11,23 +11,18 @@ export default async function AbstractsPage({
 }: {
   searchParams: Promise<{ abstractId?: string | string[]; mode?: string | string[] }>;
 }) {
-  const [{ abstracts }, params] = await Promise.all([getAdminAbstracts(), searchParams]);
+  const params = await searchParams;
   // A selected proposal is a useful review deep link and lets the server render
   // the accessible drawer from the first response. Never trust the URL alone:
-  // it must name an abstract already scoped by getAdminAbstracts().
+  // it must name an abstract already scoped by getAdminAbstracts(). Older
+  // proposals are intentionally outside the newest bounded table page, but a
+  // valid event-scoped deep link still gets its own drawer record.
   const requestedId = typeof params.abstractId === "string" ? params.abstractId : null;
-  const initialSelectedId = requestedId && abstracts.some((abstract) => abstract.id === requestedId)
+  const { abstracts, selectedAbstract, total, hasMore, metrics } = await getAdminAbstracts(requestedId);
+  const initialSelectedId = requestedId && (selectedAbstract?.id === requestedId || abstracts.some((abstract) => abstract.id === requestedId))
     ? requestedId
     : null;
   const initialChanging = initialSelectedId !== null && params.mode === "decide";
-
-  const accepted = abstracts.filter((a) => a.status === "ACCEPTED").length;
-  // A Maybe is deliberately still under consideration, so it belongs in the
-  // producer's pending-review count until the team accepts or declines it.
-  const pending = abstracts.filter((a) => {
-    const status = String(a.status);
-    return status === "SUBMITTED" || status === "UNDER_REVIEW" || status === "MAYBE";
-  }).length;
 
   return (
     <section className="page-stack">
@@ -37,14 +32,17 @@ export default async function AbstractsPage({
         description="Review and manage abstract submissions through the acceptance pipeline."
       />
       <div className="metric-grid">
-        <div className="metric"><span>Total</span><strong>{abstracts.length}</strong></div>
-        <div className="metric"><span>Pending review</span><strong>{pending}</strong></div>
-        <div className="metric"><span>Accepted</span><strong>{accepted}</strong></div>
+        <div className="metric"><span>Total</span><strong>{metrics.total}</strong></div>
+        <div className="metric"><span>Pending review</span><strong>{metrics.pending}</strong></div>
+        <div className="metric"><span>Accepted</span><strong>{metrics.accepted}</strong></div>
       </div>
       <AbstractsTable
         abstracts={abstracts}
+        initialSelectedAbstract={selectedAbstract}
         initialSelectedId={initialSelectedId}
         initialChanging={initialChanging}
+        total={total}
+        hasMore={hasMore}
       />
     </section>
   );
