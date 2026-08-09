@@ -5,15 +5,10 @@ import { useRouter } from "next/navigation";
 import { Building2, CalendarDays, Plus, Tags, Trash2 } from "lucide-react";
 import type { EventSettingsView } from "@/lib/data/reads";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
-import { validateEventDatePair } from "@/lib/event-settings-form";
+import { planEventSettingsPatch, validateEventDatePair, type EventSettingsDraft } from "@/lib/event-settings-form";
 import { EmptyState, Pill } from "@/components/ui";
 
-type EventForm = {
-  name: string;
-  timezone: string;
-  startsOn: string;
-  endsOn: string;
-};
+type EventForm = EventSettingsDraft;
 
 type RoomDraft = { id: string; name: string; capacity: string };
 type EventError = { message: string; field: "name" | "timezone" | "dates" | "general" };
@@ -82,15 +77,16 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       setEventError({ message: dateError, field: "dates" });
       return;
     }
+    const patch = planEventSettingsPatch(event, view.event);
+    if (!patch) {
+      setEventError(null);
+      setEventNotice("No event details have changed.");
+      return;
+    }
     setSavingEvent(true);
     setEventError(null);
     setEventNotice(null);
-    const res = await apiPatch<{ event: EventSettingsView["event"] }>("/api/admin/settings", {
-      name: event.name,
-      timezone: event.timezone,
-      startsOn: event.startsOn || null,
-      endsOn: event.endsOn || null,
-    });
+    const res = await apiPatch<{ event: EventSettingsView["event"] }>("/api/admin/settings", patch);
     setSavingEvent(false);
     if (!res.ok) {
       const fields = firstFieldErrors(res.error.fieldErrors);
