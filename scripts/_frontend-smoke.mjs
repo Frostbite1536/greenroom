@@ -172,6 +172,24 @@ async function resetScratch() {
     data: { planId: plan.id, abstractId: abstract.id, evaluatorId: users.evaluatorTwo, teamKey: "team-ai", status: "ASSIGNED" },
   });
 
+  // C34: MAYBE remains historical setup coverage. Its existing admin review
+  // stays scoreable, but it must never enter the new-assignment picker.
+  const maybeSetupAbstract = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID, formConfigId: form.id, submitterId: users.speaker,
+      title: "Scratch: Maybe historical coverage", abstract: "More review is still useful.", format: "Talk",
+      durationMinutes: 30, categoryId: category.id, status: "MAYBE",
+      submittedAt: new Date(),
+      speakers: { create: [{ userId: users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: {
+      planId: plan.id, abstractId: maybeSetupAbstract.id, evaluatorId: users.admin,
+      teamKey: "team-ai", status: "ASSIGNED",
+    },
+  });
+
   // An accepted abstract to convert, plus two sessions to schedule/conflict.
   const acceptedAbstract = await prisma.abstract.create({
     data: {
@@ -214,7 +232,10 @@ async function resetScratch() {
     },
   });
 
-  return { event, form, abstract, acceptedAbstract, plan, sessionA, sessionB, roomA, roomB, track, category, users, dayKey };
+  return {
+    event, form, abstract, maybeSetupAbstract, acceptedAbstract, plan, sessionA, sessionB,
+    roomA, roomB, track, category, users, dayKey,
+  };
 }
 
 // ---- checks ---------------------------------------------------------------
@@ -710,7 +731,7 @@ try {
   check("pipeline renders a Maybe status pill",
     /class="pill warn">Maybe<\/span>/.test(afterMaybe.text));
   check("Maybe status filter exposes its pressed state",
-    /aria-pressed="false"[^>]*>Maybe(?:<!-- -->)? <span class="count">1<\/span>/.test(afterMaybe.text));
+    /aria-pressed="false"[^>]*>Maybe(?:<!-- -->)? <span class="count">2<\/span>/.test(afterMaybe.text));
   check("unconfirmed maybe is not presented as a programme mismatch",
     !afterMaybe.text.includes("Still on the programme"));
 
@@ -977,6 +998,57 @@ try {
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
   check("evaluation setup payload omits unused reviewer emails",
     !setupPage.text.includes("ravi@greenroom.demo"));
+  const proposalPickerStart = setupPage.text.indexOf('<section aria-labelledby="pick-proposals"');
+  const proposalPickerEnd = setupPage.text.indexOf('<section aria-labelledby="pick-reviewers"');
+  const proposalPicker = proposalPickerStart === -1 || proposalPickerEnd === -1
+    ? ""
+    : setupPage.text.slice(proposalPickerStart, proposalPickerEnd);
+  const setupTableRow = (title) => {
+    const titleIndex = setupPage.text.indexOf(title);
+    if (titleIndex === -1) return "";
+    const start = setupPage.text.lastIndexOf("<tr", titleIndex);
+    const end = setupPage.text.indexOf("</tr>", titleIndex);
+    return start === -1 || end === -1 ? "" : setupPage.text.slice(start, end + "</tr>".length);
+  };
+  const maybeSetupRow = setupTableRow(fx.maybeSetupAbstract.title);
+  check("C34 MAYBE stays in historical coverage with its existing assignment count",
+    renderedText(maybeSetupRow)?.includes("Maybe")
+    && renderedText(maybeSetupRow)?.includes("0/1"));
+  check("C34 MAYBE has no new-assignment checkbox or row action",
+    !proposalPicker.includes(fx.maybeSetupAbstract.title)
+    && !maybeSetupRow.includes("<input")
+    && !maybeSetupRow.includes("<button"));
+  check("C34 keeps under-review proposals in the assignment picker",
+    proposalPicker.includes(fx.abstract.title) && proposalPicker.includes('name="proposalIds"'));
+
+  const maybeExistingScore = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: fx.maybeSetupAbstract.id,
+    scores: [
+      { rubricKey: "relevance", score: 4 },
+      { rubricKey: "clarity", score: 4 },
+    ],
+    complete: true,
+  }, admin);
+  check("C34 existing MAYBE assignment remains scoreable → 200", maybeExistingScore.status === 200,
+    `${maybeExistingScore.status} ${JSON.stringify(maybeExistingScore.data?.error ?? "")}`);
+  const maybeNewAssignment = await req("POST", "/api/evaluations/assignments", {
+    planId: fx.plan.id,
+    abstractIds: [fx.maybeSetupAbstract.id],
+    evaluatorIds: [fx.users.evaluatorTwo],
+  }, admin);
+  check("C34 assignment route refuses a new MAYBE assignment → 409",
+    maybeNewAssignment.status === 409 && maybeNewAssignment.data?.error?.code === "ABSTRACT_NOT_REVIEWABLE",
+    `${maybeNewAssignment.status} ${JSON.stringify(maybeNewAssignment.data?.error ?? "")}`);
+  const setupAfterMaybeScore = await req("GET", "/admin/evaluations", null, admin);
+  const scoredMaybeTitleIndex = setupAfterMaybeScore.text.indexOf(fx.maybeSetupAbstract.title);
+  const scoredMaybeRow = scoredMaybeTitleIndex === -1
+    ? ""
+    : setupAfterMaybeScore.text.slice(
+      setupAfterMaybeScore.text.lastIndexOf("<tr", scoredMaybeTitleIndex),
+      setupAfterMaybeScore.text.indexOf("</tr>", scoredMaybeTitleIndex) + "</tr>".length,
+    );
+  check("C34 MAYBE coverage preserves completed review counts", renderedText(scoredMaybeRow)?.includes("1/1"));
 
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
@@ -1028,6 +1100,14 @@ try {
       speakers: { create: [{ userId: blindSpeaker.id, isPrimary: true }] },
     },
   });
+  const setupWithSubmitted = await req("GET", "/admin/evaluations", null, admin);
+  const submittedPickerStart = setupWithSubmitted.text.indexOf('<section aria-labelledby="pick-proposals"');
+  const submittedPickerEnd = setupWithSubmitted.text.indexOf('<section aria-labelledby="pick-reviewers"');
+  const submittedPicker = submittedPickerStart === -1 || submittedPickerEnd === -1
+    ? ""
+    : setupWithSubmitted.text.slice(submittedPickerStart, submittedPickerEnd);
+  check("C34 keeps submitted proposals in the assignment picker",
+    submittedPicker.includes(setupAbstract.title) && submittedPicker.includes('name="proposalIds"'));
   const freshAssign = await req("POST", "/api/evaluations/assignments", {
     planId: fx.plan.id,
     abstractIds: [setupAbstract.id],
