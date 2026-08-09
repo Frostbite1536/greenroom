@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
@@ -54,15 +55,39 @@ function isolatedPublicSubmissionHeaders(method, path) {
   return { "x-vercel-forwarded-for": `198.18.${Math.floor(sequence / 250)}.${(sequence % 250) + 1}` };
 }
 
+function hasExplicitPublicClientIp(headers) {
+  return Object.keys(headers).some((name) => {
+    const normalized = name.toLowerCase();
+    return normalized === "x-vercel-forwarded-for" || normalized === "x-forwarded-for";
+  });
+}
+
+function publicSubmissionHeaders(method, path, extraHeaders, sess) {
+  const headers = new Headers({ "content-type": "application/json" });
+  // An explicit test address must be the only client-IP header supplied. All
+  // other public write probes receive a unique valid address for isolation.
+  if (!hasExplicitPublicClientIp(extraHeaders)) {
+    for (const [name, value] of Object.entries(isolatedPublicSubmissionHeaders(method, path))) {
+      headers.set(name, value);
+    }
+  }
+  for (const [name, value] of Object.entries(extraHeaders)) {
+    headers.set(name, value);
+  }
+  if (sess) headers.set("cookie", cookie(sess));
+  return headers;
+}
+
+function publicSubmissionRateFingerprint(domain, value) {
+  return createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:public-submission-rate:v1:${domain}\u0000${value}`)
+    .digest("hex");
+}
+
 const j = async (method, path, body, sess, extraHeaders = {}) => {
   const res = await fetch(BASE + path, {
     method,
-    headers: {
-      "content-type": "application/json",
-      ...isolatedPublicSubmissionHeaders(method, path),
-      ...extraHeaders,
-      ...(sess ? { cookie: cookie(sess) } : {}),
-    },
+    headers: publicSubmissionHeaders(method, path, extraHeaders, sess),
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -143,6 +168,13 @@ async function waitReady() {
 
 const results = [];
 const check = (name, cond, extra) => { results.push({ name, ok: !!cond, extra }); console.log(`${cond ? "PASS" : "FAIL"} ${name}`, extra ?? ""); };
+const fixedIpHeader = publicSubmissionHeaders("POST", "/api/cfp/submissions", {
+  "x-vercel-forwarded-for": "198.51.100.91",
+});
+check(
+  "rate smoke explicit client-IP header replaces automatic isolation",
+  fixedIpHeader.get("x-vercel-forwarded-for") === "198.51.100.91",
+);
 
 /**
  * Wipe + recreate the scratch event so runs are idempotent and isolated.
@@ -348,6 +380,7 @@ try {
 
   const rateTestIp = "198.51.100.91";
   const rateTestHeaders = { "x-vercel-forwarded-for": rateTestIp };
+  const rateTestFingerprint = publicSubmissionRateFingerprint("ip", rateTestIp);
   const rateEmails = Array.from({ length: 21 }, (_, index) => `s19-rate-${index}@scratch.test`);
   const rateCoreBefore = await publicCoreCounts();
   const rateInvalidAttempts = [];
@@ -362,6 +395,7 @@ try {
     SELECT COALESCE(MAX("count"), 0)::int AS "count"
     FROM "PublicSubmissionRateBucket"
     WHERE "eventId" = ${SCRATCH_EVENT.id} AND "scope" = 'public_write_ip_10m'
+      AND "fingerprint" = ${rateTestFingerprint}
   `;
   const rateLimited = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "S19 rate limited after invalid attempts",
@@ -370,7 +404,7 @@ try {
   }, undefined, rateTestHeaders);
   const rateCoreAfter = await publicCoreCounts();
   check(
-    "S20 known-form business-invalid attempts durably consume the independent IP bucket and the next write is 429 without core writes",
+    "S19 known-form business-invalid attempts durably consume the intended IP bucket and the next write is 429 without core writes",
     rateInvalidAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FIELD_ERRORS") &&
       rateBucketBeforeLimit[0]?.count === 20 &&
       rateLimited.status === 429 && rateLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
@@ -438,8 +472,9 @@ try {
   check("S20 scratch event-rate buckets are explicitly cleaned after the isolated ceiling assertion", s20RateBucketsAfterCleanup[0]?.count === 0, s20RateBucketsAfterCleanup[0]?.count);
 
   // S20: seed only scratch drafts to exercise the exact filtered envelope.
-  // The historical dates also prove NULL submittedAt drafts sort after real
-  // submissions; they cannot crowd the newest submitted page.
+  // The future createdAt values leave the existing v1 createdAt-ASC smoke page
+  // intact. Null submittedAt still proves these drafts trail submissions in
+  // the admin submitted-first order.
   const s20ListSubmitter = await prisma.user.findUniqueOrThrow({
     where: { email: admin.user.email }, select: { id: true },
   });
@@ -450,7 +485,7 @@ try {
       submitterId: s20ListSubmitter.id,
       title: `S20 bounded draft ${String(index).padStart(3, "0")}`,
       status: "DRAFT",
-      createdAt: new Date("2000-01-01T00:00:00.000Z"),
+      createdAt: new Date("2100-01-01T00:00:00.000Z"),
     })),
   });
   const s20BoundedList = await j("GET", `/api/cfp/submissions?status=DRAFT&formConfigId=${formId}`, null, admin);

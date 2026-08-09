@@ -16,7 +16,7 @@ export function adminAbstractListWhere(filter: AdminAbstractListFilter): Prisma.
   };
 }
 
-/** Stable newest-first order; `id` breaks equal timestamp ties. */
+/** Stable submitted-first order; `id` breaks equal timestamp ties. */
 export const adminAbstractListOrderBy = [
   // PostgreSQL sorts NULL first under a plain DESC. Drafts must trail real
   // submitted proposals so a draft flood cannot consume the newest-page cap.
