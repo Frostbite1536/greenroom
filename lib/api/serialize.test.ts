@@ -79,3 +79,26 @@ test("serializeAbstract derives review progress and an average score from includ
   assert.equal(result.reviewsTotal, 2);
   assert.equal(result.avgScore, 4);
 });
+
+test("serializeAbstract preserves the non-final MAYBE state and its null final-decision timestamp", () => {
+  const abstract = {
+    id: "abstract-maybe",
+    eventId: "event-1",
+    formConfigId: "form-1",
+    submitterId: "user-1",
+    title: "A proposal on hold",
+    abstract: null,
+    format: null,
+    durationMinutes: null,
+    categoryId: null,
+    status: "MAYBE",
+    submittedAt: new Date("2026-08-01T00:00:00.000Z"),
+    decidedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } satisfies Abstract;
+
+  const result = serializeAbstract(abstract);
+  assert.equal(result.status, "MAYBE");
+  assert.equal(result.decidedAt, null);
+});

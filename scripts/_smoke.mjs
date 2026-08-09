@@ -669,13 +669,39 @@ try {
       reviewedAbstract?.avgScore === 5,
   );
 
-  // 10. Convert before acceptance must fail (INV-DOMAIN-001)
-  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
-  check("convert before acceptance refused", early.status === 409, early.data?.error?.code);
+  // M4: MAYBE is a non-final, evaluable decision state. It creates neither a
+  // Session nor tasks, and only an event admin may set it.
+  const anonymousMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" });
+  check("M4 anonymous callers cannot set MAYBE",
+    anonymousMaybe.status === 401 && anonymousMaybe.data?.error?.code === "UNAUTHENTICATED", anonymousMaybe.status);
+  const evaluatorMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, evalr);
+  check("M4 evaluators cannot set MAYBE",
+    evaluatorMaybe.status === 403, evaluatorMaybe.status);
+  const maybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 MAYBE is serialized as a non-final decision with no session",
+    maybe.status === 200 &&
+      maybe.data?.data?.status === "MAYBE" &&
+      maybe.data?.data?.decidedAt === null &&
+      maybe.data?.data?.session === null &&
+      maybe.data?.data?.sessionCreated === false &&
+      maybe.data?.data?.tasksAssigned === 0,
+    JSON.stringify(maybe.data?.data));
+  check("M4 MAYBE never provisions a session or task assignment",
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 0 &&
+      await prisma.speakerTask.count({ where: { task: { eventId: SCRATCH_EVENT.id } } }) === 0);
+  const maybeScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId, scores: [{ rubricKey: "relevance", score: 4, comment: "worth a closer look" }], complete: true,
+  }, evalr);
+  check("M4 an existing evaluator can still score a MAYBE proposal",
+    maybeScore.status === 200 && maybeScore.data?.data?.complete === true, maybeScore.status);
 
-  // 11. Accept, then convert to a Session
+  // 10. Convert before acceptance (including MAYBE) must fail (INV-DOMAIN-001)
+  const early = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("M4 MAYBE cannot convert into a session", early.status === 409, early.data?.error?.code);
+
+  // 11. A MAYBE proposal remains decidable: accepting it provisions the Session.
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
-  check("accept abstract", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
+  check("M4 MAYBE can later be accepted", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
@@ -694,11 +720,11 @@ try {
     includeFeedback: true,
   }, admin);
   check(
-    "O2 decision preview includes comments but never scores or reviewer identities",
+    "O2 decision preview includes the latest comments but never scores or reviewer identities",
     decisionPreview.status === 200 &&
       decisionPreview.data?.data?.preview === true &&
       decisionPreview.data?.data?.feedbackCount === 1 &&
-      decisionPreview.data?.data?.html?.includes("strong") &&
+      decisionPreview.data?.data?.html?.includes("worth a closer look") &&
       !decisionPreview.data?.data?.html?.includes("5/5") &&
       !/reviewer|evaluator/i.test(decisionPreview.data?.data?.html ?? ""),
     decisionPreview.status,
@@ -1295,6 +1321,43 @@ try {
     eventId: SCRATCH_EVENT.id, sessionId, roomId: roomA, startsAt: start, endsAt: end,
   }, admin);
   check("W2 setup: the converted session is on the schedule again", rePlace.status === 200, rePlace.status);
+
+  const m4FixtureLimit = 100;
+  const m4TaskIds = (await prisma.onboardingTask.findMany({
+    where: { eventId: SCRATCH_EVENT.id }, select: { id: true }, take: m4FixtureLimit + 1,
+  })).map((task) => task.id);
+  const m4SpeakerIds = (await prisma.sessionSpeaker.findMany({
+    where: { sessionId }, select: { userId: true }, take: m4FixtureLimit + 1,
+  })).map((speakerRow) => speakerRow.userId);
+  if (m4TaskIds.length > m4FixtureLimit || m4SpeakerIds.length > m4FixtureLimit) {
+    throw new Error(`M4 scratch fixture exceeds its ${m4FixtureLimit}-row bound`);
+  }
+  const m4CohortWhere = { taskId: { in: m4TaskIds }, userId: { in: m4SpeakerIds } };
+  const m4TasksBeforeMaybe = await prisma.speakerTask.count({ where: m4CohortWhere });
+  const expectedM4Backfill = (m4TaskIds.length * m4SpeakerIds.length) - m4TasksBeforeMaybe;
+
+  // MAYBE is a pre-confirmation state. Refusing it once a Session exists keeps
+  // every public programme consumer on one status and preserves the Session.
+  const scheduledMaybe = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "MAYBE" }, admin);
+  check("M4 a confirmed Session cannot return to MAYBE",
+    scheduledMaybe.status === 409 && scheduledMaybe.data?.error?.code === "MAYBE_NOT_AVAILABLE",
+    scheduledMaybe.data?.error?.code);
+  check("M4 the refused MAYBE transition preserves accepted programme truth and its task cohort",
+    (await prisma.abstract.findUnique({ where: { id: abstractId }, select: { status: true } }))?.status === "ACCEPTED" &&
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) === m4TasksBeforeMaybe);
+  const restoredAccepted = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
+  check("M4 re-accepting still avoids duplicate Session provisioning and reconciles missing tasks",
+    restoredAccepted.status === 200 &&
+      restoredAccepted.data?.data?.status === "ACCEPTED" &&
+      typeof restoredAccepted.data?.data?.decidedAt === "string" &&
+      restoredAccepted.data?.data?.session?.id === sessionId &&
+      restoredAccepted.data?.data?.sessionCreated === false &&
+      restoredAccepted.data?.data?.tasksAssigned === expectedM4Backfill &&
+      await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1 &&
+      await prisma.speakerTask.count({ where: m4CohortWhere }) ===
+        m4TasksBeforeMaybe + expectedM4Backfill,
+    JSON.stringify(restoredAccepted.data?.data));
 
   const reversed = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "REJECTED" }, admin);
   check("W2 reversing a decision reports the still-scheduled session",
