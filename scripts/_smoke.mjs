@@ -1238,17 +1238,28 @@ try {
       { planId, abstractId, evaluatorId, rubricKey: legacyCommentKeys[1], score: 4, comment: "Legacy text two" },
     ],
   });
-  const [adminAbstractRead, evaluatorAbstractRead] = await Promise.all([
+  const [adminAbstractRead, evaluatorGlobalAbstractRead] = await Promise.all([
     j("GET", "/admin/abstracts", null, admin),
-    j("GET", "/admin/abstracts", null, evalr),
+    // C15 intentionally redirects evaluators to their assignment-scoped queue.
+    // Do not follow that redirect: seeing their own recovered feedback there is
+    // correct and must not be mistaken for a global-organizer data leak.
+    fetch(`${BASE}/admin/abstracts`, {
+      headers: { cookie: cookie(evalr) },
+      redirect: "manual",
+    }),
   ]);
-  check("C5 divergent legacy comments keep the admin read usable without exposing evaluator identity",
+  const evaluatorGlobalLocation = evaluatorGlobalAbstractRead.headers.get("location");
+  const evaluatorRedirectsToOwnQueue =
+    evaluatorGlobalLocation !== null &&
+    new URL(evaluatorGlobalLocation, BASE).pathname === "/admin/evaluations";
+  check("C5 divergent legacy comments remain visible only to the organizer projection",
     adminAbstractRead.status === 200 &&
+      String(adminAbstractRead.data).includes("Legacy text one") &&
+      String(adminAbstractRead.data).includes("Legacy text two") &&
       !String(adminAbstractRead.data).includes(evaluatorId) &&
-      evaluatorAbstractRead.status === 200 &&
-      !String(evaluatorAbstractRead.data).includes("Legacy text one") &&
-      !String(evaluatorAbstractRead.data).includes(evaluatorId),
-    `${adminAbstractRead.status}/${evaluatorAbstractRead.status}`);
+      [307, 308].includes(evaluatorGlobalAbstractRead.status) &&
+      evaluatorRedirectsToOwnQueue,
+    `${adminAbstractRead.status}/${evaluatorGlobalAbstractRead.status}/${evaluatorGlobalLocation}`);
   await prisma.reviewScore.deleteMany({
     where: { planId, abstractId, evaluatorId, rubricKey: { in: legacyCommentKeys } },
   });
