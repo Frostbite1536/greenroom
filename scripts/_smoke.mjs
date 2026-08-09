@@ -35,6 +35,9 @@ const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
 const BASE = `http://127.0.0.1:${PORT}`;
+// `next start` runs with NODE_ENV=production, so invite URLs must use the
+// configured trusted HTTPS origin even though the smoke server itself is local.
+const REVIEWER_INVITE_APP_URL = "https://greenroom-hq.test";
 // Refuse a pre-existing listener: otherwise this run can silently verify a
 // server it did not spawn and report a misleading pass.
 const occupiedPort = await fetch(`${BASE}/login`).then(() => true).catch(() => false);
@@ -138,7 +141,7 @@ const server = spawn("npx", ["next", "start", "-p", PORT], {
     GREENROOM_API_KEY: V1_API_KEY,
     MOCK_EXTERNAL_APIS: "true",
     SESSION_SECRET: SMOKE_SESSION_SECRET,
-    APP_URL: `http://127.0.0.1:${PORT}`,
+    APP_URL: REVIEWER_INVITE_APP_URL,
   },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
@@ -1317,6 +1320,11 @@ try {
       c17AfterNoResend[0]?.tokenVersion === 1 && c17AfterNoResend[0]?.sendWindowCount === 1,
     `${c17NoResend.status}/${c17NoResend.data?.data?.state}`,
   );
+  // Keep later C17 checks from aborting the entire late suite if the primary
+  // invite assertion has already made the stored record unavailable.
+  if (!c17StoredInvite) {
+    console.error("[smoke] C17 dependent invite checks skipped: first invite produced no stored row");
+  } else {
   const c17Token = reviewerInviteBearer(c17StoredInvite);
   const [c17AcceptOne, c17AcceptTwo] = await Promise.all([
     postReviewerInviteAccept(c17Token),
@@ -1332,7 +1340,7 @@ try {
     c17AcceptStatuses.join(",") === "303,404" &&
       [c17AcceptOne, c17AcceptTwo].some((result) =>
         result.status === 303 && result.headers.get("cache-control") === "no-store" &&
-        new URL(result.headers.get("location"), BASE).pathname === "/admin/evaluations" &&
+        result.headers.get("location") === `${REVIEWER_INVITE_APP_URL}/admin/evaluations` &&
         /HttpOnly/i.test(result.headers.get("set-cookie") ?? "") && /SameSite=Lax/i.test(result.headers.get("set-cookie") ?? ""),
       ) && c17AfterAccept[0]?.acceptedVersion === c17AfterAccept[0]?.tokenVersion &&
       c17Replay.status === 404 && c17Replay.data?.error?.code === "INVITE_NOT_FOUND",
@@ -1504,6 +1512,7 @@ try {
       await prisma.eventMember.count({ where: { eventId: SCRATCH_EVENT.id, user: { email: c17CappedEmail } } }) === 0,
     `${c17Capped.status}/${c17Capped.data?.error?.code}`,
   );
+  }
 
   const assignSpeaker = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [speakerUserId],
