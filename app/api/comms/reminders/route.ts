@@ -6,8 +6,10 @@ import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { canDeliverEmail, dispatchEmail } from "@/lib/comms/send";
 import {
   buildSpeakerCalendarInvite,
+  hasScheduledReminderSession,
   orderReminderSessions,
   reminderRequestSchema,
+  reminderVariables,
   renderEmailTemplate,
   selectEligibleSpeakers,
   type EligibleSpeaker,
@@ -16,10 +18,6 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function formatSlotTime(startsAt: Date | null): string {
-  return startsAt ? startsAt.toISOString().replace("T", " ").replace(".000Z", " UTC") : "a time to be announced";
-}
-
 /** POST /api/comms/reminders — dispatch one event-scoped template per selected or eligible speaker. */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -27,17 +25,17 @@ export const POST = handle(async (req) => {
   assertEventScope(ctx, input.eventId);
 
   const [event, template, rows] = await Promise.all([
-    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { id: true, name: true, startsAt: true } }),
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { id: true, name: true, timezone: true } }),
     prisma.emailTemplate.findFirst({
       where: { eventId: ctx.eventId, key: input.templateKey },
-      select: { id: true, key: true, subject: true, htmlBody: true },
+      select: { id: true, key: true, subject: true, htmlBody: true, trigger: true },
     }),
     prisma.sessionSpeaker.findMany({
       where: { session: { eventId: ctx.eventId } },
       select: {
         user: { select: { id: true, name: true, email: true, taskAssignments: {
           where: { task: { eventId: ctx.eventId }, status: { notIn: ["COMPLETED", "WAIVED"] } },
-          select: { taskId: true },
+          select: { task: { select: { dueAt: true } } },
           take: OPERATOR_QUERY_LIMITS.openTasksPerReminderSpeaker + 1,
         } } },
         session: { select: {
@@ -72,6 +70,7 @@ export const POST = handle(async (req) => {
       name: row.user.name,
       email: row.user.email,
       openTasks: row.user.taskAssignments.length,
+      openTaskDueDates: row.user.taskAssignments.flatMap((assignment) => assignment.task.dueAt ? [assignment.task.dueAt] : []),
       sessions: [],
     };
     existing.sessions.push({
@@ -97,6 +96,18 @@ export const POST = handle(async (req) => {
   }
   if (recipients.length === 0) throw new ApiError(422, "NO_ELIGIBLE_RECIPIENTS", "This event has no eligible speakers.");
 
+  // The seeded `session.scheduled` template says an invitation is attached.
+  // Validate this before dispatch so a mixed batch can never send that promise
+  // to an unscheduled speaker or without a real attachment.
+  if (template.trigger === "session.scheduled") {
+    if (!input.includeCalendarInvite) {
+      throw new ApiError(422, "CALENDAR_INVITE_REQUIRED", "The scheduled-session message requires a calendar invite.");
+    }
+    if (recipients.some((recipient) => !hasScheduledReminderSession(recipient))) {
+      throw new ApiError(422, "SCHEDULE_REQUIRED", "The scheduled-session message can only be sent to speakers with a scheduled session.");
+    }
+  }
+
   // Delivery, mock fallback and EmailDispatch bookkeeping live in one audited
   // place (`lib/comms/send.ts`) shared with submission and decision emails.
   const isMock = !canDeliverEmail({
@@ -109,19 +120,15 @@ export const POST = handle(async (req) => {
   let failed = 0;
 
   for (const recipient of recipients) {
-    const primarySession = recipient.sessions.find((session) => session.startsAt) ?? recipient.sessions[0];
-    const variables = {
-      ...input.variables,
-      speakerName: recipient.name,
-      eventName: event.name,
-      openTasks: String(recipient.openTasks),
-      dueDate: event.startsAt ? event.startsAt.toISOString().slice(0, 10) : "the event",
-      talkTitle: primarySession?.title ?? "your session",
-      slotTime: formatSlotTime(primarySession?.startsAt ?? null),
-      roomName: primarySession?.roomName ?? "the venue",
-    };
-    const rendered = renderEmailTemplate(template, variables);
     const invite = input.includeCalendarInvite ? buildSpeakerCalendarInvite(recipient, event.name, appUrl) : null;
+    const variables = reminderVariables({
+      recipient,
+      eventName: event.name,
+      timeZone: event.timezone,
+      calendarInviteAttached: invite !== null,
+      variables: input.variables,
+    });
+    const rendered = renderEmailTemplate(template, variables);
 
     const outcome = await dispatchEmail(prisma, {
       templateId: template.id,
