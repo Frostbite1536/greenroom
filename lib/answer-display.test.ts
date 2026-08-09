@@ -70,5 +70,6 @@ test("a non-http URL value is shown as inert text, never linked", () => {
 test("a value whose type no longer matches the field still renders", () => {
   // e.g. field switched SHORT_TEXT -> SELECT after submission.
   assert.equal(formatAnswer(7, select).text, "7");
-  assert.equal(formatAnswer("yes", check).text, "Yes");
+  assert.equal(formatAnswer("yes", check).text, "yes");
+  assert.equal(formatAnswer({ legacy: "value" }, text).text, '{"legacy":"value"}');
 });

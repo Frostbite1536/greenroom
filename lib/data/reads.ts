@@ -27,6 +27,7 @@ import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { serializeForm, serializePublicForm } from "@/lib/api/form-serialize";
+import { parseFieldOptions } from "@/lib/services/field-visibility";
 import {
   buildPublicSpeakers,
   PUBLIC_SPEAKER_LIMITS,
@@ -198,6 +199,39 @@ export type AnswerRow = {
  */
 const ADMIN_ANSWER_LIMIT = 5_000;
 
+type StoredAnswerProjection = {
+  abstractId: string;
+  value: unknown;
+  formField: {
+    id: string;
+    label: string;
+    type: FormFieldType;
+    options: unknown;
+  };
+};
+
+/** Build an all-or-nothing event answer index so no proposal is silently partial. */
+export function indexAdminAnswers(
+  rows: readonly StoredAnswerProjection[],
+  limit = ADMIN_ANSWER_LIMIT,
+): { unavailable: boolean; byAbstract: Map<string, AnswerRow[]> } {
+  if (rows.length > limit) return { unavailable: true, byAbstract: new Map() };
+
+  const byAbstract = new Map<string, AnswerRow[]>();
+  for (const row of rows) {
+    const list = byAbstract.get(row.abstractId) ?? [];
+    list.push({
+      fieldId: row.formField.id,
+      label: row.formField.label,
+      type: row.formField.type,
+      options: parseFieldOptions(row.formField.options),
+      value: row.value,
+    });
+    byAbstract.set(row.abstractId, list);
+  }
+  return { unavailable: false, byAbstract };
+}
+
 export type AbstractRow = {
   id: string;
   title: string;
@@ -301,21 +335,7 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
 
   // Over the bound: drop the overflow row and report honestly instead of
   // rendering a silently-partial answer list.
-  const answersTruncated = answerRows.length > ADMIN_ANSWER_LIMIT;
-  const answersByAbstract = new Map<string, AnswerRow[]>();
-  for (const row of answerRows.slice(0, ADMIN_ANSWER_LIMIT)) {
-    const list = answersByAbstract.get(row.abstractId) ?? [];
-    list.push({
-      fieldId: row.formField.id,
-      label: row.formField.label,
-      type: row.formField.type,
-      options: Array.isArray(row.formField.options)
-        ? (row.formField.options as FieldOption[])
-        : null,
-      value: row.value,
-    });
-    answersByAbstract.set(row.abstractId, list);
-  }
+  const answerIndex = indexAdminAnswers(answerRows, ADMIN_ANSWER_LIMIT);
 
   return {
     eventId: ctx.eventId,
@@ -340,8 +360,8 @@ export async function getAdminAbstracts(): Promise<{ eventId: string; abstracts:
         reviewsComplete: reviewProgress.reviewsComplete,
         reviewsTotal: reviewProgress.reviewsTotal,
         avgScore: avg === null || avg === undefined ? null : Number(avg),
-        answers: answersByAbstract.get(a.id) ?? [],
-        answersUnavailable: answersTruncated && !answersByAbstract.has(a.id),
+        answers: answerIndex.byAbstract.get(a.id) ?? [],
+        answersUnavailable: answerIndex.unavailable,
         hasSession: a.session !== null,
         sessionId: a.session?.id ?? null,
         sessionScheduled: a.session?.scheduleSlot != null,

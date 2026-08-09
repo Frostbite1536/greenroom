@@ -406,13 +406,11 @@ function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
 
       {abstract.answersUnavailable ? (
         <p className="hint">
-          This event stores too many answers to load them all on this page. Open the proposal in
-          the CFP form to review it.
+          This event stores too many answers to load safely in this view. No partial answer set is shown.
         </p>
       ) : abstract.answers.length === 0 ? (
         <p className="hint">
-          This proposal has no extra answers — “{abstract.formName}” only asked for the title,
-          summary and speakers.
+          No custom form answers were saved for this proposal.
         </p>
       ) : (
         <dl className="answer-list">

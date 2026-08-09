@@ -31,6 +31,25 @@ function optionLabel(field: AnswerField, raw: string): string {
   return match ? match.label : raw;
 }
 
+const MAX_DISPLAY_CHARS = 5_000;
+
+/** Legacy JSON can predate today's field contract; keep its fallback readable and bounded. */
+function readableValue(value: unknown): string {
+  let text: string;
+  if (typeof value === "string") text = value.trim();
+  else if (typeof value === "number") text = Number.isFinite(value) ? String(value) : "";
+  else {
+    try {
+      text = JSON.stringify(value) ?? "";
+    } catch {
+      text = "Unsupported saved answer";
+    }
+  }
+  return text.length > MAX_DISPLAY_CHARS
+    ? `${text.slice(0, MAX_DISPLAY_CHARS - 1)}…`
+    : text;
+}
+
 function isBlank(value: unknown): boolean {
   if (value === null || value === undefined) return true;
   if (typeof value === "string" && value.trim() === "") return true;
@@ -42,23 +61,27 @@ export function formatAnswer(value: unknown, field: AnswerField): FormattedAnswe
   if (isBlank(value)) return BLANK;
 
   // A checkbox is the one type where `false` is a real answer, not a blank.
-  if (field.type === "CHECKBOX" || typeof value === "boolean") {
+  if (typeof value === "boolean") {
     return { text: value ? "Yes" : "No", empty: false, isUrl: false };
   }
 
   if (Array.isArray(value)) {
     const labels = value
       .filter((v) => !isBlank(v))
-      .map((v) => optionLabel(field, String(v)));
+      .map((v) => {
+        const text = readableValue(v);
+        return typeof v === "string" ? optionLabel(field, text) : text;
+      })
+      .filter(Boolean);
     if (labels.length === 0) return BLANK;
     return { text: labels.join(", "), empty: false, isUrl: false };
   }
 
-  if (field.type === "SELECT" || field.type === "MULTI_SELECT") {
-    return { text: optionLabel(field, String(value)), empty: false, isUrl: false };
+  if ((field.type === "SELECT" || field.type === "MULTI_SELECT") && typeof value === "string") {
+    return { text: optionLabel(field, value), empty: false, isUrl: false };
   }
 
-  const text = String(value).trim();
+  const text = readableValue(value);
   if (text === "") return BLANK;
 
   // Only ever linkify http(s); a stored `javascript:` value must stay inert
