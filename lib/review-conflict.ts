@@ -59,6 +59,44 @@ export function conflictDeclineRefusal(
   return null;
 }
 
+/**
+ * Why a score write must be refused on the caller's own assignment, or null.
+ *
+ * A declared conflict has to survive a score write, and not only a racing one:
+ * before this rule existed the score route checked the abstract's status but
+ * never the assignment's, so a `DECLINED` row could be scored straight back to
+ * `COMPLETED` — silently reversing the declaration and letting the stepped-back
+ * evaluator's scores count towards the decision.
+ *
+ * Withdrawal is checked ahead of this by the caller, so a reviewer whose row was
+ * declined *by* a withdrawal still meets the withdrawal explanation.
+ */
+export function scoreWriteRefusal(
+  assignmentStatus: ReviewAssignmentStatus,
+): ConflictRefusal | null {
+  if (assignmentStatus !== "DECLINED") return null;
+  return {
+    status: 409,
+    code: "ASSIGNMENT_DECLINED",
+    message:
+      "You declared a conflict of interest on this proposal, so it is no longer yours to score. Ask an admin to reassign it.",
+  };
+}
+
+/**
+ * Restoring a declined assignment.
+ *
+ * An explicit admin re-assignment of the same (plan, abstract, evaluator) is the
+ * restoration signal. It must apply to `DECLINED` rows only: a `COMPLETED` row
+ * carries a real review, and resetting it would strip that review out of the
+ * decision aggregate, which reads only completed assignments.
+ */
+export const RESTORABLE_ASSIGNMENT_STATUSES = ["DECLINED"] as const;
+
+export function isRestoredByReassignment(assignmentStatus: ReviewAssignmentStatus): boolean {
+  return (RESTORABLE_ASSIGNMENT_STATUSES as readonly string[]).includes(assignmentStatus);
+}
+
 /** Whether the reviewer should be offered the declare-a-conflict control. */
 export function canDeclareConflict(
   assignmentStatus: ReviewAssignmentStatus,

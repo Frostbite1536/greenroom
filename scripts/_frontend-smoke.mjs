@@ -2536,6 +2536,137 @@ try {
     solePageText.includes("No reviewable proposals remain"),
     solePageText.includes("reviewable proposal") ? "a denominator still rendered" : "none");
 
+  // --- ABS-12 integrity: a declaration survives a score write --------------
+  // Greptile #1. Before the fix the score route checked the abstract's status
+  // but never the assignment's, so this request would have moved the DECLINED
+  // row straight to COMPLETED and its scores would have counted for a decision.
+  const scoreAfterDecline = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: conflictAbstract.id,
+    scores: [{ rubricKey: "relevance", score: 5 }, { rubricKey: "clarity", score: 5 }],
+    complete: true,
+  }, conflictReviewer);
+  check("a declared conflict refuses a score write with a stable code → 409",
+    scoreAfterDecline.status === 409
+    && scoreAfterDecline.data?.error?.code === "ASSIGNMENT_DECLINED",
+    `${scoreAfterDecline.status} ${scoreAfterDecline.data?.error?.code ?? "none"}`);
+  const declinedStillDeclined = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: conflictAbstract.id, evaluatorId: conflictReviewerUser.id,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  const refusedScoreRows = await prisma.reviewScore.count({
+    where: {
+      planId: fx.plan.id, abstractId: conflictAbstract.id, evaluatorId: conflictReviewerUser.id,
+    },
+  });
+  check("the refused score write left the declaration and the scores untouched",
+    declinedStillDeclined?.status === "DECLINED"
+    && declinedStillDeclined?.completedAt === null
+    && refusedScoreRows === 0,
+    `status=${declinedStillDeclined?.status} completedAt=${declinedStillDeclined?.completedAt} scoreRows=${refusedScoreRows}`);
+
+  // --- ABS-12 restoration: an explicit re-assignment brings the row back ----
+  // Greptile #2. A completed review on a second proposal rides along in the
+  // same admin call, to prove the reset is status-scoped and not blanket.
+  const restoreControlAbstract = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID, formConfigId: fx.form.id, submitterId: fx.users.speaker,
+      title: "Scratch: Restoration control", abstract: "Reviewed and finished.",
+      format: "Talk", durationMinutes: 30, categoryId: fx.category.id,
+      status: "UNDER_REVIEW", submittedAt: new Date(),
+      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: {
+      planId: fx.plan.id, abstractId: restoreControlAbstract.id,
+      evaluatorId: conflictReviewerUser.id, teamKey: "team-ai", status: "ASSIGNED",
+    },
+  });
+  const controlScore = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: restoreControlAbstract.id,
+    scores: [{ rubricKey: "relevance", score: 4 }, { rubricKey: "clarity", score: 4 }],
+    complete: true,
+  }, conflictReviewer);
+  check("the restoration control review is submitted → 200", controlScore.status === 200,
+    `${controlScore.status} ${JSON.stringify(controlScore.data?.error ?? "")}`);
+  const controlBefore = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: restoreControlAbstract.id, evaluatorId: conflictReviewerUser.id,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  const controlScoresBefore = await prisma.reviewScore.count({
+    where: {
+      planId: fx.plan.id, abstractId: restoreControlAbstract.id, evaluatorId: conflictReviewerUser.id,
+    },
+  });
+
+  const reassign = await req("POST", "/api/evaluations/assignments", {
+    planId: fx.plan.id,
+    abstractIds: [conflictAbstract.id, restoreControlAbstract.id],
+    evaluatorIds: [conflictReviewerUser.id],
+  }, admin);
+  check("admin re-assignment of a declined proposal → 201", reassign.status === 201,
+    `${reassign.status} ${JSON.stringify(reassign.data?.error ?? "")}`);
+  const restored = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: conflictAbstract.id, evaluatorId: conflictReviewerUser.id,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  check("re-assignment restores the declined assignment to ASSIGNED",
+    restored?.status === "ASSIGNED" && restored?.completedAt === null,
+    `status=${restored?.status} completedAt=${restored?.completedAt}`);
+  const controlAfterReassign = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: restoreControlAbstract.id, evaluatorId: conflictReviewerUser.id,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  const controlScoresAfter = await prisma.reviewScore.count({
+    where: {
+      planId: fx.plan.id, abstractId: restoreControlAbstract.id, evaluatorId: conflictReviewerUser.id,
+    },
+  });
+  check("re-assignment never disturbs a completed review in the same call",
+    controlBefore?.status === "COMPLETED"
+    && controlAfterReassign?.status === "COMPLETED"
+    && String(controlAfterReassign?.completedAt) === String(controlBefore?.completedAt)
+    && controlScoresAfter === controlScoresBefore && controlScoresBefore > 0,
+    `status ${controlBefore?.status}→${controlAfterReassign?.status}, `
+    + `completedAt ${String(controlBefore?.completedAt)}→${String(controlAfterReassign?.completedAt)}, `
+    + `scores ${controlScoresBefore}→${controlScoresAfter}`);
+
+  const restoredPage = await req("GET", "/admin/evaluations", null, conflictReviewer);
+  const restoredPageText = renderedText(restoredPage.text) ?? "";
+  check("the restored proposal is back in the reviewer's queue and scoreable again",
+    restoredPage.text.includes("Submit review")
+    && restoredPage.text.includes("Declare a conflict")
+    && !restoredPageText.includes("You declared a conflict of interest")
+    && restoredPageText.includes("1 of 2 reviewable proposals scored"),
+    `panel copy gone=${!restoredPageText.includes("You declared a conflict of interest")}`);
+  const rescore = await req("POST", "/api/evaluations/scores", {
+    planId: fx.plan.id,
+    abstractId: conflictAbstract.id,
+    scores: [{ rubricKey: "relevance", score: 3 }, { rubricKey: "clarity", score: 3 }],
+    complete: true,
+  }, conflictReviewer);
+  check("the restored assignment accepts the score write it previously refused → 200",
+    rescore.status === 200,
+    `${rescore.status} ${scoreAfterDecline.data?.error?.code ?? ""} → ${JSON.stringify(rescore.data?.error ?? "")}`);
+
   // Nothing about the reviewer's finished review may move.
   const completedAfter = await prisma.reviewAssignment.findUnique({
     where: {

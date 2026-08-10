@@ -7,6 +7,7 @@ import {
   isAssignmentReviewable,
   lockReviewAssignmentWrite,
 } from "@/lib/services/review-assignment-lock";
+import { RESTORABLE_ASSIGNMENT_STATUSES } from "@/lib/review-conflict";
 
 export const dynamic = "force-dynamic";
 
@@ -170,6 +171,24 @@ export const POST = handle(async (req) => {
           },
           update: { teamKey },
           create: { planId: input.planId, abstractId: abstract.id, evaluatorId, teamKey },
+        });
+        // Explicitly re-assigning the same reviewer to the same proposal is the
+        // restoration signal for a conflict they declared (ABS-12): the row goes
+        // back to ASSIGNED and returns to their queue, which is what the
+        // workspace tells them to ask an admin for. Scoped by status, so a
+        // COMPLETED row and its review history are never touched — resetting one
+        // would strip a real review out of the decision aggregate, which reads
+        // only completed assignments. `completedAt` is cleared for correctness of
+        // the ASSIGNED state; today it is provably already null, because neither
+        // decline path can leave a completed row declined.
+        await tx.reviewAssignment.updateMany({
+          where: {
+            planId: input.planId,
+            abstractId: abstract.id,
+            evaluatorId,
+            status: { in: [...RESTORABLE_ASSIGNMENT_STATUSES] },
+          },
+          data: { status: "ASSIGNED", completedAt: null },
         });
         count++;
       }
