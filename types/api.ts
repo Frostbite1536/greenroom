@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIanaTimeZone } from "@/lib/tz";
+import { RUBRIC_WEIGHT_MAX } from "@/lib/rubric-weight";
 
 // NOTE: relaxed from z.string().cuid() by the backend worker to accept the
 // seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
@@ -326,7 +327,13 @@ export const rubricCriterionSchema = z
     description: z.string().max(500).optional(),
     min: z.number().int(),
     max: z.number().int(),
-    weight: z.number().positive().default(1),
+    // The bound is shared with the round dialog rather than restated here, so
+    // the client and this contract cannot drift. `.finite()` is load-bearing:
+    // z.number() by itself admits Infinity, which would divide the whole
+    // rubric's weighted average down to a single criterion. The maximum is an
+    // input-safety limit — weights are relative multipliers and are NOT
+    // required to total 100 (D-C5-8 §2.4).
+    weight: z.number().finite().positive().max(RUBRIC_WEIGHT_MAX).default(1),
   })
   .refine((criterion) => criterion.min < criterion.max, {
     message: "max must be greater than min",

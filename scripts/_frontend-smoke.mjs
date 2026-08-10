@@ -1550,6 +1550,62 @@ try {
     );
   check("C34 MAYBE coverage preserves completed review counts", renderedText(scoredMaybeRow)?.includes("1/1"));
 
+  // --- D-C5-8 §2: rubric weight bounds are the SAME on client and server ---
+  // The round dialog is a client-only <dialog> that never reaches this HTML, so
+  // its weight-share line and different-ranges warning are pinned by
+  // lib/rubric-weight.test.ts and lib/evaluation-setup.source.test.ts instead.
+  // What is provable from here is the half that actually protects stored data:
+  // the plans contract enforces the same bounds the dialog shows, so a weight
+  // the dialog refuses cannot arrive through the API either.
+  const weightPlan = (weight, extra = {}) => ({
+    eventId: EVENT_ID,
+    name: "Scratch weight-bounds probe",
+    ordinal: 90,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight, ...extra }],
+  });
+  const zeroWeight = await req("POST", "/api/evaluations/plans", weightPlan(0), admin);
+  const negativeWeight = await req("POST", "/api/evaluations/plans", weightPlan(-2), admin);
+  const overLimitWeight = await req("POST", "/api/evaluations/plans", weightPlan(100.5), admin);
+  check("§2.4 a zero or negative criterion weight is refused, never coerced to 1 → 400",
+    zeroWeight.status === 400 && negativeWeight.status === 400,
+    `zero ${zeroWeight.status}, negative ${negativeWeight.status}`);
+  check("§2.4 a weight above the 100 input-safety limit is refused → 400",
+    overLimitWeight.status === 400, `got ${overLimitWeight.status}`);
+  const noProbePlan = await prisma.evaluationPlan.count({
+    where: { eventId: EVENT_ID, name: "Scratch weight-bounds probe" },
+  });
+  check("§2.4 no refused weight created a round as a side effect", noProbePlan === 0, `got ${noProbePlan}`);
+
+  // Accepted in the same breath: decimals, and a rubric whose weights total far
+  // more than 100. The sum is not a validity target — weights are relative
+  // multipliers — so 60 + 55 must save exactly like 1.5 + 1 does.
+  const decimalOverHundredTotal = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID,
+    name: "Scratch weight-share round",
+    ordinal: 91,
+    rubric: [
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 60 },
+      { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 55.5 },
+    ],
+  }, admin);
+  check("§2.2 a rubric totalling well over 100 is valid and saves → 201",
+    decimalOverHundredTotal.status === 201, `got ${decimalOverHundredTotal.status}`);
+  // §2.3 present-case: differing ranges are a visible WARNING, not a refusal.
+  // A round mixing 1-5 and 0-10 must still save, or the warning has quietly
+  // become a validation rule and the formula contract has changed.
+  const mixedRanges = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID,
+    name: "Scratch mixed-range round",
+    ordinal: 92,
+    rubric: [
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 },
+      { key: "depth", label: "Depth", min: 0, max: 10, weight: 1 },
+    ],
+  }, admin);
+  check("§2.3 differing score ranges warn without blocking the save → 201",
+    mixedRanges.status === 201, `got ${mixedRanges.status}`);
+  await prisma.evaluationPlan.deleteMany({ where: { eventId: EVENT_ID, ordinal: { in: [91, 92] } } });
+
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator does NOT see the setup panel",

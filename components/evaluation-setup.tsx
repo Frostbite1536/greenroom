@@ -21,19 +21,39 @@ import {
   roundWindowInput,
 } from "@/lib/evaluation-round-window";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
+import {
+  RUBRIC_WEIGHT_MAX,
+  parseRubricWeight,
+  rubricRangeWarning,
+  rubricWeightError,
+  rubricWeightShareLine,
+} from "@/lib/rubric-weight";
 import { reviewerInviteLifecycleText } from "@/lib/reviewer-invite-ui";
 import { ReviewerInviteForm, ReviewerInviteResend } from "@/components/reviewer-invite-controls";
 import { EmptyState, Pill, Switch } from "@/components/ui";
 
-/** Sensible opening rubric so a brand-new event is one click, not a blank form. */
+/**
+ * Sensible opening rubric so a brand-new event is one click, not a blank form.
+ * The starter ranges are deliberately identical (1–5) so the default rubric
+ * never opens under the different-ranges warning.
+ */
 const STARTER_CRITERIA = [
-  { label: "Relevance", description: "Fit for the audience and event theme.", min: 1, max: 5, weight: 1.5 },
-  { label: "Originality", description: "Fresh perspective or novel material.", min: 1, max: 5, weight: 1 },
-  { label: "Clarity", description: "Well-structured, understandable proposal.", min: 1, max: 5, weight: 1 },
-  { label: "Speaker readiness", description: "Track record and delivery signals.", min: 1, max: 5, weight: 1 },
+  { label: "Relevance", description: "Fit for the audience and event theme.", min: 1, max: 5, weight: "1.5" },
+  { label: "Originality", description: "Fresh perspective or novel material.", min: 1, max: 5, weight: "1" },
+  { label: "Clarity", description: "Well-structured, understandable proposal.", min: 1, max: 5, weight: "1" },
+  { label: "Speaker readiness", description: "Track record and delivery signals.", min: 1, max: 5, weight: "1" },
 ];
 
-type DraftCriterion = { label: string; description: string; min: number; max: number; weight: number };
+/**
+ * `weight` is held as the author's raw text, not a number.
+ *
+ * The previous `Number(e.target.value) || 1` turned an emptied field or a typed
+ * `0` into a silent weight of 1 — an invisible change to how every review in
+ * the round is scored. Keeping the draft as typed lets the field be blank while
+ * it is being edited and lets `rubricWeightError` say what is wrong, so nothing
+ * is repaired behind the author's back (D-C5-8 §2.4).
+ */
+type DraftCriterion = { label: string; description: string; min: number; max: number; weight: string };
 
 export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const router = useRouter();
@@ -538,9 +558,13 @@ function RoundDialog({
       setError(`“${nonIntegerRange.label}”: lowest and highest scores must be whole numbers.`);
       return;
     }
-    const badWeight = labelled.find((c) => !Number.isFinite(c.weight) || c.weight <= 0);
+    // Reported per criterion rather than coerced. The rubric total is never
+    // checked: weights are relative multipliers, so any positive total is valid.
+    const badWeight = labelled
+      .map((c) => ({ criterion: c, message: rubricWeightError(c.weight) }))
+      .find((entry) => entry.message !== null);
     if (badWeight) {
-      setError(`“${badWeight.label}”: weight must be greater than zero.`);
+      setError(`“${badWeight.criterion.label}”: ${badWeight.message}`);
       return;
     }
     const windowError = roundWindowError(roundWindow);
@@ -566,7 +590,9 @@ function RoundDialog({
         ...(c.description.trim() ? { description: c.description.trim() } : {}),
         min: c.min,
         max: c.max,
-        weight: c.weight,
+        // Non-null by construction: `badWeight` above returned early on every
+        // draft `parseRubricWeight` cannot read.
+        weight: parseRubricWeight(c.weight) ?? 1,
       })),
     });
     setBusy(false);
@@ -669,7 +695,10 @@ function RoundDialog({
 
         <h3 style={{ margin: "20px 0 4px", fontSize: 14 }}>Scoring criteria</h3>
         <p className="hint" style={{ marginBottom: 10 }}>
-          Weight decides how much a criterion counts towards the overall score.
+          Weight decides how much a criterion counts towards the overall score. Weights are
+          relative, not percentages — <strong>2, 1, 1</strong> and <strong>50, 25, 25</strong>{" "}
+          score identically, so they do not need to add up to 100. Each criterion shows its share
+          of the rubric’s total weight.
         </p>
 
         {criteria.map((c, i) => (
@@ -708,7 +737,22 @@ function RoundDialog({
             </label>
             <label className="stack">
               <span className="field-label">Weight</span>
-              <input className="text-input" name={`criterion-${i}-weight`} type="number" inputMode="decimal" min={0.1} step={0.5} value={c.weight} onChange={(e) => patch(i, { weight: Number(e.target.value) || 1 })} />
+              {/* `step="any"` because decimal weights are legitimate, and the
+                  value is passed through untouched: validation and the share
+                  line live below the field rather than in a coercion. */}
+              <input
+                className="text-input"
+                name={`criterion-${i}-weight`}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={RUBRIC_WEIGHT_MAX}
+                step="any"
+                value={c.weight}
+                aria-invalid={rubricWeightError(c.weight) !== null}
+                aria-describedby={`criterion-${i}-weight-note`}
+                onChange={(e) => patch(i, { weight: e.target.value })}
+              />
             </label>
             <button
               type="button"
@@ -719,14 +763,42 @@ function RoundDialog({
             >
               <Trash2 size={15} aria-hidden="true" />
             </button>
+            {/* One slot, two jobs: the refusal reason while the draft is
+                unusable, otherwise this criterion's share of the rubric's
+                total weight. Never both, and never a coerced number. It spans
+                the whole grid row because "Weight 1.5 · 33.3% of rubric weight"
+                does not fit the 84px weight column. */}
+            <p
+              className={
+                rubricWeightError(c.weight) !== null
+                  ? "criterion-weight-note criterion-weight-invalid"
+                  : "criterion-weight-note"
+              }
+              id={`criterion-${i}-weight-note`}
+            >
+              {rubricWeightError(c.weight)
+                ?? rubricWeightShareLine(c.weight, criteria.map((other) => other.weight))
+                ?? ""}
+            </p>
           </div>
         ))}
+
+        {/* Non-blocking and advisory: the round saves either way. It exists
+            because the score is an average of RAW criterion scores, so a 0–10
+            criterion can move the result further than a 1–5 one at the same
+            weight. Normalizing ranges instead would be a different scoring
+            contract and would change results already recorded. */}
+        {rubricRangeWarning(criteria) ? (
+          <p className="hint setup-note" role="status" style={{ marginTop: 10 }}>
+            <AlertTriangle size={13} aria-hidden="true" /> {rubricRangeWarning(criteria)}
+          </p>
+        ) : null}
 
         <button
           className="ghost-button"
           type="button"
           style={{ marginTop: 8 }}
-          onClick={() => setCriteria((l) => [...l, { label: "", description: "", min: 1, max: 5, weight: 1 }])}
+          onClick={() => setCriteria((l) => [...l, { label: "", description: "", min: 1, max: 5, weight: "1" }])}
         >
           <Plus size={15} aria-hidden="true" /> Add criterion
         </button>

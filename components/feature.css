@@ -381,6 +381,12 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 
 .criterion-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 84px 84px auto; gap: 8px; align-items: end; margin-bottom: 10px; }
 .criterion-main { display: grid; gap: 8px; min-width: 0; }
+/* The weight-share / validation line sits under the whole row: the share
+   sentence is far wider than the 84px weight column it describes. */
+.criterion-weight-note { grid-column: 1 / -1; margin: 2px 0 0; font-size: 12px; color: var(--muted); min-height: 1em; }
+/* Not colour alone: an invalid weight also carries aria-invalid on its input
+   and replaces the share sentence with the reason it cannot be saved. */
+.criterion-weight-invalid { color: #a3372a; font-weight: 600; }
 
 
 /* ---- Modal dialog ---- */
