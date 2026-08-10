@@ -1,5 +1,6 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { CFP_SUBMITTED_TEMPLATE_KEY } from "@/lib/comms/notifications";
+import { hashPassword } from "@/lib/password-credential";
 import { zonedToUtcIso } from "@/lib/tz";
 
 /**
@@ -57,6 +58,72 @@ const PERSONAS = {
   evaluator: { email: "ravi@greenroom.demo", name: "Ravi Patel" },
   speaker: { email: "sofia@greenroom.demo", name: "Sofia Marques" },
 } as const;
+
+/* ==========================================================================
+ * DEMO CREDENTIALS — PUBLIC BY DESIGN, NOT SECRETS
+ * ==========================================================================
+ * These plaintext values exist so an evaluation harness or a reviewer can sign
+ * in with email + password (D-C5-6). They are demo constants for demo data and
+ * this file is their ONLY home: they must never be copied into a coordination
+ * file, a status note, a log line, or any response body. Nothing outside this
+ * module ever sees a plaintext — the seed hashes them with scrypt
+ * (`lib/password-credential.ts`) before any write.
+ *
+ * Rotating a password here is the whole rotation procedure: the next seed or
+ * demo reset overwrites `User.passwordHash` for exactly these identities.
+ * ========================================================================== */
+
+/** One shared password for the three one-click demo personas. */
+export const DEMO_PERSONA_PASSWORD = "GreenroomDemo!2026";
+
+/**
+ * The evaluation harness's fixture identities.
+ *
+ * `emails` carries EVERY address form the harness is known to use for one
+ * person, and each form is seeded as its own credentialed `User`. That is
+ * deliberate: the harness's `fixtures/sample-data.json` uses
+ * `sbek-<role>@example.com` while its scenario specs type
+ * `<first>.<role>@sbek-test.example.com`, and sign-in has to succeed either
+ * way. The first address is the canonical one — extra forms are aliases with
+ * the same name, role, and password, and hold no data of their own.
+ */
+export const DEMO_FIXTURE_IDENTITIES = [
+  {
+    name: "Jordan Alvarez",
+    role: "ADMIN",
+    password: "SbekTest!2027-org",
+    emails: ["sbek-organizer@example.com", "jordan.organizer@sbek-test.example.com"],
+  },
+  {
+    name: "Priya Raman",
+    role: "SPEAKER",
+    password: "SbekTest!2027-spk",
+    emails: ["sbek-speaker@example.com", "priya.speaker@sbek-test.example.com"],
+  },
+  {
+    name: "Sam Whitfield",
+    role: "EVALUATOR",
+    password: "SbekTest!2027-rev",
+    emails: ["sbek-reviewer@example.com", "sam.reviewer@sbek-test.example.com"],
+  },
+] as const satisfies readonly {
+  name: string;
+  role: "ADMIN" | "EVALUATOR" | "SPEAKER";
+  password: string;
+  emails: readonly string[];
+}[];
+
+/** email -> plaintext, for every identity that gets a seeded credential. */
+function demoCredentialPlaintext(): Map<string, string> {
+  const byEmail = new Map<string, string>();
+  for (const persona of Object.values(PERSONAS)) {
+    byEmail.set(persona.email.toLowerCase(), DEMO_PERSONA_PASSWORD);
+  }
+  for (const identity of DEMO_FIXTURE_IDENTITIES) {
+    for (const email of identity.emails) byEmail.set(email.toLowerCase(), identity.password);
+  }
+  return byEmail;
+}
 
 const CATEGORIES = [
   { key: "ai", name: "AI & Machine Learning", teamKey: "team-ai" },
@@ -147,17 +214,27 @@ const SEED_LOCK_KEY = 8_675_309;
  * The timeout is generous because a full seed issues several hundred statements.
  */
 export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
+  // scrypt is deliberately expensive, so derive every credential BEFORE the
+  // transaction opens. Hashing inside it would hold the advisory lock for
+  // hundreds of milliseconds of pure CPU for no reason.
+  const credentials = new Map<string, string>();
+  for (const [email, plaintext] of demoCredentialPlaintext()) {
+    credentials.set(email, await hashPassword(plaintext));
+  }
   return prisma.$transaction(
     async (tx) => {
       // Serialize against any other seeding process before touching a row.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SEED_LOCK_KEY}::bigint)`;
-      return seedWithin(tx);
+      return seedWithin(tx, credentials);
     },
     { maxWait: 60_000, timeout: 300_000 },
   );
 }
 
-async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
+async function seedWithin(
+  db: Prisma.TransactionClient,
+  credentials: ReadonlyMap<string, string>,
+): Promise<SeedSummary> {
   const eventId = DEMO_EVENT.id;
 
   // --- 1. Reset all event-scoped data (idempotent reseed) --------------------
@@ -199,12 +276,19 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   });
 
   // --- 3. Persona + evaluator + speaker users --------------------------------
+  // Global `User` rows are upserted, never deleted and recreated, so ids and
+  // any non-demo relations survive. A seeded credential is (re)applied on both
+  // create and update: the documented demo password must work after every
+  // reset, and rotating the constant above must actually take effect. Users
+  // without a seeded credential keep whatever `passwordHash` they had — the
+  // update simply omits the field.
   async function upsertUser(email: string, name: string): Promise<string> {
     const lower = email.toLowerCase();
+    const passwordHash = credentials.get(lower);
     const user = await db.user.upsert({
       where: { email: lower },
-      update: { name },
-      create: { email: lower, name },
+      update: { name, ...(passwordHash ? { passwordHash } : {}) },
+      create: { email: lower, name, ...(passwordHash ? { passwordHash } : {}) },
     });
     return user.id;
   }
@@ -229,11 +313,32 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
     speakerUsers.push({ id, name, email });
   }
 
+  // Harness fixture identities (D-C5-6 ruling 3). Created idempotently by
+  // email — `upsertUser` never deletes a row, so an identity that already
+  // exists keeps its id and everything hanging off it.
+  //
+  // They are deliberately NOT appended to `speakerUsers`: that list drives the
+  // deterministic abstract/session/task distribution below, and inserting into
+  // it would shift every seeded index. A fixture speaker therefore starts with
+  // an empty portal, which is the state the harness's own scenarios begin from.
+  const fixtureUsers: { id: string; name: string; email: string; role: "ADMIN" | "EVALUATOR" | "SPEAKER" }[] = [];
+  for (const identity of DEMO_FIXTURE_IDENTITIES) {
+    for (const email of identity.emails) {
+      fixtureUsers.push({
+        id: await upsertUser(email, identity.name),
+        name: identity.name,
+        email: email.toLowerCase(),
+        role: identity.role,
+      });
+    }
+  }
+
   // --- 4. Memberships --------------------------------------------------------
   const memberships: Prisma.EventMemberCreateManyInput[] = [
     { eventId, userId: adminId, role: "ADMIN" },
     ...evaluatorIds.map((userId) => ({ eventId, userId, role: "EVALUATOR" as const })),
     ...speakerUsers.map((s) => ({ eventId, userId: s.id, role: "SPEAKER" as const })),
+    ...fixtureUsers.map((f) => ({ eventId, userId: f.id, role: f.role })),
   ];
   await db.eventMember.createMany({ data: memberships, skipDuplicates: true });
 
@@ -242,7 +347,7 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   // event-scoped wipe above. Reset the demo fields explicitly on update as well
   // as create, otherwise edits made through the portal survive a reseed and the
   // demo drifts (observed: a smoke-test job title persisting across seeds).
-  for (const s of speakerUsers) {
+  for (const s of [...speakerUsers, ...fixtureUsers.filter((f) => f.role === "SPEAKER")]) {
     const demoProfile = {
       bio: `${s.name} is a practitioner and frequent conference speaker.`,
       company: "Acme Labs",
