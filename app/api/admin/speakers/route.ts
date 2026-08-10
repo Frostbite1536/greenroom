@@ -44,6 +44,11 @@ export const dynamic = "force-dynamic";
  * speaker surface — so an organizer may write it only for a speaker who belongs
  * to no other event. Both handlers take that decision from a fresh read inside
  * their own transaction; see `countOtherEventMemberships`.
+ *
+ * `status` (SPK-04) is stored on that same global row and is therefore governed
+ * by exactly the same rule: setting a shared speaker's status is refused with
+ * the identical 409, because "confirmed" would otherwise be asserted on this
+ * event's authority across somebody else's programme.
  */
 
 const profileSelect = {
@@ -52,6 +57,7 @@ const profileSelect = {
   jobTitle: true,
   headshotUrl: true,
   slideDeckUrl: true,
+  status: true,
 } as const;
 
 /** One indistinguishable refusal for unknown, cross-event, and non-speaker ids. */

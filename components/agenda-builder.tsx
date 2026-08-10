@@ -7,7 +7,9 @@ import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
-import { apiDelete, apiPost } from "@/lib/api-client";
+import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
+import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
+import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
   formatDayLabel,
@@ -52,6 +54,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [overrides, setOverrides] = useState<Record<string, SlotOverride>>({});
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const tz = data.timezone;
   const roomName = (id: string) => data.rooms.find((r) => r.id === id)?.name ?? id;
@@ -73,6 +76,9 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const unscheduled = useMemo(() => sessions.filter((s) => s.slot === null), [sessions]);
   const conflicts = useMemo(() => findConflicts(sessions, roomName), [sessions]);
   const conflictIds = useMemo(() => conflictedSessionIds(conflicts), [conflicts]);
+  // Derived once so the notice and the condition that renders it can never
+  // describe different sets, and so the truncation flag is read in one place.
+  const publicationNotice = unpublishedNotice(sessions.map((s) => s.contentStatus), data.truncated);
 
   // Days that actually have content, so the grid follows the real event.
   const days = useMemo(() => {
@@ -81,6 +87,26 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   }, [placed, tz]);
   const [day, setDay] = useState<string | null>(null);
   const activeDay = day && days.includes(day) ? day : (days[0] ?? null);
+
+  /**
+   * Publish or unpublish one talk. The server is the only authority: this
+   * refreshes the RSC payload rather than patching a local list, so what the
+   * grid shows afterwards is what the public surfaces will actually read.
+   */
+  async function setPublication(session: AgendaSession) {
+    const control = publicationControl(session.contentStatus);
+    if (control.confirm && !window.confirm(control.confirm(session.title))) return;
+    setPublishError(null);
+    const res = await apiPatch("/api/agenda/sessions", {
+      sessionId: session.id,
+      contentStatus: control.next,
+    });
+    if (!res.ok) {
+      setPublishError(res.error.message);
+      return;
+    }
+    startTransition(() => router.refresh());
+  }
 
   async function unschedule(sessionId: string, title?: string) {
     if (!window.confirm(`Unschedule${title ? ` “${title}”` : " this session"}?`)) return false;
@@ -142,7 +168,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           view={view}
           setView={setView}
           icon={<AlertTriangle size={15} />}
-          label={`Conflicts${conflicts.length ? ` (${conflicts.length})` : ""}`}
+          label={`Conflicts${conflicts.length ? ` (${boundedCount(conflicts.length, data.truncated)})` : ""}`}
         />
         <span className="spacer" />
         {days.length > 1 && (view === "day" || view === "rooms") && (
@@ -168,12 +194,48 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         </div>
       )}
 
+      {publishError && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>Publication change refused.</strong> {publishError}{" "}
+              <button className="link-button" onClick={() => setPublishError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* An operator laying out a partial programme must be told so: a conflict
+          in the sessions this read never loaded is one the grid cannot warn
+          about, and silence here would read as "no conflicts" (S20). */}
+      {data.truncated ? (
+        <div style={{ padding: "12px 12px 0" }}>
+          <p className="hint" role="status">
+            This event has more sessions than this page loads at once. The grid, the backlog and the conflict
+            count below cover only the sessions listed here — reduce the event data to see the whole programme.
+          </p>
+        </div>
+      ) : null}
+
+      {/* Says nothing at all when the whole programme is published, rather than
+          reporting a reassuring zero. */}
+      {publicationNotice ? (
+        <div style={{ padding: "12px 12px 0" }}>
+          <p className="hint" role="status">{publicationNotice}</p>
+        </div>
+      ) : null}
+
       {conflicts.length > 0 && view !== "conflicts" && (
         <div style={{ padding: 12 }}>
           <div className="conflict-banner">
             <AlertTriangle size={17} aria-hidden="true" />
             <div>
-              <strong>{conflicts.length} scheduling conflict{conflicts.length > 1 ? "s" : ""} detected.</strong>{" "}
+              {/* A floor past the cap: conflicts among sessions this read never
+                  loaded are conflicts nothing here could have detected. */}
+              <strong>
+                {boundedCountLabel(conflicts.length, data.truncated, "scheduling conflict")} detected.
+              </strong>{" "}
               <button className="link-button" onClick={() => setView("conflicts")}>Review conflicts</button>
             </div>
           </div>
@@ -183,12 +245,15 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
       {unscheduled.length > 0 && (
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
           <p className="field-label" style={{ marginBottom: 8 }}>
-            Unscheduled backlog <span className="hint">({unscheduled.length})</span>
+            Unscheduled backlog <span className="hint">({boundedCount(unscheduled.length, data.truncated)})</span>
           </p>
           <div className="row wrap" style={{ gap: 8 }}>
             {unscheduled.map((s) => (
               <button key={s.id} className="ghost-button" onClick={() => setScheduling(s)}>
-                {s.title} <span className="hint">· {s.durationMinutes}m</span>
+                {s.title}{" "}
+                <span className="hint">
+                  · {s.durationMinutes}m{s.category ? ` · ${s.category.name}` : ""}
+                </span>
               </button>
             ))}
           </div>
@@ -204,6 +269,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           trackColor={trackColor}
           onReschedule={setScheduling}
           onUnschedule={unschedule}
+          onPublication={setPublication}
           busy={pending}
         />
       )}
@@ -237,7 +303,13 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         />
       )}
       {view === "conflicts" && (
-        <ConflictsView conflicts={conflicts} sessions={sessions} tz={tz} onSelect={setScheduling} />
+        <ConflictsView
+          conflicts={conflicts}
+          sessions={sessions}
+          tz={tz}
+          truncated={data.truncated}
+          onSelect={setScheduling}
+        />
       )}
 
       {scheduling ? (
@@ -277,6 +349,7 @@ function ListView({
   trackColor,
   onReschedule,
   onUnschedule,
+  onPublication,
   busy,
 }: {
   sessions: Placed[];
@@ -286,6 +359,7 @@ function ListView({
   trackColor: (id: string | null) => string;
   onReschedule: (s: AgendaSession) => void;
   onUnschedule: (id: string, title?: string) => void;
+  onPublication: (s: AgendaSession) => void;
   busy: boolean;
 }) {
   const sorted = [...sessions].sort((a, b) => a.slot.startsAt.localeCompare(b.slot.startsAt));
@@ -308,9 +382,25 @@ function ListView({
             <div className="cell-title">{s.title}</div>
             <div className="cell-sub">
               {s.speakers.map((sp) => sp.name).join(", ") || "No speakers"} · {roomName(s.slot.roomId)}
+              {/* The topic the proposal was submitted under. Named separately
+                  from the track dot beside it: one is the swimlane an organizer
+                  placed the talk in, the other is what the speaker chose. */}
+              {s.category ? ` · ${s.category.name}` : ""}
             </div>
           </div>
           {conflictIds.has(s.id) ? <Pill tone="bad"><AlertTriangle size={12} /> Conflict</Pill> : null}
+          {/* Stated in words, not by absence: an unpublished talk still sits in
+              this grid, so nothing else here would tell an organizer that the
+              public agenda has stopped showing it. */}
+          {s.contentStatus === "DRAFT" ? <Pill tone="neutral">Unpublished</Pill> : null}
+          <button
+            className="ghost-button"
+            disabled={busy}
+            onClick={() => onPublication(s)}
+            aria-label={publicationControl(s.contentStatus).actionLabel(s.title)}
+          >
+            {publicationControl(s.contentStatus).label}
+          </button>
           <button className="ghost-button" onClick={() => onReschedule(s)}>Move</button>
           <button className="ghost-button danger-button" disabled={busy} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
             <CalendarX size={15} />
@@ -572,15 +662,25 @@ function ConflictsView({
   conflicts,
   sessions,
   tz,
+  truncated,
   onSelect,
 }: {
   conflicts: ReturnType<typeof findConflicts>;
   sessions: AgendaSession[];
   tz: string;
+  truncated: boolean;
   onSelect: (s: AgendaSession) => void;
 }) {
   if (conflicts.length === 0) {
-    return (
+    // "Every room and speaker has a clear schedule" is a claim about the whole
+    // programme. Past the cap this view has not seen the whole programme, so it
+    // reports what it actually checked instead of clearing the event.
+    return truncated ? (
+      <EmptyState icon={<AlertTriangle size={22} />} title="No conflicts in the sessions loaded here">
+        This event is larger than this page loads at once, so this is not a clear bill of health for the
+        whole schedule — reduce the event data to check every session.
+      </EmptyState>
+    ) : (
       <EmptyState icon={<AlertTriangle size={22} />} title="No conflicts">
         Every room and speaker has a clear schedule.
       </EmptyState>

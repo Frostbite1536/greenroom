@@ -57,34 +57,106 @@ type ConvertibleAbstract = {
   abstract: string | null;
   format: string | null;
   durationMinutes: number | null;
+  categoryId: string | null;
   speakers: { userId: string; isPrimary: boolean }[];
-  session: { id: string } | null;
+  session: { id: string; categoryId: string | null } | null;
 };
+
+/**
+ * The topic write that would bring an existing Session back in line with its
+ * proposal, or `null` when they already agree.
+ *
+ * Returning `null` for an unchanged topic is the point, not an optimization: a
+ * re-run that writes nothing leaves `updatedAt` alone, so "the admin reconvened
+ * this talk" and "the admin changed this talk" stay distinguishable in the row.
+ */
+export function reconciledSessionTopic(
+  abstract: { categoryId: string | null },
+  session: { categoryId: string | null },
+): { categoryId: string | null } | null {
+  return abstract.categoryId === session.categoryId ? null : { categoryId: abstract.categoryId };
+}
+
+/**
+ * Everything a brand-new `Session` copies off the accepted proposal.
+ *
+ * Pure and exported so the copy list is asserted without a database: what a
+ * talk inherits from its proposal is a product rule, and a field silently
+ * dropped here is invisible until an organizer notices it missing on the
+ * public agenda — which is exactly how the category was lost.
+ */
+export function newSessionData(
+  abstract: ConvertibleAbstract,
+  requestedDuration?: number | null,
+): {
+  eventId: string;
+  sourceAbstractId: string;
+  title: string;
+  description: string | null;
+  format: string | null;
+  durationMinutes: number;
+  categoryId: string | null;
+} {
+  return {
+    eventId: abstract.eventId,
+    sourceAbstractId: abstract.id,
+    title: abstract.title,
+    description: abstract.abstract,
+    format: abstract.format,
+    durationMinutes: resolveSessionDuration(abstract.durationMinutes, requestedDuration),
+    // The topic the speaker chose survives acceptance. Without this the label
+    // was lost at exactly the moment a proposal became a talk, and every agenda
+    // surface fell back to an unlabelled colour.
+    categoryId: abstract.categoryId,
+  };
+}
 
 /**
  * Ensure the abstract has its confirmed `Session`, creating it with the
  * proposal's speakers on first call. At most one session per abstract
  * (INV-DOMAIN-001, enforced by the unique `sourceAbstractId`); re-running
  * returns the existing one rather than failing.
+ *
+ * **Re-running also reconciles the topic, and nothing else.** A proposal's
+ * category can legitimately change after acceptance, which left the Session
+ * carrying a stale topic on the public agenda with no way to repair it.
+ *
+ * Which paths reconcile, and which deliberately do not:
+ *
+ *  - **Reconciles** — both callers of this function, and only those:
+ *    `POST /api/evaluations/decisions` re-accepting an already-accepted
+ *    abstract, and `POST /api/evaluations/convert`. Both are
+ *    `requireContext(["ADMIN"])`, so the write is always an organizer acting on
+ *    their own programme.
+ *  - **Does not reconcile** — the speaker's own edit
+ *    (`PATCH /api/cfp/submissions/:abstractId`, authorized by
+ *    `isAbstractSpeaker`). Per INV-EDIT-001 a speaker edit never silently
+ *    mutates its linked Session; C18 owns that reconciliation handoff, and
+ *    propagating here would let a speaker change the public programme without
+ *    an organizer ever seeing it. The organizer's re-run above is the repair.
+ *  - **Nothing to reconcile** — the anonymous draft upsert (DRAFT rows only)
+ *    and the admin CSV import (DRAFT/SUBMITTED only). A Session exists only
+ *    after acceptance, so neither can ever face one.
+ *
+ * Title, description, format and duration are deliberately left alone: the
+ * convert route already documents that a requested duration never mutates an
+ * existing Session, and scheduling owns later duration changes.
  */
 export async function provisionSessionForAbstract(
   tx: Prisma.TransactionClient,
   abstract: ConvertibleAbstract,
   requestedDuration?: number | null,
-): Promise<{ sessionId: string; created: boolean }> {
+): Promise<{ sessionId: string; created: boolean; topicReconciled: boolean }> {
   if (abstract.session) {
-    return { sessionId: abstract.session.id, created: false };
+    const topic = reconciledSessionTopic(abstract, abstract.session);
+    if (topic) {
+      await tx.session.update({ where: { id: abstract.session.id }, data: topic });
+    }
+    return { sessionId: abstract.session.id, created: false, topicReconciled: topic !== null };
   }
 
   const created = await tx.session.create({
-    data: {
-      eventId: abstract.eventId,
-      sourceAbstractId: abstract.id,
-      title: abstract.title,
-      description: abstract.abstract,
-      format: abstract.format,
-      durationMinutes: resolveSessionDuration(abstract.durationMinutes, requestedDuration),
-    },
+    data: newSessionData(abstract, requestedDuration),
   });
   if (abstract.speakers.length > 0) {
     await tx.sessionSpeaker.createMany({
@@ -95,7 +167,9 @@ export async function provisionSessionForAbstract(
       })),
     });
   }
-  return { sessionId: created.id, created: true };
+  // A session created from the proposal a moment ago cannot be out of step
+  // with it, so there is nothing to reconcile on this branch.
+  return { sessionId: created.id, created: true, topicReconciled: false };
 }
 
 /**
@@ -164,7 +238,7 @@ export async function provisionAcceptedAbstract(
   tx: Prisma.TransactionClient,
   abstract: ConvertibleAbstract,
   requestedDuration?: number | null,
-): Promise<{ sessionId: string; created: boolean; tasksAssigned: number }> {
+): Promise<{ sessionId: string; created: boolean; topicReconciled: boolean; tasksAssigned: number }> {
   const session = await provisionSessionForAbstract(tx, abstract, requestedDuration);
   const tasksAssigned = await assignOnboardingTasks(tx, abstract.eventId, session.sessionId);
   return { ...session, tasksAssigned };

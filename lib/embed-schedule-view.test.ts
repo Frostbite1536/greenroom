@@ -4,6 +4,9 @@ import {
   ALL,
   DESCRIPTION_PREVIEW_CHARS,
   MAX_EVENT_DAYS,
+  PUBLIC_AGENDA_LIMITS,
+  agendaTruncationNotice,
+  chipPrefix,
   dayTabs,
   descriptionPreview,
   eventDayKeys,
@@ -182,6 +185,68 @@ test("chips carry format, track and room as text, never colour alone", () => {
   ]);
 });
 
+test("an accept-created talk with no schedule track is labelled by its topic", () => {
+  // The defect this closes: a session provisioned from an accepted abstract has
+  // no slot track, so it rendered a grey rail and no words at all.
+  assert.deepEqual(
+    sessionChips(session({ format: null, track: null, category: { id: "cat-1", name: "Developer Experience" } })),
+    [
+      { kind: "topic", label: "Developer Experience" },
+      { kind: "room", label: "Redwood Hall" },
+    ],
+  );
+});
+
+test("a topic is its own chip, never printed under the track's label", () => {
+  assert.deepEqual(
+    sessionChips(session({ category: { id: "cat-1", name: "Developer Experience" } })),
+    [
+      { kind: "format", label: "Keynote" },
+      { kind: "track", label: "Engineering" },
+      { kind: "topic", label: "Developer Experience" },
+      { kind: "room", label: "Redwood Hall" },
+    ],
+  );
+  assert.equal(chipPrefix("topic"), "Topic");
+  assert.equal(chipPrefix("track"), "Track");
+  assert.equal(chipPrefix("format"), "Format");
+  assert.equal(chipPrefix("room"), "Room");
+});
+
+test("a blank or missing topic adds no chip", () => {
+  assert.equal(sessionChips(session({ category: null })).some((chip) => chip.kind === "topic"), false);
+  assert.equal(
+    sessionChips(session({ category: { id: "cat-1", name: "   " } })).some((chip) => chip.kind === "topic"),
+    false,
+  );
+});
+
+test("a complete agenda renders no truncation notice at all", () => {
+  assert.equal(agendaTruncationNotice({ sessions: [session()], truncated: false }), null);
+  // An older caller that predates the bound is not accused of being cut.
+  assert.equal(agendaTruncationNotice({ sessions: [session()] }), null);
+});
+
+test("a cut agenda says how many it is showing and how to narrow it", () => {
+  const notice = agendaTruncationNotice({
+    sessions: [session(), session({ slotId: "slot-2" })],
+    truncated: true,
+  });
+  assert.match(notice ?? "", /only the first 2 sessions/);
+  assert.match(notice ?? "", /day tabs or search/);
+});
+
+test("the public agenda bound is a real number the reads can page against", () => {
+  assert.equal(typeof PUBLIC_AGENDA_LIMITS.sessions, "number");
+  assert.ok(PUBLIC_AGENDA_LIMITS.sessions > 0);
+});
+
+test("keyword search reaches a session's topic", () => {
+  const talk = session({ track: null, category: { id: "cat-1", name: "Developer Experience" } });
+  assert.equal(matchesQuery(talk, "developer experience"), true);
+  assert.equal(matchesQuery(talk, "accessibility"), false);
+});
+
 test("filter links keep the event parameter byte-identical and drop defaults", () => {
   const filters = { track: engineering.id, day: "2026-05-13", q: "edge" };
   assert.equal(
@@ -214,4 +279,25 @@ test("the header summary states how many of the total are showing", () => {
   assert.equal(resultSummary(18, 18, false), "18 sessions");
   assert.equal(resultSummary(18, 3, true), "3 sessions of 18");
   assert.equal(resultSummary(1, 1, false), "1 session");
+});
+
+test("a capped agenda reports its total as a floor, and what is shown exactly", () => {
+  // The shown half is never suffixed: the page knows exactly what it rendered.
+  assert.equal(resultSummary(500, 500, false, true), "500+ sessions");
+  assert.equal(resultSummary(500, 3, true, true), "3 sessions of 500+");
+  // A complete read is byte-identical to before, including the singular.
+  assert.equal(resultSummary(18, 18, false, false), "18 sessions");
+  assert.equal(resultSummary(1, 1, false, false), "1 session");
+  assert.equal(resultSummary(18, 3, true, false), "3 sessions of 18");
+  // Omitting the flag behaves exactly as the three-argument callers expect.
+  assert.equal(resultSummary(18, 18, false), "18 sessions");
+});
+
+test("the truncation notice names the cut as chronological, so day tabs stay readable", () => {
+  // The read orders by startsAt and takes the first page, so the missing
+  // sessions are the latest ones — early day tabs are complete. That is why the
+  // tabs themselves are plain numbers rather than each carrying a "+".
+  const notice = agendaTruncationNotice({ sessions: [session()], truncated: true }) ?? "";
+  assert.match(notice, /start-time order/);
+  assert.match(notice, /latest sessions of the event are missing/);
 });

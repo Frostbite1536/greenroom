@@ -15,10 +15,18 @@ export const dynamic = "force-dynamic";
  * existing session.
  *
  * Accepting an abstract now provisions this automatically (WAVE1-B1), so this
- * endpoint remains for two jobs: converting a legacy accepted abstract that
- * has no Session yet (using the requested duration), and acting as the manual
- * checklist backfill for existing Sessions. A requested duration never mutates
- * a Session that already exists; scheduling owns later duration changes.
+ * endpoint remains for three jobs: converting a legacy accepted abstract that
+ * has no Session yet (using the requested duration), acting as the manual
+ * checklist backfill for existing Sessions, and reconciling a Session whose
+ * topic has moved on the proposal since it was created. A requested duration
+ * never mutates a Session that already exists; scheduling owns later duration
+ * changes.
+ *
+ * The topic repair is ADMIN-authorized by this route's own `requireContext`,
+ * which is the whole reason it lives on the re-run rather than on the speaker's
+ * edit: per INV-EDIT-001 a speaker edit never silently mutates its linked
+ * Session (C18 owns that handoff), so an organizer re-running conversion is how
+ * a changed category reaches the public programme.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);

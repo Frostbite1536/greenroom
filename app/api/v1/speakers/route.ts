@@ -30,14 +30,39 @@ export const GET = handleV1(async (req: Request): Promise<Response> => {
 
   // A user is eligible only through an abstract or session for this one event;
   // membership and global user tables are intentionally not a source here.
+  //
+  // Both halves carry the publication predicate, because both can announce a
+  // person the organizer has held back.
+  //
+  // The session half is the obvious one: an unpublished talk must not make its
+  // speaker reachable, nor count toward their appearances.
+  //
+  // The abstract half needed the rule too, and this is the exact scenario the
+  // unpublish control exists for. An organizer holds back a surprise keynote;
+  // if that talk is the speaker's only appearance, the submission branch still
+  // listed them — with `appearances.sessions` at zero, which is itself the
+  // tell. So an abstract qualifies its speakers only when it has **no linked
+  // Session** (accepted-but-unconverted, and submitted-but-undecided: the
+  // participation case this branch exists for, where nothing has been withheld
+  // because nothing was ever published) **or** its linked Session is PUBLISHED.
+  // A submission whose talk was deliberately unpublished is not a separate
+  // disclosure axis — it is the same talk, seen from the other end.
+  const eventSessionSpeakers = { session: { eventId: event.id, contentStatus: "PUBLISHED" as const } };
+  const eventAbstractSpeakers = {
+    abstract: {
+      eventId: event.id,
+      OR: [
+        { session: { is: null } },
+        { session: { is: { contentStatus: "PUBLISHED" as const } } },
+      ],
+    },
+  };
   const where = {
     OR: [
-      { abstractSpeakers: { some: { abstract: { eventId: event.id } } } },
-      { sessionSpeakers: { some: { session: { eventId: event.id } } } },
+      { abstractSpeakers: { some: eventAbstractSpeakers } },
+      { sessionSpeakers: { some: eventSessionSpeakers } },
     ],
   };
-  const eventAbstractSpeakers = { abstract: { eventId: event.id } };
-  const eventSessionSpeakers = { session: { eventId: event.id } };
   const [speakers, total] = await Promise.all([
     prisma.user.findMany({
       where,

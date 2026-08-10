@@ -341,6 +341,9 @@ async function resetScratch() {
     data: {
       eventId: EVENT_ID, title: "Scratch Session A", durationMinutes: 30, format: "Talk",
       description: SESSION_A_DESCRIPTION,
+      // The proposal's topic, carried onto the talk. Drives the topic chip that
+      // gives an otherwise unlabelled coloured rail some words.
+      categoryId: category.id,
       speakers: {
         create: [
           { userId: users.speaker, isPrimary: true },
@@ -1025,12 +1028,17 @@ try {
     categoryId: fx.category.id,
     speakers: [
       { email: "smoke.speaker@example.com", name: "Smoke Speaker", isPrimary: true },
-      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false },
+      // ABS-11: the harness's own fixture wording, left unstated on the primary.
+      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false, role: "Co-presenter" },
     ],
     answers: { audience_level: "beginner", learning_objectives: "Three takeaways." },
     intent: "submit",
   }, null);
   check("CFP direct submit remains capability-free → 201", submit.status === 201, `${submit.status} ${JSON.stringify(submit.data?.error ?? "")}`);
+  check("T3 the submitted roster reports the stated role and the unstated null",
+    submit.data?.data?.speakers?.find((s) => s.email === "smoke.cospeaker@example.com")?.role === "Co-presenter"
+    && submit.data?.data?.speakers?.find((s) => s.email === "smoke.speaker@example.com")?.role === null,
+    JSON.stringify(submit.data?.data?.speakers));
   check("submitted abstract has SUBMITTED status", submit.data?.data?.status === "SUBMITTED");
   check("co-speaker upserted by email", (submit.data?.data?.speakers ?? []).length === 2);
 
@@ -1074,6 +1082,19 @@ try {
   const afterConvert = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts table shows an unscheduled talk as 'Talk created'",
     afterConvert.text.includes("Talk created"));
+
+  // T3 / ABS-11: the co-speaker's stated role reaches the organizer, in the
+  // table summary and again in the drawer's full roster line.
+  check("T3 the abstracts table names the co-speaker's role instead of counting them",
+    afterConvert.text.includes("+1 co-speaker: Co-presenter"),
+    "expected the role-bearing co-speaker summary");
+  const roleDrawer = await req(
+    "GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin,
+  );
+  check("T3 the admin drawer's roster line carries the role beside the primary marker",
+    roleDrawer.status === 200
+    && roleDrawer.text.includes("Smoke Speaker (primary), Smoke Co — Co-presenter"),
+    "expected 'Smoke Speaker (primary), Smoke Co — Co-presenter' in the drawer");
 
   // --- F1: the admin drawer must actually carry the speaker's custom answers ---
   // The drawer is client-rendered on click, so the assertion is that the answer
@@ -1199,11 +1220,74 @@ try {
   check("declined-but-scheduled abstract is flagged 'Still on the programme'",
     afterReverse.text.includes("Still on the programme"));
 
+  // T3: the flag is the admin's safeguard; the publication column is the
+  // public one. A declined talk keeps its slot and stops being announced.
+  check("T3 declining a confirmed talk unpublishes it",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "DRAFT");
+  const embedAfterReverse = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the declined talk is gone from the public schedule embed",
+    embedAfterReverse.status === 200 && !embedAfterReverse.text.includes(`session-${convertedSessionId}`),
+    `expected no session-${convertedSessionId} anchor`);
+  const apiAfterReverse = await req("GET", `/api/agenda/public?event=${EVENT_ID}`, null, null);
+  check("T3 the JSON agenda twin drops it too",
+    apiAfterReverse.status === 200
+    && !apiAfterReverse.data?.data?.sessions?.some((s) => s.sessionId === convertedSessionId));
+  check("T3 unpublishing removed no data: the slot and its speakers survive",
+    !!(await prisma.scheduleSlot.findUnique({ where: { sessionId: convertedSessionId } }))
+    && (await prisma.sessionSpeaker.count({ where: { sessionId: convertedSessionId } })) > 0);
+  const agendaWhileUnpublished = await req("GET", "/admin/agenda", null, admin);
+  check("T3 the agenda builder says how many talks are held back, and where to publish them",
+    agendaWhileUnpublished.text.includes("unpublished and does not appear on the public agenda")
+    && agendaWhileUnpublished.text.includes("List view"),
+    "expected the unpublished-count notice on /admin/agenda");
+
   // Restore ACCEPTED so later checks see the pipeline in its expected state.
   const restore = await req("POST", "/api/evaluations/decisions", {
     abstractId: convertedAbstractId, decision: "ACCEPTED",
   }, admin);
   check("decision can be changed back → 200", restore.status === 200, `got ${restore.status}`);
+  check("T3 re-accepting puts the talk back on the public programme",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "PUBLISHED");
+  const embedAfterRestore = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the restored talk is announced again from the same slot",
+    embedAfterRestore.text.includes(`session-${convertedSessionId}`));
+
+  // The organizer control itself: an admin may hold a talk back without any
+  // decision changing, and put it back.
+  const unpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "DRAFT",
+  }, admin);
+  check("T3 an admin can unpublish a talk directly → 200",
+    unpublish.status === 200 && unpublish.data?.data?.contentStatus === "DRAFT",
+    `${unpublish.status} ${JSON.stringify(unpublish.data?.error ?? "")}`);
+  const embedAfterManualUnpublish = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the manually unpublished talk leaves the public schedule",
+    !embedAfterManualUnpublish.text.includes(`session-${convertedSessionId}`));
+  // The embed's own "Add all to calendar" affordance must not hand out what the
+  // page just stopped showing.
+  const icsAfterManualUnpublish = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${convertedSessionId}`, null, null,
+  );
+  check("T3 the calendar export refuses the unpublished talk",
+    icsAfterManualUnpublish.status === 404, icsAfterManualUnpublish.status);
+  const speakersAfterManualUnpublish = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  check("T3 an unpublished talk is not announced on the public speaker gallery",
+    speakersAfterManualUnpublish.status === 200
+    && !speakersAfterManualUnpublish.text.includes("Smoke submitted proposal"),
+    "expected the unpublished talk's title off the speaker cards");
+  const speakerUnpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, speaker);
+  check("T3 a speaker cannot publish a talk", speakerUnpublish.status === 403, speakerUnpublish.status);
+  const republish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, admin);
+  check("T3 publishing again restores it → 200",
+    republish.status === 200 && republish.data?.data?.contentStatus === "PUBLISHED", republish.status);
   await req("DELETE", `/api/agenda/slots?sessionId=${convertedSessionId}`, null, admin);
 
   // --- mutation 4: score submission ---
@@ -2170,6 +2254,13 @@ try {
     && landingText.includes("/embed/speakers"));
   check("landing page names the event and its real programme size",
     landingText.includes("Scratch Frontend") && landingText.includes("Scheduled sessions"));
+  // S20: this event is far inside the cap, so the metrics must be exact numbers
+  // with no "+" floor and no partial-programme notice. Guards the flag against
+  // being inverted, which would qualify every count on every real event.
+  check("T3 a small programme's landing metrics are stated exactly, with no floor qualifier",
+    !/<strong>\d+\+<\/strong>/.test(landingHtml)
+    && !landingText.includes("larger than this page counts at once"),
+    "expected exact landing metrics for an event inside the cap");
   check("landing page carries the same open-CFP chooser",
     landingHtml.includes(`href="${canonicalCfpPath}"`)
     && landingHtml.includes(`href="${c16LegacyPath}"`)
@@ -2262,6 +2353,13 @@ try {
   check("embed renders a format chip", chipText("format").includes("Talk"), chipText("format"));
   check("embed renders a track chip", chipText("track").includes("Mainstage"), chipText("track"));
   check("embed renders a room chip", chipText("room").includes("Hall A"), chipText("room"));
+  check("T3 embed renders the session's topic as its own chip",
+    chipText("topic").includes(fx.category.name), chipText("topic"));
+  check("T3 the topic chip is announced as a topic, never as a track",
+    chipText("topic").startsWith("Topic:") && !chipText("topic").includes("Track"),
+    chipText("topic"));
+  check("T3 the expanded detail names the topic separately from the track",
+    enriched.text.includes("<dt>Topic</dt>") && enriched.text.includes("<dt>Track</dt>"));
 
   // Day tabs come from Event.startsAt..endsAt, unioned with any day that holds
   // a placed session outside that range.
@@ -2402,11 +2500,14 @@ try {
   // --- no admin-only data on any public embed --------------------------------
   // Scanned over the whole document, flight payload included: the speaker
   // gallery is a client island, so its props are serialized into the response.
+  // The category NAME ("Applied AI") left this list when Session.categoryId
+  // made topics deliberately public via the embed's topic chip; the category's
+  // admin-only defaultTeamKey ("team-ai") must still never appear.
   const embedLeaks = [
     "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo",
     EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL,
     "UNDER_REVIEW", "Scratch: Agents in Production", "Scratch: Maybe historical coverage",
-    "Scratch Session B", "team-ai", "Applied AI",
+    "Scratch Session B", "team-ai",
   ];
   for (const [label, html] of [["schedule", enriched.text], ["speakers", speakersEmbed.text]]) {
     const found = embedLeaks.filter((needle) => html.includes(needle));
@@ -2925,6 +3026,43 @@ try {
   check("the cleared bio is reported as absent rather than left on screen",
     !afterClear.text.includes("Priya now leads the reliability guild") && afterClear.text.includes("No bio stored yet"));
 
+  // T3 / SPK-04: where a speaker is in accepting their invitation.
+  const rosterBeforeStatus = await req("GET", "/admin/speakers", null, admin);
+  check("T3 an existing speaker is not silently marked unconfirmed by the new column",
+    !rosterBeforeStatus.text.includes(">Invited<") && !rosterBeforeStatus.text.includes(">Declined<"),
+    "expected no status chip before any status was set");
+  const setInvited = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "INVITED",
+  }, admin);
+  check("T3 a status-only edit is a real edit → 200",
+    setInvited.status === 200 && setInvited.data?.data?.profile?.status === "INVITED",
+    `${setInvited.status} ${JSON.stringify(setInvited.data?.data?.profile ?? setInvited.data?.error ?? "none")}`);
+  check("T3 setting a status left every stored prose field alone",
+    setInvited.data?.data?.profile?.company === "Lumen Grid"
+    && setInvited.data?.data?.profile?.jobTitle === "Director of Platform",
+    JSON.stringify(setInvited.data?.data?.profile ?? "none"));
+  const rosterInvited = await req("GET", "/admin/speakers", null, admin);
+  check("T3 the roster renders an Invited chip for that speaker",
+    rosterInvited.text.includes(">Invited<"), "expected an Invited status chip");
+  const setDeclined = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "DECLINED",
+  }, admin);
+  const rosterDeclined = await req("GET", "/admin/speakers", null, admin);
+  check("T3 a declined speaker is shown as declined",
+    setDeclined.status === 200 && rosterDeclined.text.includes(">Declined<"),
+    `${setDeclined.status}`);
+  const badStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "MAYBE",
+  }, admin);
+  check("T3 a status outside the three known ones is refused",
+    badStatus.status === 422, badStatus.status);
+  const restoreStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 the status can be set back to confirmed",
+    restoreStatus.status === 200 && restoreStatus.data?.data?.profile?.status === "CONFIRMED",
+    restoreStatus.status);
+
   const renameAttempt = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, name: "Someone Else" }, admin);
   check("an organizer cannot rename a speaker's account through the profile edit",
     renameAttempt.status === 422, `got ${renameAttempt.status}`);
@@ -2984,6 +3122,26 @@ try {
   const sharedAfterEdit = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
   check("the refused shared edit wrote no global profile row", sharedAfterEdit === null,
     `got ${JSON.stringify(sharedAfterEdit)}`);
+  // T3 / SPK-04: status lives on that same global row, so it refuses identically
+  // rather than becoming a back door into a shared speaker's profile.
+  const statusShared = await req("PATCH", "/api/admin/speakers", {
+    userId: sharedUser.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 setting a shared speaker's status is refused with the identical 409",
+    statusShared.status === 409
+    && statusShared.data?.error?.code === "SPEAKER_SHARED_ACROSS_EVENTS"
+    && statusShared.data?.error?.message === editShared.data?.error?.message,
+    `${statusShared.status} ${statusShared.data?.error?.code ?? "none"}`);
+  check("T3 the refused status write created no global profile row either",
+    (await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id } })) === null);
+  const addSharedWithStatus = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME, status: "CONFIRMED",
+  }, admin);
+  check("T3 adding a shared speaker withholds their status alongside the rest",
+    addSharedWithStatus.status === 200
+    && addSharedWithStatus.data?.data?.profileRequested === true
+    && addSharedWithStatus.data?.data?.profileApplied === false,
+    JSON.stringify(addSharedWithStatus.data?.data ?? "none"));
   // The refusal must be targeted, not a blanket lockout of the edit feature.
   const editExclusive = await req("PATCH", "/api/admin/speakers", {
     userId: fx.rosterMember.id, company: "Lumen Grid Holdings",

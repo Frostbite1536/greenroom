@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Mic2, Search, Users } from "lucide-react";
 import type { PublicSpeaker, PublicSpeakers } from "@/lib/public-speakers";
 import { formatEventDateRange } from "@/lib/tz";
+import { boundedCountLabel } from "@/lib/bounded-count";
 import {
   headshotAlt,
   initials,
@@ -88,7 +89,9 @@ export function EmbedSpeakers({
             <div>
               <h1>{gallery.event.name}</h1>
               <p className="hint">
-                {gallery.speakers.length} {gallery.speakers.length === 1 ? "speaker" : "speakers"}
+                {/* A floor, not a total, once the read was capped — the note
+                    below says so in words, and this must not contradict it. */}
+                {boundedCountLabel(gallery.speakers.length, gallery.truncated, "speaker")}
                 {dates ? ` · ${dates}` : ""}
               </p>
             </div>

@@ -5,6 +5,7 @@ import { getResolvedSession, homeForRole } from "@/lib/auth";
 import { getPublicAgenda } from "@/lib/data/reads";
 import { DEFAULT_PUBLIC_EVENT, getOpenCfpEntry } from "@/lib/data/open-cfp";
 import { embedAliasTarget } from "@/lib/embed-alias";
+import { boundedCount, derivedBoundedCount } from "@/lib/bounded-count";
 import { normalizeLandingEventParam, resolveLandingEvent } from "@/lib/landing-event";
 import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 
@@ -84,6 +85,10 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
   const sessionCount = agenda?.sessions.length ?? 0;
   const speakerCount = agenda ? new Set(agenda.sessions.flatMap((s) => s.speakers)).size : 0;
   const trackCount = agenda?.tracks.length ?? 0;
+  // The session read is capped, so both counts derived from it are floors past
+  // the cap. Taken from the read's own flag rather than a second `count()`:
+  // one read, one truth (the email-history rule).
+  const programmeTruncated = agenda?.truncated ?? false;
 
   const schedulePath = embedAliasTarget("/embed/schedule", resolution.eventParam);
   const speakersPath = embedAliasTarget("/embed/speakers", resolution.eventParam);
@@ -122,11 +127,28 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
         </section>
 
         {agenda ? (
-          <div className="metric-grid landing-metrics">
-            <div className="metric"><span>Scheduled sessions</span><strong>{sessionCount}</strong></div>
-            <div className="metric"><span>Speakers</span><strong>{speakerCount}</strong></div>
-            <div className="metric"><span>Tracks</span><strong>{trackCount}</strong></div>
-          </div>
+          <>
+            <div className="metric-grid landing-metrics">
+              {/* Both of these are counted off the capped session read, so past
+                  the cap they are floors and say so. `Tracks` comes from its
+                  own uncapped read and stays an exact number. */}
+              <div className="metric">
+                <span>Scheduled sessions</span>
+                <strong>{boundedCount(sessionCount, programmeTruncated)}</strong>
+              </div>
+              <div className="metric">
+                <span>Speakers</span>
+                <strong>{derivedBoundedCount(speakerCount, programmeTruncated)}</strong>
+              </div>
+              <div className="metric"><span>Tracks</span><strong>{trackCount}</strong></div>
+            </div>
+            {programmeTruncated ? (
+              <p className="landing-notice">
+                This programme is larger than this page counts at once, so the session and speaker
+                figures above are the minimum. Open the full schedule to see everything.
+              </p>
+            ) : null}
+          </>
         ) : (
           <p className="landing-notice">
             No public programme is published yet. The schedule and speaker directory

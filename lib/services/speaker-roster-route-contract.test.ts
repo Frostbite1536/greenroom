@@ -114,3 +114,22 @@ test("adding a shared speaker still joins them to this event, withholding only t
   // legitimately appears at two events.
   assert.doesNotMatch(post, /SPEAKER_SHARED_ACROSS_EVENTS/);
 });
+
+test("SPK-04: a speaker's status is written through the same guarded profile payload", () => {
+  // `status` lives on the global SpeakerProfile row, so it must inherit the
+  // shared-speaker refusal rather than sneak past it on a separate write. The
+  // guarantee is structural: `speakerProfileWriteData` produces the one payload
+  // both handlers pass to the one upsert, and that upsert sits behind the 409.
+  assert.deepEqual(route.match(/tx\.speakerProfile\.upsert\(/g)?.length, 2);
+  assert.deepEqual(route.match(/update: profileData,/g)?.length, 2);
+  assert.deepEqual(route.match(/speakerProfileWriteData\(profile\)/g)?.length, 2);
+  // Nothing writes a SpeakerProfile outside that guarded payload.
+  assert.doesNotMatch(route, /speakerProfile\.(update|create)\(/);
+  assert.doesNotMatch(route, /status:\s*(input|patch|body)/);
+  // A status-bearing edit therefore takes the profile key, counts other
+  // memberships, and only then reaches the row.
+  assert.ok(patch.indexOf("lockSpeakerProfile") < patch.indexOf("countOtherEventMemberships"));
+  assert.ok(patch.indexOf("countOtherEventMemberships") < patch.indexOf("tx.speakerProfile.upsert"));
+  // And it is projected back, so the roster re-renders from stored truth.
+  assert.match(route, /status: true,/);
+});

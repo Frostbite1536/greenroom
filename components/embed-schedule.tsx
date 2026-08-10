@@ -14,6 +14,8 @@ import { calendarExportUrl } from "@/lib/ics-embed";
 import { formatDayLabel, formatEventDateRange, formatTime, zonedParts } from "@/lib/tz";
 import {
   ALL,
+  agendaTruncationNotice,
+  chipPrefix,
   dayTabs,
   descriptionPreview,
   eventDayKeys,
@@ -55,12 +57,12 @@ function SessionCard({
           <span>{when}</span>
         </div>
 
-        {/* Format / track / room as readable text, so the label never depends on
-            the colour rail alone. */}
+        {/* Format / track / topic / room as readable text, so the label never
+            depends on the colour rail alone. */}
         <ul className="embed-chips">
           {chips.map((chip) => (
             <li className={`embed-chip embed-chip-${chip.kind}`} key={`${chip.kind}-${chip.label}`}>
-              <span className="sr-only">{chip.kind === "format" ? "Format" : chip.kind === "track" ? "Track" : "Room"}: </span>
+              <span className="sr-only">{chipPrefix(chip.kind)}: </span>
               {chip.label}
             </li>
           ))}
@@ -101,6 +103,12 @@ function SessionCard({
                 <div>
                   <dt>Track</dt>
                   <dd>{session.track.name}</dd>
+                </div>
+              ) : null}
+              {session.category ? (
+                <div>
+                  <dt>Topic</dt>
+                  <dd>{session.category.name}</dd>
                 </div>
               ) : null}
               {session.speakers.length > 0 ? (
@@ -157,9 +165,14 @@ export function EmbedSchedule({
           <div>
             <h1>{agenda.event.name}</h1>
             <p className="hint">
-              {resultSummary(agenda.sessions.length, filtered.length, isFiltered)}
+              {resultSummary(agenda.sessions.length, filtered.length, isFiltered, agenda.truncated ?? false)}
               {dateRange ? ` · ${dateRange}` : ""}
             </p>
+            {/* A reader whose programme was cut short is told, rather than
+                shown a confident count of a partial schedule (S20). */}
+            {agendaTruncationNotice(agenda) ? (
+              <p className="hint" role="status">{agendaTruncationNotice(agenda)}</p>
+            ) : null}
           </div>
           {agenda.sessions.length > 0 && (
             <a

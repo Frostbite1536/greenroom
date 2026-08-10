@@ -70,6 +70,7 @@ import {
   PUBLIC_SPEAKER_LIMITS,
   type PublicSpeakers,
 } from "@/lib/public-speakers";
+import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -406,7 +407,8 @@ export type AbstractRow = {
   durationMinutes: number | null;
   categoryName: string | null;
   formName: string;
-  speakers: { name: string; isPrimary: boolean }[];
+  /** `role` is the per-proposal contribution label ("Co-presenter"), or null. */
+  speakers: { name: string; isPrimary: boolean; role: string | null }[];
   submittedAt: string | null;
   /** Server-computed only for the explicitly selected decision round. */
   decisionSummary: AdminDecisionAbstractSummary | null;
@@ -472,7 +474,7 @@ const adminAbstractSelect = {
   speakers: {
     // Email is not needed for this organizer surface, so it never enters the
     // RSC payload.
-    select: { isPrimary: true, user: { select: { name: true } } },
+    select: { isPrimary: true, role: true, user: { select: { name: true } } },
   },
   // `scheduleSlot` tells the admin table whether the confirmed talk is
   // actually on the public programme, which is what makes a reversed
@@ -617,6 +619,7 @@ export async function getAdminAbstracts(
       speakers: a.speakers.map((s) => ({
         name: s.user.name,
         isPrimary: s.isPrimary,
+        role: s.role,
       })),
       submittedAt: a.submittedAt?.toISOString() ?? null,
       decisionSummary: decisionSummary.summariesByAbstractId[a.id] ?? null,
@@ -648,6 +651,11 @@ export type AgendaSession = {
   title: string;
   format: string | null;
   durationMinutes: number;
+  /** The proposal's topic, carried onto the talk at acceptance. Null for a
+   *  directly authored session, or once its category is deleted. */
+  category: { id: string; name: string } | null;
+  /** Whether this talk is announced on the public programme. */
+  contentStatus: "DRAFT" | "PUBLISHED";
   speakers: { userId: string; name: string }[];
   slot: {
     id: string;
@@ -664,6 +672,9 @@ export type AgendaData = {
   rooms: { id: string; name: string; capacity: number | null }[];
   tracks: { id: string; name: string; color: string }[];
   sessions: AgendaSession[];
+  /** True when the event holds more sessions than one read materializes (S20).
+   *  The builder says so rather than laying out a partial programme silently. */
+  truncated: boolean;
 };
 
 export async function getAgendaData(): Promise<AgendaData> {
@@ -682,12 +693,19 @@ export async function getAgendaData(): Promise<AgendaData> {
     }),
     prisma.session.findMany({
       where: { eventId: ctx.eventId },
-      orderBy: { createdAt: "asc" },
+      // Bounded, stably ordered, cap-plus-one (S20). `id` breaks `createdAt`
+      // ties so the grid cannot reshuffle between renders. The builder reports
+      // the cut rather than silently laying out a partial programme — a
+      // conflict it never loaded is a conflict it cannot warn about.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.agendaSessions + 1,
       select: {
         id: true,
         title: true,
         format: true,
         durationMinutes: true,
+        category: { select: { id: true, name: true } },
+        contentStatus: true,
         speakers: { select: { userId: true, user: { select: { name: true } } } },
         scheduleSlot: {
           select: { id: true, roomId: true, trackId: true, startsAt: true, endsAt: true },
@@ -701,11 +719,14 @@ export async function getAgendaData(): Promise<AgendaData> {
     timezone: event?.timezone ?? "UTC",
     rooms,
     tracks,
-    sessions: sessions.map((s) => ({
+    truncated: sessions.length > OPERATOR_QUERY_LIMITS.agendaSessions,
+    sessions: sessions.slice(0, OPERATOR_QUERY_LIMITS.agendaSessions).map((s) => ({
       id: s.id,
       title: s.title,
       format: s.format,
       durationMinutes: s.durationMinutes,
+      category: s.category,
+      contentStatus: s.contentStatus,
       speakers: s.speakers.map((sp) => ({ userId: sp.userId, name: sp.user.name })),
       slot: s.scheduleSlot
         ? {
@@ -962,6 +983,9 @@ export type PublicAgendaSession = {
   format: string | null;
   room: { id: string; name: string };
   track: { id: string; name: string; color: string } | null;
+  /** The proposal's topic, carried onto the talk at acceptance (`Session.categoryId`).
+   *  Independent of `track`, which is a schedule swimlane owned by the slot. */
+  category: { id: string; name: string } | null;
   startsAt: string;
   endsAt: string;
   speakers: string[];
@@ -971,6 +995,9 @@ export type PublicAgenda = {
   event: { id: string; name: string; slug: string; timezone: string; startsAt: string | null; endsAt: string | null };
   tracks: { id: string; name: string; color: string }[];
   sessions: PublicAgendaSession[];
+  /** True when this event holds more published placed sessions than one read
+   *  materializes (S20). Surfaced to the reader rather than silently cutting. */
+  truncated: boolean;
 };
 
 export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
@@ -987,8 +1014,15 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       select: { id: true, name: true, color: true },
     }),
     prisma.scheduleSlot.findMany({
-      where: { eventId: event.id },
-      orderBy: { startsAt: "asc" },
+      // A talk reaches the public programme only while it is published. An
+      // unpublished session keeps its slot, its speakers and its place in the
+      // admin grid — it simply stops being announced (CNT-12, AIA-07).
+      where: { eventId: event.id, session: { contentStatus: "PUBLISHED" } },
+      // Bounded, stably ordered, cap-plus-one (S20). `id` breaks ties so two
+      // sessions starting at the same instant cannot swap places between
+      // renders and silently change which one falls outside the cap.
+      orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+      take: PUBLIC_AGENDA_LIMITS.sessions + 1,
       select: {
         id: true,
         sessionId: true,
@@ -1001,6 +1035,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
             title: true,
             description: true,
             format: true,
+            category: { select: { id: true, name: true } },
             speakers: { select: { user: { select: { name: true } } } },
           },
         },
@@ -1015,7 +1050,8 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       endsAt: event.endsAt?.toISOString() ?? null,
     },
     tracks,
-    sessions: slots.map((slot) => ({
+    truncated: slots.length > PUBLIC_AGENDA_LIMITS.sessions,
+    sessions: slots.slice(0, PUBLIC_AGENDA_LIMITS.sessions).map((slot) => ({
       slotId: slot.id,
       sessionId: slot.sessionId,
       title: slot.session.title,
@@ -1023,6 +1059,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       format: slot.session.format,
       room: slot.room,
       track: slot.track,
+      category: slot.session.category,
       startsAt: slot.startsAt.toISOString(),
       endsAt: slot.endsAt.toISOString(),
       speakers: slot.session.speakers.map((s) => s.user.name),
@@ -1043,6 +1080,9 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
     session: {
       eventId: event.id,
       scheduleSlot: { isNot: null },
+      // The same publication predicate the schedule uses: unpublishing a talk
+      // must not leave its speaker announced on the public gallery.
+      contentStatus: "PUBLISHED",
       OR: [
         { sourceAbstractId: null },
         { sourceAbstract: { is: { status: "ACCEPTED" } } },

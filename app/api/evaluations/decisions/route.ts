@@ -9,6 +9,7 @@ import {
   decisionProvisionsSession,
   decisionTimestamp,
   maybeBlockedByConfirmedSession,
+  sessionPublicationForDecision,
 } from "@/lib/services/abstract-decision";
 import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
@@ -64,7 +65,13 @@ export const POST = handle(async (req) => {
       // MAYBE keeps an abstract in review: it carries no final-decision
       // timestamp, can be scored/re-decided later, and never provisions.
       data: { status: input.decision, decidedAt: decisionTimestamp(input.decision, new Date()) },
-      include: { speakers: { select: { userId: true, isPrimary: true } }, session: { select: { id: true } } },
+      include: {
+        speakers: { select: { userId: true, isPrimary: true } },
+        // `categoryId` so re-accepting can reconcile a topic that moved on the
+        // proposal after the talk was created. Read under the same abstract
+        // lock as the write that follows it.
+        session: { select: { id: true, categoryId: true } },
+      },
     });
 
     // Rejecting deliberately provisions nothing and removes nothing: an already
@@ -74,7 +81,19 @@ export const POST = handle(async (req) => {
     const provisioned =
       decisionProvisionsSession(input.decision)
         ? await provisionAcceptedAbstract(tx, decided)
-        : { sessionId: decided.session?.id ?? null, created: false, tasksAssigned: 0 };
+        : { sessionId: decided.session?.id ?? null, created: false, topicReconciled: false, tasksAssigned: 0 };
+
+    // Nothing is deleted, but a reversed decision must stop speaking publicly.
+    // Scoped to this abstract's own Session by its unique `sourceAbstractId`,
+    // inside the same advisory lock as the status write, so the public
+    // programme can never disagree with the decision that produced it.
+    const publication = sessionPublicationForDecision(input.decision);
+    if (publication && provisioned.sessionId) {
+      await tx.session.update({
+        where: { id: provisioned.sessionId },
+        data: { contentStatus: publication },
+      });
+    }
 
     const full = await tx.abstract.findUniqueOrThrow({
       where: { id: input.abstractId },
@@ -111,5 +130,7 @@ export const POST = handle(async (req) => {
     // What accepting just built, so the UI can confirm it in plain language.
     sessionCreated: provisioned.created,
     tasksAssigned: provisioned.tasksAssigned,
+    // Additive: true when re-accepting brought a stale topic back in line.
+    topicReconciled: provisioned.topicReconciled,
   });
 });

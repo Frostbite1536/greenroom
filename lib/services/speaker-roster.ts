@@ -38,14 +38,31 @@ export const ADMIN_SPEAKER_PROFILE_FIELDS = [
 
 export type AdminSpeakerProfileField = (typeof ADMIN_SPEAKER_PROFILE_FIELDS)[number];
 
+/**
+ * Where a speaker is in accepting their invitation (SPK-04).
+ *
+ * Deliberately not part of `speakerProfileUpdateSchema`: the portal's schema is
+ * the speaker's own editable prose, and whether an organizer considers somebody
+ * confirmed is the organizer's record, not a field the speaker sets about
+ * themselves. It is still stored on `SpeakerProfile`, so it is global and
+ * inherits the shared-speaker refusal below exactly like every other field
+ * there — an organizer may not decide a shared speaker's status either.
+ */
+export const SPEAKER_STATUSES = ["INVITED", "CONFIRMED", "DECLINED"] as const;
+export type SpeakerStatusValue = (typeof SPEAKER_STATUSES)[number];
+
+export const speakerStatusSchema = z.enum(SPEAKER_STATUSES);
+
 /** The portal's rules, narrowed to the organizer's fields. Not a copy of them. */
-export const adminSpeakerProfileFields = speakerProfileUpdateSchema.pick({
-  bio: true,
-  company: true,
-  jobTitle: true,
-  headshotUrl: true,
-  slideDeckUrl: true,
-});
+export const adminSpeakerProfileFields = speakerProfileUpdateSchema
+  .pick({
+    bio: true,
+    company: true,
+    jobTitle: true,
+    headshotUrl: true,
+    slideDeckUrl: true,
+  })
+  .extend({ status: speakerStatusSchema.optional() });
 
 export type AdminSpeakerProfilePatch = z.infer<typeof adminSpeakerProfileFields>;
 
@@ -76,7 +93,9 @@ export const adminSpeakerProfilePatchSchema = adminSpeakerProfileFields
   .extend({ userId: idSchema })
   .strict()
   .refine(
-    (patch) => ADMIN_SPEAKER_PROFILE_FIELDS.some((field) => patch[field] !== undefined),
+    (patch) =>
+      ADMIN_SPEAKER_PROFILE_FIELDS.some((field) => patch[field] !== undefined)
+      || patch.status !== undefined,
     { message: "Provide at least one profile field to update." },
   );
 
@@ -89,13 +108,17 @@ export type AdminSpeakerProfilePatchInput = z.infer<typeof adminSpeakerProfilePa
  * caller skip the write entirely instead of touching `updatedAt` for nothing.
  */
 export function speakerProfileWriteData(
-  patch: Partial<Record<AdminSpeakerProfileField, string | null | undefined>>,
+  patch: Partial<Record<AdminSpeakerProfileField, string | null | undefined>>
+    & { status?: SpeakerStatusValue },
 ): Record<string, string | null> {
   const data: Record<string, string | null> = {};
   for (const field of ADMIN_SPEAKER_PROFILE_FIELDS) {
     const value = patch[field];
     if (value !== undefined) data[field] = value;
   }
+  // `status` has a stored default and is never cleared to null: an omitted
+  // status leaves the record alone, exactly like an omitted bio.
+  if (patch.status !== undefined) data.status = patch.status;
   return data;
 }
 

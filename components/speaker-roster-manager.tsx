@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { Pencil, UserPlus } from "lucide-react";
 import { apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
 import { speakerDialogRecovery, speakerProvisionNotice } from "@/lib/speakers/roster";
+import {
+  SPEAKER_CONFIRMATION_LABELS,
+  type SpeakerConfirmation,
+} from "@/lib/speakers/status";
 
 /**
  * Add and edit speakers from the roster (SPK-02).
@@ -24,6 +28,7 @@ export type SpeakerProfileDraft = {
   company: string;
   bio: string;
   headshotUrl: string;
+  status: SpeakerConfirmation;
 };
 
 export type EditableSpeaker = {
@@ -34,9 +39,16 @@ export type EditableSpeaker = {
   company: string | null;
   bio: string | null;
   headshotUrl: string | null;
+  status: SpeakerConfirmation;
 };
 
-const EMPTY_DRAFT: SpeakerProfileDraft = { jobTitle: "", company: "", bio: "", headshotUrl: "" };
+/** New speakers start INVITED: an organizer adding somebody has not heard back
+ *  from them yet, and claiming otherwise would put an unearned "Confirmed" on
+ *  the roster. The stored column defaults to CONFIRMED for the opposite reason
+ *  — existing rows describe people who are already taking part. */
+const EMPTY_DRAFT: SpeakerProfileDraft = {
+  jobTitle: "", company: "", bio: "", headshotUrl: "", status: "INVITED",
+};
 
 function draftFromSpeaker(speaker: EditableSpeaker): SpeakerProfileDraft {
   return {
@@ -44,6 +56,7 @@ function draftFromSpeaker(speaker: EditableSpeaker): SpeakerProfileDraft {
     company: speaker.company ?? "",
     bio: speaker.bio ?? "",
     headshotUrl: speaker.headshotUrl ?? "",
+    status: speaker.status,
   };
 }
 
@@ -58,6 +71,9 @@ function profilePayload(draft: SpeakerProfileDraft) {
     company: nullable(draft.company),
     bio: nullable(draft.bio),
     headshotUrl: nullable(draft.headshotUrl),
+    // Always sent, never null: the column has a stored default and there is no
+    // such thing as clearing where somebody is in accepting an invitation.
+    status: draft.status,
   };
 }
 
@@ -285,6 +301,25 @@ function ProfileFields({
 }) {
   return (
     <>
+      <label className="stack" htmlFor={`${ids}-status`}>
+        <span className="field-label">Taking part</span>
+        <select
+          id={`${ids}-status`}
+          className="text-input"
+          value={draft.status}
+          onChange={(change) => onChange({ ...draft, status: change.target.value as SpeakerConfirmation })}
+          aria-describedby={`${ids}-status-help`}
+        >
+          {(Object.keys(SPEAKER_CONFIRMATION_LABELS) as SpeakerConfirmation[]).map((status) => (
+            <option key={status} value={status}>{SPEAKER_CONFIRMATION_LABELS[status]}</option>
+          ))}
+        </select>
+        <span className="hint" id={`${ids}-status-help`}>
+          Your record of where this speaker is in accepting. Changing it sends nothing to them.
+        </span>
+        {errors.status ? <span className="field-error">{errors.status}</span> : null}
+      </label>
+
       <div className="grid-2">
         <label className="stack" htmlFor={`${ids}-jobTitle`}>
           <span className="field-label">Job title <span className="muted">(optional)</span></span>

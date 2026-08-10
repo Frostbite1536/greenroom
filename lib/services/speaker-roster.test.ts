@@ -4,6 +4,7 @@ import {
   ADMIN_SPEAKER_PROFILE_FIELDS,
   SPEAKER_SHARED_ACROSS_EVENTS,
   SPEAKER_SHARED_MESSAGE,
+  SPEAKER_STATUSES,
   adminSpeakerCreateSchema,
   adminSpeakerProfileFields,
   adminSpeakerProfilePatchSchema,
@@ -14,14 +15,37 @@ import {
 import { speakerProfileUpdateSchema } from "@/types/api";
 
 test("the organizer's profile rules are the portal's own rules, minus socialLinks", () => {
-  // Not a copy: the shape is picked from the portal schema, so a field rule can
-  // only ever be changed in one place (C13).
+  // Not a copy: every prose field is picked from the portal schema, so a field
+  // rule can only ever be changed in one place (C13). `status` is the single
+  // deliberate addition — it is the organizer's record about a speaker, not
+  // prose the speaker writes about themselves, so it is not in the portal
+  // schema at all and must not silently appear there.
   assert.deepEqual(
     Object.keys(adminSpeakerProfileFields.shape).sort(),
-    [...ADMIN_SPEAKER_PROFILE_FIELDS].sort(),
+    [...ADMIN_SPEAKER_PROFILE_FIELDS, "status"].sort(),
   );
   assert.ok(Object.keys(speakerProfileUpdateSchema.shape).includes("socialLinks"));
   assert.ok(!Object.keys(adminSpeakerProfileFields.shape).includes("socialLinks"));
+  assert.ok(!Object.keys(speakerProfileUpdateSchema.shape).includes("status"));
+});
+
+test("SPK-04: status is a bounded three-state record, and omitting it changes nothing", () => {
+  assert.deepEqual([...SPEAKER_STATUSES], ["INVITED", "CONFIRMED", "DECLINED"]);
+  assert.equal(adminSpeakerProfileFields.parse({ status: "DECLINED" }).status, "DECLINED");
+  assert.equal(adminSpeakerProfileFields.safeParse({ status: "MAYBE" }).success, false);
+  // There is no clearing a status: the column has a stored default.
+  assert.equal(adminSpeakerProfileFields.safeParse({ status: null }).success, false);
+  assert.ok(!("status" in adminSpeakerProfileFields.parse({ bio: "x" })));
+});
+
+test("a status-only edit is a real edit, and reaches the write as one field", () => {
+  const patch = adminSpeakerProfilePatchSchema.safeParse({ userId: "user-1", status: "CONFIRMED" });
+  assert.equal(patch.success, true);
+  assert.deepEqual(speakerProfileWriteData({ status: "CONFIRMED" }), { status: "CONFIRMED" });
+  // An omitted status leaves the stored one alone, exactly like an omitted bio.
+  assert.deepEqual(speakerProfileWriteData({ bio: "Builds things" }), { bio: "Builds things" });
+  // A patch that says nothing at all is still refused.
+  assert.equal(adminSpeakerProfilePatchSchema.safeParse({ userId: "user-1" }).success, false);
 });
 
 test("C13 normalization: trim to a value, blank to an explicit null, omitted stays omitted", () => {
