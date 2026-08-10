@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ClipboardCheck,
   EyeOff,
   Plus,
@@ -21,19 +24,89 @@ import {
   roundWindowInput,
 } from "@/lib/evaluation-round-window";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
+import {
+  RUBRIC_WEIGHT_MAX,
+  legacyRubricWeightNote,
+  parseRubricWeight,
+  rubricRangeWarning,
+  rubricWeightError,
+  rubricWeightShareLine,
+} from "@/lib/rubric-weight";
+import {
+  coverageAriaSort,
+  nextCoverageSort,
+  sortCoverageRows,
+  type CoverageSortColumn,
+  type CoverageSortState,
+} from "@/lib/review-coverage-sort";
 import { reviewerInviteLifecycleText } from "@/lib/reviewer-invite-ui";
 import { ReviewerInviteForm, ReviewerInviteResend } from "@/components/reviewer-invite-controls";
 import { EmptyState, Pill, Switch } from "@/components/ui";
 
-/** Sensible opening rubric so a brand-new event is one click, not a blank form. */
+/**
+ * Sensible opening rubric so a brand-new event is one click, not a blank form.
+ * The starter ranges are deliberately identical (1–5) so the default rubric
+ * never opens under the different-ranges warning.
+ */
 const STARTER_CRITERIA = [
-  { label: "Relevance", description: "Fit for the audience and event theme.", min: 1, max: 5, weight: 1.5 },
-  { label: "Originality", description: "Fresh perspective or novel material.", min: 1, max: 5, weight: 1 },
-  { label: "Clarity", description: "Well-structured, understandable proposal.", min: 1, max: 5, weight: 1 },
-  { label: "Speaker readiness", description: "Track record and delivery signals.", min: 1, max: 5, weight: 1 },
+  { label: "Relevance", description: "Fit for the audience and event theme.", min: 1, max: 5, weight: "1.5" },
+  { label: "Originality", description: "Fresh perspective or novel material.", min: 1, max: 5, weight: "1" },
+  { label: "Clarity", description: "Well-structured, understandable proposal.", min: 1, max: 5, weight: "1" },
+  { label: "Speaker readiness", description: "Track record and delivery signals.", min: 1, max: 5, weight: "1" },
 ];
 
-type DraftCriterion = { label: string; description: string; min: number; max: number; weight: number };
+/**
+ * `weight` is held as the author's raw text, not a number.
+ *
+ * The previous `Number(e.target.value) || 1` turned an emptied field or a typed
+ * `0` into a silent weight of 1 — an invisible change to how every review in
+ * the round is scored. Keeping the draft as typed lets the field be blank while
+ * it is being edited and lets `rubricWeightError` say what is wrong, so nothing
+ * is repaired behind the author's back (D-C5-8 §2.4).
+ */
+type DraftCriterion = { label: string; description: string; min: number; max: number; weight: string };
+
+/** The five sortable coverage columns, in the order they are rendered. */
+const COVERAGE_COLUMNS: { column: CoverageSortColumn; label: string }[] = [
+  { column: "proposal", label: "Proposal" },
+  { column: "category", label: "Category" },
+  { column: "status", label: "Status" },
+  { column: "reviewers", label: "Reviewers" },
+  { column: "reviewsDone", label: "Reviews done" },
+];
+
+function coverageSortDirection(
+  state: CoverageSortState,
+  column: CoverageSortColumn,
+): "asc" | "desc" | null {
+  return state?.column === column ? state.direction : null;
+}
+
+/**
+ * The visible sort state of one header.
+ *
+ * Direction is carried by the arrow's **shape**, never by colour alone, and the
+ * screen-reader sentence spells it out in words beside the `aria-sort` the `th`
+ * already exposes. An unsorted column still shows a (muted) double arrow, so
+ * "this column can be sorted" is discoverable without hovering.
+ */
+function SortIndicator({ direction }: { direction: "asc" | "desc" | null }) {
+  if (direction === null) {
+    return <ArrowUpDown size={13} className="sort-indicator" aria-hidden="true" />;
+  }
+  return (
+    <>
+      {direction === "asc" ? (
+        <ArrowUp size={13} className="sort-indicator active" aria-hidden="true" />
+      ) : (
+        <ArrowDown size={13} className="sort-indicator active" aria-hidden="true" />
+      )}
+      <span className="sr-only">
+        {direction === "asc" ? ", sorted ascending" : ", sorted descending"}
+      </span>
+    </>
+  );
+}
 
 export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const router = useRouter();
@@ -52,6 +125,9 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Null until the organizer picks a column, so the table opens in the order
+  // the server returned. This state belongs to the coverage table alone.
+  const [coverageSort, setCoverageSort] = useState<CoverageSortState>(null);
 
   const assignableAbstracts = useMemo(
     () => view.abstracts.filter((abstract) => abstract.assignable),
@@ -69,6 +145,25 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const unassignedCount = plan
     ? assignableAbstracts.filter((a) => (a.assignedByPlan[plan.id] ?? 0) === 0).length
     : assignableAbstracts.length;
+
+  /**
+   * The coverage rows, flattened against the selected round so the comparators
+   * see the same numbers the cells print. Sorting is local to these already
+   * loaded rows — no query is re-issued and no server aggregate changes.
+   */
+  const coverageRows = useMemo(() => {
+    if (!plan) return [];
+    const rows = view.abstracts.map((a) => ({
+      id: a.id,
+      title: a.title,
+      categoryName: a.categoryName,
+      status: a.status,
+      assignable: a.assignable,
+      assigned: a.assignedByPlan[plan.id] ?? 0,
+      completed: a.completedByPlan[plan.id] ?? 0,
+    }));
+    return sortCoverageRows(rows, coverageSort);
+  }, [view.abstracts, plan, coverageSort]);
 
   function selectPlan(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -161,6 +256,10 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
         <div className="round-list">
           {view.plans.map((p) => {
             const roundWindow = formatRoundWindow(p.startsAt, p.endsAt, view.timezone);
+            // Only ever present on a round authored before the weight ceiling.
+            // Informational, not a warning: the round is valid, its scoring is
+            // unaffected, and the weight is kept exactly as configured.
+            const legacyWeights = legacyRubricWeightNote(p.rubric);
             return (
               <button
                 type="button"
@@ -184,6 +283,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                 {/* Only rendered when the round actually carries a window: an
                     absent date is left absent rather than shown as a dash. */}
                 {roundWindow ? <div className="cell-sub">{roundWindow}</div> : null}
+                {legacyWeights ? <div className="cell-sub muted">{legacyWeights}</div> : null}
               </button>
             );
           })}
@@ -415,17 +515,24 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Proposal</th>
-                  <th>Category</th>
-                  <th>Status</th>
-                  <th>Reviewers</th>
-                  <th>Reviews done</th>
+                  {COVERAGE_COLUMNS.map(({ column, label }) => (
+                    <th key={column} scope="col" aria-sort={coverageAriaSort(coverageSort, column)}>
+                      <button
+                        type="button"
+                        className="sort-header"
+                        onClick={() => setCoverageSort((s) => nextCoverageSort(s, column))}
+                      >
+                        {label}
+                        <SortIndicator direction={coverageSortDirection(coverageSort, column)} />
+                      </button>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {view.abstracts.map((a) => {
-                  const assigned = a.assignedByPlan[plan.id] ?? 0;
-                  const done = a.completedByPlan[plan.id] ?? 0;
+                {coverageRows.map((a) => {
+                  const assigned = a.assigned;
+                  const done = a.completed;
                   return (
                     <tr key={a.id}>
                       <td className="cell-title">{a.title}</td>
@@ -538,9 +645,13 @@ function RoundDialog({
       setError(`“${nonIntegerRange.label}”: lowest and highest scores must be whole numbers.`);
       return;
     }
-    const badWeight = labelled.find((c) => !Number.isFinite(c.weight) || c.weight <= 0);
+    // Reported per criterion rather than coerced. The rubric total is never
+    // checked: weights are relative multipliers, so any positive total is valid.
+    const badWeight = labelled
+      .map((c) => ({ criterion: c, message: rubricWeightError(c.weight) }))
+      .find((entry) => entry.message !== null);
     if (badWeight) {
-      setError(`“${badWeight.label}”: weight must be greater than zero.`);
+      setError(`“${badWeight.criterion.label}”: ${badWeight.message}`);
       return;
     }
     const windowError = roundWindowError(roundWindow);
@@ -566,7 +677,9 @@ function RoundDialog({
         ...(c.description.trim() ? { description: c.description.trim() } : {}),
         min: c.min,
         max: c.max,
-        weight: c.weight,
+        // Non-null by construction: `badWeight` above returned early on every
+        // draft `parseRubricWeight` cannot read.
+        weight: parseRubricWeight(c.weight) ?? 1,
       })),
     });
     setBusy(false);
@@ -669,7 +782,10 @@ function RoundDialog({
 
         <h3 style={{ margin: "20px 0 4px", fontSize: 14 }}>Scoring criteria</h3>
         <p className="hint" style={{ marginBottom: 10 }}>
-          Weight decides how much a criterion counts towards the overall score.
+          Weight decides how much a criterion counts towards the overall score. Weights are
+          relative, not percentages — <strong>2, 1, 1</strong> and <strong>50, 25, 25</strong>{" "}
+          score identically, so they do not need to add up to 100. Each criterion shows its share
+          of the rubric’s total weight.
         </p>
 
         {criteria.map((c, i) => (
@@ -708,7 +824,22 @@ function RoundDialog({
             </label>
             <label className="stack">
               <span className="field-label">Weight</span>
-              <input className="text-input" name={`criterion-${i}-weight`} type="number" inputMode="decimal" min={0.1} step={0.5} value={c.weight} onChange={(e) => patch(i, { weight: Number(e.target.value) || 1 })} />
+              {/* `step="any"` because decimal weights are legitimate, and the
+                  value is passed through untouched: validation and the share
+                  line live below the field rather than in a coercion. */}
+              <input
+                className="text-input"
+                name={`criterion-${i}-weight`}
+                type="number"
+                inputMode="decimal"
+                min={0}
+                max={RUBRIC_WEIGHT_MAX}
+                step="any"
+                value={c.weight}
+                aria-invalid={rubricWeightError(c.weight) !== null}
+                aria-describedby={`criterion-${i}-weight-note`}
+                onChange={(e) => patch(i, { weight: e.target.value })}
+              />
             </label>
             <button
               type="button"
@@ -719,14 +850,42 @@ function RoundDialog({
             >
               <Trash2 size={15} aria-hidden="true" />
             </button>
+            {/* One slot, two jobs: the refusal reason while the draft is
+                unusable, otherwise this criterion's share of the rubric's
+                total weight. Never both, and never a coerced number. It spans
+                the whole grid row because "Weight 1.5 · 33.3% of rubric weight"
+                does not fit the 84px weight column. */}
+            <p
+              className={
+                rubricWeightError(c.weight) !== null
+                  ? "criterion-weight-note criterion-weight-invalid"
+                  : "criterion-weight-note"
+              }
+              id={`criterion-${i}-weight-note`}
+            >
+              {rubricWeightError(c.weight)
+                ?? rubricWeightShareLine(c.weight, criteria.map((other) => other.weight))
+                ?? ""}
+            </p>
           </div>
         ))}
+
+        {/* Non-blocking and advisory: the round saves either way. It exists
+            because the score is an average of RAW criterion scores, so a 0–10
+            criterion can move the result further than a 1–5 one at the same
+            weight. Normalizing ranges instead would be a different scoring
+            contract and would change results already recorded. */}
+        {rubricRangeWarning(criteria) ? (
+          <p className="hint setup-note" role="status" style={{ marginTop: 10 }}>
+            <AlertTriangle size={13} aria-hidden="true" /> {rubricRangeWarning(criteria)}
+          </p>
+        ) : null}
 
         <button
           className="ghost-button"
           type="button"
           style={{ marginTop: 8 }}
-          onClick={() => setCriteria((l) => [...l, { label: "", description: "", min: 1, max: 5, weight: 1 }])}
+          onClick={() => setCriteria((l) => [...l, { label: "", description: "", min: 1, max: 5, weight: "1" }])}
         >
           <Plus size={15} aria-hidden="true" /> Add criterion
         </button>

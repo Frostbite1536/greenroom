@@ -1495,6 +1495,38 @@ try {
   check("admin sees the round list", setupPage.text.includes("Review rounds"));
   check("admin sees the assignment panel", setupPage.text.includes("Assign proposals to reviewers"));
   check("admin sees review coverage", setupPage.text.includes("Review coverage"));
+
+  // --- D-C5-8 §3.1: review-coverage sort headers --------------------------
+  // The sorted ORDER is client state and cannot be exercised over HTTP; the
+  // comparators and their round trips live in lib/review-coverage-sort.test.ts.
+  // What the served markup does prove is the accessibility contract and the
+  // default: a real button in every sortable <th>, and no aria-sort at all
+  // before the organizer has chosen a column.
+  const coverageHead = (() => {
+    const marker = setupPage.text.indexOf("Review coverage");
+    if (marker === -1) return "";
+    const start = setupPage.text.indexOf("<thead", marker);
+    const end = setupPage.text.indexOf("</thead>", marker);
+    return start === -1 || end === -1 ? "" : setupPage.text.slice(start, end + "</thead>".length);
+  })();
+  const coverageHeaderButtons = (coverageHead.match(/<button[^>]*class="sort-header"/g) ?? []).length;
+  check("§3.1 all five coverage columns are sortable through a real header button",
+    coverageHeaderButtons === 5, `got ${coverageHeaderButtons}`);
+  check("§3.1 the coverage headers still name their columns",
+    ["Proposal", "Category", "Status", "Reviewers", "Reviews done"]
+      .every((label) => coverageHead.includes(label)));
+  check("§3.1 an unsorted coverage table claims no aria-sort on any header",
+    !coverageHead.includes("aria-sort"), coverageHead.slice(0, 200));
+  check("§3.1 every sortable header carries a direction affordance, not colour alone",
+    (coverageHead.match(/sort-indicator/g) ?? []).length === 5,
+    `${(coverageHead.match(/sort-indicator/g) ?? []).length} indicators`);
+  // The sort must not have become a server round trip: the coverage rows are
+  // still the server's own order on first paint.
+  const coverageBodyTitles = [fx.abstract.title, fx.maybeSetupAbstract.title]
+    .map((title) => setupPage.text.indexOf(title))
+    .filter((index) => index !== -1);
+  check("§3.1 the coverage table renders its rows server-side before any sort",
+    coverageBodyTitles.length === 2, `found ${coverageBodyTitles.length} of 2`);
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
   check("admin-only reviewer setup includes the contact data needed for resends",
     setupPage.text.includes("ravi@greenroom.demo"));
@@ -1549,6 +1581,136 @@ try {
       setupAfterMaybeScore.text.indexOf("</tr>", scoredMaybeTitleIndex) + "</tr>".length,
     );
   check("C34 MAYBE coverage preserves completed review counts", renderedText(scoredMaybeRow)?.includes("1/1"));
+
+  // --- D-C5-8 §2: rubric weight bounds are the SAME on client and server ---
+  // The round dialog is a client-only <dialog> that never reaches this HTML, so
+  // its weight-share line and different-ranges warning are pinned by
+  // lib/rubric-weight.test.ts and lib/evaluation-setup.source.test.ts instead.
+  // What is provable from here is the half that actually protects stored data:
+  // the plans contract enforces the same bounds the dialog shows, so a weight
+  // the dialog refuses cannot arrive through the API either.
+  const weightPlan = (weight, extra = {}) => ({
+    eventId: EVENT_ID,
+    name: "Scratch weight-bounds probe",
+    ordinal: 90,
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight, ...extra }],
+  });
+  // 422, not 400: a body that parses as JSON but fails the Zod contract is a
+  // validation refusal, and `fromZod` (lib/api/http.ts) maps every one of those
+  // to 422 VALIDATION_ERROR. I asserted 400 without checking the repo's own
+  // refusal status — the product behaviour was right all along.
+  const zeroWeight = await req("POST", "/api/evaluations/plans", weightPlan(0), admin);
+  const negativeWeight = await req("POST", "/api/evaluations/plans", weightPlan(-2), admin);
+  const overLimitWeight = await req("POST", "/api/evaluations/plans", weightPlan(100.5), admin);
+  check("§2.4 a zero or negative criterion weight is refused, never coerced to 1 → 422",
+    zeroWeight.status === 422 && zeroWeight.data?.error?.code === "VALIDATION_ERROR"
+    && negativeWeight.status === 422 && negativeWeight.data?.error?.code === "VALIDATION_ERROR",
+    `zero ${zeroWeight.status} ${JSON.stringify(zeroWeight.data?.error?.code ?? "")}, negative ${negativeWeight.status} ${JSON.stringify(negativeWeight.data?.error?.code ?? "")}`);
+  check("§2.4 a weight above the 100 input-safety limit is refused → 422",
+    overLimitWeight.status === 422 && overLimitWeight.data?.error?.code === "VALIDATION_ERROR",
+    `${overLimitWeight.status} ${JSON.stringify(overLimitWeight.data?.error?.code ?? "")}`);
+  const noProbePlan = await prisma.evaluationPlan.count({
+    where: { eventId: EVENT_ID, name: "Scratch weight-bounds probe" },
+  });
+  check("§2.4 no refused weight created a round as a side effect", noProbePlan === 0, `got ${noProbePlan}`);
+
+  // Accepted in the same breath: decimals, and a rubric whose weights total far
+  // more than 100. The sum is not a validity target — weights are relative
+  // multipliers — so 60 + 55 must save exactly like 1.5 + 1 does.
+  const decimalOverHundredTotal = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID,
+    name: "Scratch weight-share round",
+    ordinal: 91,
+    rubric: [
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 60 },
+      { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 55.5 },
+    ],
+  }, admin);
+  check("§2.2 a rubric totalling well over 100 is valid and saves → 201",
+    decimalOverHundredTotal.status === 201, `got ${decimalOverHundredTotal.status}`);
+  // §2.3 present-case: differing ranges are a visible WARNING, not a refusal.
+  // A round mixing 1-5 and 0-10 must still save, or the warning has quietly
+  // become a validation rule and the formula contract has changed.
+  const mixedRanges = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID,
+    name: "Scratch mixed-range round",
+    ordinal: 92,
+    rubric: [
+      { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1 },
+      { key: "depth", label: "Depth", min: 0, max: 10, weight: 1 },
+    ],
+  }, admin);
+  check("§2.3 differing score ranges warn without blocking the save → 201",
+    mixedRanges.status === 201, `got ${mixedRanges.status}`);
+  await prisma.evaluationPlan.deleteMany({ where: { eventId: EVENT_ID, ordinal: { in: [91, 92] } } });
+
+  // --- PR #80 Greptile: a legacy over-limit weight is grandfathered --------
+  // The row is written straight through Prisma, exactly as a plan authored
+  // before the ceiling existed would look. No schema games — this is ordinary
+  // data the API can no longer author but must still accept back unchanged.
+  const legacyPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: EVENT_ID, name: "Scratch legacy-weight round", ordinal: 93, isBlind: false,
+      rubric: [
+        { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 150 },
+        { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 50 },
+      ],
+    },
+  });
+  const legacyRubric = [
+    { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 150 },
+    { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 50 },
+  ];
+  const renameLegacy = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false, rubric: legacyRubric,
+  }, admin);
+  check("legacy: an unrelated edit resubmitting an UNCHANGED over-limit weight saves → 200",
+    renameLegacy.status === 200,
+    `${renameLegacy.status} ${JSON.stringify(renameLegacy.data?.error ?? "")}`);
+  const legacyAfterRename = await prisma.evaluationPlan.findUnique({ where: { id: legacyPlan.id } });
+  check("legacy: the established scoring weight is preserved byte-for-byte, not clamped",
+    legacyAfterRename?.name === "Scratch legacy-weight round (renamed)"
+    && legacyAfterRename?.rubric?.[0]?.weight === 150,
+    `name ${legacyAfterRename?.name}, weight ${legacyAfterRename?.rubric?.[0]?.weight}`);
+  // Changing that weight, while still above the ceiling, is a NEW choice.
+  const nudgeLegacy = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false,
+    rubric: [{ ...legacyRubric[0], weight: 149 }, legacyRubric[1]],
+  }, admin);
+  check("legacy: CHANGING an over-limit weight is still refused → 422",
+    nudgeLegacy.status === 422 && nudgeLegacy.data?.error?.code === "VALIDATION_ERROR",
+    `${nudgeLegacy.status} ${JSON.stringify(nudgeLegacy.data?.error?.code ?? "")}`);
+  // A brand-new criterion has nothing to carry forward.
+  const newOverLimit = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false,
+    rubric: [...legacyRubric, { key: "freshness", label: "Freshness", min: 1, max: 5, weight: 120 }],
+  }, admin);
+  check("legacy: a NEW over-limit criterion on the same plan is refused → 422",
+    newOverLimit.status === 422, `got ${newOverLimit.status}`);
+  const legacyUntouched = await prisma.evaluationPlan.findUnique({ where: { id: legacyPlan.id } });
+  check("legacy: no refused edit wrote anything to the plan",
+    legacyUntouched?.rubric?.length === 2 && legacyUntouched?.rubric?.[0]?.weight === 150,
+    JSON.stringify(legacyUntouched?.rubric ?? "none"));
+  // The regression that mattered most: a legacy rubric must stay READABLE, or
+  // the round's decision scores silently blank to "No included reviews".
+  const legacyDecisionPage = await req(
+    "GET", `/admin/abstracts?planId=${encodeURIComponent(legacyPlan.id)}`, null, admin,
+  );
+  const legacyDecisionText = renderedText(legacyDecisionPage.text) ?? "";
+  check("legacy: the round is selectable and its rubric still parses for decision scoring",
+    legacyDecisionPage.status === 200
+    && legacyDecisionText.includes("Scratch legacy-weight round (renamed)"),
+    `${legacyDecisionPage.status}`);
+  // And the admin sees a calm note rather than a warning.
+  const legacySetupPage = await req("GET", "/admin/evaluations", null, admin);
+  const legacySetupText = renderedText(legacySetupPage.text) ?? "";
+  check("legacy: the round card explains the kept weight without calling it an error",
+    legacySetupText.includes("Relevance (150) was set above the current 100 weight limit")
+    && legacySetupText.includes("Scoring is unaffected."));
+  await prisma.evaluationPlan.delete({ where: { id: legacyPlan.id } });
 
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
@@ -1940,6 +2102,47 @@ try {
   check("partial completed review is counted but withheld from the decision score",
     partialRoundText.includes("No included reviews")
     && partialRoundText.includes("0 of 1 completed"));
+
+  // --- D-C5-8 §3.2: ABS-10 decision-score sort ----------------------------
+  // The ordering itself is client state; the comparator, missing-scores-last in
+  // both directions and the ties live in lib/decision-score-sort.test.ts. What
+  // the served markup proves is the contract around it — that the control is on
+  // the score column and only there, that the page still opens unsorted, and
+  // that PR #65's newest-round default is untouched by the sort.
+  const scoreSortHead = (() => {
+    const start = multiplePlanPage.text.indexOf("<thead");
+    const end = multiplePlanPage.text.indexOf("</thead>");
+    return start === -1 || end === -1 ? "" : multiplePlanPage.text.slice(start, end + "</thead>".length);
+  })();
+  check("§3.2 exactly one abstracts header is sortable, and it is the decision score",
+    (scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length === 1
+    && scoreSortHead.includes("Decision score"),
+    `${(scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length} sortable headers`);
+  // Bounded to the review-count <th> itself. The previous end anchor was the
+  // string "Decision score", which is the *next* header's button text, so the
+  // slice ran through `</th><th scope="col"><button class="sort-header">` and
+  // convicted this header of owning the score column's control. Same anchoring
+  // bug I had already fixed in lib/abstracts-table.source.test.ts and failed to
+  // carry across.
+  const reviewCountHeader = (() => {
+    const label = scoreSortHead.indexOf("Decision reviews");
+    if (label === -1) return "";
+    const start = scoreSortHead.lastIndexOf("<th", label);
+    const end = scoreSortHead.indexOf("</th>", label);
+    return start === -1 || end === -1 ? "" : scoreSortHead.slice(start, end + "</th>".length);
+  })();
+  check("§3.2 the decision-review count is NOT sortable in this lane",
+    reviewCountHeader.includes("Decision reviews") && !reviewCountHeader.includes("<button"),
+    reviewCountHeader || "review-count header not found");
+  check("§3.2 the abstracts table opens unsorted, with no aria-sort claimed",
+    !scoreSortHead.includes("aria-sort"), scoreSortHead.slice(0, 200));
+  check("§3.2 sorting does not disturb the newest-round default or the included-review copy",
+    multiplePlanText.includes("the newest one is shown")
+    && multiplePlanText.includes("only valid, completed reviews from the selected round"));
+  // A missing score must still read as an absence, never as a number, on a page
+  // whose score column is now sortable.
+  check("§3.2 an unscored proposal still reads 'No included reviews', not 0.00",
+    partialRoundText.includes("No included reviews") && !partialRoundText.includes("0.00"));
   const adminSubmissions = await req("GET", `/api/cfp/submissions?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
   const apiSummary = adminSubmissions.data?.data?.decisionSummary;
   const apiAbstract = (adminSubmissions.data?.data?.abstracts ?? []).find((abstract) => abstract.id === fx.abstract.id);
@@ -2137,7 +2340,10 @@ try {
   check("S20 reports global counts and an honest bounded-order notice",
     s20PageText.includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`)
     && s20PageText.includes("Submitted proposals are ordered newest first; drafts follow.")
-    && s20PageText.includes("Tabs and search cover only these loaded proposals.")
+    // Updated with ABS-10: the notice now scopes sorting too, because a sorted
+    // score column must not read as a ranking of every stored proposal.
+    && s20PageText.includes("Tabs, search and sorting cover only these loaded proposals")
+    && s20PageText.includes("it does not rank every stored proposal")
     && new RegExp(`Total\\s*${s20Total}`).test(s20PageText)
     && new RegExp(`Pending review\\s*${s20Pending}`).test(s20PageText)
     && new RegExp(`Accepted\\s*${s20Accepted}`).test(s20PageText));

@@ -5,6 +5,7 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import { overallReviewCommentKeyChanged } from "@/lib/services/review-score-comment";
+import { rubricWeightBoundErrors } from "@/lib/rubric-weight";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +50,25 @@ export const POST = handle(async (req) => {
     rubric: input.rubric as unknown as Prisma.InputJsonValue,
   };
 
+  /**
+   * The `RUBRIC_WEIGHT_MAX` ceiling lives here rather than in
+   * `rubricCriterionSchema` because it is a rule about the *edit*, not the
+   * *value*: a weight merely carried forward from an older plan is legitimate,
+   * while a new or changed one must meet the ceiling. Zod cannot express that —
+   * it never sees the stored rubric. See `rubricWeightBoundErrors`.
+   *
+   * A creation has nothing to carry forward, so it is checked here against no
+   * stored rubric and every over-limit weight is refused. An update is checked
+   * inside the transaction below, against the row it is about to overwrite.
+   */
+  const refuseWeights = (storedRubric: unknown) => {
+    const fieldErrors = rubricWeightBoundErrors(input.rubric, storedRubric);
+    if (fieldErrors) {
+      throw new ApiError(422, "VALIDATION_ERROR", "Request validation failed.", fieldErrors);
+    }
+  };
+  if (!input.id) refuseWeights(null);
+
   try {
     const plan = input.id
       ? await prisma.$transaction(async (tx) => {
@@ -58,6 +78,10 @@ export const POST = handle(async (req) => {
             SELECT "id", "eventId", "rubric" FROM "EvaluationPlan" WHERE "id" = ${input.id} FOR UPDATE
           `;
           const owned = requireEventOwnedRow(existing, ctx.eventId, "PLAN_NOT_FOUND", "Plan");
+          // Compared against the row just read FOR UPDATE, so the "unchanged"
+          // exception is decided from server state that cannot move before the
+          // write commits — never from a client claim that a weight is legacy.
+          refuseWeights(owned.rubric);
           if (overallReviewCommentKeyChanged(owned.rubric, input.rubric)) {
             const comment = await tx.reviewScore.findFirst({
               where: { planId: owned.id, comment: { not: null } },
