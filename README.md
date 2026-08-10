@@ -47,8 +47,8 @@ npm run dev
 Then open http://localhost:3000/login — one-click demo personas (Admin /
 Evaluator / Speaker) are available for the fixed seeded demo personas.
 
-Demo personas: `maya@greenroom.demo` (admin), `ravi@greenroom.demo` (evaluator),
-`sofia@greenroom.demo` (speaker).
+Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
+`sofia@greenroom-hq.com` (speaker).
 
 `DATABASE_URL` is the only variable you must set; everything else defaults
 safely (external integrations mocked, demo reset disabled, public REST API off).
@@ -103,9 +103,9 @@ Sign in through the one-click buttons on `/login`; no password is required.
 
 | Role | Persona | Email | Main area |
 | --- | --- | --- | --- |
-| Event admin | Maya Chen | `maya@greenroom.demo` | Forms, Abstracts, Agenda |
-| Evaluator | Ravi Patel | `ravi@greenroom.demo` | Evaluations |
-| Speaker | Sofia Marques | `sofia@greenroom.demo` | Speaker portal |
+| Event admin | Maya Chen | `maya@greenroom-hq.com` | Forms, Abstracts, Agenda |
+| Evaluator | Ravi Patel | `ravi@greenroom-hq.com` | Evaluations |
+| Speaker | Sofia Marques | `sofia@greenroom-hq.com` | Speaker portal |
 
 ### Repeatable verification
 

@@ -21,7 +21,28 @@ The sprint cloned the revealed target's Program workflow; shipping with the
 source name implied affiliation with a real company. Renamed atomically in
 commit `20976f8` — brand strings, metadata, ICS PRODID/UIDs, package name,
 demo email domain (`@greenroom.demo`), and docs — with the demo DB reseeded
-under the new persona emails.
+under the new persona emails. (The three persona addresses moved again in
+Cycle 5 — see *Persona addresses on a deliverable domain* below; the rest of
+the seeded cast still uses the non-routable domain this entry describes.)
+
+## Persona addresses on a deliverable domain
+The three one-click personas moved from `@greenroom.demo`, which cannot receive
+mail, to `maya|ravi|sofia@greenroom-hq.com`, which a catch-all forwards — so the
+demo's email features can be proven with a real delivery instead of a mocked
+one. Deliberately limited to those three: the 40-strong speaker pool
+(`@speakers.demo`) and the two supporting evaluators stay undeliverable, because
+pointing bulk fiction at a live mailbox turns any future broadcast into real
+mail.
+
+`User.email` is unique and a signed session resolves to a `User` by email, so
+changing the constant alone would have made the seed's upsert create a second
+row and strand the original — which owns the persona's id and therefore its
+global, `userId`-keyed `SpeakerProfile`. The seed instead renames the surviving
+pre-move row in place before the upserts (idempotent; a no-op on a fresh or
+already-migrated database). If both addresses somehow exist it leaves the old
+row alone rather than deleting it: this seed never removes a `User`, and an
+orphan is inert because the reset wipes every demo-event `EventMember` and
+re-adds only the migrated ids.
 
 ## Abstract vs Session are distinct models
 An `Abstract` is an evaluated CFP proposal; a `Session` is a confirmed,
