@@ -14,5 +14,13 @@ export default async function FormBuilderPage({
   const { formId } = await params;
   const result = await getFormForBuilder(formId);
   if (!result) notFound();
-  return <FormBuilder form={result.form} eventId={result.eventId} timezone={result.timezone} publicFormPath={result.publicFormPath} />;
+  return (
+    <FormBuilder
+      form={result.form}
+      eventId={result.eventId}
+      timezone={result.timezone}
+      publicFormPath={result.publicFormPath}
+      categories={result.categories}
+    />
+  );
 }

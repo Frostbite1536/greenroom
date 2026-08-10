@@ -602,6 +602,199 @@ try {
   const unpublishedPublic = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
   check("unpublished new form is not public yet → 404", unpublishedPublic.status === 404, `got ${unpublishedPublic.status}`);
 
+  // --- C4 builder: clickable controls, stable option values, built-in rule
+  //     sources, and inline server-error surfacing -------------------------
+  //
+  // The layout half of this is geometry no HTTP harness can measure, so what is
+  // asserted is the contract that makes the geometry safe, read back off the
+  // stylesheet the running server actually serves — not off the source file.
+  const builderSheets = [
+    // Next 16 emits page CSS under `static/chunks`, not `static/css`.
+    ...new Set([...builderPage.text.matchAll(/href="(\/_next\/static\/[^"]+\.css)"/g)].map((m) => m[1])),
+  ];
+  const builderCssRaw = (
+    await Promise.all(builderSheets.map(async (href) => (await req("GET", href, null, admin)).text))
+  ).join("\n");
+  // Normalized so the assertion survives whether the build minified or not.
+  const builderCss = builderCssRaw.replace(/\s*([{},:;])\s*/g, "$1");
+  check("builder page serves its stylesheet", builderSheets.length > 0 && builderCssRaw.length > 0,
+    `${builderSheets.length} sheet(s), ${builderCssRaw.length} bytes`);
+  check("served CSS keeps the editor column above the sticky preview",
+    /\.builder-panel\{[^}]*position:relative/.test(builderCss)
+      && /\.builder-panel\{[^}]*z-index:1/.test(builderCss)
+      && /\.builder-preview\{[^}]*z-index:0/.test(builderCss),
+    "Add field / Required would sit under the preview and lose their clicks");
+  check("served CSS lets the switch decoration pass its clicks through to the checkbox",
+    /\.switch \.track,\.switch \.thumb\{pointer-events:none\}/.test(builderCss),
+    "the Required and blind-review toggles stay mouse-dead otherwise");
+  check("served CSS drops the preview before the editor column is squeezed",
+    /max-width:1280px/.test(builderCss) && /\.field-editor-head\{[^}]*flex-wrap:wrap/.test(builderCss));
+  check("builder markup wraps the rows that used to overflow the column",
+    builderPage.text.includes('class="row wrap"'));
+
+  // A rule on a built-in submission question must survive the save and then
+  // decide what the renderer shows. The builder's live preview is server
+  // rendered on the fields step, so this is `resolveVisibleFields` running for
+  // real with the built-in answers folded in — the format picker starts on
+  // "Talk", so exactly one of these two questions may appear.
+  const builtInLogicPayload = {
+    ...createdPayload,
+    id: newFormId,
+    fields: [
+      { key: "audience_level", label: "Audience level", type: "SELECT", required: false, sortOrder: 0,
+        options: [{ label: "Beginner", value: "option_1" }, { label: "Advanced", value: "option_2" }] },
+      { key: "talk_extra", label: "Smoke shown for a Talk", type: "SHORT_TEXT", required: false, sortOrder: 1,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "Talk" }] } },
+      { key: "workshop_extra", label: "Smoke shown for a Workshop", type: "SHORT_TEXT", required: false, sortOrder: 2,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "Workshop" }] } },
+    ],
+  };
+  const builtInSave = await req("POST", "/api/cfp/forms", builtInLogicPayload, admin);
+  check("a built-in-source rule round-trips through Save → 200",
+    builtInSave.status === 200
+      && (builtInSave.data?.data?.fields ?? []).find((f) => f.key === "talk_extra")?.conditionalLogic?.rules?.[0]?.fieldKey === "format",
+    `${builtInSave.status} ${JSON.stringify(builtInSave.data?.error ?? "")}`);
+
+  const builderAfterLogic = await req("GET", `/admin/forms/${newFormId}`, null, admin);
+  // Scoped to the preview, deliberately. The editor list on the same page
+  // renders EVERY question's label unconditionally, and the hydration payload
+  // carries them again, so a page-wide substring search can only ever say "the
+  // form has this question" — it says nothing about what the preview rendered.
+  const previewStart = builderAfterLogic.text.indexOf('class="builder-preview"');
+  const previewEnd = builderAfterLogic.text.indexOf("</aside>", previewStart);
+  const previewMarkup = previewStart >= 0 && previewEnd > previewStart
+    ? builderAfterLogic.text.slice(previewStart, previewEnd)
+    : "";
+  check("the builder page server-renders its live preview region",
+    previewMarkup.includes("Live preview") && previewMarkup.length > 200,
+    `start=${previewStart} end=${previewEnd} len=${previewMarkup.length}`);
+  // Premise: both questions really are on the saved form, so a question missing
+  // from the preview below is the rule hiding it and not a broken fixture.
+  const editorMarkup = previewStart >= 0 ? builderAfterLogic.text.slice(0, previewStart) : "";
+  check("both conditional questions exist in the builder's editor list",
+    editorMarkup.includes("Smoke shown for a Talk") && editorMarkup.includes("Smoke shown for a Workshop"));
+  // `preview-<key>` is emitted only by FieldControl under the preview's
+  // idPrefix, so it cannot be satisfied by the editor list or the payload.
+  check("the live preview renders the field its built-in rule matches",
+    previewMarkup.includes('id="preview-talk_extra"') && previewMarkup.includes("Smoke shown for a Talk"),
+    "the format picker starts on Talk, so this question must be shown");
+  check("the live preview omits the field its built-in rule does not match",
+    !previewMarkup.includes('id="preview-workshop_extra"') && !previewMarkup.includes("Smoke shown for a Workshop"),
+    "a rule on Session format was ignored, so every conditional field rendered");
+  // Every built-in the picker offers must be answerable in the preview, or a
+  // rule on it sits at an empty default and the preview disagrees with the
+  // public form for exactly that rule (PR #67).
+  check("the live preview offers a control for every built-in rule source",
+    ["Session title", "Abstract", "Session format", "Topic category", "Speakers added"]
+      .every((label) => previewMarkup.includes(label)),
+    `missing: ${["Session title", "Abstract", "Session format", "Topic category", "Speakers added"].filter((label) => !previewMarkup.includes(label)).join(", ")}`);
+  check("the live preview's category picker is populated from the event's categories",
+    previewMarkup.includes(fx.category.name) && !previewMarkup.includes("This event has no categories yet"),
+    `expected the seeded category ${fx.category.name} in the preview`);
+
+  // A second, non-format built-in source proves the wiring is general rather
+  // than one special-cased key.
+  //
+  // Coverage boundary, stated rather than papered over: only the *hidden*
+  // direction is reachable here. The preview deliberately starts blank like the
+  // public form's first paint, so `format` is the only built-in with a
+  // non-empty default and therefore the only one that can be in the shown state
+  // in server-rendered markup. Driving a category into the matched state needs
+  // a click. Both directions for all five built-in sources are covered by the
+  // focused gate (`lib/form-logic-builtin.test.ts`, "every built-in source the
+  // preview offers drives visibility in both directions"), through the exact
+  // call `Preview` makes.
+  const categoryLogicPayload = {
+    ...builtInLogicPayload,
+    fields: [
+      builtInLogicPayload.fields[0],
+      { key: "category_unset_extra", label: "Smoke shown when no category", type: "SHORT_TEXT", required: false, sortOrder: 1,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "categoryId", operator: "isNotEmpty" }] } },
+      { key: "category_set_extra", label: "Smoke shown for the seeded category", type: "SHORT_TEXT", required: false, sortOrder: 2,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "categoryId", operator: "equals", value: fx.category.id }] } },
+    ],
+  };
+  const categorySave = await req("POST", "/api/cfp/forms", categoryLogicPayload, admin);
+  check("a categoryId-source rule round-trips through Save → 200",
+    categorySave.status === 200
+      && (categorySave.data?.data?.fields ?? []).find((f) => f.key === "category_set_extra")?.conditionalLogic?.rules?.[0]?.fieldKey === "categoryId",
+    `${categorySave.status} ${JSON.stringify(categorySave.data?.error ?? "")}`);
+
+  const builderAfterCategory = await req("GET", `/admin/forms/${newFormId}`, null, admin);
+  const categoryPreviewStart = builderAfterCategory.text.indexOf('class="builder-preview"');
+  const categoryPreviewEnd = builderAfterCategory.text.indexOf("</aside>", categoryPreviewStart);
+  const categoryPreview = categoryPreviewStart >= 0 && categoryPreviewEnd > categoryPreviewStart
+    ? builderAfterCategory.text.slice(categoryPreviewStart, categoryPreviewEnd)
+    : "";
+  check("the builder page still server-renders its preview region for the category rules",
+    categoryPreview.includes("Live preview") && categoryPreview.length > 200,
+    `start=${categoryPreviewStart} end=${categoryPreviewEnd} len=${categoryPreview.length}`);
+  check("both category-conditional questions exist in the builder's editor list",
+    builderAfterCategory.text.slice(0, categoryPreviewStart).includes("Smoke shown when no category")
+      && builderAfterCategory.text.slice(0, categoryPreviewStart).includes("Smoke shown for the seeded category"));
+  check("the live preview omits both categoryId-conditional questions while no category is chosen",
+    !categoryPreview.includes('id="preview-category_unset_extra"')
+      && !categoryPreview.includes('id="preview-category_set_extra"'),
+    "a rule on Topic category was ignored, so conditional fields rendered with no category chosen");
+  // The unconditional question is the control: it proves the preview did render
+  // questions here, so the two absences above are the rules and not an empty
+  // preview.
+  check("the live preview still renders the unconditional question beside them",
+    categoryPreview.includes('id="preview-audience_level"'),
+    "the preview rendered no questions at all, so the omissions above prove nothing");
+
+  // Publish so the public renderer is reachable, and confirm the rule reaches it.
+  const publishForBuiltIn = await req("POST", "/api/cfp/forms", { ...builtInLogicPayload, published: true }, admin);
+  check("publishing the built-in-rule form → 200", publishForBuiltIn.status === 200,
+    `${publishForBuiltIn.status} ${JSON.stringify(publishForBuiltIn.data?.error ?? "")}`);
+  const publicWithBuiltIn = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
+  check("the public form is served the built-in-source rule it has to evaluate",
+    publicWithBuiltIn.status === 200 && publicWithBuiltIn.text.includes("format") && publicWithBuiltIn.text.includes("talk_extra"),
+    `got ${publicWithBuiltIn.status}`);
+
+  // Relabelling a choice must not move the value answers are stored by.
+  const relabelled = await req("POST", "/api/cfp/forms", {
+    ...builtInLogicPayload,
+    published: true,
+    fields: builtInLogicPayload.fields.map((field) =>
+      field.key === "audience_level"
+        ? { ...field, options: [{ label: "Newcomer", value: "option_1" }, { label: "Experienced", value: "option_2" }] }
+        : field,
+    ),
+  }, admin);
+  const relabelledOptions = (relabelled.data?.data?.fields ?? []).find((f) => f.key === "audience_level")?.options ?? [];
+  check("relabelling a choice leaves its stored value unchanged",
+    relabelled.status === 200
+      && relabelledOptions.map((o) => o.value).join(",") === "option_1,option_2"
+      && relabelledOptions.map((o) => o.label).join(",") === "Newcomer,Experienced",
+    `${relabelled.status} ${JSON.stringify(relabelledOptions)}`);
+
+  // A rule with no value must be refused loudly, scoped to the question that
+  // owns it, so the builder can put the message on that question instead of
+  // dropping the save on the floor.
+  const missingRuleValue = await req("POST", "/api/cfp/forms", {
+    ...builtInLogicPayload,
+    fields: builtInLogicPayload.fields.map((field) =>
+      field.key === "talk_extra"
+        ? { ...field, conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "" }] } }
+        : field,
+    ),
+  }, admin);
+  check("a rule with no value is refused with a field-scoped 400",
+    missingRuleValue.status === 400 && missingRuleValue.data?.error?.code === "FORM_LOGIC_VALUE_MISSING",
+    `${missingRuleValue.status} ${missingRuleValue.data?.error?.code ?? "?"}`);
+  check("the refusal names the offending question so the builder can render it inline",
+    Array.isArray(missingRuleValue.data?.error?.fieldErrors?.talk_extra)
+      && missingRuleValue.data.error.fieldErrors.talk_extra.length > 0,
+    JSON.stringify(missingRuleValue.data?.error?.fieldErrors ?? {}));
+
+  // Put the fixture back where the rest of this run expects it: this form was
+  // created unpublished and only published above to reach the public renderer.
+  const unpublishAgain = await req("POST", "/api/cfp/forms", { ...builtInLogicPayload, published: false }, admin);
+  check("the built-in-rule form is left unpublished for the rest of the run",
+    unpublishAgain.status === 200 && unpublishAgain.data?.data?.published === false,
+    `${unpublishAgain.status}`);
+
   // A duplicate slug must not silently create a second form.
   const duplicate = await req("POST", "/api/cfp/forms", createdPayload, admin);
   check("duplicate slug is rejected", duplicate.status >= 400,

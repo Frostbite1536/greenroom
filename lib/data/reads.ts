@@ -202,24 +202,42 @@ export type BuilderForm = Omit<ReturnType<typeof serializeForm>, "fields"> & {
   fields: FieldView[];
 };
 
-export async function getFormForBuilder(
-  formId: string,
-): Promise<{ eventId: string; timezone: string; publicFormPath: string; form: BuilderForm } | null> {
+export async function getFormForBuilder(formId: string): Promise<{
+  eventId: string;
+  timezone: string;
+  publicFormPath: string;
+  form: BuilderForm;
+  /**
+   * The event's own categories, so the builder's live preview can answer the
+   * built-in Topic category question the same way a submitter does. Same
+   * bounded, event-scoped projection the settings read uses, and id + name
+   * only — the preview needs what the public picker shows and nothing else.
+   */
+  categories: { id: string; name: string }[];
+} | null> {
   const ctx = await pageContext(["ADMIN"]);
-  const [form, event] = await Promise.all([
+  const [form, event, categories] = await Promise.all([
     prisma.formConfig.findFirst({
       where: { id: formId, eventId: ctx.eventId },
       include: { fields: true },
     }),
     prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true, slug: true } }),
+    prisma.category.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.settingsCategories + 1,
+      select: { id: true, name: true },
+    }),
   ]);
   if (!form || !event) return null;
+  assertEventQueryBound(categories, OPERATOR_QUERY_LIMITS.settingsCategories, "categories in the form builder");
   const serialized = serializeForm(form);
   return {
     eventId: ctx.eventId,
     timezone: event.timezone,
     publicFormPath: canonicalPublicFormPath({ eventSlug: event.slug, formSlug: serialized.slug }),
     form: { ...serialized, fields: form.fields.slice().sort((a, b) => a.sortOrder - b.sortOrder).map(normalizeField) },
+    categories: categories.slice(0, OPERATOR_QUERY_LIMITS.settingsCategories),
   };
 }
 
