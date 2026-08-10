@@ -3129,9 +3129,9 @@ try {
   let releaseC6AbstractLock;
   const c6AbstractLockHeld = new Promise((resolve) => { signalC6AbstractLock = resolve; });
   const c6AbstractLockRelease = new Promise((resolve) => { releaseC6AbstractLock = resolve; });
+  const c6AbstractLockName = `abstract-write:${c6RaceId}`;
   const c6AbstractHolder = prisma.$transaction(async (tx) => {
-    const key = `abstract-write:${c6RaceId}`;
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${c6AbstractLockName}, 0))`;
     signalC6AbstractLock();
     await c6AbstractLockRelease;
     // 60s, not the 15s default: the two advisory-waiter polls run up to 200
@@ -3140,10 +3140,17 @@ try {
   }, { timeout: 60_000 });
   await c6AbstractLockHeld;
   const countWaitingAdvisoryLocks = async () => {
+    // Count only waiters for THIS abstract's advisory key: an unfiltered
+    // global count could be satisfied by unrelated waiters in the shared
+    // database, releasing the holder before the intended requests queue. For
+    // the one-argument bigint form, classid holds the key's high 32 bits and
+    // objid the low 32 (objsubid 1); the signed shift reproduces the exact
+    // hashtextextended bit pattern.
     const rows = await prisma.$queryRaw`
       SELECT count(*)::int AS "count"
       FROM pg_locks
-      WHERE locktype = 'advisory' AND NOT granted
+      WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+        AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(${c6AbstractLockName}, 0)
     `;
     return rows[0]?.count ?? 0;
   };
@@ -3172,6 +3179,8 @@ try {
   const c6RaceAssignments = await prisma.reviewAssignment.findMany({
     where: { planId, abstractId: c6RaceId },
     select: { evaluatorId: true, status: true, completedAt: true },
+    orderBy: { evaluatorId: "asc" },
+    take: 20,
   });
   const c6EvaluatorHistory = c6RaceAssignments.find((assignment) => assignment.evaluatorId === evaluatorId);
   const c6AdminHistory = c6RaceAssignments.find((assignment) => assignment.evaluatorId === adminUserId);
@@ -3189,6 +3198,8 @@ try {
   const c6AfterStaleScore = await prisma.reviewAssignment.findMany({
     where: { planId, abstractId: c6RaceId },
     select: { evaluatorId: true, status: true, completedAt: true },
+    orderBy: { evaluatorId: "asc" },
+    take: 20,
   });
   check("C6 stale score after withdrawal is refused without reopening completed or declined work",
     c6StaleScore.status === 409 && c6StaleScore.data?.error?.code === "ABSTRACT_WITHDRAWN" &&
