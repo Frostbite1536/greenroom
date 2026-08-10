@@ -1045,8 +1045,16 @@ try {
   check("submit rejects missing required field", bad.status === 422 && bad.data?.error?.fieldErrors?.title_note, bad.data?.error?.code);
 
   // 4. Valid submit (public)
+  // A real topic is chosen here on purpose: it is the value that must survive
+  // acceptance onto the created Session (Session.categoryId) and reach the
+  // public agenda, which is asserted at sections 11 and 18.
+  const aiCategory = await prisma.category.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, name: "AI" },
+    select: { id: true },
+  });
   const sub = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My great talk", abstract: "About stuff",
+    categoryId: aiCategory?.id,
     speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
     answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
@@ -2416,6 +2424,24 @@ try {
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("M4 MAYBE can later be accepted", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
+  // The topic loss that made every accept-created talk an unlabelled colour.
+  const acceptedSession = await prisma.session.findUnique({
+    where: { sourceAbstractId: abstractId },
+    select: { id: true, categoryId: true },
+  });
+  check(
+    "T3 accepting carries the proposal's topic onto the created session",
+    !!aiCategory?.id && acceptedSession?.categoryId === aiCategory.id,
+    `${acceptedSession?.categoryId} vs ${aiCategory?.id}`,
+  );
+  const acceptedAdminAgenda = await j("GET", "/api/agenda", null, admin);
+  check(
+    "T3 the admin agenda names that topic on the session it created",
+    acceptedAdminAgenda.status === 200 &&
+      acceptedAdminAgenda.data?.data?.sessions?.find((s) => s.id === acceptedSession?.id)?.category?.name === "AI",
+    acceptedAdminAgenda.status,
+  );
+
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
   }, admin);
@@ -2812,6 +2838,12 @@ try {
   // 18. Public embed shows placed sessions with a null session
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
+  check(
+    "T3 the public agenda projects each placed session's topic key",
+    Array.isArray(pubAgenda.data?.data?.sessions) &&
+      pubAgenda.data.data.sessions.every((s) => Object.hasOwn(s, "category")),
+    JSON.stringify(pubAgenda.data?.data?.sessions?.map((s) => s.category?.name ?? null)),
+  );
 
   // C12: one real task deadline is rendered in the event timezone and the
   // invitation path remains forced-mock. This is scratch-only and deliberately

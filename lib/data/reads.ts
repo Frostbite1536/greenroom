@@ -648,6 +648,9 @@ export type AgendaSession = {
   title: string;
   format: string | null;
   durationMinutes: number;
+  /** The proposal's topic, carried onto the talk at acceptance. Null for a
+   *  directly authored session, or once its category is deleted. */
+  category: { id: string; name: string } | null;
   speakers: { userId: string; name: string }[];
   slot: {
     id: string;
@@ -688,6 +691,7 @@ export async function getAgendaData(): Promise<AgendaData> {
         title: true,
         format: true,
         durationMinutes: true,
+        category: { select: { id: true, name: true } },
         speakers: { select: { userId: true, user: { select: { name: true } } } },
         scheduleSlot: {
           select: { id: true, roomId: true, trackId: true, startsAt: true, endsAt: true },
@@ -706,6 +710,7 @@ export async function getAgendaData(): Promise<AgendaData> {
       title: s.title,
       format: s.format,
       durationMinutes: s.durationMinutes,
+      category: s.category,
       speakers: s.speakers.map((sp) => ({ userId: sp.userId, name: sp.user.name })),
       slot: s.scheduleSlot
         ? {
@@ -962,6 +967,9 @@ export type PublicAgendaSession = {
   format: string | null;
   room: { id: string; name: string };
   track: { id: string; name: string; color: string } | null;
+  /** The proposal's topic, carried onto the talk at acceptance (`Session.categoryId`).
+   *  Independent of `track`, which is a schedule swimlane owned by the slot. */
+  category: { id: string; name: string } | null;
   startsAt: string;
   endsAt: string;
   speakers: string[];
@@ -1001,6 +1009,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
             title: true,
             description: true,
             format: true,
+            category: { select: { id: true, name: true } },
             speakers: { select: { user: { select: { name: true } } } },
           },
         },
@@ -1023,6 +1032,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       format: slot.session.format,
       room: slot.room,
       track: slot.track,
+      category: slot.session.category,
       startsAt: slot.startsAt.toISOString(),
       endsAt: slot.endsAt.toISOString(),
       speakers: slot.session.speakers.map((s) => s.user.name),

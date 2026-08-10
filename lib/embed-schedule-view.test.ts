@@ -4,6 +4,7 @@ import {
   ALL,
   DESCRIPTION_PREVIEW_CHARS,
   MAX_EVENT_DAYS,
+  chipPrefix,
   dayTabs,
   descriptionPreview,
   eventDayKeys,
@@ -180,6 +181,48 @@ test("chips carry format, track and room as text, never colour alone", () => {
   assert.deepEqual(sessionChips(session({ format: null, track: null })), [
     { kind: "room", label: "Redwood Hall" },
   ]);
+});
+
+test("an accept-created talk with no schedule track is labelled by its topic", () => {
+  // The defect this closes: a session provisioned from an accepted abstract has
+  // no slot track, so it rendered a grey rail and no words at all.
+  assert.deepEqual(
+    sessionChips(session({ format: null, track: null, category: { id: "cat-1", name: "Developer Experience" } })),
+    [
+      { kind: "topic", label: "Developer Experience" },
+      { kind: "room", label: "Redwood Hall" },
+    ],
+  );
+});
+
+test("a topic is its own chip, never printed under the track's label", () => {
+  assert.deepEqual(
+    sessionChips(session({ category: { id: "cat-1", name: "Developer Experience" } })),
+    [
+      { kind: "format", label: "Keynote" },
+      { kind: "track", label: "Engineering" },
+      { kind: "topic", label: "Developer Experience" },
+      { kind: "room", label: "Redwood Hall" },
+    ],
+  );
+  assert.equal(chipPrefix("topic"), "Topic");
+  assert.equal(chipPrefix("track"), "Track");
+  assert.equal(chipPrefix("format"), "Format");
+  assert.equal(chipPrefix("room"), "Room");
+});
+
+test("a blank or missing topic adds no chip", () => {
+  assert.equal(sessionChips(session({ category: null })).some((chip) => chip.kind === "topic"), false);
+  assert.equal(
+    sessionChips(session({ category: { id: "cat-1", name: "   " } })).some((chip) => chip.kind === "topic"),
+    false,
+  );
+});
+
+test("keyword search reaches a session's topic", () => {
+  const talk = session({ track: null, category: { id: "cat-1", name: "Developer Experience" } });
+  assert.equal(matchesQuery(talk, "developer experience"), true);
+  assert.equal(matchesQuery(talk, "accessibility"), false);
 });
 
 test("filter links keep the event parameter byte-identical and drop defaults", () => {

@@ -188,7 +188,10 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           <div className="row wrap" style={{ gap: 8 }}>
             {unscheduled.map((s) => (
               <button key={s.id} className="ghost-button" onClick={() => setScheduling(s)}>
-                {s.title} <span className="hint">· {s.durationMinutes}m</span>
+                {s.title}{" "}
+                <span className="hint">
+                  · {s.durationMinutes}m{s.category ? ` · ${s.category.name}` : ""}
+                </span>
               </button>
             ))}
           </div>
@@ -308,6 +311,10 @@ function ListView({
             <div className="cell-title">{s.title}</div>
             <div className="cell-sub">
               {s.speakers.map((sp) => sp.name).join(", ") || "No speakers"} · {roomName(s.slot.roomId)}
+              {/* The topic the proposal was submitted under. Named separately
+                  from the track dot beside it: one is the swimlane an organizer
+                  placed the talk in, the other is what the speaker chose. */}
+              {s.category ? ` · ${s.category.name}` : ""}
             </div>
           </div>
           {conflictIds.has(s.id) ? <Pill tone="bad"><AlertTriangle size={12} /> Conflict</Pill> : null}

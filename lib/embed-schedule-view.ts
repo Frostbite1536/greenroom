@@ -23,6 +23,13 @@ export type ScheduleViewSession = {
   format: string | null;
   room: { id: string; name: string };
   track: ScheduleViewTrack | null;
+  /**
+   * The proposal's topic, carried onto the talk at acceptance. Optional so a
+   * caller built before this column existed still type-checks, and deliberately
+   * distinct from `track`: a track is a schedule swimlane owned by the slot,
+   * while a topic is what the speaker submitted under and survives unscheduling.
+   */
+  category?: { id: string; name: string } | null;
   startsAt: string;
   endsAt: string;
   speakers: string[];
@@ -119,6 +126,7 @@ export function matchesQuery(session: ScheduleViewSession, query: string): boole
     session.format,
     session.room.name,
     session.track?.name ?? null,
+    session.category?.name ?? null,
     ...session.speakers,
   ];
   return haystack.some((value) => Boolean(value) && value!.toLocaleLowerCase().includes(needle));
@@ -204,13 +212,38 @@ export function descriptionPreview(
   return { preview, truncated: true };
 }
 
-/** Non-colour labels for a session: format, track, room — in that order. */
-export function sessionChips(session: ScheduleViewSession): Array<{ kind: "format" | "track" | "room"; label: string }> {
-  const chips: Array<{ kind: "format" | "track" | "room"; label: string }> = [];
+export type ScheduleChipKind = "format" | "track" | "topic" | "room";
+
+/**
+ * Non-colour labels for a session: format, track, topic, room — in that order.
+ *
+ * The topic chip is what closes the "unlabelled coloured bar": a talk with no
+ * schedule track renders a grey rail and, before this, no words explaining it.
+ * It is a separate chip from the track rather than a fallback because the two
+ * are different facts — a session can legitimately carry both, and quietly
+ * printing a topic under a "Track" label would be a lie to a screen reader.
+ */
+export function sessionChips(session: ScheduleViewSession): Array<{ kind: ScheduleChipKind; label: string }> {
+  const chips: Array<{ kind: ScheduleChipKind; label: string }> = [];
   if (session.format?.trim()) chips.push({ kind: "format", label: session.format.trim() });
   if (session.track) chips.push({ kind: "track", label: session.track.name });
+  if (session.category?.name.trim()) chips.push({ kind: "topic", label: session.category.name.trim() });
   chips.push({ kind: "room", label: session.room.name });
   return chips;
+}
+
+/** Screen-reader prefix naming what a chip is, so the label is never bare. */
+export function chipPrefix(kind: ScheduleChipKind): string {
+  switch (kind) {
+    case "format":
+      return "Format";
+    case "track":
+      return "Track";
+    case "topic":
+      return "Topic";
+    default:
+      return "Room";
+  }
 }
 
 /**

@@ -57,9 +57,44 @@ type ConvertibleAbstract = {
   abstract: string | null;
   format: string | null;
   durationMinutes: number | null;
+  categoryId: string | null;
   speakers: { userId: string; isPrimary: boolean }[];
   session: { id: string } | null;
 };
+
+/**
+ * Everything a brand-new `Session` copies off the accepted proposal.
+ *
+ * Pure and exported so the copy list is asserted without a database: what a
+ * talk inherits from its proposal is a product rule, and a field silently
+ * dropped here is invisible until an organizer notices it missing on the
+ * public agenda — which is exactly how the category was lost.
+ */
+export function newSessionData(
+  abstract: ConvertibleAbstract,
+  requestedDuration?: number | null,
+): {
+  eventId: string;
+  sourceAbstractId: string;
+  title: string;
+  description: string | null;
+  format: string | null;
+  durationMinutes: number;
+  categoryId: string | null;
+} {
+  return {
+    eventId: abstract.eventId,
+    sourceAbstractId: abstract.id,
+    title: abstract.title,
+    description: abstract.abstract,
+    format: abstract.format,
+    durationMinutes: resolveSessionDuration(abstract.durationMinutes, requestedDuration),
+    // The topic the speaker chose survives acceptance. Without this the label
+    // was lost at exactly the moment a proposal became a talk, and every agenda
+    // surface fell back to an unlabelled colour.
+    categoryId: abstract.categoryId,
+  };
+}
 
 /**
  * Ensure the abstract has its confirmed `Session`, creating it with the
@@ -77,14 +112,7 @@ export async function provisionSessionForAbstract(
   }
 
   const created = await tx.session.create({
-    data: {
-      eventId: abstract.eventId,
-      sourceAbstractId: abstract.id,
-      title: abstract.title,
-      description: abstract.abstract,
-      format: abstract.format,
-      durationMinutes: resolveSessionDuration(abstract.durationMinutes, requestedDuration),
-    },
+    data: newSessionData(abstract, requestedDuration),
   });
   if (abstract.speakers.length > 0) {
     await tx.sessionSpeaker.createMany({

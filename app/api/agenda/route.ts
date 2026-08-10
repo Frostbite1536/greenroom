@@ -18,6 +18,7 @@ export const GET = handle(async () => {
     prisma.session.findMany({
       where: { eventId: ctx.eventId },
       include: {
+        category: { select: { id: true, name: true } },
         speakers: { include: { user: { select: { id: true, name: true } } } },
         scheduleSlot: true,
       },
@@ -33,6 +34,8 @@ export const GET = handle(async () => {
       title: s.title,
       format: s.format,
       durationMinutes: s.durationMinutes,
+      // Additive: the proposal's topic, carried onto the talk at acceptance.
+      category: s.category,
       speakers: s.speakers.map((sp) => ({
         userId: sp.userId,
         name: sp.user.name,

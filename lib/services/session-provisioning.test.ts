@@ -4,10 +4,43 @@ import type { Prisma } from "@prisma/client";
 import {
   assignOnboardingTasks,
   DEFAULT_SESSION_MINUTES,
+  newSessionData,
   planTaskAssignments,
   resolveSessionDuration,
   TASK_ASSIGNMENT_PAGE_SIZE,
 } from "@/lib/services/session-provisioning";
+
+const proposal = {
+  id: "abstract-1",
+  eventId: "event-1",
+  title: "Scaling to 10M requests",
+  abstract: "How we grew the platform.",
+  format: "Keynote",
+  durationMinutes: 45,
+  categoryId: "category-devex",
+  speakers: [{ userId: "user-1", isPrimary: true }],
+  session: null,
+};
+
+test("an accepted proposal's topic is carried onto the talk it becomes", () => {
+  assert.equal(newSessionData(proposal).categoryId, "category-devex");
+});
+
+test("a proposal submitted without a topic creates a talk with none", () => {
+  assert.equal(newSessionData({ ...proposal, categoryId: null }).categoryId, null);
+});
+
+test("the new talk copies exactly the proposal fields it is meant to", () => {
+  assert.deepEqual(newSessionData(proposal, 60), {
+    eventId: "event-1",
+    sourceAbstractId: "abstract-1",
+    title: "Scaling to 10M requests",
+    description: "How we grew the platform.",
+    format: "Keynote",
+    durationMinutes: 60,
+    categoryId: "category-devex",
+  });
+});
 
 test("an explicit duration wins over the proposal", () => {
   assert.equal(resolveSessionDuration(45, 60), 60);

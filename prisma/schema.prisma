@@ -180,6 +180,7 @@ model Category {
 
   event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
   abstracts Abstract[]
+  sessions  Session[]
 
   @@unique([eventId, name])
   @@index([eventId, sortOrder])
@@ -378,15 +379,22 @@ model Session {
   description      String?
   format           String?
   durationMinutes  Int
+  // The topic the proposal was submitted under, carried onto the talk when the
+  // abstract is accepted. Nullable because a Session may be authored directly
+  // (a keynote), and SetNull because deleting a Category must never delete a
+  // confirmed talk — it only takes its label away.
+  categoryId       String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   event          Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   sourceAbstract Abstract?        @relation(fields: [sourceAbstractId], references: [id], onDelete: SetNull)
+  category       Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   speakers       SessionSpeaker[]
   scheduleSlot   ScheduleSlot?
 
   @@index([eventId])
+  @@index([categoryId])
 }
 
 model SessionSpeaker {

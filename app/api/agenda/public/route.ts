@@ -26,7 +26,10 @@ export const GET = handle(async (req) => {
         room: { select: { id: true, name: true } },
         track: { select: { id: true, name: true, color: true } },
         session: {
-          include: { speakers: { include: { user: { select: { name: true } } } } },
+          include: {
+            category: { select: { id: true, name: true } },
+            speakers: { include: { user: { select: { name: true } } } },
+          },
         },
       },
       orderBy: [{ startsAt: "asc" }],
@@ -45,6 +48,8 @@ export const GET = handle(async (req) => {
       format: slot.session.format,
       room: slot.room,
       track: slot.track,
+      // Additive: the proposal's topic, carried onto the talk at acceptance.
+      category: slot.session.category,
       startsAt: slot.startsAt.toISOString(),
       endsAt: slot.endsAt.toISOString(),
       speakers: slot.session.speakers.map((s) => ({ name: s.user.name, isPrimary: s.isPrimary })),

@@ -341,6 +341,9 @@ async function resetScratch() {
     data: {
       eventId: EVENT_ID, title: "Scratch Session A", durationMinutes: 30, format: "Talk",
       description: SESSION_A_DESCRIPTION,
+      // The proposal's topic, carried onto the talk. Drives the topic chip that
+      // gives an otherwise unlabelled coloured rail some words.
+      categoryId: category.id,
       speakers: {
         create: [
           { userId: users.speaker, isPrimary: true },
@@ -2262,6 +2265,13 @@ try {
   check("embed renders a format chip", chipText("format").includes("Talk"), chipText("format"));
   check("embed renders a track chip", chipText("track").includes("Mainstage"), chipText("track"));
   check("embed renders a room chip", chipText("room").includes("Hall A"), chipText("room"));
+  check("T3 embed renders the session's topic as its own chip",
+    chipText("topic").includes(fx.category.name), chipText("topic"));
+  check("T3 the topic chip is announced as a topic, never as a track",
+    chipText("topic").startsWith("Topic:") && !chipText("topic").includes("Track"),
+    chipText("topic"));
+  check("T3 the expanded detail names the topic separately from the track",
+    enriched.text.includes("<dt>Topic</dt>") && enriched.text.includes("<dt>Track</dt>"));
 
   // Day tabs come from Event.startsAt..endsAt, unioned with any day that holds
   // a placed session outside that range.
