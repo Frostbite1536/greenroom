@@ -215,7 +215,10 @@ export function EmbedSchedule({
                 aria-current={tab.current ? "page" : undefined}
                 prefetch={false}
               >
-                {tab.label} <span className="embed-tab-count">({tab.count})</span>
+                {/* One interpolation, not `({tab.count})`: React would split
+                    that into three text nodes separated by HTML comments, which
+                    breaks plain-markup assertions on the count. */}
+                {tab.label} <span className="embed-tab-count">{`(${tab.count})`}</span>
               </Link>
             ))}
           </nav>
