@@ -34,19 +34,26 @@ export const DEMO_EVENT = {
   slug: "forward-2026",
 } as const;
 
+/**
+ * The three one-click personas. Their addresses are on the DELIVERABLE
+ * `greenroom-hq.com` domain so a live email proof reaches a real inbox; they
+ * must stay byte-identical to `lib/demo/seed.ts` `DEMO_SEED_PERSONAS`, because
+ * `getResolvedSession()` resolves a signed cookie to a `User` row by email.
+ * `lib/demo/seed-credentials.test.ts` guards that agreement in both directions.
+ */
 export const DEMO_PERSONAS = {
   admin: {
-    user: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
+    user: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom-hq.com" },
     event: DEMO_EVENT,
     role: "ADMIN",
   },
   evaluator: {
-    user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo" },
+    user: { id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom-hq.com" },
     event: DEMO_EVENT,
     role: "EVALUATOR",
   },
   speaker: {
-    user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
+    user: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom-hq.com" },
     event: DEMO_EVENT,
     role: "SPEAKER",
   },

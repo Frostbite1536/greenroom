@@ -166,8 +166,11 @@ scores, 13 sessions (incl. a guaranteed keynote), 11 schedule slots **with one
 deliberate room conflict**, **6 onboarding tasks (three carry a form:
 hotel stay, flight reimbursement, A/V logistics)**, per-speaker task status,
 5 email templates, 2 resources. Persona users are upserted by email so
-fixed-persona access survives a reseed. The speaker persona
-(`sofia@greenroom.demo`) owns a confirmed session and is at **3/6 tasks** — with
+fixed-persona access survives a reseed; a database seeded before the Cycle 5
+move to `@greenroom-hq.com` has its three persona rows renamed in place first,
+so they keep their ids, speaker profiles and passwords rather than being
+replaced by duplicates. The speaker persona
+(`sofia@greenroom-hq.com`) owns a confirmed session and is at **3/6 tasks** — with
 one completed task form to review and the flight reimbursement still
 outstanding, so both task-form states are demonstrable.
 
@@ -189,9 +192,9 @@ Two ways to rebuild demo data from a clean state:
 
 ## Demo credentials
 One-click personas on `/login`:
-- **Admin** — Maya Chen (`maya@greenroom.demo`)
-- **Evaluator** — Ravi Patel (`ravi@greenroom.demo`)
-- **Speaker** — Sofia Marques (`sofia@greenroom.demo`)
+- **Admin** — Maya Chen (`maya@greenroom-hq.com`)
+- **Evaluator** — Ravi Patel (`ravi@greenroom-hq.com`)
+- **Speaker** — Sofia Marques (`sofia@greenroom-hq.com`)
 
 `/login` offers only these three buttons — there is no email/password form — and
 a session grants no authority by itself: the role is resolved from the

@@ -52,12 +52,42 @@ export const DEMO_EMAIL_TEMPLATES = [
     htmlBody: "<p>Hi {{speakerName}},</p><p><strong>{{talkTitle}}</strong> is scheduled for {{slotTime}} in {{roomName}}. A calendar invite is attached.</p>" },
 ] as const;
 
-// Personas must match lib/auth.ts DEMO_PERSONAS emails.
-const PERSONAS = {
-  admin: { email: "maya@greenroom.demo", name: "Maya Chen" },
-  evaluator: { email: "ravi@greenroom.demo", name: "Ravi Patel" },
-  speaker: { email: "sofia@greenroom.demo", name: "Sofia Marques" },
+/**
+ * The three one-click personas. Exported so a test can assert, in both
+ * directions, that these are exactly `lib/auth.ts` `DEMO_PERSONAS` — a signed
+ * session resolves to a `User` by email, so a one-sided edit would silently
+ * bounce every persona button back to `/login`.
+ *
+ * Their addresses sit on the DELIVERABLE `greenroom-hq.com` domain (a catch-all
+ * forwards it) so the demo can prove a real send. Every OTHER seeded address
+ * below stays on a deliberately non-routable domain: the 40-strong speaker pool
+ * (`@speakers.demo`) and the two supporting evaluators (`@greenroom.demo`) are
+ * bulk fiction, and pointing them at a live mailbox would turn any future
+ * broadcast into real mail.
+ */
+export const DEMO_SEED_PERSONAS = {
+  admin: { email: "maya@greenroom-hq.com", name: "Maya Chen" },
+  evaluator: { email: "ravi@greenroom-hq.com", name: "Ravi Patel" },
+  speaker: { email: "sofia@greenroom-hq.com", name: "Sofia Marques" },
 } as const;
+
+const PERSONAS = DEMO_SEED_PERSONAS;
+
+/**
+ * One-time, idempotent address migration (C5): the personas moved off the
+ * non-routable `@greenroom.demo` domain.
+ *
+ * `User.email` is `@unique` and every lookup keys on it, so simply changing the
+ * constant above would make the upsert below CREATE a second row and strand the
+ * original — which still owns the persona's id and therefore its global,
+ * userId-keyed `SpeakerProfile` plus any membership in a non-demo event. Renaming
+ * the surviving row in place keeps one identity with one id.
+ */
+const PERSONA_EMAIL_MIGRATIONS = [
+  { from: "maya@greenroom.demo", to: PERSONAS.admin.email },
+  { from: "ravi@greenroom.demo", to: PERSONAS.evaluator.email },
+  { from: "sofia@greenroom.demo", to: PERSONAS.speaker.email },
+] as const;
 
 /* ==========================================================================
  * DEMO CREDENTIALS — PUBLIC BY DESIGN, NOT SECRETS
@@ -291,6 +321,22 @@ async function seedWithin(
       create: { email: lower, name, ...(passwordHash ? { passwordHash } : {}) },
     });
     return user.id;
+  }
+
+  // Rename any surviving pre-C5 persona row BEFORE the upserts, so the upsert
+  // finds the migrated row instead of creating a duplicate. Idempotent three
+  // ways: a fresh database has no legacy row, an already-migrated database has
+  // no legacy row, and if BOTH addresses somehow exist we leave the legacy row
+  // untouched rather than delete it — this seed never removes a `User`. Such a
+  // leftover is inert: the reset above wipes every demo-event `EventMember`, and
+  // only the migrated ids are re-added, so an orphan resolves to no membership
+  // and `getResolvedSession()` grants it nothing.
+  for (const { from, to } of PERSONA_EMAIL_MIGRATIONS) {
+    const legacy = await db.user.findUnique({ where: { email: from }, select: { id: true } });
+    if (!legacy) continue;
+    const existing = await db.user.findUnique({ where: { email: to }, select: { id: true } });
+    if (existing) continue;
+    await db.user.update({ where: { id: legacy.id }, data: { email: to } });
   }
 
   const adminId = await upsertUser(PERSONAS.admin.email, PERSONAS.admin.name);
@@ -673,7 +719,7 @@ async function seedWithin(
   const seededResponses: Record<string, Record<string, unknown>> = {
     [avForm.id]: { shirt_size: "m", av_needs: "Wireless lav mic", arrival_date: "2026-05-11" },
     [hotelForm.id]: { needs_hotel: "yes", check_in: "11 May 2026", check_out: "13 May 2026", room_preference: "quiet", hotel_notes: "" },
-    [flightForm.id]: { claiming_travel: "yes", departure_city: "Lisbon", amount: 720, receipt_url: "https://example.com/receipt.pdf", payee_email: "sofia@greenroom.demo" },
+    [flightForm.id]: { claiming_travel: "yes", departure_city: "Lisbon", amount: 720, receipt_url: "https://example.com/receipt.pdf", payee_email: PERSONAS.speaker.email },
   };
 
   for (const userId of sessionSpeakerIds) {

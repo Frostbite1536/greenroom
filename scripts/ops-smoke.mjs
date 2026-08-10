@@ -42,14 +42,15 @@ function check(name, pass, detail = "") {
 /**
  * Single source of truth for persona identities.
  *
- * These MUST match lib/auth.ts DEMO_PERSONAS and lib/demo/seed.ts PERSONAS.
+ * These MUST match lib/auth.ts DEMO_PERSONAS and lib/demo/seed.ts
+ * DEMO_SEED_PERSONAS (which a unit test now holds equal to each other).
  * The Greenroom rebrand previously changed these emails and this file was
  * updated in one place but not another, so the suite silently queried an
  * orphaned pre-rebrand user. Keep every reference pointed at this object.
  */
 const PERSONAS = {
-  ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" },
-  SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" },
+  ADMIN: { id: "demo-admin", name: "Maya Chen", email: "maya@greenroom-hq.com" },
+  SPEAKER: { id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom-hq.com" },
 };
 
 /** Mirrors the signed cookie contract using local smoke-only signing material. */

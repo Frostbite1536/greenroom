@@ -24,7 +24,7 @@ const C17_REVIEWER_EMAIL = "c17-reviewer@scratch.test";
 // open, so the workspace correctly opens on that instead of the declined row.
 const CONFLICT_REVIEWER_EMAIL = "conflict-reviewer@scratch.test";
 // A scratch-only co-speaker with a filled profile. Deliberately NOT one of the
-// shared demo users: writing a QA bio onto sofia@greenroom.demo would surface
+// shared demo users: writing a QA bio onto sofia@greenroom-hq.com would surface
 // in the seeded event's own public speaker widget, which is exactly the litter
 // the eval run flagged. This identity is created and deleted with the scratch
 // event.
@@ -96,10 +96,10 @@ if (probe) {
 }
 
 const ev = { id: EVENT_ID, name: "Scratch Frontend", slug: EVENT_ID };
-const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom.demo" }, event: ev, role: "ADMIN" };
-const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom.demo" }, event: ev, role: "EVALUATOR" };
+const admin = { user: { id: "x", name: "Maya Chen", email: "maya@greenroom-hq.com" }, event: ev, role: "ADMIN" };
+const evaluator = { user: { id: "x", name: "Ravi Patel", email: "ravi@greenroom-hq.com" }, event: ev, role: "EVALUATOR" };
 const evaluatorTwo = { user: { id: "x", name: "Casey Morgan", email: SECOND_EVALUATOR_EMAIL }, event: ev, role: "EVALUATOR" };
-const speaker = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "SPEAKER" };
+const speaker = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom-hq.com" }, event: ev, role: "SPEAKER" };
 const cookie = cookieForSession;
 
 async function req(method, path, body, sess) {
@@ -168,10 +168,10 @@ async function resetScratch() {
 
   const users = {};
   for (const [key, [email, name]] of Object.entries({
-    admin: ["maya@greenroom.demo", "Maya Chen"],
-    evaluator: ["ravi@greenroom.demo", "Ravi Patel"],
+    admin: ["maya@greenroom-hq.com", "Maya Chen"],
+    evaluator: ["ravi@greenroom-hq.com", "Ravi Patel"],
     evaluatorTwo: [SECOND_EVALUATOR_EMAIL, "Casey Morgan"],
-    speaker: ["sofia@greenroom.demo", "Sofia Marques"],
+    speaker: ["sofia@greenroom-hq.com", "Sofia Marques"],
   })) {
     const role = key === "admin" ? "ADMIN" : key.startsWith("evaluator") ? "EVALUATOR" : "SPEAKER";
     const u = await prisma.user.upsert({ where: { email }, update: { name }, create: { email, name } });
@@ -672,7 +672,7 @@ try {
   const creatorMembership = createdEventId
     ? await prisma.eventMember.findMany({ where: { eventId: createdEventId }, select: { userId: true, role: true }, orderBy: { userId: "asc" }, take: 5 })
     : [];
-  const creatorUser = await prisma.user.findUnique({ where: { email: "maya@greenroom.demo" }, select: { id: true } });
+  const creatorUser = await prisma.user.findUnique({ where: { email: "maya@greenroom-hq.com" }, select: { id: true } });
   check("D-C5-9 the creator is an ADMIN member of the new event in the same step",
     creatorMembership.length === 1
     && creatorMembership[0].role === "ADMIN"
@@ -1665,7 +1665,7 @@ try {
     coverageBodyTitles.length === 2, `found ${coverageBodyTitles.length} of 2`);
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
   check("admin-only reviewer setup includes the contact data needed for resends",
-    setupPage.text.includes("ravi@greenroom.demo"));
+    setupPage.text.includes("ravi@greenroom-hq.com"));
   const proposalPickerStart = setupPage.text.indexOf('<section aria-labelledby="pick-proposals"');
   const proposalPickerEnd = setupPage.text.indexOf('<section aria-labelledby="pick-reviewers"');
   const proposalPicker = proposalPickerStart === -1 || proposalPickerEnd === -1
@@ -1853,7 +1853,7 @@ try {
   check("evaluator does NOT see the setup panel",
     !evaluatorEval.text.includes("Assign proposals to reviewers")
     && !evaluatorEval.text.includes("Review coverage")
-    && !evaluatorEval.text.includes("ravi@greenroom.demo"));
+    && !evaluatorEval.text.includes("ravi@greenroom-hq.com"));
 
   // Fresh event: the empty states must tell the admin what to do next.
   const freshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
@@ -2110,7 +2110,7 @@ try {
   check("blind assigned queue withholds identity and keeps the text-identification limit",
     !blindQueue.text.includes("Sofia Marques")
     && !blindQueue.text.includes("Blind Boundary Speaker")
-    && !blindQueue.text.includes("sofia@greenroom.demo")
+    && !blindQueue.text.includes("sofia@greenroom-hq.com")
     && blindQueue.text.includes("Proposal text can still identify a speaker"));
   check("evaluator queue excludes custom answers, organizer data, decisions, and another evaluator's proposal",
     !blindQueue.text.includes("Audience level")
@@ -2846,7 +2846,7 @@ try {
   // made topics deliberately public via the embed's topic chip; the category's
   // admin-only defaultTeamKey ("team-ai") must still never appear.
   const embedLeaks = [
-    "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo",
+    "sofia@greenroom-hq.com", "maya@greenroom-hq.com", "ravi@greenroom-hq.com",
     EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL,
     "UNDER_REVIEW", "Scratch: Agents in Production", "Scratch: Maybe historical coverage",
     "Scratch Session B", "team-ai",
@@ -3200,7 +3200,7 @@ try {
 
   const declareAsSpeaker = await req("POST", "/api/evaluations/assignments/decline", {
     planId: fx.plan.id, abstractId: conflictAbstract.id,
-  }, { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "EVALUATOR" });
+  }, { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom-hq.com" }, event: ev, role: "EVALUATOR" });
   check("a speaker cannot reach the decline path even with a forged role claim",
     declareAsSpeaker.status === 401 || declareAsSpeaker.status === 403,
     `got ${declareAsSpeaker.status}`);
@@ -3320,7 +3320,7 @@ try {
   check("re-adding did not duplicate the event membership", membershipCount === 1, `got ${membershipCount}`);
 
   const addAdmin = await req("POST", "/api/admin/speakers", {
-    email: "maya@greenroom.demo", name: "Maya Chen",
+    email: "maya@greenroom-hq.com", name: "Maya Chen",
   }, admin);
   check("someone who already holds another role is refused, not silently demoted → 409",
     addAdmin.status === 409 && addAdmin.data?.error?.code === "SPEAKER_ROLE_CONFLICT",
@@ -3498,7 +3498,7 @@ try {
   check("a reviewer can neither add nor edit a speaker → 403",
     evaluatorAdd.status === 403 && evaluatorEdit.status === 403,
     `add ${evaluatorAdd.status}, edit ${evaluatorEdit.status}`);
-  const forgedAdmin = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "ADMIN" };
+  const forgedAdmin = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom-hq.com" }, event: ev, role: "ADMIN" };
   const forgedAdd = await req("POST", "/api/admin/speakers", { email: "nope2@scratch.test", name: "Nope" }, forgedAdmin);
   check("a forged ADMIN claim in the cookie does not grant speaker administration",
     forgedAdd.status === 401 || forgedAdd.status === 403, `got ${forgedAdd.status}`);
@@ -3522,7 +3522,7 @@ try {
   // re-resolves the persisted EventMember role by email. So test with a user
   // whose DB membership is SPEAKER (sofia) — even a forged ADMIN claim in the
   // cookie must not grant access to an admin page.
-  const speakerSess = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "ADMIN" };
+  const speakerSess = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom-hq.com" }, event: ev, role: "ADMIN" };
   const wrongRole = await fetch(`${BASE}/admin/agenda`, {
     headers: { cookie: cookie(speakerSess) },
     redirect: "manual",
