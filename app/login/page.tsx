@@ -117,8 +117,8 @@ export default async function LoginPage({
             Sign in
           </button>
           <p className="login-note">
-            Organizers provision accounts. There is no self-service sign-up, and password reset is
-            not available yet — ask your event organizer if you need access.
+            Self-service sign-up is on the roadmap — for now organizers provision accounts. Password
+            reset is not available yet — ask your event organizer if you need access.
           </p>
         </form>
 

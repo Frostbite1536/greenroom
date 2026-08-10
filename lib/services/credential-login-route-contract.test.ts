@@ -148,10 +148,10 @@ test("the login page renders a labelled credential form beside the unchanged per
   assert.match(page, /action=\{loginAsPersona\}/);
   assert.match(page, /one-click/i);
   assert.match(page, /No password required\./);
-  // Honest scope copy: provisioned only, no sign-up, no reset.
-  assert.match(page, /Organizers provision accounts\./);
-  assert.match(page, /no self-service sign-up/i);
-  assert.match(page, /password reset is\s*\n?\s*not available yet/i);
+  // Honest scope copy: provisioned only, no reset, and sign-up named as roadmap
+  // rather than merely absent (D-C5-9).
+  assert.match(page, /Self-service sign-up is on the roadmap\s*\n?\s*—\s*for now organizers provision accounts\./);
+  assert.match(page, /Password\s*\n?\s*reset is not available yet/i);
 });
 
 test("no self-registration or password-reset surface was added", () => {

@@ -1,3 +1,23 @@
+/**
+ * Suggested IANA zones offered as a datalist. Shared by the settings editor and
+ * the new-event dialog so the two suggest the same zones; both are free-text
+ * inputs and the server remains the authority on what is a valid zone.
+ */
+export const COMMON_TIME_ZONES = [
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "America/Toronto",
+  "America/Sao_Paulo",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Singapore",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+  "UTC",
+];
+
 export type EventSettingsDraft = {
   name: string;
   timezone: string;

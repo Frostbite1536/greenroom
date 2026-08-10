@@ -113,7 +113,7 @@ test("normalizeLoginPassword preserves the secret verbatim and bounds its length
   assert.equal(normalizeLoginPassword("x".repeat(513)), "");
 });
 
-test("membership selection is deterministic: authority first, then event id", () => {
+test("membership selection is deterministic: authority, then the pinned event, then event id", () => {
   assert.equal(pickCredentialMembership([]), null);
   assert.deepEqual(
     pickCredentialMembership([
@@ -123,9 +123,29 @@ test("membership selection is deterministic: authority first, then event id", ()
     ]),
     { role: "ADMIN", event: EVENT },
   );
+  // Role authority still outranks the pin: a more capable home on another event
+  // wins over an EVALUATOR seat on the pinned one.
   assert.deepEqual(
     pickCredentialMembership([
       { role: "EVALUATOR", event: EVENT },
+      { role: "ADMIN", event: OTHER_EVENT },
+    ]),
+    { role: "ADMIN", event: OTHER_EVENT },
+  );
+  // At equal role the pinned default event wins, even though "aardvark-event"
+  // sorts before "event-forward" by id.
+  assert.deepEqual(
+    pickCredentialMembership([
+      { role: "EVALUATOR", event: EVENT },
+      { role: "EVALUATOR", event: OTHER_EVENT },
+    ]),
+    { role: "EVALUATOR", event: EVENT },
+  );
+  // Event id remains the final tie-break between two unpinned events.
+  const THIRD_EVENT = { id: "zebra-event", name: "Third", slug: "third" };
+  assert.deepEqual(
+    pickCredentialMembership([
+      { role: "EVALUATOR", event: THIRD_EVENT },
       { role: "EVALUATOR", event: OTHER_EVENT },
     ]),
     { role: "EVALUATOR", event: OTHER_EVENT },
@@ -136,6 +156,25 @@ test("membership selection is deterministic: authority first, then event id", ()
     { role: "EVALUATOR" as const, event: OTHER_EVENT },
   ];
   assert.deepEqual(pickCredentialMembership(memberships), pickCredentialMembership([...memberships].reverse()));
+});
+
+/**
+ * D-C5-9 regression. Admin event creation grants the creator ADMIN membership
+ * on the new event, and `Event.id` is a cuid — every cuid starts with "c",
+ * which sorts before the seeded default event's literal id "demo-event". Under
+ * the old id-only tie-break the organizer's next sign-in would silently land on
+ * the brand-new empty event and the populated programme would look lost.
+ */
+test("a newly created event never displaces the pinned default event at sign-in", () => {
+  const seeded = { role: "ADMIN" as const, event: { id: "demo-event", name: "Forward 2026", slug: "forward-2026" } };
+  const justCreated = {
+    role: "ADMIN" as const,
+    event: { id: "cm4x0000000000000000abcd", name: "Forward 2027", slug: "forward-2027" },
+  };
+  // Guard the premise rather than assume it: the new id really does sort first.
+  assert.ok(justCreated.event.id.localeCompare(seeded.event.id) < 0);
+  assert.deepEqual(pickCredentialMembership([seeded, justCreated]), seeded);
+  assert.deepEqual(pickCredentialMembership([justCreated, seeded]), seeded);
 });
 
 test("the resolved session never carries the stored credential", async () => {

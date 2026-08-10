@@ -1,5 +1,6 @@
 import type { UserRole } from "@prisma/client";
 import type { DemoSession } from "@/lib/auth";
+import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
 import { PASSWORD_MAX_LENGTH, verifyPassword } from "@/lib/password-credential";
 
 /**
@@ -35,12 +36,26 @@ export type CredentialUserRecord = {
 /**
  * Deterministic ordering when an identity holds several memberships. The
  * product is single-event today, so this is a tie-break rule rather than a
- * feature: land the user on their most capable home, then order by event id so
- * the choice never depends on row order. `getResolvedSession` re-derives the
- * role from the chosen event on every later request, so this only decides where
- * the sign-in lands.
+ * feature: land the user on their most capable home, then on the pinned default
+ * event, then by event id so the choice never depends on row order.
+ * `getResolvedSession` re-derives the role from the chosen event on every later
+ * request, so this only decides where the sign-in lands.
+ *
+ * The pinned-event tie-break is load-bearing as of D-C5-9, which lets an ADMIN
+ * create events and grants the creator ADMIN membership on each one. `Event.id`
+ * is a cuid, and every cuid begins with "c" — which sorts BEFORE the seeded
+ * default event's literal id "demo-event". Without this rule, an organizer who
+ * created one event would silently be landed on that empty event by their next
+ * sign-in, and the populated programme would look lost. Ordering by role first
+ * is preserved: this only decides ties, which is exactly the create case (the
+ * creator is ADMIN on both).
  */
 const ROLE_AUTHORITY: Record<UserRole, number> = { ADMIN: 0, EVALUATOR: 1, SPEAKER: 2 };
+
+/** 0 sorts first: the pinned default event wins every tie at equal role. */
+function pinnedRank(membership: CredentialMembership): number {
+  return membership.event.slug === DEFAULT_PUBLIC_EVENT ? 0 : 1;
+}
 
 export function pickCredentialMembership(
   memberships: readonly CredentialMembership[],
@@ -48,6 +63,7 @@ export function pickCredentialMembership(
   const ordered = [...memberships].sort(
     (left, right) =>
       (ROLE_AUTHORITY[left.role] ?? Number.MAX_SAFE_INTEGER) - (ROLE_AUTHORITY[right.role] ?? Number.MAX_SAFE_INTEGER) ||
+      pinnedRank(left) - pinnedRank(right) ||
       left.event.id.localeCompare(right.event.id),
   );
   return ordered[0] ?? null;

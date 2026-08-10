@@ -4504,8 +4504,9 @@ try {
       /autocomplete="username"/i.test(loginHtml) && /autocomplete="current-password"/i.test(loginHtml) &&
       (loginHtml.match(/name="persona"/g) || []).length === 3 &&
       /No password required\./.test(loginHtml) &&
-      /Organizers provision accounts\./.test(loginHtml) &&
-      /no self-service sign-up/.test(loginHtml),
+      // D-C5-9 roadmap copy: sign-up is named as roadmap, not merely absent.
+      /Self-service sign-up is on the roadmap/.test(loginHtml) &&
+      /for now organizers provision accounts\./.test(loginHtml),
     loginPageResponse.status);
   const personaHome = await fetch(`${BASE}/portal`, { headers: { cookie: cookie(speaker) }, redirect: "manual" });
   check("C5-LOGIN the one-click persona session still reaches its home unchanged",

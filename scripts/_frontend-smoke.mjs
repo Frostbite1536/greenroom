@@ -77,6 +77,11 @@ const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
 // canonical public URLs remain event-scoped and the legacy slug route fails
 // closed instead of choosing one candidate.
 const S2_OTHER_EVENT_ID = "scratch-frontend-s2-other";
+// D-C5-9 creates a real event through the API, so it cannot be one of the fixed
+// scratch ids: its id is a server-generated cuid. It is cleaned up by SLUG —
+// both the one that succeeds and the `${slug}-*` variants the refusal checks
+// attempt — so a failed run cannot leave an event behind to collide next time.
+const CREATED_EVENT_SLUG = "scratch-frontend-created";
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 const REVIEWER_INVITE_APP_URL = "https://greenroom-hq.test";
@@ -146,6 +151,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+  await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
   await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
 
   const now = Date.now();
@@ -423,6 +429,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+      await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
       await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
@@ -628,6 +635,135 @@ try {
   }, admin);
   check("settings category action uses the existing authorized route", settingsCategory.status === 201 && settingsCategory.data?.data?.name === "Settings category",
     `${settingsCategory.status} ${JSON.stringify(settingsCategory.data?.error ?? "")}`);
+
+  // --- D-C5-9: minimal admin event creation -------------------------------
+  // The landing programme is captured BEFORE anything is created so "unchanged"
+  // is a diff against a recorded value, not an assertion about a value we like.
+  // `/api/agenda/public` with no `?event=` runs the exact same default-event
+  // resolution the landing page and the embeds use, and answers in deterministic
+  // JSON — so "unchanged" is a comparison of resolved data, not of rendered
+  // markup that could differ for unrelated reasons.
+  const defaultAgendaBefore = await req("GET", "/api/agenda/public", null, null);
+  const landingBefore = await req("GET", "/", null, null);
+  const embedBefore = await req("GET", "/embed/schedule", null, null);
+
+  const settingsPageForCreate = await req("GET", "/admin/settings", null, admin);
+  check("D-C5-9 event settings offers the New event affordance",
+    settingsPageForCreate.text.includes("New event"), `${settingsPageForCreate.status}`);
+
+  const createdEvent = await req("POST", "/api/admin/events", {
+    name: "Scratch Created Event", slug: CREATED_EVENT_SLUG, timezone: "America/Los_Angeles",
+    startsOn: "2027-05-12", endsOn: "2027-05-14",
+  }, admin);
+  const createdEventId = createdEvent.data?.data?.event?.id;
+  check("D-C5-9 an ADMIN creates an event with event-local dates",
+    createdEvent.status === 201
+    && Boolean(createdEventId)
+    && createdEvent.data?.data?.event?.slug === CREATED_EVENT_SLUG
+    && createdEvent.data?.data?.event?.startsOn === "2027-05-12"
+    && createdEvent.data?.data?.event?.endsOn === "2027-05-14",
+    `${createdEvent.status} ${JSON.stringify(createdEvent.data?.error ?? createdEvent.data?.data ?? "")}`);
+
+  // One step, not two: the creator's ADMIN membership must already exist. If
+  // the transaction were split, this row could be missing and the event would
+  // be unreachable with no delete path to clean it up.
+  // take 5: the assertion needs "exactly one" — a handful proves or disproves
+  // that without materializing whatever the database happens to contain.
+  const creatorMembership = createdEventId
+    ? await prisma.eventMember.findMany({ where: { eventId: createdEventId }, select: { userId: true, role: true }, orderBy: { userId: "asc" }, take: 5 })
+    : [];
+  const creatorUser = await prisma.user.findUnique({ where: { email: "maya@greenroom.demo" }, select: { id: true } });
+  check("D-C5-9 the creator is an ADMIN member of the new event in the same step",
+    creatorMembership.length === 1
+    && creatorMembership[0].role === "ADMIN"
+    && creatorMembership[0].userId === creatorUser?.id,
+    JSON.stringify(creatorMembership));
+
+  // "Starts empty" is the ruling's own words: nothing is cloned from the
+  // current event, so every surface shows its existing empty state.
+  const createdCounts = createdEventId
+    ? {
+        rooms: await prisma.room.count({ where: { eventId: createdEventId } }),
+        forms: await prisma.formConfig.count({ where: { eventId: createdEventId } }),
+        categories: await prisma.category.count({ where: { eventId: createdEventId } }),
+        sessions: await prisma.session.count({ where: { eventId: createdEventId } }),
+      }
+    : null;
+  check("D-C5-9 the new event starts genuinely empty — nothing is cloned",
+    Boolean(createdCounts) && Object.values(createdCounts).every((n) => n === 0),
+    JSON.stringify(createdCounts));
+
+  const duplicateSlug = await req("POST", "/api/admin/events", {
+    name: "Another Name Entirely", slug: CREATED_EVENT_SLUG, timezone: "UTC",
+  }, admin);
+  check("D-C5-9 a duplicate web address is refused as a stable 409",
+    duplicateSlug.status === 409 && duplicateSlug.data?.error?.code === "EVENT_SLUG_TAKEN",
+    `${duplicateSlug.status} ${JSON.stringify(duplicateSlug.data?.error ?? "")}`);
+
+  // 422, not 400: `parseBody` → `fromZod` in lib/api/http.ts answers a body that
+  // parses as JSON but violates the schema with VALIDATION_ERROR.
+  const invertedDates = await req("POST", "/api/admin/events", {
+    name: "Inverted", slug: `${CREATED_EVENT_SLUG}-inverted`, timezone: "UTC",
+    startsOn: "2027-05-14", endsOn: "2027-05-12",
+  }, admin);
+  check("D-C5-9 an inverted date pair is refused with the shared message",
+    invertedDates.status === 422
+    && invertedDates.data?.error?.code === "VALIDATION_ERROR"
+    && /end on or after its start date/i.test(JSON.stringify(invertedDates.data?.error?.fieldErrors ?? "")),
+    `${invertedDates.status} ${JSON.stringify(invertedDates.data?.error ?? "")}`);
+
+  const halfDates = await req("POST", "/api/admin/events", {
+    name: "Half", slug: `${CREATED_EVENT_SLUG}-half`, timezone: "UTC", startsOn: "2027-05-12",
+  }, admin);
+  check("D-C5-9 a half-supplied date pair is refused",
+    halfDates.status === 422 && halfDates.data?.error?.code === "VALIDATION_ERROR",
+    `${halfDates.status} ${JSON.stringify(halfDates.data?.error ?? "")}`);
+
+  const evaluatorCreate = await req("POST", "/api/admin/events", {
+    name: "Evaluator Event", slug: `${CREATED_EVENT_SLUG}-evaluator`, timezone: "UTC",
+  }, evaluator);
+  const speakerCreate = await req("POST", "/api/admin/events", {
+    name: "Speaker Event", slug: `${CREATED_EVENT_SLUG}-speaker`, timezone: "UTC",
+  }, speaker);
+  const anonCreate = await req("POST", "/api/admin/events", {
+    name: "Anon Event", slug: `${CREATED_EVENT_SLUG}-anon`, timezone: "UTC",
+  }, null);
+  check("D-C5-9 event creation is ADMIN-only",
+    evaluatorCreate.status === 403 && speakerCreate.status === 403 && anonCreate.status === 401,
+    `${evaluatorCreate.status}/${speakerCreate.status}/${anonCreate.status}`);
+  const refusedEvents = await prisma.event.count({ where: { slug: { startsWith: `${CREATED_EVENT_SLUG}-` } } });
+  check("D-C5-9 every refused creation wrote no event at all", refusedEvents === 0, `${refusedEvents}`);
+
+  // The judged programme must be byte-identical across the create. This is the
+  // landmine the ruling names: an empty brand-new event must never displace it.
+  const defaultAgendaAfter = await req("GET", "/api/agenda/public", null, null);
+  const landingAfter = await req("GET", "/", null, null);
+  const embedAfter = await req("GET", "/embed/schedule", null, null);
+  check("D-C5-9 the default public programme resolves to the same event and data after a create",
+    defaultAgendaAfter.status === defaultAgendaBefore.status
+    && defaultAgendaAfter.text === defaultAgendaBefore.text,
+    `${defaultAgendaBefore.status}->${defaultAgendaAfter.status} `
+    + `${defaultAgendaBefore.text.slice(0, 120)} -> ${defaultAgendaAfter.text.slice(0, 120)}`);
+  // The identity itself, stated separately from the payload: whichever event the
+  // pin resolved to before the create is the one it resolves to after. The new
+  // event has a different slug, so a displacement would show up here.
+  check("D-C5-9 the pinned default event is still the one being served",
+    defaultAgendaAfter.data?.data?.event?.slug === defaultAgendaBefore.data?.data?.event?.slug
+    && defaultAgendaAfter.data?.data?.event?.slug !== CREATED_EVENT_SLUG,
+    `before ${JSON.stringify(defaultAgendaBefore.data?.data?.event?.slug ?? defaultAgendaBefore.data?.error?.code ?? null)} `
+    + `after ${JSON.stringify(defaultAgendaAfter.data?.data?.event?.slug ?? defaultAgendaAfter.data?.error?.code ?? null)}`);
+  check("D-C5-9 the landing page and embed still answer the same way",
+    landingAfter.status === landingBefore.status && embedAfter.status === embedBefore.status,
+    `landing ${landingBefore.status}->${landingAfter.status}, embed ${embedBefore.status}->${embedAfter.status}`);
+  check("D-C5-9 the new event never appears on the public default surfaces",
+    !landingAfter.text.includes("Scratch Created Event") && !embedAfter.text.includes("Scratch Created Event"));
+
+  const roadmapLogin = await req("GET", "/login", null, null);
+  check("D-C5-9 the login page names self-service sign-up as roadmap",
+    roadmapLogin.status === 200
+    && /Self-service sign-up is on the roadmap/.test(roadmapLogin.text)
+    && /for now organizers provision accounts\./.test(roadmapLogin.text),
+    `${roadmapLogin.status}`);
 
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
