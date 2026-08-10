@@ -28,6 +28,55 @@ export type LogicField = {
   conditionalLogic?: ConditionalLogic | null;
 };
 
+/**
+ * The built-in questions every submission carries, in the shape a rule reads
+ * them.
+ *
+ * A `LogicRule` may name a built-in source (`lib/services/form-shape-validation.ts`
+ * declares the inventory the server accepts), but those answers are not in the
+ * custom-field answer map — the public form holds them in their own state and
+ * the builder's preview renders them itself. Without this bridge a rule on
+ * Session format evaluated against `undefined` and the field it guarded simply
+ * never appeared.
+ *
+ * The keys must stay exactly the inventory's keys; `lib/form-logic.test.ts`
+ * pins that against `BUILT_IN_SUBMISSION_SOURCES` rather than a copy of it.
+ */
+export type BuiltInSubmissionAnswers = {
+  title?: string;
+  abstract?: string;
+  format?: string;
+  categoryId?: string;
+  /** Only the roster entries a submitter actually filled in count as present. */
+  speakers?: readonly { name?: string; email?: string }[];
+};
+
+export function builtInAnswerMap(input: BuiltInSubmissionAnswers): AnswerMap {
+  const speakers = (input.speakers ?? []).filter(
+    (speaker) => (speaker.name ?? "").trim().length > 0 || (speaker.email ?? "").trim().length > 0,
+  );
+  return {
+    title: input.title ?? "",
+    abstract: input.abstract ?? "",
+    format: input.format ?? "",
+    categoryId: input.categoryId ?? "",
+    // A roster, so only `isEmpty`/`isNotEmpty` can ask anything of it.
+    speakers: speakers.map((speaker) => (speaker.email ?? speaker.name ?? "").trim()),
+  };
+}
+
+/**
+ * Built-in answers first so a legacy custom field that claimed a reserved key
+ * (a shape the server now refuses, but stored data may predate) keeps driving
+ * its own rules.
+ */
+export function withBuiltInAnswers(
+  answers: Readonly<AnswerMap>,
+  builtIn: BuiltInSubmissionAnswers,
+): AnswerMap {
+  return { ...builtInAnswerMap(builtIn), ...answers };
+}
+
 function isBlank(value: AnswerValue): boolean {
   if (value === undefined || value === null) return true;
   if (typeof value === "string") return value.trim().length === 0;

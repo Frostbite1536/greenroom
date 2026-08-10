@@ -4,7 +4,14 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { Check, Megaphone, Plus, Trash2 } from "lucide-react";
 import type { PublicFormView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
-import { resolveVisibleFields, validateField, type AnswerMap, type AnswerValue } from "@/lib/form-logic";
+import {
+  resolveVisibleFields,
+  validateField,
+  withBuiltInAnswers,
+  type AnswerMap,
+  type AnswerValue,
+} from "@/lib/form-logic";
+import { DEFAULT_SESSION_FORMAT, SESSION_FORMATS } from "@/lib/cfp-formats";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import {
   clearDraftRecovery,
@@ -24,13 +31,8 @@ type Speaker = { name: string; email: string; isPrimary: boolean };
 type Step = 0 | 1 | 2 | 3;
 const STEP_LABELS = ["Welcome", "Submission", "Participants", "Review"];
 
-/** Session formats offered to submitters, with the duration each implies. */
-const FORMATS: { label: string; value: string; minutes: number }[] = [
-  { label: "Lightning talk (10 min)", value: "Lightning Talk", minutes: 10 },
-  { label: "Talk (30 min)", value: "Talk", minutes: 30 },
-  { label: "Deep dive (45 min)", value: "Deep Dive", minutes: 45 },
-  { label: "Workshop (90 min)", value: "Workshop", minutes: 90 },
-];
+/** Shared with the builder preview so a rule on Session format previews truly. */
+const FORMATS = SESSION_FORMATS;
 
 type SubmissionResult = {
   id: string;
@@ -73,7 +75,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
   const [step, setStep] = useState<Step>(0);
   const [title, setTitle] = useState("");
   const [abstract, setAbstract] = useState("");
-  const [format, setFormat] = useState(FORMATS[1].value);
+  const [format, setFormat] = useState(DEFAULT_SESSION_FORMAT);
   const [categoryId, setCategoryId] = useState("");
   const [answers, setAnswers] = useState<AnswerMap>({});
   const [speakers, setSpeakers] = useState<Speaker[]>([{ name: "", email: "", isPrimary: true }]);
@@ -90,9 +92,17 @@ export function CfpForm({ form }: { form: PublicFormView }) {
   const initializedFormRef = useRef<string | null>(null);
   const resumeRef = useRef<(candidate: RecoveryCandidate) => void>(() => {});
 
+  // A rule may name a built-in submission question (Session format, Topic
+  // category, the roster…), which the server's shape validator accepts as a
+  // source but which lives outside the custom-field answer map. Fold them in so
+  // a field guarded by "format is Workshop" actually appears when it is.
   const visibleFields = useMemo(
-    () => resolveVisibleFields(form.fields, answers),
-    [form.fields, answers],
+    () =>
+      resolveVisibleFields(
+        form.fields,
+        withBuiltInAnswers(answers, { title, abstract, format, categoryId, speakers }),
+      ),
+    [form.fields, answers, title, abstract, format, categoryId, speakers],
   );
 
   function setAnswer(key: string, v: AnswerValue) {
@@ -181,7 +191,7 @@ export function CfpForm({ form }: { form: PublicFormView }) {
   function applyRecoveredDraft(data: ResumeDraftResult) {
     setTitle(data.title);
     setAbstract(data.abstract ?? "");
-    setFormat(FORMATS.some((entry) => entry.value === data.format) ? data.format! : FORMATS[1].value);
+    setFormat(FORMATS.some((entry) => entry.value === data.format) ? data.format! : DEFAULT_SESSION_FORMAT);
     setCategoryId(data.categoryId ?? "");
     setAnswers(data.answersByKey ?? {});
     setSpeakers(data.speakers.length > 0 ? data.speakers : [{ name: "", email: "", isPrimary: true }]);
