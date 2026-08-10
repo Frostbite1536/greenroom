@@ -101,19 +101,19 @@ test("an oversize log renders one capped page and admits what it withheld", () =
   const rows = Array.from({ length: EMAIL_HISTORY_CAP + 1 }, (_, index) =>
     row({ id: `dispatch-${index}`, status: index === 0 ? "failed" : "mocked", error: index === 0 ? "boom" : null }),
   );
-  const history = toEmailHistory(rows, 4_212);
+  const history = toEmailHistory(rows);
   assert.equal(history.entries.length, EMAIL_HISTORY_CAP);
   assert.equal(history.shown, EMAIL_HISTORY_CAP);
   assert.equal(history.truncated, true);
-  assert.equal(history.total, 4_212);
   assert.equal(history.entries.at(-1)?.id, `dispatch-${EMAIL_HISTORY_CAP - 1}`);
 });
 
 test("a log inside the cap reports itself complete and counts only what it shows", () => {
-  const history = toEmailHistory(
-    [row({ id: "a", status: "sent" }), row({ id: "b", status: "mocked" }), row({ id: "c", status: "failed", error: "no mailbox" })],
-    3,
-  );
+  const history = toEmailHistory([
+    row({ id: "a", status: "sent" }),
+    row({ id: "b", status: "mocked" }),
+    row({ id: "c", status: "failed", error: "no mailbox" }),
+  ]);
   assert.equal(history.truncated, false);
   assert.equal(history.shown, 3);
   assert.equal(history.shownDelivered, 1);
@@ -122,8 +122,25 @@ test("a log inside the cap reports itself complete and counts only what it shows
 });
 
 test("an empty log is an empty page, not a truncated one", () => {
-  const history = toEmailHistory([], 0);
+  const history = toEmailHistory([]);
   assert.deepEqual(history.entries, []);
   assert.equal(history.truncated, false);
-  assert.equal(history.total, 0);
+  assert.equal(history.shown, 0);
+});
+
+test("the page states no volume it did not read from its own single query", () => {
+  // Regression guard for the dropped `count()`: the panel used to pair this
+  // read with an independently-snapshotted total, so a dispatch inserted
+  // between the two could make the header contradict the rows below it. There
+  // is now no field that can disagree with `entries`.
+  const history = toEmailHistory([row({ id: "a", status: "sent" }), row({ id: "b", status: "failed", error: "bounced" })]);
+  assert.equal("total" in history, false);
+  assert.equal(history.shown, history.entries.length);
+  assert.equal(history.shownDelivered + history.shownUndelivered, history.entries.length);
+  assert.equal(history.shownFailed <= history.shownUndelivered, true);
+
+  // Truncated: `shown` is the page size, never advertised as an event total.
+  const capped = toEmailHistory(Array.from({ length: EMAIL_HISTORY_CAP + 1 }, (_, i) => row({ id: `d-${i}` })));
+  assert.equal(capped.shown, capped.entries.length);
+  assert.equal(capped.shown, capped.cap);
 });

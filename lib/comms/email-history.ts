@@ -187,8 +187,10 @@ export function toEmailHistoryEntry(row: EmailDispatchRow): EmailHistoryEntry {
 
 export type EmailHistory = {
   entries: EmailHistoryEntry[];
-  /** Every dispatch this event has, including the ones beyond the cap. */
-  total: number;
+  /**
+   * Rows on this page. When `truncated` is false this is also the event's exact
+   * dispatch count; when it is true the page makes no exact-total claim at all.
+   */
   shown: number;
   cap: number;
   truncated: boolean;
@@ -201,15 +203,21 @@ export type EmailHistory = {
 /**
  * Fold a cap-plus-one query into an honest page.
  *
- * `truncated` comes from the extra row rather than from `total`, so a send that
- * lands between the page query and the count cannot make the panel claim
- * completeness it does not have.
+ * Everything the panel states comes from this one query. An earlier draft paired
+ * it with a separate `count()` to show an exact event-wide total, but the two
+ * statements read different snapshots: a dispatch inserted between them let the
+ * page print a total that disagreed with the rows underneath it. Rather than
+ * narrow that window — a `RepeatableRead` transaction would — the total is gone.
+ * A log that only ever grows does not need an exact lifetime count to be useful,
+ * and one query cannot contradict itself.
+ *
+ * `truncated` therefore comes from the extra fetched row, and it is the only
+ * thing that decides whether `shown` may be spoken of as a complete count.
  */
-export function toEmailHistory(rows: readonly EmailDispatchRow[], total: number): EmailHistory {
+export function toEmailHistory(rows: readonly EmailDispatchRow[]): EmailHistory {
   const entries = rows.slice(0, EMAIL_HISTORY_CAP).map(toEmailHistoryEntry);
   return {
     entries,
-    total,
     shown: entries.length,
     cap: EMAIL_HISTORY_CAP,
     truncated: rows.length > EMAIL_HISTORY_CAP,

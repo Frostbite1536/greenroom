@@ -1076,23 +1076,26 @@ export type EmailHistoryView = EmailHistory & {
  *
  * Unlike the fail-closed operator reads, an oversize log is expected here: the
  * table only grows, so the page reports its truncation instead of refusing.
+ *
+ * One cap-plus-one query answers everything the panel says about volume. It is
+ * deliberately not paired with a `count()` for an exact event-wide total: the
+ * two statements observe different snapshots, so a dispatch inserted between
+ * them let the page print a total that disagreed with its own rows. Dropping
+ * the count removes that contradiction outright rather than shrinking its
+ * window behind a `RepeatableRead` transaction.
  */
 export async function getEmailHistory(): Promise<EmailHistoryView> {
   const ctx = await pageContext(["ADMIN"]);
-  const where = emailHistoryWhere(ctx.eventId);
-  const [event, rows, total] = await Promise.all([
+  const [event, rows] = await Promise.all([
     prisma.event.findUniqueOrThrow({ where: { id: ctx.eventId }, select: { timezone: true } }),
     prisma.emailDispatch.findMany({
-      where,
+      where: emailHistoryWhere(ctx.eventId),
       select: emailHistorySelect,
       orderBy: emailHistoryOrderBy,
       take: EMAIL_HISTORY_TAKE,
     }),
-    // Counted through the same event-scoped filter so the "of N" line cannot
-    // quietly describe a different set than the rows above it.
-    prisma.emailDispatch.count({ where }),
   ]);
-  return { ...toEmailHistory(rows, total), timezone: event.timezone };
+  return { ...toEmailHistory(rows), timezone: event.timezone };
 }
 
 // ---- Embeds ---------------------------------------------------------------

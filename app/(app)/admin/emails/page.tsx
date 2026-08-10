@@ -34,19 +34,26 @@ export default async function AdminEmailsPage() {
         description="Every message this event has attempted to send — reminders, decision notices, submission receipts, and reviewer invites — with what actually happened to each one."
       />
 
+      {/*
+        Every number on this page — the four metrics and the line below them —
+        is counted from the same single query, so they can never disagree with
+        each other or with the rows in the table. When the log is truncated the
+        page says so and claims no event-wide total, rather than pairing this
+        read with a separate count that would observe a different snapshot.
+      */}
       <div className="metric-grid">
-        <div className="metric"><span>Recorded emails</span><strong>{history.total}</strong></div>
-        <div className="metric"><span>Delivered in view</span><strong>{history.shownDelivered}</strong></div>
-        <div className="metric"><span>Not delivered in view</span><strong>{history.shownUndelivered}</strong></div>
-        <div className="metric"><span>Failed in view</span><strong>{history.shownFailed}</strong></div>
+        <div className="metric"><span>{history.truncated ? "Shown" : "Recorded emails"}</span><strong>{history.shown}</strong></div>
+        <div className="metric"><span>Delivered</span><strong>{history.shownDelivered}</strong></div>
+        <div className="metric"><span>Not delivered</span><strong>{history.shownUndelivered}</strong></div>
+        <div className="metric"><span>Failed</span><strong>{history.shownFailed}</strong></div>
       </div>
 
       <p className="hint" role="status">
-        {history.total === 0
+        {history.shown === 0
           ? "No emails have been attempted for this event yet."
           : history.truncated
-            ? `Showing the newest ${history.shown} of ${history.total} recorded emails. Older attempts are not loaded on this page, so the three "in view" counts above describe this page only — not the event.`
-            : `Showing all ${history.total} recorded ${history.total === 1 ? "email" : "emails"} for this event, newest first.`}
+            ? `Showing the ${history.cap} most recent emails — more exist beyond this page. The counts above describe these ${history.cap} rows only, not the whole event.`
+            : `Showing all ${history.shown} recorded ${history.shown === 1 ? "email" : "emails"} for this event, newest first.`}
       </p>
 
       <div className="card">
