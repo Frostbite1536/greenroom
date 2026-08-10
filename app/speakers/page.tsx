@@ -1,14 +1,28 @@
-import { redirect } from "next/navigation";
-import { embedAliasTarget } from "@/lib/embed-alias";
+import {
+  SpeakersProgramme,
+  speakersMetadata,
+  type SpeakersSearchParams,
+} from "@/components/programme-pages";
 
 export const dynamic = "force-dynamic";
 
-/** Guessable public alias for the canonical speaker embed. */
+/**
+ * The canonical public speaker directory. Same reversal as `/schedule`: served
+ * here with the site header, while `/embed/speakers` stays the frameable
+ * variant of the identical component tree.
+ */
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<SpeakersSearchParams>;
+}) {
+  return speakersMetadata(searchParams);
+}
+
 export default async function SpeakersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ event?: string }>;
+  searchParams: Promise<SpeakersSearchParams>;
 }) {
-  const { event } = await searchParams;
-  redirect(embedAliasTarget("/embed/speakers", event));
+  return <SpeakersProgramme searchParams={searchParams} surface="canonical" />;
 }

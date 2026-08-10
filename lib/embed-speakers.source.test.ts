@@ -47,7 +47,11 @@ test("the detail panel lists sessions with their placement and an honest bio fal
 
 test("speaker search is a GET form and the header shows the real date range", () => {
   const component = source("components/embed-speakers.tsx");
-  assert.match(component, /<form className="speaker-gallery-controls" method="get" action="\/embed\/speakers"/);
+  // The action is the surface the reader is actually on — `/speakers` or
+  // `/embed/speakers` — so submitting search inside an iframe cannot navigate
+  // the frame to the standalone site. Its default is the frameable path.
+  assert.match(component, /<form className="speaker-gallery-controls" method="get" action=\{basePath\}/);
+  assert.match(component, /basePath = EMBED_SPEAKERS_PATH/);
   assert.match(component, /type="hidden" name="event"/);
   assert.match(component, /type="submit"/);
   assert.match(component, /formatEventDateRange\(gallery\.event\.startsAt, gallery\.event\.endsAt, gallery\.event\.timezone\)/);

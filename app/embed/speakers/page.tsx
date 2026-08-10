@@ -1,30 +1,24 @@
-import { notFound } from "next/navigation";
-import "@/components/feature.css";
-import { EmbedSpeakers } from "@/components/embed-speakers";
-import { getPublicSpeakers } from "@/lib/data/reads";
+import {
+  SpeakersProgramme,
+  speakersMetadata,
+  type SpeakersSearchParams,
+} from "@/components/programme-pages";
 
 export const dynamic = "force-dynamic";
 
+/** The frameable speaker directory: `/speakers` without the site header. */
 export async function generateMetadata({
   searchParams,
 }: {
-  searchParams: Promise<{ event?: string }>;
+  searchParams: Promise<SpeakersSearchParams>;
 }) {
-  const { event } = await searchParams;
-  const gallery = await getPublicSpeakers(event);
-  return {
-    title: gallery ? `${gallery.event.name} — Speakers` : "Speakers",
-    description: gallery ? `Public speaker lineup for ${gallery.event.name}.` : undefined,
-  };
+  return speakersMetadata(searchParams);
 }
 
 export default async function EmbedSpeakersPage({
   searchParams,
 }: {
-  searchParams: Promise<{ event?: string; q?: string; track?: string }>;
+  searchParams: Promise<SpeakersSearchParams>;
 }) {
-  const { event, q, track } = await searchParams;
-  const gallery = await getPublicSpeakers(event);
-  if (!gallery) notFound();
-  return <EmbedSpeakers gallery={gallery} initialQuery={q ?? ""} initialTrack={track ?? "all"} />;
+  return <SpeakersProgramme searchParams={searchParams} surface="embed" />;
 }

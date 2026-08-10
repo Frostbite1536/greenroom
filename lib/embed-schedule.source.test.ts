@@ -34,7 +34,12 @@ test("descriptions and their expand control are in the served markup", () => {
 test("search is a GET form that preserves the other filters", () => {
   const component = source("components/embed-schedule.tsx");
   assert.match(component, /<form[^>]*method="get"/);
-  assert.match(component, /action="\/embed\/schedule"/);
+  // Surface-aware: search must return to the page the reader is on, so a day
+  // tab on `/schedule` cannot drop them into the chrome-free embed. The default
+  // is the frameable path, which is where this form lived before `/schedule`
+  // became a real page.
+  assert.match(component, /action=\{basePath\}/);
+  assert.match(component, /basePath = EMBED_SCHEDULE_PATH/);
   assert.match(component, /name="q"/);
   assert.match(component, /type="hidden" name="event"/);
   assert.match(component, /type="hidden" name="track"/);

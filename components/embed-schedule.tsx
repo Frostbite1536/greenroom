@@ -11,6 +11,7 @@ import Link from "next/link";
 import { CalendarDays, CalendarPlus, Download, MapPin, Search, User } from "lucide-react";
 import type { PublicAgenda } from "@/lib/data/reads";
 import { calendarExportUrl } from "@/lib/ics-embed";
+import { EMBED_SCHEDULE_PATH, type PublicSurfacePath } from "@/lib/embed-alias";
 import { PUBLIC_SESSION_SUMMARY_FALLBACK } from "@/lib/public-session-copy";
 import { formatDayLabel, formatEventDateRange, formatTimeRange, timeZoneNote, zonedParts } from "@/lib/tz";
 import {
@@ -146,11 +147,15 @@ export function EmbedSchedule({
   agenda,
   eventParam,
   searchParams = {},
+  basePath = EMBED_SCHEDULE_PATH,
 }: {
   agenda: PublicAgenda;
   /** Echoed into every generated link exactly as the host page supplied it. */
   eventParam?: string;
   searchParams?: { track?: string; day?: string; q?: string };
+  /** Where this page's own filter links and search form return to: the
+   *  canonical `/schedule` or the frameable `/embed/schedule`. */
+  basePath?: PublicSurfacePath;
 }) {
   const tz = agenda.event.timezone;
   const dayKeys = eventDayKeys(agenda);
@@ -167,7 +172,7 @@ export function EmbedSchedule({
   // read in winter must still say PDT.
   const zoneNote = timeZoneNote(tz, agenda.event.startsAt);
   const isFiltered = filters.track !== ALL || filters.day !== ALL || filters.q !== "";
-  const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides);
+  const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides, basePath);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;
 
   return (
@@ -200,7 +205,7 @@ export function EmbedSchedule({
 
         {/* A plain GET form: submitting works without JavaScript and the result
             is a linkable URL. Hidden inputs keep the other filters intact. */}
-        <form className="embed-search-form" method="get" action="/embed/schedule" role="search">
+        <form className="embed-search-form" method="get" action={basePath} role="search">
           {eventParam ? <input type="hidden" name="event" value={eventParam} /> : null}
           {filters.track !== ALL ? <input type="hidden" name="track" value={filters.track} /> : null}
           {filters.day !== ALL ? <input type="hidden" name="day" value={filters.day} /> : null}
@@ -217,7 +222,7 @@ export function EmbedSchedule({
           </label>
           <button className="ghost-button" type="submit">Search</button>
           {isFiltered ? (
-            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" })} prefetch={false}>
+            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" }, {}, basePath)} prefetch={false}>
               Clear
             </Link>
           ) : null}
@@ -294,7 +299,7 @@ export function EmbedSchedule({
                 ? "This day is part of the event but has no published sessions yet."
                 : "Try another day, track, or search term."}
             </EmptyState>
-            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" })} prefetch={false}>
+            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" }, {}, basePath)} prefetch={false}>
               Show the full schedule
             </Link>
           </div>

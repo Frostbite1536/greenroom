@@ -1,14 +1,14 @@
 import { redirect } from "next/navigation";
-import { embedAliasTarget } from "@/lib/embed-alias";
+import { CANONICAL_SCHEDULE_PATH, publicSurfaceUrl } from "@/lib/embed-alias";
 
 export const dynamic = "force-dynamic";
 
-/** Guessable public alias for the canonical schedule embed. */
+/** Guessable alias for the canonical public schedule. */
 export default async function AgendaPage({
   searchParams,
 }: {
   searchParams: Promise<{ event?: string }>;
 }) {
   const { event } = await searchParams;
-  redirect(embedAliasTarget("/embed/schedule", event));
+  redirect(publicSurfaceUrl(CANONICAL_SCHEDULE_PATH, event));
 }

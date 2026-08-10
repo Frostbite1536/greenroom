@@ -2662,11 +2662,18 @@ try {
   const landingHtml = await landing.text();
   const landingText = renderedText(landingHtml) ?? "";
   check("landing page serves logged-out visitors → 200", landing.status === 200, `got ${landing.status}`);
-  check("landing page links both embed surfaces prominently",
-    landingHtml.includes('href="/embed/schedule')
-    && landingHtml.includes('href="/embed/speakers')
+  // §5-5: the calls to action point at the canonical pages now, while the
+  // panel still advertises the /embed/* URLs an organizer pastes into an iframe.
+  check("landing page links both public surfaces prominently",
+    landingHtml.includes(`href="/schedule?event=${EVENT_ID}"`)
+    && landingHtml.includes(`href="/speakers?event=${EVENT_ID}"`)
     && landingText.includes("View the schedule")
     && landingText.includes("Meet the speakers")
+    && landingText.includes("/schedule")
+    && landingText.includes("/speakers"));
+  check("§5-5 landing page still advertises the embeddable variants",
+    landingHtml.includes('href="/embed/schedule"')
+    && landingHtml.includes('href="/embed/speakers"')
     && landingText.includes("/embed/schedule")
     && landingText.includes("/embed/speakers"));
   check("landing page names the event and its real programme size",
@@ -2694,20 +2701,53 @@ try {
     && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
     `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
 
+  // --- §5-5: the programme is SERVED at /schedule and /speakers -------------
+  // The reversal: these used to 307 into /embed/*, so the guessable URL was a
+  // frame fragment with no site around it. They are pages now; /embed/* stays
+  // the chrome-free variant of the same component tree.
+  for (const [path, marker] of [
+    ["/schedule", "Scratch Session A"],
+    ["/speakers", EMBED_SPEAKER_NAME],
+  ]) {
+    const page = await reqManual(`${path}?event=${encodeURIComponent(EVENT_ID)}`, null);
+    check(`§5-5 ${path} serves the programme itself → 200`,
+      page.status === 200 && page.text.includes(marker),
+      `${page.status} ${page.location || ""}`);
+    check(`§5-5 ${path} carries the standalone site header and its nav`,
+      page.text.includes("public-programme-nav")
+      && page.text.includes(">Greenroom<")
+      && page.text.includes('href="/schedule?event=')
+      && page.text.includes('href="/speakers?event='),
+      `expected the brand header and both nav links on ${path}`);
+    check(`§5-5 ${path} keeps its own links on the canonical surface`,
+      !page.text.includes('action="/embed/'),
+      `expected no /embed/ form action on ${path}`);
+  }
+  // ...and the frameable variant is still frameable, with NO standalone header.
+  for (const [path, marker] of [
+    ["/embed/schedule", "Scratch Session A"],
+    ["/embed/speakers", EMBED_SPEAKER_NAME],
+  ]) {
+    const framed = await reqManual(`${path}?event=${encodeURIComponent(EVENT_ID)}`, null);
+    check(`§5-5 ${path} still renders for a host iframe → 200`,
+      framed.status === 200 && framed.text.includes(marker), `${framed.status} ${framed.location || ""}`);
+    check(`§5-5 ${path} draws no standalone site chrome`,
+      !framed.text.includes("public-programme-nav"),
+      `expected no site header inside ${path}`);
+  }
+
   for (const [alias, target] of [
-    ["/schedule", "/embed/schedule"],
-    ["/agenda", "/embed/schedule"],
-    ["/sessions", "/embed/schedule"],
-    ["/speakers", "/embed/speakers"],
+    ["/agenda", "/schedule"],
+    ["/sessions", "/schedule"],
   ]) {
     const aliasRes = await reqManual(alias, null);
     check(`alias ${alias} → ${target}`,
       aliasRes.status === 307 && aliasRes.location === target,
       `${aliasRes.status} ${aliasRes.location || "none"}`);
   }
-  const aliasWithEvent = await reqManual(`/schedule?event=${encodeURIComponent(EVENT_ID)}`, null);
+  const aliasWithEvent = await reqManual(`/agenda?event=${encodeURIComponent(EVENT_ID)}`, null);
   check("an alias carries an explicit event through the redirect",
-    aliasWithEvent.status === 307 && aliasWithEvent.location === `/embed/schedule?event=${EVENT_ID}`,
+    aliasWithEvent.status === 307 && aliasWithEvent.location === `/schedule?event=${EVENT_ID}`,
     `${aliasWithEvent.status} ${aliasWithEvent.location || "none"}`);
 
   // An unknown ?event= must behave exactly like no ?event= at all. Comparing the

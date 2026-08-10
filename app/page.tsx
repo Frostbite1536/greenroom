@@ -4,7 +4,13 @@ import { ArrowRight, CalendarDays, Mic2, Users } from "lucide-react";
 import { getResolvedSession, homeForRole } from "@/lib/auth";
 import { getPublicAgenda } from "@/lib/data/reads";
 import { DEFAULT_PUBLIC_EVENT, getOpenCfpEntry } from "@/lib/data/open-cfp";
-import { embedAliasTarget } from "@/lib/embed-alias";
+import {
+  CANONICAL_SCHEDULE_PATH,
+  CANONICAL_SPEAKERS_PATH,
+  EMBED_SCHEDULE_PATH,
+  EMBED_SPEAKERS_PATH,
+  publicSurfaceUrl,
+} from "@/lib/embed-alias";
 import { boundedCount, derivedBoundedCount } from "@/lib/bounded-count";
 import { normalizeLandingEventParam, resolveLandingEvent } from "@/lib/landing-event";
 import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
@@ -90,8 +96,11 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
   // one read, one truth (the email-history rule).
   const programmeTruncated = agenda?.truncated ?? false;
 
-  const schedulePath = embedAliasTarget("/embed/schedule", resolution.eventParam);
-  const speakersPath = embedAliasTarget("/embed/speakers", resolution.eventParam);
+  // The hero links now point at the canonical pages a visitor can share and a
+  // crawler can index; the panel below still advertises the `/embed/*` variants
+  // because those are the URLs an organizer pastes into an iframe.
+  const schedulePath = publicSurfaceUrl(CANONICAL_SCHEDULE_PATH, resolution.eventParam);
+  const speakersPath = publicSurfaceUrl(CANONICAL_SPEAKERS_PATH, resolution.eventParam);
 
   return (
     <main className="landing">
@@ -162,16 +171,26 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
           <section className="landing-panel" aria-labelledby="landing-public-pages">
             <h2 className="landing-panel-heading" id="landing-public-pages">Public pages</h2>
             <p className="landing-panel-lede">
-              These pages are embeddable in any conference website and need no sign-in.
+              The programme lives at these URLs and needs no sign-in. The
+              <code> /embed/</code> variants are the same pages without this
+              header, for an iframe on your own site.
             </p>
             <ul className="landing-links">
               <li>
-                <Link href="/embed/schedule">/embed/schedule</Link>
+                <Link href={CANONICAL_SCHEDULE_PATH}>{CANONICAL_SCHEDULE_PATH}</Link>
                 <span>Every scheduled session, by day, room, and track.</span>
               </li>
               <li>
-                <Link href="/embed/speakers">/embed/speakers</Link>
+                <Link href={CANONICAL_SPEAKERS_PATH}>{CANONICAL_SPEAKERS_PATH}</Link>
                 <span>The confirmed speaker directory with their sessions.</span>
+              </li>
+              <li>
+                <Link href={EMBED_SCHEDULE_PATH}>{EMBED_SCHEDULE_PATH}</Link>
+                <span>The schedule, chrome-free, for embedding in an iframe.</span>
+              </li>
+              <li>
+                <Link href={EMBED_SPEAKERS_PATH}>{EMBED_SPEAKERS_PATH}</Link>
+                <span>The speaker directory, chrome-free, for the same.</span>
               </li>
             </ul>
           </section>
