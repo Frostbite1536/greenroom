@@ -63,6 +63,39 @@ test("the speaker roster counts only entries a submitter actually filled in", ()
   assert.deepEqual(resolveVisibleFields(fields, realRow).map((f) => f.key), ["workshop_room"]);
 });
 
+test("the builder preview's own call hides the question whose format rule does not match", () => {
+  // The exact fixture and the exact call `Preview` makes, so the unit gate and
+  // the smoke gate cannot disagree about what the preview should render. The
+  // smoke's page-wide substring search could not tell this apart from the
+  // editor list, which renders every question's label unconditionally.
+  const fields = [
+    { key: "audience_level", type: "SELECT", required: false, conditionalLogic: null },
+    {
+      key: "talk_extra",
+      type: "SHORT_TEXT",
+      required: false,
+      conditionalLogic: { match: "all" as const, rules: [{ fieldKey: "format", operator: "equals", value: "Talk" }] },
+    },
+    {
+      key: "workshop_extra",
+      type: "SHORT_TEXT",
+      required: false,
+      conditionalLogic: { match: "all" as const, rules: [{ fieldKey: "format", operator: "equals", value: "Workshop" }] },
+    },
+  ];
+  const atFirstPaint = resolveVisibleFields(
+    fields,
+    withBuiltInAnswers({}, { title: "", format: DEFAULT_SESSION_FORMAT }),
+  ).map((field) => field.key);
+  assert.deepEqual(atFirstPaint, ["audience_level", "talk_extra"]);
+
+  const afterChoosingWorkshop = resolveVisibleFields(
+    fields,
+    withBuiltInAnswers({}, { title: "", format: "Workshop" }),
+  ).map((field) => field.key);
+  assert.deepEqual(afterChoosingWorkshop, ["audience_level", "workshop_extra"]);
+});
+
 test("a stored custom field that claimed a reserved key still drives its own rules", () => {
   // The server refuses this shape now, but data written before it could exist.
   const merged = withBuiltInAnswers({ format: "custom answer" }, { format: "Talk" });

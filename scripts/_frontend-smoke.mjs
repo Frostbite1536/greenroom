@@ -656,10 +656,30 @@ try {
     `${builtInSave.status} ${JSON.stringify(builtInSave.data?.error ?? "")}`);
 
   const builderAfterLogic = await req("GET", `/admin/forms/${newFormId}`, null, admin);
-  check("the live preview shows the field the built-in rule matches",
-    builderAfterLogic.text.includes("Smoke shown for a Talk"));
-  check("the live preview hides the field the built-in rule does not match",
-    !builderAfterLogic.text.includes("Smoke shown for a Workshop"),
+  // Scoped to the preview, deliberately. The editor list on the same page
+  // renders EVERY question's label unconditionally, and the hydration payload
+  // carries them again, so a page-wide substring search can only ever say "the
+  // form has this question" — it says nothing about what the preview rendered.
+  const previewStart = builderAfterLogic.text.indexOf('class="builder-preview"');
+  const previewEnd = builderAfterLogic.text.indexOf("</aside>", previewStart);
+  const previewMarkup = previewStart >= 0 && previewEnd > previewStart
+    ? builderAfterLogic.text.slice(previewStart, previewEnd)
+    : "";
+  check("the builder page server-renders its live preview region",
+    previewMarkup.includes("Live preview") && previewMarkup.length > 200,
+    `start=${previewStart} end=${previewEnd} len=${previewMarkup.length}`);
+  // Premise: both questions really are on the saved form, so a question missing
+  // from the preview below is the rule hiding it and not a broken fixture.
+  const editorMarkup = previewStart >= 0 ? builderAfterLogic.text.slice(0, previewStart) : "";
+  check("both conditional questions exist in the builder's editor list",
+    editorMarkup.includes("Smoke shown for a Talk") && editorMarkup.includes("Smoke shown for a Workshop"));
+  // `preview-<key>` is emitted only by FieldControl under the preview's
+  // idPrefix, so it cannot be satisfied by the editor list or the payload.
+  check("the live preview renders the field its built-in rule matches",
+    previewMarkup.includes('id="preview-talk_extra"') && previewMarkup.includes("Smoke shown for a Talk"),
+    "the format picker starts on Talk, so this question must be shown");
+  check("the live preview omits the field its built-in rule does not match",
+    !previewMarkup.includes('id="preview-workshop_extra"') && !previewMarkup.includes("Smoke shown for a Workshop"),
     "a rule on Session format was ignored, so every conditional field rendered");
 
   // Publish so the public renderer is reachable, and confirm the rule reaches it.

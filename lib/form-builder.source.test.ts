@@ -111,6 +111,26 @@ test("the public form and the preview both answer the built-in sources", () => {
   assert.match(builder, /useState\(DEFAULT_SESSION_FORMAT\)/);
 });
 
+test("only the builder preview renders fields under the `preview-` id prefix", () => {
+  // The smoke tells "the preview rendered this question" apart from "the editor
+  // list named it" by looking for `id="preview-<key>"`. That only discriminates
+  // while this prefix stays unique to the preview.
+  const builder = source("components/form-builder.tsx");
+  assert.match(builder, /idPrefix="preview"/);
+  assert.match(source("components/field-renderer.tsx"), /const id = `\$\{idPrefix\}-\$\{field\.key\}`/);
+  for (const [path, prefix] of [
+    ["components/cfp-form.tsx", "cfp"],
+    ["app/(app)/portal/submissions/[abstractId]/submission-editor.tsx", "sub"],
+    ["app/(app)/portal/tasks/[taskId]/task-form.tsx", "task"],
+  ] as const) {
+    assert.match(source(path), new RegExp(`idPrefix="${prefix}"`));
+    assert.doesNotMatch(source(path), /idPrefix="preview"/);
+  }
+  // The editor list names every question regardless of the preview, which is
+  // exactly why a page-wide search cannot stand in for a scoped one.
+  assert.match(builder, /\{field\.label \|\| "Untitled question"\}/);
+});
+
 test("the shared switch's decoration cannot intercept its own checkbox", () => {
   const css = source("components/feature.css");
   // Both spans are absolutely positioned after the input, so they are the hit
