@@ -31,8 +31,8 @@ const CONFLICT_REVIEWER_EMAIL = "conflict-reviewer@scratch.test";
 const EMBED_SPEAKER_EMAIL = "embed-speaker@scratch.test";
 // A second scratch co-speaker deliberately left WITHOUT a SpeakerProfile, to
 // exercise the derived fallback line. It cannot be one of the demo speakers:
-// lib/demo/seed.ts:245-258 upserts a global SpeakerProfile (jobTitle "Staff
-// Engineer", company "Acme Labs") for every demo speaker user, and that row is
+// `lib/demo/seed.ts` upserts a global SpeakerProfile (a distinct fictional
+// title and company per speaker) for every demo speaker user, and that row is
 // keyed by userId, so it survives this script's event-scoped wipe entirely.
 const EMBED_NOPROFILE_EMAIL = "embed-noprofile@scratch.test";
 // SPK-01 needs the case the old roster could not show at all: someone the
@@ -2812,9 +2812,10 @@ try {
     && speakersEmbed.text.includes("Full profile")
     && !speakersEmbed.text.includes('role="dialog"'));
   // The derived-fallback case needs a speaker with genuinely no SpeakerProfile.
-  // That cannot be one of the demo users: lib/demo/seed.ts:245-258 upserts a
-  // global profile ("Staff Engineer at Acme Labs") for every demo speaker, and
-  // the row is keyed by userId so the event-scoped wipe never touches it.
+  // That cannot be one of the demo users: `lib/demo/seed.ts` upserts a global
+  // profile (a distinct fictional title and company per speaker) for every demo
+  // speaker, and the row is keyed by userId so the event-scoped wipe never
+  // touches it.
   // Confirm the premise against the DB, then assert the rendered line.
   const noProfileRow = await prisma.speakerProfile.findUnique({
     where: { userId: fx.noProfileSpeaker.id }, select: { userId: true },
