@@ -681,6 +681,67 @@ try {
   check("the live preview omits the field its built-in rule does not match",
     !previewMarkup.includes('id="preview-workshop_extra"') && !previewMarkup.includes("Smoke shown for a Workshop"),
     "a rule on Session format was ignored, so every conditional field rendered");
+  // Every built-in the picker offers must be answerable in the preview, or a
+  // rule on it sits at an empty default and the preview disagrees with the
+  // public form for exactly that rule (PR #67).
+  check("the live preview offers a control for every built-in rule source",
+    ["Session title", "Abstract", "Session format", "Topic category", "Speakers added"]
+      .every((label) => previewMarkup.includes(label)),
+    `missing: ${["Session title", "Abstract", "Session format", "Topic category", "Speakers added"].filter((label) => !previewMarkup.includes(label)).join(", ")}`);
+  check("the live preview's category picker is populated from the event's categories",
+    previewMarkup.includes(fx.category.name) && !previewMarkup.includes("This event has no categories yet"),
+    `expected the seeded category ${fx.category.name} in the preview`);
+
+  // A second, non-format built-in source proves the wiring is general rather
+  // than one special-cased key.
+  //
+  // Coverage boundary, stated rather than papered over: only the *hidden*
+  // direction is reachable here. The preview deliberately starts blank like the
+  // public form's first paint, so `format` is the only built-in with a
+  // non-empty default and therefore the only one that can be in the shown state
+  // in server-rendered markup. Driving a category into the matched state needs
+  // a click. Both directions for all five built-in sources are covered by the
+  // focused gate (`lib/form-logic-builtin.test.ts`, "every built-in source the
+  // preview offers drives visibility in both directions"), through the exact
+  // call `Preview` makes.
+  const categoryLogicPayload = {
+    ...builtInLogicPayload,
+    fields: [
+      builtInLogicPayload.fields[0],
+      { key: "category_unset_extra", label: "Smoke shown when no category", type: "SHORT_TEXT", required: false, sortOrder: 1,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "categoryId", operator: "isNotEmpty" }] } },
+      { key: "category_set_extra", label: "Smoke shown for the seeded category", type: "SHORT_TEXT", required: false, sortOrder: 2,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "categoryId", operator: "equals", value: fx.category.id }] } },
+    ],
+  };
+  const categorySave = await req("POST", "/api/cfp/forms", categoryLogicPayload, admin);
+  check("a categoryId-source rule round-trips through Save → 200",
+    categorySave.status === 200
+      && (categorySave.data?.data?.fields ?? []).find((f) => f.key === "category_set_extra")?.conditionalLogic?.rules?.[0]?.fieldKey === "categoryId",
+    `${categorySave.status} ${JSON.stringify(categorySave.data?.error ?? "")}`);
+
+  const builderAfterCategory = await req("GET", `/admin/forms/${newFormId}`, null, admin);
+  const categoryPreviewStart = builderAfterCategory.text.indexOf('class="builder-preview"');
+  const categoryPreviewEnd = builderAfterCategory.text.indexOf("</aside>", categoryPreviewStart);
+  const categoryPreview = categoryPreviewStart >= 0 && categoryPreviewEnd > categoryPreviewStart
+    ? builderAfterCategory.text.slice(categoryPreviewStart, categoryPreviewEnd)
+    : "";
+  check("the builder page still server-renders its preview region for the category rules",
+    categoryPreview.includes("Live preview") && categoryPreview.length > 200,
+    `start=${categoryPreviewStart} end=${categoryPreviewEnd} len=${categoryPreview.length}`);
+  check("both category-conditional questions exist in the builder's editor list",
+    builderAfterCategory.text.slice(0, categoryPreviewStart).includes("Smoke shown when no category")
+      && builderAfterCategory.text.slice(0, categoryPreviewStart).includes("Smoke shown for the seeded category"));
+  check("the live preview omits both categoryId-conditional questions while no category is chosen",
+    !categoryPreview.includes('id="preview-category_unset_extra"')
+      && !categoryPreview.includes('id="preview-category_set_extra"'),
+    "a rule on Topic category was ignored, so conditional fields rendered with no category chosen");
+  // The unconditional question is the control: it proves the preview did render
+  // questions here, so the two absences above are the rules and not an empty
+  // preview.
+  check("the live preview still renders the unconditional question beside them",
+    categoryPreview.includes('id="preview-audience_level"'),
+    "the preview rendered no questions at all, so the omissions above prove nothing");
 
   // Publish so the public renderer is reachable, and confirm the rule reaches it.
   const publishForBuiltIn = await req("POST", "/api/cfp/forms", { ...builtInLogicPayload, published: true }, admin);

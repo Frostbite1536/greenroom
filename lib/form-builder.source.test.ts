@@ -104,11 +104,39 @@ test("the public form and the preview both answer the built-in sources", () => {
   const cfp = source("components/cfp-form.tsx");
   assert.match(cfp, /withBuiltInAnswers\(answers, \{ title, abstract, format, categoryId, speakers \}\)/);
   const builder = source("components/form-builder.tsx");
-  assert.match(builder, /withBuiltInAnswers\(answers, \{ title, format \}\)/);
+  // Same helper, same call, so preview and public form cannot drift.
+  assert.match(builder, /withBuiltInAnswers\(answers, previewBuiltInAnswers\(builtIns\)\)/);
   // Both start on the same format, so the preview is not lying about the first
   // paint a submitter gets.
   assert.match(cfp, /useState\(DEFAULT_SESSION_FORMAT\)/);
-  assert.match(builder, /useState\(DEFAULT_SESSION_FORMAT\)/);
+  assert.match(builder, /initialPreviewBuiltIns\(DEFAULT_SESSION_FORMAT\)/);
+});
+
+test("the preview renders a control for every built-in the rule picker offers", () => {
+  const builder = source("components/form-builder.tsx");
+  // A source with no control would sit at an empty default forever, and the
+  // preview would disagree with the public form for that rule (PR #67).
+  const preview = builder.slice(builder.indexOf("function Preview("));
+  for (const label of ["Session title", "Abstract", "Session format", "Topic category", "Speakers added"]) {
+    assert.ok(preview.includes(label), `the preview has no control for ${label}`);
+  }
+  assert.match(preview, /patchBuiltIn\(\{ abstract: e\.target\.value \}\)/);
+  assert.match(preview, /patchBuiltIn\(\{ categoryId: e\.target\.value \}\)/);
+  assert.match(preview, /patchBuiltIn\(\{ speakerCount: Number\(e\.target\.value\) \}\)/);
+  // An event with no categories says so rather than showing an empty picker.
+  assert.match(preview, /This event has no categories yet/);
+});
+
+test("the builder page loads the event categories the preview and rule picker need", () => {
+  const reads = source("lib/data/reads.ts");
+  const builderRead = reads.slice(reads.indexOf("export async function getFormForBuilder"));
+  // Bounded and event-scoped like every other operator projection, id+name only.
+  assert.match(builderRead, /prisma\.category\.findMany\(\{\s*where: \{ eventId: ctx\.eventId \}/);
+  assert.match(builderRead, /select: \{ id: true, name: true \}/);
+  assert.match(builderRead, /assertEventQueryBound\(categories, OPERATOR_QUERY_LIMITS\.settingsCategories/);
+
+  const page = source("app/(app)/admin/forms/[formId]/page.tsx");
+  assert.match(page, /categories=\{result\.categories\}/);
 });
 
 test("only the builder preview renders fields under the `preview-` id prefix", () => {

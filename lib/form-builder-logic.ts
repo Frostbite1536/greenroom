@@ -95,6 +95,54 @@ export function normalizeOptions(options: readonly BuilderOption[] | null | unde
   return result;
 }
 
+// ---- preview answers for the built-in questions ---------------------------
+
+/**
+ * What the live preview holds for the built-in submission questions.
+ *
+ * Every source the rule picker offers needs a control here, or a rule on it
+ * silently evaluates against an empty default and the preview disagrees with
+ * the public form for exactly the sources the builder just made authorable
+ * (Greptile, PR #67). The roster is a count rather than a list because only its
+ * presence can be compared.
+ */
+export type PreviewBuiltIns = {
+  title: string;
+  abstract: string;
+  format: string;
+  categoryId: string;
+  speakerCount: number;
+};
+
+/**
+ * Where the preview starts, chosen to match the public form's own first paint:
+ * everything blank except the format picker, which is a `<select>` with a
+ * default, and the roster, which begins as one empty row that counts as nobody.
+ */
+export function initialPreviewBuiltIns(defaultFormat: string): PreviewBuiltIns {
+  return { title: "", abstract: "", format: defaultFormat, categoryId: "", speakerCount: 0 };
+}
+
+/** Stand-in roster entries; only how many there are can ever be compared. */
+export function sampleSpeakers(count: number): { name: string; email: string }[] {
+  const safe = Number.isFinite(count) ? Math.max(0, Math.min(20, Math.trunc(count))) : 0;
+  return Array.from({ length: safe }, (_, index) => ({
+    name: `Sample speaker ${index + 1}`,
+    email: `speaker${index + 1}@example.test`,
+  }));
+}
+
+/** The preview's built-ins in the shape `withBuiltInAnswers` consumes. */
+export function previewBuiltInAnswers(builtIns: PreviewBuiltIns) {
+  return {
+    title: builtIns.title,
+    abstract: builtIns.abstract,
+    format: builtIns.format,
+    categoryId: builtIns.categoryId,
+    speakers: sampleSpeakers(builtIns.speakerCount),
+  };
+}
+
 // ---- rule sources ---------------------------------------------------------
 
 export type RuleSourceField = {
@@ -150,7 +198,10 @@ export function ruleSources(
     operators: source.operators.filter((operator) =>
       BUILT_IN_AUTHORABLE_OPERATORS.includes(operator),
     ),
-    optionValues: builtInValues[source.key] ?? null,
+    // An empty list means "not knowable here" (an event with no categories
+    // yet), which has to stay free text rather than an empty picker.
+    optionValues:
+      (builtInValues[source.key]?.length ?? 0) > 0 ? builtInValues[source.key] : null,
   })).filter((source) => source.operators.length > 0);
   const custom = fields
     .filter((field) => field.key !== selfKey)
@@ -209,9 +260,12 @@ export function retargetRule(
   if (!operatorNeedsValue(operator)) return { fieldKey: source.key, operator };
   const current = rule.value === undefined ? "" : String(rule.value);
   const allowed = source.optionValues;
-  const value =
-    allowed && !allowed.some((option) => option.value === current)
-      ? (allowed[0]?.value ?? "")
-      : current;
-  return { fieldKey: source.key, operator, value };
+  const unknown = allowed !== null && !allowed.some((option) => option.value === current);
+  // Snap to a real choice when the server would refuse anything else — that is
+  // a custom option-backed question. A built-in's values are a convenience list
+  // only (the server checks the key, never the value), and the list can go
+  // stale, so a value the author already wrote is preserved rather than
+  // silently rewritten when they touch the operator.
+  const snap = unknown && (current.length === 0 || !source.builtIn);
+  return { fieldKey: source.key, operator, value: snap ? (allowed?.[0]?.value ?? "") : current };
 }

@@ -11,6 +11,7 @@ import test from "node:test";
 import { builtInAnswerMap, resolveVisibleFields, withBuiltInAnswers } from "@/lib/form-logic";
 import { RESERVED_FIELD_KEYS } from "@/lib/services/form-shape-validation";
 import { DEFAULT_SESSION_FORMAT } from "@/lib/cfp-formats";
+import { initialPreviewBuiltIns, previewBuiltInAnswers } from "@/lib/form-builder-logic";
 
 const guarded = (fieldKey: string, operator: string, value?: string) => [
   {
@@ -94,6 +95,45 @@ test("the builder preview's own call hides the question whose format rule does n
     withBuiltInAnswers({}, { title: "", format: "Workshop" }),
   ).map((field) => field.key);
   assert.deepEqual(afterChoosingWorkshop, ["audience_level", "workshop_extra"]);
+});
+
+test("every built-in source the preview offers drives visibility in both directions", () => {
+  // One rule per source, through the exact call `Preview` makes. Before this,
+  // abstract/categoryId/speakers had no preview control at all, so their rules
+  // sat permanently on the "unanswered" side.
+  const cases = [
+    { key: "title_q", source: "title", operator: "equals", value: "Kickoff", match: { title: "Kickoff" }, miss: { title: "Other" } },
+    { key: "abstract_q", source: "abstract", operator: "isNotEmpty", value: undefined, match: { abstract: "Some body" }, miss: { abstract: "" } },
+    { key: "format_q", source: "format", operator: "equals", value: "Workshop", match: { format: "Workshop" }, miss: { format: "Talk" } },
+    { key: "category_q", source: "categoryId", operator: "equals", value: "cat_1", match: { categoryId: "cat_1" }, miss: { categoryId: "cat_2" } },
+    // The preview holds the roster as a count, so this is the knob it turns.
+    { key: "speakers_q", source: "speakers", operator: "isNotEmpty", value: undefined, match: { speakerCount: 1 }, miss: { speakerCount: 0 } },
+  ] as const;
+
+  for (const entry of cases) {
+    const fields = [
+      {
+        key: entry.key,
+        type: "SHORT_TEXT",
+        required: false,
+        conditionalLogic: {
+          match: "all" as const,
+          rules: [{ fieldKey: entry.source, operator: entry.operator, value: entry.value }],
+        },
+      },
+    ];
+    const shown = resolveVisibleFields(
+      fields,
+      withBuiltInAnswers({}, previewBuiltInAnswers({ ...initialPreviewBuiltIns(DEFAULT_SESSION_FORMAT), ...entry.match })),
+    );
+    assert.deepEqual(shown.map((f) => f.key), [entry.key], `${entry.source} should show its field when matched`);
+
+    const hidden = resolveVisibleFields(
+      fields,
+      withBuiltInAnswers({}, previewBuiltInAnswers({ ...initialPreviewBuiltIns(DEFAULT_SESSION_FORMAT), ...entry.miss })),
+    );
+    assert.deepEqual(hidden.map((f) => f.key), [], `${entry.source} should hide its field when unmatched`);
+  }
 });
 
 test("a stored custom field that claimed a reserved key still drives its own rules", () => {

@@ -32,14 +32,20 @@ import {
   addOption,
   defaultRule,
   findRuleSource,
+  initialPreviewBuiltIns,
   normalizeOptions,
   operatorNeedsValue,
+  previewBuiltInAnswers,
   relabelOption,
   removeOption,
   retargetRule,
   ruleSources,
+  type PreviewBuiltIns,
   type RuleSource,
 } from "@/lib/form-builder-logic";
+
+/** Event-scoped categories, so the preview can answer the built-in Topic question. */
+export type BuilderCategory = { id: string; name: string };
 
 type Step = "welcome" | "fields" | "settings";
 type FieldType = FieldView["type"];
@@ -132,11 +138,13 @@ export function FormBuilder({
   eventId,
   timezone,
   publicFormPath,
+  categories = [],
 }: {
   form: BuilderForm;
   eventId: string;
   timezone: string;
   publicFormPath: string;
+  categories?: BuilderCategory[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -369,6 +377,7 @@ export function FormBuilder({
           {step === "fields" && (
             <FieldsStep
               draft={draft}
+              categories={categories}
               errors={fieldErrors}
               openField={openField}
               setOpenField={setOpenField}
@@ -383,7 +392,7 @@ export function FormBuilder({
 
         <aside className="builder-preview" aria-label="Live preview">
           <p className="preview-eyebrow">Live preview</p>
-          <Preview draft={draft} />
+          <Preview draft={draft} categories={categories} />
         </aside>
       </div>
     </div>
@@ -420,6 +429,7 @@ function WelcomeStep({ draft, patch, errors }: { draft: Draft; patch: (p: Partia
 
 function FieldsStep({
   draft,
+  categories,
   errors,
   openField,
   setOpenField,
@@ -429,6 +439,7 @@ function FieldsStep({
   move,
 }: {
   draft: Draft;
+  categories: BuilderCategory[];
   errors: ErrorMap;
   openField: string | null;
   setOpenField: (id: string | null) => void;
@@ -508,7 +519,7 @@ function FieldsStep({
                   <OptionsEditor field={field} patchField={patchField} />
                 )}
 
-                <LogicEditor draft={draft} field={field} patchField={patchField} />
+                <LogicEditor draft={draft} categories={categories} field={field} patchField={patchField} />
               </div>
             )}
           </div>
@@ -573,10 +584,12 @@ function OptionsEditor({
 
 function LogicEditor({
   draft,
+  categories,
   field,
   patchField,
 }: {
   draft: Draft;
+  categories: BuilderCategory[];
   field: DraftField;
   patchField: (localId: string, p: Partial<DraftField>) => void;
 }) {
@@ -590,9 +603,15 @@ function LogicEditor({
       ruleSources(
         draft.fields.map((f) => ({ key: f.key, label: f.label, type: f.type, options: f.options })),
         field.key,
-        { format: SESSION_FORMATS.map((entry) => ({ label: entry.label, value: entry.value })) },
+        {
+          format: SESSION_FORMATS.map((entry) => ({ label: entry.label, value: entry.value })),
+          // Convenience only: the server checks the key, never the value, and
+          // categories outlive any list captured at save time — so an id that
+          // is no longer here stays editable rather than being rewritten.
+          categoryId: categories.map((category) => ({ label: category.name, value: category.id })),
+        },
       ),
-    [draft.fields, field.key],
+    [draft.fields, field.key, categories],
   );
 
   if (!logic) {
@@ -780,13 +799,12 @@ function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch:
   );
 }
 
-function Preview({ draft }: { draft: Draft }) {
+function Preview({ draft, categories }: { draft: Draft; categories: BuilderCategory[] }) {
   const [answers, setAnswers] = useState<AnswerMap>({});
   // The built-in questions are real inputs here, not a sentence about them: a
-  // rule on Session format is only previewable if the preview can answer it,
-  // and these start where the public form starts so the first paint agrees.
-  const [title, setTitle] = useState("");
-  const [format, setFormat] = useState(DEFAULT_SESSION_FORMAT);
+  // rule is only previewable if the preview can answer its source, and these
+  // start where the public form starts so the first paint agrees.
+  const [builtIns, setBuiltIns] = useState<PreviewBuiltIns>(() => initialPreviewBuiltIns(DEFAULT_SESSION_FORMAT));
   const asFields = useMemo(
     () =>
       draft.fields.map((f) => ({
@@ -801,11 +819,13 @@ function Preview({ draft }: { draft: Draft }) {
       })),
     [draft.fields],
   );
+  // The same call the public form makes, so the two cannot drift.
   const visible = useMemo(
-    () => resolveVisibleFields(asFields, withBuiltInAnswers(answers, { title, format })),
-    [asFields, answers, title, format],
+    () => resolveVisibleFields(asFields, withBuiltInAnswers(answers, previewBuiltInAnswers(builtIns))),
+    [asFields, answers, builtIns],
   );
   const hiddenCount = asFields.length - visible.length;
+  const patchBuiltIn = (patch: Partial<PreviewBuiltIns>) => setBuiltIns((current) => ({ ...current, ...patch }));
 
   return (
     <div className="card" style={{ padding: 16, background: "white" }}>
@@ -815,16 +835,52 @@ function Preview({ draft }: { draft: Draft }) {
           {draft.welcomeText.slice(0, 140)}{draft.welcomeText.length > 140 ? "…" : ""}
         </p>
       ) : null}
-      <p className="hint" style={{ marginBottom: 14 }}>Title, abstract, format and category are always collected.</p>
+      {/* Every built-in the rule picker offers as a source gets a control here.
+          A source the picker offers but the preview cannot answer would sit at
+          an empty default forever, and the preview would disagree with the
+          public form for exactly the rules the builder just made writable. */}
+      <p className="hint" style={{ marginBottom: 14 }}>
+        Title, abstract, format, category and speakers are always collected. Change them to see
+        conditional questions appear.
+      </p>
       <label className="stack" style={{ marginBottom: 12 }}>
         <span className="field-label">Session title</span>
-        <input className="text-input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="text-input" value={builtIns.title} onChange={(e) => patchBuiltIn({ title: e.target.value })} />
       </label>
-      <label className="stack" style={{ marginBottom: 14 }}>
+      <label className="stack" style={{ marginBottom: 12 }}>
+        <span className="field-label">Abstract</span>
+        <textarea className="text-input" rows={2} value={builtIns.abstract} onChange={(e) => patchBuiltIn({ abstract: e.target.value })} />
+      </label>
+      <label className="stack" style={{ marginBottom: 12 }}>
         <span className="field-label">Session format</span>
-        <select className="select-input" value={format} onChange={(e) => setFormat(e.target.value)}>
+        <select className="select-input" value={builtIns.format} onChange={(e) => patchBuiltIn({ format: e.target.value })}>
           {SESSION_FORMATS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
         </select>
+      </label>
+      {categories.length > 0 ? (
+        <label className="stack" style={{ marginBottom: 12 }}>
+          <span className="field-label">Topic category</span>
+          <select className="select-input" value={builtIns.categoryId} onChange={(e) => patchBuiltIn({ categoryId: e.target.value })}>
+            <option value="">Select…</option>
+            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+          </select>
+        </label>
+      ) : (
+        <p className="hint" style={{ marginBottom: 12 }}>
+          This event has no categories yet, so the built-in Topic category question has nothing to pick.
+        </p>
+      )}
+      <label className="stack" style={{ marginBottom: 14 }}>
+        {/* The roster is presence-only, so a count is all a rule can read. */}
+        <span className="field-label">Speakers added</span>
+        <input
+          type="number"
+          min={0}
+          max={20}
+          className="text-input"
+          value={builtIns.speakerCount}
+          onChange={(e) => patchBuiltIn({ speakerCount: Number(e.target.value) })}
+        />
       </label>
       {visible.map((field) => (
         <FieldControl

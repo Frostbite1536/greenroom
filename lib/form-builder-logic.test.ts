@@ -10,13 +10,15 @@ import {
   addOption,
   defaultRule,
   findRuleSource,
-  nextOptionValue,
+  initialPreviewBuiltIns,
   normalizeOptions,
   operatorNeedsValue,
+  previewBuiltInAnswers,
   relabelOption,
   removeOption,
   retargetRule,
   ruleSources,
+  sampleSpeakers,
 } from "@/lib/form-builder-logic";
 import {
   BUILT_IN_SUBMISSION_SOURCES,
@@ -124,6 +126,65 @@ test("a freshly added rule is already valid, so the first Save is not a refusal"
     { key: "extra", label: "Extra", type: "SHORT_TEXT", conditionalLogic: { match: "all", rules: [seeded] } },
   ]);
   assert.deepEqual(issues, []);
+});
+
+test("the preview can answer every built-in source the picker offers", () => {
+  // The defect this closes: the picker offered abstract, categoryId and
+  // speakers, but the preview held no value for them, so those rules evaluated
+  // against an empty default forever and the preview disagreed with the public
+  // form for exactly the sources the builder had just made writable.
+  const offered = ruleSources([], null)
+    .filter((source) => source.builtIn)
+    .map((source) => source.key)
+    .sort();
+  const answerable = Object.keys(previewBuiltInAnswers(initialPreviewBuiltIns("Talk"))).sort();
+  assert.deepEqual(offered, answerable);
+});
+
+test("the preview starts where the public form's first paint starts", () => {
+  const start = initialPreviewBuiltIns("Talk");
+  assert.deepEqual(start, { title: "", abstract: "", format: "Talk", categoryId: "", speakerCount: 0 });
+  // The public roster begins as one empty row, which counts as nobody.
+  assert.deepEqual(sampleSpeakers(start.speakerCount), []);
+});
+
+test("the sample roster is presence-only and bounded", () => {
+  assert.equal(sampleSpeakers(3).length, 3);
+  assert.equal(sampleSpeakers(-4).length, 0);
+  assert.equal(sampleSpeakers(999).length, 20);
+  assert.equal(sampleSpeakers(Number.NaN).length, 0);
+  // Every entry has to read as filled in, or `isNotEmpty` would never fire.
+  assert.ok(sampleSpeakers(2).every((speaker) => speaker.name.length > 0 && speaker.email.length > 0));
+});
+
+test("a built-in's convenience value list never rewrites a value the author already wrote", () => {
+  // Categories are created and deleted after a form is saved, and the server
+  // checks the key rather than the value, so a stale id must survive an
+  // operator change instead of silently snapping to whichever category is first.
+  const sources = ruleSources([], null, {
+    categoryId: [{ label: "Applied AI", value: "cat_1" }, { label: "Platform", value: "cat_2" }],
+  });
+  const category = findRuleSource(sources, "categoryId")!;
+  assert.deepEqual(category.optionValues, [
+    { label: "Applied AI", value: "cat_1" },
+    { label: "Platform", value: "cat_2" },
+  ]);
+  assert.deepEqual(retargetRule({ fieldKey: "categoryId", operator: "equals", value: "deleted_cat" }, category), {
+    fieldKey: "categoryId",
+    operator: "equals",
+    value: "deleted_cat",
+  });
+  // An empty value still gets filled in, since that is the refusal case.
+  assert.deepEqual(retargetRule({ fieldKey: "title", operator: "equals", value: "" }, category), {
+    fieldKey: "categoryId",
+    operator: "equals",
+    value: "cat_1",
+  });
+});
+
+test("an event with no categories keeps the category rule value as free text", () => {
+  const sources = ruleSources([], null, { categoryId: [] });
+  assert.equal(findRuleSource(sources, "categoryId")?.optionValues, null);
 });
 
 test("re-pointing a rule drops a value the new source could never match", () => {
