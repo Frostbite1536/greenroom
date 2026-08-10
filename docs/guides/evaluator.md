@@ -24,7 +24,16 @@ row shows the talk title, its category and review team, and where you are with i
 | **To do** | not started |
 | **In progress** | you saved scores but did not finish |
 | **Done** | you submitted your review (you can still change it) |
-| **Declined** | you are not reviewing this one |
+| **Conflict declared** | you are not reviewing this one |
+
+If you know a speaker personally, or have any other reason not to judge their work, choose
+**Declare a conflict** on that proposal and confirm. It leaves your queue as a declared
+conflict and the server refuses any score on it afterwards; only an administrator can put it
+back. Nothing is deleted, and your other assignments are unaffected.
+
+When the event runs more than one review round, a **Review round** selector appears above the
+queue, showing how many proposals are assigned to you in each. With a single round — as in the
+seeded Forward 2026 demo — there is nothing to switch to, so it stays hidden.
 
 A progress bar above the queue shows how many active assignments are scored. Greenroom opens
 the first unscored, reviewable proposal and, after each submitted review, jumps to the next

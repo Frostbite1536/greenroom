@@ -1,86 +1,182 @@
-# Public production screenshots
+# Judging index
 
-## Current demo and evidence scope
+> Greenroom is an open-source, self-hostable conference programme platform that
+> takes an organizer from an open CFP through structured review, atomic
+> acceptance, speaker readiness, conflict-safe scheduling, and a published
+> programme.
 
-The current canonical demo is <https://greenroom-hq.com>. The screenshots and
-measurements below are retained as **historical evidence**: they were captured
-on 2026-08-08 from the then-canonical Vercel deployment, whose URL is recorded
-with each artifact. They are not represented as fresh captures of the current
-domain. A consolidated post-reseed window owns replacement screenshots.
+**Deployed application:** <https://greenroom-hq.com>
+**Commit this evidence describes:** `9e058f3560a398352bbd48277ef80cb16e8550dc`
 
-Captured at a **1440 × 1000** viewport with headless Microsoft Edge and a fresh
-temporary browser profile. Each capture is public and read-only; no
-authenticated session, mutation, reset, or seed was used.
+Every primary artifact in this directory describes that one commit. Anything
+measured or captured on an earlier build is labeled **historical** and is not
+presented as current evidence.
 
-| File | Public URL | Captured |
-| --- | --- | --- |
-| [screenshots/login.png](screenshots/login.png) | <https://greenroom-omega-dusky.vercel.app/login> | 2026-08-08T07:19-05:00 |
-| [screenshots/public-cfp.png](screenshots/public-cfp.png) | <https://greenroom-omega-dusky.vercel.app/cfp/call-for-speakers> | 2026-08-08T07:19-05:00 |
-| [screenshots/public-schedule.png](screenshots/public-schedule.png) | <https://greenroom-omega-dusky.vercel.app/embed/schedule?event=forward-2026> | **2026-08-08T13:50-05:00** |
-| [screenshots/public-speakers.png](screenshots/public-speakers.png) | <https://greenroom-omega-dusky.vercel.app/embed/speakers?event=forward-2026> | **2026-08-08T13:50-05:00** |
+## Start here
 
-The schedule and speakers captures were retaken after the A3 production
-walkthrough and coordinated reseed, so they show the **then-final** demo data: 11
-sessions across May 12–14 2026 with correct event-local times, and the 10
-scheduled speakers with their session links.
+| Artifact | What it is |
+| --- | --- |
+| [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) | Shot list and narration for the walkthrough video: the full operating loop, one deliberate conflict refusal, and the greenfield event/CFP proof |
+| [SCREENSHOT-INDEX.md](SCREENSHOT-INDEX.md) | The current screenshot set, organized by role and workflow, with per-artifact commit, URL, timestamp, viewport, access role, and read-only/mutation status |
+| [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) | Clean-install rehearsal from a fresh clone and an empty database (**historical** — recorded at `f80247e`) |
+| [PERFORMANCE.md](PERFORMANCE.md) | Lighthouse performance and accessibility results for ten routes (**historical** — measured 2026-08-08 on the pre-cutover deployment) |
+| [A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) | An authenticated production verification receipt, 14/14 (**historical** — recorded at `0bb4aad`) |
+| [COSTS.md](COSTS.md) | Reimbursement claim structure and token telemetry (estimates, not invoices) |
+| [embed-schedule-proof.html](embed-schedule-proof.html) | Standalone page proving the schedule embed works from a foreign origin |
 
-## Clean-install rehearsal
+Written guides for the three roles live in [`../guides/`](../guides/):
+[event admin](../guides/event-admin.md) · [evaluator](../guides/evaluator.md) ·
+[speaker](../guides/speaker.md).
 
-[INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) documents a from-scratch install on
-an empty database — fresh clone → seeded, running instance in under four minutes,
-with the golden path passing 20/20 and 108/108 unit tests plus a 71/71 smoke on
-that brand-new instance.
+Developer-facing documents: [`../ARCHITECTURE.md`](../ARCHITECTURE.md) (product
+boundary, domain model, routes, security), [`../INVARIANTS.md`](../INVARIANTS.md)
+(the rules the server enforces), [`../LIFECYCLE.md`](../LIFECYCLE.md),
+[`../API.md`](../API.md), [`../DEPLOY.md`](../DEPLOY.md).
 
-## Measured performance and accessibility
+## Proof points
 
-[PERFORMANCE.md](PERFORMANCE.md) records Lighthouse scores for **ten routes**
-covering all four user journeys: **95–99 performance, 100 accessibility on every
-route**, zero layout shift everywhere, 28–33 ms production TTFB, and every page
-under ~180 KiB. It also lists the four accessibility issues found in the first
-pass and the fix that closed each one.
+- Conventional **Next.js, TypeScript, PostgreSQL, and Prisma** stack — no exotic
+  infrastructure to evaluate.
+- **Reproducible setup with one required database variable.** `DATABASE_URL` is
+  the only value a local install must set; a production deployment additionally
+  needs `SESSION_SECRET`, and fails closed without it.
+- **Deterministic demo data and one-click role personas** — the same seed
+  produces the same 40 proposals, 13 sessions, and 11 placements every time.
+- **Event-scoped authorization resolved from persisted membership.** The signed
+  cookie identifies an email and an active event; it never carries a role. Every
+  protected read and write re-resolves the `EventMember` row server-side
+  (`lib/api/context.ts`, INV-EVENT-001).
+- **Transactional acceptance and scheduling rules.** Acceptance provisions at
+  most one session plus its onboarding assignments in one transaction; room and
+  speaker overlaps are detected and refused inside the transaction that would
+  write the slot (INV-DOMAIN-001, INV-SCHEDULE-001).
+- **Speaker onboarding with form-backed tasks.** A form-carrying task cannot be
+  completed until its visible required answers pass the same validator the
+  public form uses (INV-TASK-001).
+- **Public schedule and speaker surfaces, embeds, calendar export, and a
+  read-only API** — all reachable without an account, except the API, which is
+  key-gated and off by default.
+- **Explicit verification, accessibility, and performance evidence**, each
+  labeled with what was measured and on which commit.
+
+## Verification receipts
+
+Run these from a checked-out repository. `prod-verify.mjs` is read-only: it needs
+the configured read-only database connection to discover a live published form,
+confirms production reset stays refused, and never seeds or resets data.
+
+```bash
+npm test
+npm run typecheck
+npm run build
+node --env-file=.env scripts/_frontend-smoke.mjs
+node scripts/prod-verify.mjs https://greenroom-hq.com
+```
+
+Recorded results for the current commit are captured during the coordinated
+evidence window and belong here:
+
+| Gate | Commit | Result | Recorded |
+| --- | --- | --- | --- |
+| `npm test` | `9e058f3` | *fill in* | *fill in* |
+| `npm run typecheck` | `9e058f3` | *fill in* | *fill in* |
+| `npm run build` | `9e058f3` | *fill in* | *fill in* |
+| frontend smoke | `9e058f3` | *fill in* | *fill in* |
+| `scripts/prod-verify.mjs` | `9e058f3` | *fill in* | *fill in* |
+
+The frontend smoke creates and removes only its own `scratch-frontend` event.
+[A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) and
+[INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) are the same kind of receipt,
+recorded on earlier commits and labeled as such.
+
+## Enforced rules a judge can check
+
+These are server-enforced, not UI conventions. The walkthrough video captures the
+first one on camera; the rest are covered by the automated suites and the
+invariant references in [`../INVARIANTS.md`](../INVARIANTS.md).
+
+- A room overlap is refused, and so is a speaker double-booking — detection and
+  the slot write share one transaction.
+- Acceptance provisions **at most one** session per proposal and never
+  duplicates onboarding assignments; repeating it tops up what is missing.
+- A form-carrying onboarding task cannot be marked complete while a visible
+  required answer is missing or invalid.
+- An accepted proposal's text stays editable by its speaker, while the confirmed
+  speaker roster is locked.
+- Cross-event access fails closed: a resource belonging to another event is
+  refused rather than filtered.
+- Demo reset is refused unless an operator explicitly opts in with
+  `ALLOW_DEMO_RESET=true` — it is not set in production, and there is no reset
+  control anywhere in the UI.
+- The read-only API refuses a request without a valid key, and returns
+  `503` when no key is configured at all rather than serving data openly.
+
+## Current limitations
+
+Stated plainly, because a judge should not have to discover them.
+
+- **No self-service sign-up.** Organizers provision accounts; the login page says
+  so. Public sign-up is roadmap, not shipped.
+- **No password reset.** An organizer re-provisions access.
+- **No event switching.** An admin can create a new event from **Event settings**,
+  and it is created genuinely empty, but the workspace stays on the event the
+  session was issued for — the app says "switching between events is on the
+  roadmap". A newly created event therefore cannot yet be configured from the UI.
+- **No file upload on proposals or speaker profiles.** Slide decks and headshots
+  are stored as URLs. The only file input in the product is the admin CSV
+  proposal import.
+- **One topic per submission, by design.** A CFP form can offer several topic
+  options, but each submitted proposal stores exactly one selected topic, which
+  is what routes it to a review team. The agenda `Track` is a separate placement
+  choice made later, not the submitted topic.
+- **Email delivery is split on purpose.** Submission receipts dispatch on the
+  live provider path when one is configured. Decision mail is preview-gated: the
+  send button stays disabled until the exact content has been previewed, and the
+  send is bound to that content and recipient set.
+- **The read-only v1 API is off by default.** It serves data only when
+  `GREENROOM_API_KEY` is configured on the server.
+- **Accessibility evidence is automated only.** Every audited route scored 100 on
+  Lighthouse accessibility at the recorded measurement, but no manual
+  screen-reader pass has been performed. That gap is real and unclosed.
+- **The Greenroom Assistant is not in the product.** It is not in the merged
+  tree and is deliberately not described anywhere in this package.
 
 ## Beyond the minimum
 
 The required workflow is intentionally small: collect a proposal, route and
 review it, accept it, onboard the speakers, schedule it safely, and publish the
-programme. The following capabilities are already in the merged application;
-they are not placeholders or planned work.
+programme. The following are already in the merged application — not
+placeholders, not planned work.
 
-- **Evaluation depth.** Admins can create weighted rubric rounds, assign
-  reviewers, and opt a round into blind review. Blind reviewer surfaces withhold
-  speaker profiles, while making the important limitation explicit: proposal
-  text can still identify its author.
-- **Operations control room.** The ADMIN-only Operations area groups reminder
-  sends, CSV import, email-template previews, and integration status instead of
-  leaving operators to call endpoints directly.
+- **Evaluation depth.** Weighted rubric rounds with each criterion's share of
+  the total rubric shown as a percentage, optional open/close dates per round,
+  reviewer coverage that sorts by whichever column the team is chasing, a
+  reviewer's own conflict declaration, and optional blind rounds that withhold
+  speaker profiles server-side while stating plainly that proposal text can
+  still identify its author.
+- **Operations control room.** An ADMIN-only area grouping reminder sends, CSV
+  import, email-template previews, the preview-gated decision send, and
+  integration status, plus a separate **Email history** panel that reports each
+  dispatch's real outcome — including "mocked, not delivered".
 - **Enforced form rules.** Conditional questions, typed answers, submission
-  limits, and open/close windows are checked on the server; a hidden required
-  question does not block a valid submitter.
-- **Speaker operations.** The portal includes resources and form-carrying
-  onboarding tasks. Completion is gated on the visible required answers, not a
-  checkbox alone.
-- **Programme tooling.** List, Day, Week, Tracks, and Conflicts agenda views
-  complement conflict-safe scheduling. The deterministic demo also includes a
-  source-less guaranteed keynote; direct UI creation of that special session is
-  not claimed here.
+  limits, and open/close windows are all checked on the server; a hidden
+  required question never blocks a valid submitter. After the call closes,
+  non-accepted proposals become read-only while accepted ones stay editable —
+  and withdrawal is never blocked by the deadline.
+- **Speaker operations.** Resources and form-carrying onboarding tasks with per-
+  task due dates, an overdue count, and a readiness chase list on the admin side.
+- **Programme tooling.** List, Day, Week, Tracks, and Conflicts agenda views;
+  drag-and-drop moves re-checked on the server; an assisted **Fill open slots**
+  pass that previews conflict-free placements and writes nothing until applied;
+  and per-session publication control, so a confirmed talk can be held back from
+  the public programme without losing its slot, speakers, or tasks. The
+  deterministic demo also includes a source-less guaranteed keynote and one
+  deliberate seeded room conflict, so the conflict view is populated; direct UI
+  creation of that special keynote is not claimed here.
 - **Integration surfaces.** The key-gated, read-only v1 API exposes submissions,
   speakers, and schedule data. The Airtable mirror projects confirmed programme
   data into upserted Sessions, Speakers, and Schedule tables, with per-table
   repair reporting and no delete operation.
-
-The Greenroom Assistant is intentionally absent from this list: it is not in
-the current merged tree and should be documented only after it lands.
-
-## Product decision: one track per submission
-
-A CFP form can offer several track options, but each submitted `Abstract`
-stores one selected `Category` for CFP track routing to the appropriate review
-team. This is a deliberate product call, not an unadvertised many-to-many
-capability. The later agenda `Track` is a separate `ScheduleSlot` placement
-choice; it is not the submission's selected `Category`. The organizer
-clarification in `REQUIREMENTS-DELTA-2026-08-08.md`, Q&A #1 — “single form w
-one or more track options is great” — supports the form design. It does not
-change the fact that a single submission has one chosen Category.
 
 ## Reimbursement evidence
 
@@ -88,36 +184,3 @@ change the fact that a single submission has one chosen Category.
 reimbursement claim from transparent token telemetry. Its dollar figures are
 API-equivalent estimates, not invoices, and must be refreshed at submission
 freeze.
-
-## Reproduce
-
-Run this PowerShell template from the repository root for any of the URLs above.
-It uses a unique temporary Edge profile so it cannot reuse a signed-in browser
-session.
-
-```powershell
-$edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-$profile = Join-Path ([System.IO.Path]::GetTempPath()) ("greenroom-edge-" + [guid]::NewGuid().ToString('N'))
-$url = 'https://greenroom-hq.com/embed/schedule?event=forward-2026'
-$output = 'docs\judging\screenshots\public-schedule.png'
-
-New-Item -ItemType Directory -Path $profile | Out-Null
-& $edge --headless=new --disable-gpu --no-first-run --hide-scrollbars `
-  --run-all-compositor-stages-before-draw --virtual-time-budget=5000 `
-  "--user-data-dir=$profile" --window-size=1440,1000 "--screenshot=$output" $url
-```
-
-After Edge exits, inspect the generated PNG before replacing a committed
-artifact. The output should show the public page, not a deployment-authentication
-or error screen.
-
-Two traps worth knowing: Edge prints a `… bytes written to file <path>` line on
-success — if you do not see it, nothing was captured. And pass `--screenshot` an
-**absolute** path; a mangled or relative path silently writes somewhere else
-rather than failing.
-
-## Walkthrough video
-
-[VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) is the shot list and narration for the
-recorded walkthrough: the golden path end to end, the logged-out `/embed/*`
-proof, the `.ics` download, and the public API with and without a key.

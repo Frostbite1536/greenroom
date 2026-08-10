@@ -1,14 +1,23 @@
 # Greenroom
 
-Open-source event program management — an alternative to closed CFP/speaker-ops
-SaaS. Greenroom covers the full life of a conference program: CFP forms,
-abstract evaluation, speaker onboarding, and a conflict-aware agenda, with
-public embeds for your event site.
+Greenroom is an open-source, self-hostable conference programme platform that
+takes an organizer from an open CFP through structured review, atomic
+acceptance, speaker readiness, conflict-safe scheduling, and a published
+programme.
+
+An alternative to closed CFP/speaker-ops SaaS: CFP forms, abstract evaluation,
+speaker onboarding, and a conflict-aware agenda, with public embeds for your
+event site.
+
+Evaluating this project? Start at the
+[judging index](docs/judging/README.md).
 
 ## Features (the golden path)
 
 1. **CFP forms** — build a submission form (custom fields, conditional logic,
-   submission limits, welcome/thank-you pages) and publish it at a public URL.
+   submission limits, welcome/thank-you pages) and publish it at a public,
+   event-scoped URL (`/cfp/{event}/{form}`). An unpublished form has no public
+   page at all.
 2. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
    email); drafts and validation included.
 3. **Evaluation** — review teams score abstracts against a weighted rubric
@@ -27,8 +36,10 @@ public embeds for your event site.
 7. **Agenda builder** — List / Day / Week / Tracks / Conflicts views, with
    drag-and-drop moves in the day grid and transactional room-overlap and
    speaker double-booking conflict detection.
-8. **Public embeds** — mobile-friendly schedule and compact speaker gallery,
-   with `.ics` calendar export and copy-paste snippets at `/admin/embeds`.
+8. **Public embeds** — a public landing page at `/`, plus a mobile-friendly
+   schedule (day tabs, search, track filters, session details) and speaker
+   gallery, with `.ics` calendar export and copy-paste snippets at
+   `/admin/embeds`.
 
 ## Quickstart
 
@@ -44,8 +55,9 @@ npm run db:seed            # deterministic demo data (event, forms, 40 abstracts
 npm run dev
 ```
 
-Then open http://localhost:3000/login — one-click demo personas (Admin /
-Evaluator / Speaker) are available for the fixed seeded demo personas.
+Then open http://localhost:3000/login. Sign in with an email and password, or
+use the one-click demo personas (Admin / Evaluator / Speaker). There is no
+self-service sign-up and no password reset — organizers provision accounts.
 
 Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
 `sofia@greenroom-hq.com` (speaker).
@@ -63,10 +75,11 @@ The demo runs on Vercel + Neon; pushes to `main` auto-deploy.
 
 ### Production golden-path walkthrough
 
-The public CFP uses the stable seeded slug
-[`/cfp/call-for-speakers`](https://greenroom-hq.com/cfp/call-for-speakers).
-Use a distinctive, throwaway talk title so it is easy to find in the admin
-pipeline.
+The public CFP uses the stable seeded slugs
+[`/cfp/forward-2026/call-for-speakers`](https://greenroom-hq.com/cfp/forward-2026/call-for-speakers)
+(the older one-segment `/cfp/call-for-speakers` still resolves and redirects
+there). Use a distinctive, throwaway talk title so it is easy to find in the
+admin pipeline.
 
 1. Open the public CFP, complete its required fields, and submit it while
    logged out.
@@ -99,7 +112,10 @@ Non-technical walkthroughs of the same ground, one per role, live in
 
 ### Demo personas
 
-Sign in through the one-click buttons on `/login`; no password is required.
+The one-click buttons on `/login` sign these three in without a password. The
+credential form beside them accepts the same identities with the seeded demo
+password — a deliberately public constant (`DEMO_PERSONA_PASSWORD` in
+`lib/demo/seed.ts`), not a secret, rotated by editing it and reseeding.
 
 | Role | Persona | Email | Main area |
 | --- | --- | --- | --- |
@@ -126,6 +142,30 @@ an external-origin embed proof, serve
 [`docs/judging/embed-schedule-proof.html`](docs/judging/embed-schedule-proof.html)
 from any static host or localhost.
 
+## Current limitations
+
+Stated up front rather than left to be discovered. The fuller list, with
+context, is in the [judging index](docs/judging/README.md#current-limitations).
+
+- **No self-service sign-up** and **no password reset** — organizers provision
+  accounts. Public sign-up is roadmap, not shipped.
+- **No event switching.** An admin can create a new event from **Event
+  settings**, and it is created genuinely empty, but the workspace stays on the
+  event the session was issued for. Switching is on the roadmap, so a brand-new
+  event cannot yet be configured from the UI.
+- **No file upload** on proposals or speaker profiles — slide decks and
+  headshots are URLs. The only file input is the admin CSV proposal import.
+- **One topic per submission, by design.** A form can offer several topic
+  options; each proposal stores exactly one, and that is what routes it to a
+  review team. The agenda `Track` is a separate, later placement choice.
+- **Email is split on purpose.** Submission receipts dispatch on the live
+  provider path when one is configured; decision mail is preview-gated and
+  cannot send content that was not previewed.
+- **The read-only v1 API is off** unless `GREENROOM_API_KEY` is configured.
+- **Demo reset is refused** unless an operator sets `ALLOW_DEMO_RESET=true`. It
+  is unset in production and there is no reset control in the UI.
+- **Accessibility evidence is automated only** — no manual screen-reader pass.
+
 ## Stack
 
 Next.js 16 (App Router) · React 19 · Prisma 6 · PostgreSQL · Zod. Plain CSS,
@@ -135,6 +175,7 @@ no UI framework. See `docs/ARCHITECTURE.md`.
 
 | Document | What it covers |
 | --- | --- |
+| [`docs/judging/`](docs/judging/README.md) | Judging index: walkthrough script, screenshot index, verification receipts, limitations |
 | [`docs/guides/`](docs/guides/) | Plain-language how-tos for admins, evaluators, and speakers |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Product boundary, domain model, routes, security |
 | [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) | Abstract / Session / ScheduleSlot / SpeakerTask state machines |

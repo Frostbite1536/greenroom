@@ -6,6 +6,11 @@ the schedule. Signed in as **Maya Chen**, event admin for **Forward 2026**.
 Everything below happens in the left-hand menu, roughly top to bottom. You can stop and come
 back at any point; nothing is lost.
 
+Your event itself lives under **Event settings**: its name, dates and time zone, the rooms
+talks can be placed in, and the tracks and topics the programme is grouped by. **New event**
+there creates another event from scratch — it starts genuinely empty, and your workspace
+stays on the event you signed in to, because switching between events is on the roadmap.
+
 ---
 
 ## 1. Open your call for speakers
@@ -14,8 +19,10 @@ back at any point; nothing is lost.
 
 A form is the page speakers fill in. You control:
 
-- the **name** and the **web address** (the "slug") — Forward 2026 uses
-  `/cfp/call-for-speakers`, so you can put that link straight on your event site;
+- the **name** and the **web address** (the "slug") — the public link carries
+  your event and your form, so Forward 2026's call is at
+  `/cfp/forward-2026/call-for-speakers`, ready to put straight on your event
+  site. The dialog shows you the exact address while you type it.
 - the **welcome** and **thank-you** messages speakers see before and after they submit;
 - **when it opens and closes** — outside those dates the page politely says the window is
   shut, and nothing can be submitted;
@@ -36,9 +43,9 @@ Tracks are handled by the **categories** on the form — one form with several t
 usually all you need, and you can always publish more forms later. Each category also decides
 which review team gets those proposals.
 
-When the form looks right, publish it and use **View public form** to see exactly what a
-speaker sees. The public page works for people who are not signed in — that is the whole
-point.
+A new form starts as a **Draft** and has no public page at all. When it looks right, turn on
+**Published** and save; then open its address in another tab to see exactly what a speaker
+sees. The public page works for people who are not signed in — that is the whole point.
 
 > **Tip:** the public form is the safest thing to test. Submit a fake proposal with an obvious
 > title, then follow it through the steps below.

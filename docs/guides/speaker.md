@@ -7,7 +7,7 @@ For speakers. The examples use **Sofia Marques**, a speaker at **Forward 2026**.
 ## 1. Submitting a proposal
 
 You do **not** need an account to submit. The event gives you a link — for Forward 2026 it is
-`/cfp/call-for-speakers` — and you fill the page in.
+`/cfp/forward-2026/call-for-speakers` — and you fill the page in.
 
 - Fill in your talk title, description, session type and length, and the track it belongs to.
 - Answer the event's own questions. Required ones are marked; some only appear once an earlier
@@ -61,7 +61,11 @@ Two limits, and the portal tells you which one applies:
 - **Proposals that were not accepted, or that were withdrawn, are read-only.** You can still
   open and read them.
 
-You do not need to beat a deadline: editing keeps working after the call for speakers closes.
+There is one deadline that matters. Once the call for speakers closes, a proposal the
+programme team has **not** accepted becomes read-only — an edit landing after reviewers have
+started reading would change the thing being judged. An **accepted** talk is the deliberate
+exception: you keep editing it long after the call shuts. And withdrawing is never blocked by
+the closing date, so you are never trapped in a proposal you no longer want to give.
 
 ### Withdrawing before a decision
 
@@ -77,13 +81,14 @@ contact them so they can make the programme change safely.
 
 Your portal home has three things the programme team is watching:
 
-**Your tasks.** The event's checklist — for Forward 2026: complete your profile, upload a
-headshot, submit the A/V & logistics form, confirm your session details, and (optional) upload
-your slide deck. Mark each plain checklist item as done as you go; you can move one back if you
-were too optimistic. A task with a **Form** badge opens the questions the team needs—for
-example hotel stay, flight reimbursement, or A/V logistics. Partial answers are saved and
-shown when you return. The task cannot be marked done until every question currently visible
-and required for your choices is valid. A waiver can be displayed when an organiser has
+**Your tasks.** The event's checklist, each item with its own due date. Forward 2026 asks you
+to complete your speaker profile, tell the team about your hotel stay, claim your flight
+reimbursement, submit the A/V & logistics form, confirm your session details, and — optionally
+— upload your slide deck. Mark each plain checklist item as done as you go; you can move one
+back if you were too optimistic. A task with a **Form** badge opens the questions the team
+needs — hotel stay, flight reimbursement and A/V logistics all carry one. Partial answers are
+saved and shown when you return. The task cannot be marked done until every question currently
+visible and required for your choices is valid. A waiver can be displayed when an organiser has
 prepared one, but speakers cannot waive their own required work.
 
 **Your sessions.** Your confirmed talks and when they are scheduled — date, time and room once
