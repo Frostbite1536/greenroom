@@ -10,7 +10,11 @@ export const PUBLIC_RATE_EXPIRED_BUCKET_CLEANUP_LIMIT = 100;
 export const PUBLIC_SUBMISSION_RATE_LIMITS = {
   writeIp: { scope: "public_write_ip_10m", limit: 20, windowMs: 10 * 60 * 1_000, order: 10 },
   writeEvent: { scope: "public_write_event_1h", limit: 120, windowMs: 60 * 60 * 1_000, order: 20 },
-  submitPrimaryEmail: { scope: "submit_primary_email_24h", limit: 3, windowMs: 24 * 60 * 60 * 1_000, order: 30 },
+  // 10, not 3: a real speaker legitimately submits several proposals plus
+  // edits from one primary email in a sitting, and the lower cap refused
+  // honest traffic mid-session. Abuse is still bounded by the IP and
+  // event-wide ceilings above, which are unchanged.
+  submitPrimaryEmail: { scope: "submit_primary_email_24h", limit: 10, windowMs: 24 * 60 * 60 * 1_000, order: 30 },
   submitEvent: { scope: "submit_event_1h", limit: 60, windowMs: 60 * 60 * 1_000, order: 40 },
 } as const;
 
@@ -99,6 +103,37 @@ export function publicSubmissionRateLockKeys(eventId: string, plans: readonly Pu
     .map((plan) => `public-submission-rate:${eventId}:${String(plan.order).padStart(3, "0")}:${plan.scope}`);
 }
 
+/**
+ * Whole seconds until the refusing bucket's window rolls over — the earliest
+ * moment the same request could pass. Never below 1 so `Retry-After` is always
+ * an actionable, non-zero delay.
+ */
+export function publicSubmissionRetryAfterSeconds(expiresAt: Date, now: Date): number {
+  return Math.max(1, Math.ceil((expiresAt.getTime() - now.getTime()) / 1_000));
+}
+
+/** Approximate, human-facing wait phrase. Rounds up so it never promises early. */
+export function describePublicSubmissionRetryWait(seconds: number): string {
+  if (seconds < 60) return "in less than a minute";
+  if (seconds < 90 * 60) {
+    const minutes = Math.ceil(seconds / 60);
+    return `in about ${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  const hours = Math.ceil(seconds / (60 * 60));
+  return `in about ${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+/**
+ * The one public rate refusal. The stable `PUBLIC_SUBMISSION_RATE_LIMITED`
+ * code is unchanged; the wait is derived from the refusing bucket's real
+ * `windowStart + windowMs` rather than left for the caller to guess.
+ */
+export function publicSubmissionRateLimitError(plan: PublicRateBucketPlan, now: Date): ApiError {
+  const retryAfterSeconds = publicSubmissionRetryAfterSeconds(plan.expiresAt, now);
+  const message = `Too many public CFP writes right now. Try again ${describePublicSubmissionRetryWait(retryAfterSeconds)}.`;
+  return new ApiError(429, "PUBLIC_SUBMISSION_RATE_LIMITED", message, undefined, retryAfterSeconds);
+}
+
 async function incrementRateBucket(
   tx: Prisma.TransactionClient,
   eventId: string,
@@ -154,9 +189,7 @@ export async function enforcePublicSubmissionRateLimit(input: {
     `;
     for (const plan of plans) {
       const count = await incrementRateBucket(tx, input.eventId, plan, now);
-      if (count > plan.limit) {
-        throw new ApiError(429, "PUBLIC_SUBMISSION_RATE_LIMITED", "Please wait before sending another public CFP write.");
-      }
+      if (count > plan.limit) throw publicSubmissionRateLimitError(plan, now);
     }
   });
 }

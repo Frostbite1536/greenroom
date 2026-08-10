@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { ApiError, toResponse } from "@/lib/api/http";
 import {
   PUBLIC_SUBMISSION_RATE_LIMITS,
+  describePublicSubmissionRetryWait,
   publicClientIp,
   publicSubmissionFingerprint,
+  publicSubmissionRateLimitError,
   publicSubmissionRateLockKeys,
   publicSubmissionRatePlan,
+  publicSubmissionRetryAfterSeconds,
 } from "./public-submission-rate";
 
 const secret = "scratch-signing-secret-at-least-32-characters";
@@ -64,7 +68,81 @@ test("rate locks have exact IP, event, primary-email, then submit-event order an
   ]);
   const source = readFileSync(new URL("./public-submission-rate.ts", import.meta.url), "utf8");
   assert.match(source, /INSERT INTO "PublicSubmissionRateBucket"[\s\S]*ON CONFLICT[\s\S]*"count" = "PublicSubmissionRateBucket"\."count" \+ 1[\s\S]*RETURNING "count"/);
-  assert.match(source, /throw new ApiError\(429, "PUBLIC_SUBMISSION_RATE_LIMITED"/);
+  assert.match(source, /new ApiError\(429, "PUBLIC_SUBMISSION_RATE_LIMITED"/);
+  assert.match(source, /if \(count > plan\.limit\) throw publicSubmissionRateLimitError\(plan, now\)/);
+});
+
+test("the named public rate ceilings are the ratified values", () => {
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(PUBLIC_SUBMISSION_RATE_LIMITS).map(([name, rule]) => [name, [rule.limit, rule.windowMs]]),
+    ),
+    {
+      writeIp: [20, 10 * 60 * 1_000],
+      writeEvent: [120, 60 * 60 * 1_000],
+      // Relaxed from 3: one speaker's fixture proposals plus edits must not
+      // exhaust a day's budget mid-session.
+      submitPrimaryEmail: [10, 24 * 60 * 60 * 1_000],
+      submitEvent: [60, 60 * 60 * 1_000],
+    },
+  );
+});
+
+test("a refusal reports the refusing bucket's real window rollover, never a guess", () => {
+  const plans = publicSubmissionRatePlan({
+    eventId: "event-1", intent: "submit", primaryEmail: "primary@example.test", clientIp: "203.0.113.10", secret, now,
+  });
+  const ruleByScope = new Map<string, number>(
+    Object.values(PUBLIC_SUBMISSION_RATE_LIMITS).map((rule) => [rule.scope, rule.windowMs]),
+  );
+  for (const plan of plans) {
+    // The advertised moment is windowStart + windowMs, not a fixed constant.
+    assert.equal(plan.expiresAt.getTime(), plan.windowStart.getTime() + ruleByScope.get(plan.scope)!);
+    const error = publicSubmissionRateLimitError(plan, now);
+    assert.equal(error.status, 429);
+    assert.equal(error.code, "PUBLIC_SUBMISSION_RATE_LIMITED");
+    assert.equal(error.retryAfterSeconds, Math.ceil((plan.expiresAt.getTime() - now.getTime()) / 1_000));
+    assert.ok(error.retryAfterSeconds! >= 1);
+    // Honest: the promised wait never lands before the bucket actually rolls.
+    assert.ok(now.getTime() + error.retryAfterSeconds! * 1_000 >= plan.expiresAt.getTime());
+    assert.match(error.message, /Try again in (about \d+ (minutes?|hours?)|less than a minute)\./);
+    assert.doesNotMatch(error.message, /Please wait before sending another public CFP write/);
+  }
+});
+
+test("retry-after is a whole, never-zero second count and the wait phrase rounds up", () => {
+  const at = (ms: number) => publicSubmissionRetryAfterSeconds(new Date(now.getTime() + ms), now);
+  assert.equal(at(10 * 60 * 1_000), 600);
+  assert.equal(at(1_500), 2);
+  assert.equal(at(0), 1);
+  assert.equal(at(-60_000), 1);
+  assert.equal(describePublicSubmissionRetryWait(30), "in less than a minute");
+  assert.equal(describePublicSubmissionRetryWait(60), "in about 1 minute");
+  assert.equal(describePublicSubmissionRetryWait(600), "in about 10 minutes");
+  assert.equal(describePublicSubmissionRetryWait(24 * 60 * 60), "in about 24 hours");
+});
+
+test("the 429 response carries Retry-After and retryAfterSeconds beside the stable code", async () => {
+  const plan = publicSubmissionRatePlan({
+    eventId: "event-1", intent: "submit", primaryEmail: "primary@example.test", clientIp: "203.0.113.10", secret, now,
+  }).find((candidate) => candidate.scope === PUBLIC_SUBMISSION_RATE_LIMITS.submitPrimaryEmail.scope)!;
+  const error = publicSubmissionRateLimitError(plan, now);
+  const response = toResponse(error);
+  const body = await response.json() as { ok: false; error: { code: string; message: string; retryAfterSeconds?: number } };
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("Retry-After"), String(error.retryAfterSeconds));
+  assert.match(response.headers.get("Retry-After")!, /^\d+$/);
+  assert.equal(body.ok, false);
+  assert.equal(body.error.code, "PUBLIC_SUBMISSION_RATE_LIMITED");
+  assert.equal(body.error.retryAfterSeconds, error.retryAfterSeconds);
+  assert.equal(body.error.message, error.message);
+});
+
+test("refusals that do not know when they clear stay header-free", async () => {
+  const response = toResponse(new ApiError(404, "FORM_NOT_FOUND", "This form is not available."));
+  const body = await response.json() as { error: { retryAfterSeconds?: number } };
+  assert.equal(response.headers.get("Retry-After"), null);
+  assert.equal(body.error.retryAfterSeconds, undefined);
 });
 
 test("413 and 429 preflight precede core public writer calls", () => {

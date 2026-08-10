@@ -82,6 +82,10 @@ function publicSubmissionHeaders(method, path, extraHeaders, sess) {
   return headers;
 }
 
+// The public rate refusal must name an approximate wait, never a bare
+// "please wait". Mirrors describePublicSubmissionRetryWait.
+const PUBLIC_RATE_WAIT_PATTERN = /Try again in (about \d+ (minutes?|hours?)|less than a minute)\./;
+
 function publicSubmissionRateFingerprint(domain, value) {
   return createHmac("sha256", SMOKE_SESSION_SECRET)
     .update(`greenroom:public-submission-rate:v1:${domain}\u0000${value}`)
@@ -556,13 +560,19 @@ try {
     answers: {}, intent: "submit",
   }, undefined, rateTestHeaders);
   const rateCoreAfter = await publicCoreCounts();
+  // Every public refusal must say when it clears: `Retry-After` seconds plus
+  // the same number in the JSON error. This bucket is the 10-minute IP window.
+  const rateLimitedRetryAfter = Number(rateLimited.headers?.get("retry-after"));
   check(
     "S19 known-form business-invalid attempts durably consume the intended IP bucket and the next write is 429 without core writes",
     rateInvalidAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FIELD_ERRORS") &&
       rateBucketBeforeLimit[0]?.count === 20 &&
       rateLimited.status === 429 && rateLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      Number.isInteger(rateLimitedRetryAfter) && rateLimitedRetryAfter >= 1 && rateLimitedRetryAfter <= 600 &&
+      rateLimited.data?.error?.retryAfterSeconds === rateLimitedRetryAfter &&
+      PUBLIC_RATE_WAIT_PATTERN.test(rateLimited.data?.error?.message ?? "") &&
       JSON.stringify(rateCoreAfter) === JSON.stringify(rateCoreBefore),
-    `${rateInvalidAttempts.map((attempt) => attempt.status).join(",")}/${rateBucketBeforeLimit[0]?.count}/${rateLimited.status}`,
+    `${rateInvalidAttempts.map((attempt) => attempt.status).join(",")}/${rateBucketBeforeLimit[0]?.count}/${rateLimited.status}/${rateLimitedRetryAfter}`,
   );
   await prisma.$executeRaw`
     DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
@@ -571,6 +581,52 @@ try {
     SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
   `;
   check("S19 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
+
+  // S19: the primary-email submit budget is 10 per 24h, not 3 — one speaker
+  // legitimately submits several proposals plus edits in a sitting. Seed the
+  // durable bucket to one below the cap so exactly two real requests prove the
+  // boundary: the 10th clears the limiter (and is refused later, on business
+  // validation), the 11th is throttled with an honest 24h-window retry moment.
+  const s19EmailCapEmail = "s19-email-cap@scratch.test";
+  const s19EmailWindowMs = 24 * 60 * 60 * 1_000;
+  const s19EmailWindowStart = new Date(Math.floor(Date.now() / s19EmailWindowMs) * s19EmailWindowMs);
+  await prisma.publicSubmissionRateBucket.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      scope: "submit_primary_email_24h",
+      fingerprint: publicSubmissionRateFingerprint("primary-email", s19EmailCapEmail),
+      windowStart: s19EmailWindowStart,
+      count: 9,
+      expiresAt: new Date(s19EmailWindowStart.getTime() + s19EmailWindowMs),
+    },
+  });
+  const s19EmailCapAttempt = (index) => j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: `S19 email cap attempt ${index}`,
+    speakers: [{ email: s19EmailCapEmail, name: "Cap", isPrimary: true }],
+    answers: {}, intent: "submit",
+  });
+  const s19EmailCoreBefore = await publicCoreCounts();
+  const s19EmailAtCap = await s19EmailCapAttempt(10);
+  const s19EmailOverCap = await s19EmailCapAttempt(11);
+  const s19EmailCoreAfter = await publicCoreCounts();
+  const s19EmailRetryAfter = Number(s19EmailOverCap.headers?.get("retry-after"));
+  check(
+    "S19 the primary-email submit budget admits 10 per 24h and the 11th is 429 with a real retry moment and no core writes",
+    s19EmailAtCap.status === 422 && s19EmailAtCap.data?.error?.code === "FIELD_ERRORS" &&
+      s19EmailOverCap.status === 429 && s19EmailOverCap.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      Number.isInteger(s19EmailRetryAfter) && s19EmailRetryAfter >= 1 && s19EmailRetryAfter <= s19EmailWindowMs / 1_000 &&
+      s19EmailOverCap.data?.error?.retryAfterSeconds === s19EmailRetryAfter &&
+      PUBLIC_RATE_WAIT_PATTERN.test(s19EmailOverCap.data?.error?.message ?? "") &&
+      JSON.stringify(s19EmailCoreAfter) === JSON.stringify(s19EmailCoreBefore),
+    `${s19EmailAtCap.status}/${s19EmailOverCap.status}/${s19EmailRetryAfter}`,
+  );
+  await prisma.$executeRaw`
+    DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  const s19EmailCapBucketsAfterCleanup = await prisma.$queryRaw`
+    SELECT COUNT(*)::int AS "count" FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
+  `;
+  check("S19 scratch primary-email cap buckets are explicitly cleaned after the boundary assertion", s19EmailCapBucketsAfterCleanup[0]?.count === 0, s19EmailCapBucketsAfterCleanup[0]?.count);
 
   // S20: the event-wide bucket applies to every public intent. Establish the
   // durable count with distinct, smoke-isolated IPs, then set only the scratch
@@ -608,13 +664,19 @@ try {
     answers: {}, intent: "saveDraft",
   });
   const s20EventRateCoreAfter = await publicCoreCounts();
+  // The event ceiling refuses on a one-hour window, so its advertised wait
+  // must fall inside that hour rather than repeat a generic "please wait".
+  const s20EventRetryAfter = Number(s20EventLimited.headers?.get("retry-after"));
   check(
     "S20 rotating-IP invalid drafts durably reach the all-intent event ceiling without core writes",
     s20EventRateAttempts.every((attempt) => attempt.status === 422 && attempt.data?.error?.code === "FORM_CLOSED") &&
       s20EventBucket[0]?.count === 3 && s20IpBuckets[0]?.count === 3 &&
       s20EventLimited.status === 429 && s20EventLimited.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
+      Number.isInteger(s20EventRetryAfter) && s20EventRetryAfter >= 1 && s20EventRetryAfter <= 3_600 &&
+      s20EventLimited.data?.error?.retryAfterSeconds === s20EventRetryAfter &&
+      PUBLIC_RATE_WAIT_PATTERN.test(s20EventLimited.data?.error?.message ?? "") &&
       JSON.stringify(s20EventRateCoreAfter) === JSON.stringify(s20EventRateCoreBefore),
-    `${s20EventRateAttempts.map((attempt) => attempt.status).join(",")}/${s20EventBucket[0]?.count}/${s20IpBuckets[0]?.count}/${s20EventLimited.status}`,
+    `${s20EventRateAttempts.map((attempt) => attempt.status).join(",")}/${s20EventBucket[0]?.count}/${s20IpBuckets[0]?.count}/${s20EventLimited.status}/${s20EventRetryAfter}`,
   );
   await prisma.$executeRaw`
     DELETE FROM "PublicSubmissionRateBucket" WHERE "eventId" = ${SCRATCH_EVENT.id}
@@ -3183,7 +3245,7 @@ try {
   // open assignment. This exercises the fresh post-lock status check instead
   // of relying on request timing.
   //
-  // Earlier sections legitimately consume the 3/24h submit budget for this
+  // Earlier sections legitimately consume the 10/24h submit budget for this
   // reused scratch primary email, so clear that one scratch-owned bucket first
   // — otherwise this anonymous setup submit is correctly refused by S19 and
   // the race never forms. Same scratch hygiene as the harness's teardown.
