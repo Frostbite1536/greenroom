@@ -3009,9 +3009,10 @@ try {
     await s16SessionWriterRelease;
   });
   await s16SessionWriterReady;
+  const s16SessionBaselineShares = await countSpeakerFormShareLocks();
   const s16SessionLockBaseline = {
-    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
-    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+    baselineFormConfigShares: s16SessionBaselineShares.formConfig,
+    baselineFormFieldShares: s16SessionBaselineShares.formField,
   };
   const staleSessionRosterEdit = j("PATCH", `/api/cfp/submissions/${s16SessionId}`, {
     speakers: [
@@ -3063,9 +3064,10 @@ try {
     await s16TerminalWriterRelease;
   });
   await s16TerminalWriterReady;
+  const s16TerminalBaselineShares = await countSpeakerFormShareLocks();
   const s16TerminalLockBaseline = {
-    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
-    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+    baselineFormConfigShares: s16TerminalBaselineShares.formConfig,
+    baselineFormFieldShares: s16TerminalBaselineShares.formField,
   };
   const staleTerminalEdit = j("PATCH", `/api/cfp/submissions/${s16TerminalId}`, {
     title: "S16 stale terminal attempt",
