@@ -19,6 +19,10 @@ const EVENT_ID = "scratch-frontend";
 const BLIND_SPEAKER_EMAIL = "blind-boundary@scratch.test";
 const SECOND_EVALUATOR_EMAIL = "second-evaluator@scratch.test";
 const C17_REVIEWER_EMAIL = "c17-reviewer@scratch.test";
+// ABS-12 needs a reviewer whose entire queue is the one assignment it declines.
+// Ravi cannot serve: by the time that section runs he still holds `setupAbstract`
+// open, so the workspace correctly opens on that instead of the declined row.
+const CONFLICT_REVIEWER_EMAIL = "conflict-reviewer@scratch.test";
 // A scratch-only co-speaker with a filled profile. Deliberately NOT one of the
 // shared demo users: writing a QA bio onto sofia@greenroom.demo would surface
 // in the seeded event's own public speaker widget, which is exactly the litter
@@ -121,7 +125,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -370,7 +374,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -2414,6 +2418,34 @@ try {
     },
   });
 
+  // A reviewer holding exactly this one assignment and nothing else. Ravi keeps
+  // `setupAbstract` open at this point, so his workspace correctly opens on that
+  // still-actionable row rather than the one he declined — which is the whole
+  // point of the queue-departure behaviour, and is why the declared-conflict
+  // panel cannot be observed on his page. This identity makes the declined row
+  // the only row there is, so the panel is the one the page must open on.
+  const conflictReviewerUser = await prisma.user.upsert({
+    where: { email: CONFLICT_REVIEWER_EMAIL },
+    update: { name: "Dana Whitfield" },
+    create: { email: CONFLICT_REVIEWER_EMAIL, name: "Dana Whitfield" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: conflictReviewerUser.id } },
+    update: { role: "EVALUATOR" },
+    create: { eventId: EVENT_ID, userId: conflictReviewerUser.id, role: "EVALUATOR" },
+  });
+  await prisma.reviewAssignment.create({
+    data: {
+      planId: fx.plan.id, abstractId: conflictAbstract.id,
+      evaluatorId: conflictReviewerUser.id, teamKey: "team-ai", status: "ASSIGNED",
+    },
+  });
+  const conflictReviewer = {
+    user: { id: "x", name: "Dana Whitfield", email: CONFLICT_REVIEWER_EMAIL },
+    event: ev,
+    role: "EVALUATOR",
+  };
+
   // The queue size the reviewer is measured against, before and after.
   const queueDenominator = (html) => {
     const match = /(\d+) of (\d+) reviewable proposal/.exec(renderedText(html) ?? "");
@@ -2466,9 +2498,43 @@ try {
     denominatorAfter !== null && denominatorBefore !== null
     && denominatorAfter === denominatorBefore - 1,
     `before=${denominatorBefore} after=${denominatorAfter}`);
-  check("the declined row reports an honest completed state, not a bare status",
-    conflictAfter.text.includes("Conflict declared")
-    && renderedText(conflictAfter.text).includes("You declared a conflict of interest"));
+  // What a *fresh* load of the declaring reviewer's page must show. It cannot
+  // show the declared-conflict panel: the row left the active queue, so the
+  // workspace opens on Ravi's still-open assignment instead. Asserting the
+  // panel here would contradict the queue-departure check directly above it.
+  check("the declined row stays listed and is named a conflict, not a bare status",
+    conflictAfter.text.includes("Scratch: Conflict of interest")
+    && conflictAfter.text.includes("Conflict declared"),
+    `listed=${conflictAfter.text.includes("Scratch: Conflict of interest")} `
+    + `named=${conflictAfter.text.includes("Conflict declared")}`);
+  check("a fresh load opens on still-open work, not on the row just declined",
+    !renderedText(conflictAfter.text).includes("You declared a conflict of interest")
+    && conflictAfter.text.includes("Declare a conflict"),
+    "the open row must be the one the workspace lands on, and it still offers the control");
+
+  // The honest completed state itself, on the one page that can render it: a
+  // reviewer whose only assignment is the one they just declined.
+  const soleDeclare = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: conflictAbstract.id,
+  }, conflictReviewer);
+  check("a second reviewer declares a conflict on the same proposal → 200",
+    soleDeclare.status === 200 && soleDeclare.data?.data?.status === "DECLINED",
+    `${soleDeclare.status} ${JSON.stringify(soleDeclare.data?.error ?? soleDeclare.data?.data ?? "")}`);
+  const solePage = await req("GET", "/admin/evaluations", null, conflictReviewer);
+  const solePageText = renderedText(solePage.text) ?? "";
+  check("the declined row reports an honest completed state when it is the open row",
+    solePage.status === 200
+    && solePageText.includes("You declared a conflict of interest")
+    && solePageText.includes("no score of yours counts towards its decision"),
+    `status ${solePage.status}; panel copy ${solePageText.includes("You declared a conflict of interest")}`);
+  check("the declared-conflict panel withholds the scoring form it cannot honour",
+    !solePage.text.includes("Submit review")
+    && !solePage.text.includes("Score every criterion")
+    && !solePage.text.includes("Declare a conflict"),
+    "a declined row must offer neither scoring nor a second declaration");
+  check("a reviewer whose only assignment is declined has no reviewable work left",
+    solePageText.includes("No reviewable proposals remain"),
+    solePageText.includes("reviewable proposal") ? "a denominator still rendered" : "none");
 
   // Nothing about the reviewer's finished review may move.
   const completedAfter = await prisma.reviewAssignment.findUnique({
