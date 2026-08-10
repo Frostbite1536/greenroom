@@ -64,6 +64,7 @@ export async function ScheduleProgramme({
       eventParam={event}
       searchParams={{ track, day, q }}
       basePath={schedulePathFor(surface)}
+      speakersPath={speakersPathFor(surface)}
     />
   );
 

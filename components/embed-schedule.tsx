@@ -8,10 +8,16 @@
  * lib/embed-schedule-view.ts so it can be unit-tested without a DOM.
  */
 import Link from "next/link";
-import { CalendarDays, CalendarPlus, Download, MapPin, Search, User } from "lucide-react";
+import { CalendarDays, CalendarPlus, Download, MapPin, Search, User, Users } from "lucide-react";
 import type { PublicAgenda } from "@/lib/data/reads";
 import { calendarExportUrl } from "@/lib/ics-embed";
-import { EMBED_SCHEDULE_PATH, type PublicSurfacePath } from "@/lib/embed-alias";
+import {
+  EMBED_SCHEDULE_PATH,
+  EMBED_SPEAKERS_PATH,
+  publicSurfaceUrl,
+  type PublicSurfacePath,
+} from "@/lib/embed-alias";
+import { speakerAnchorHref } from "@/lib/speaker-anchor";
 import { PUBLIC_SESSION_SUMMARY_FALLBACK } from "@/lib/public-session-copy";
 import { formatDayLabel, formatEventDateRange, formatTimeRange, timeZoneNote, zonedParts } from "@/lib/tz";
 import {
@@ -37,10 +43,13 @@ function SessionCard({
   session,
   eventId,
   timeZone,
+  speakersUrl,
 }: {
   session: ScheduleViewSession;
   eventId: string;
   timeZone: string;
+  /** The speaker directory on this same surface, for the name cross-links. */
+  speakersUrl: string;
 }) {
   const chips = sessionChips(session);
   const split = descriptionPreview(session.description);
@@ -55,7 +64,19 @@ function SessionCard({
         <h3>{session.title}</h3>
         <div className="meta">
           {session.speakers.length > 0 && (
-            <span className="row" style={{ gap: 4 }}><User size={13} aria-hidden="true" /> {session.speakers.join(", ")}</span>
+            <span className="row" style={{ gap: 4 }}>
+              <User size={13} aria-hidden="true" />{" "}
+              {/* Each name links to its own card on the speaker directory, so
+                  the session -> speaker direction finally exists (§5-3). */}
+              {session.speakers.map((name, index) => (
+                <span key={name}>
+                  {index > 0 ? ", " : ""}
+                  <Link className="embed-speaker-link" href={speakerAnchorHref(speakersUrl, name)} prefetch={false}>
+                    {name}
+                  </Link>
+                </span>
+              ))}
+            </span>
           )}
           <span className="row" style={{ gap: 4 }}><MapPin size={13} aria-hidden="true" /> {session.room.name}</span>
           <span>{when}</span>
@@ -124,7 +145,16 @@ function SessionCard({
               {session.speakers.length > 0 ? (
                 <div>
                   <dt>{session.speakers.length === 1 ? "Speaker" : "Speakers"}</dt>
-                  <dd>{session.speakers.join(", ")}</dd>
+                  <dd>
+                    {session.speakers.map((name, index) => (
+                      <span key={name}>
+                        {index > 0 ? ", " : ""}
+                        <Link className="embed-speaker-link" href={speakerAnchorHref(speakersUrl, name)} prefetch={false}>
+                          {name}
+                        </Link>
+                      </span>
+                    ))}
+                  </dd>
                 </div>
               ) : null}
             </dl>
@@ -148,6 +178,7 @@ export function EmbedSchedule({
   eventParam,
   searchParams = {},
   basePath = EMBED_SCHEDULE_PATH,
+  speakersPath = EMBED_SPEAKERS_PATH,
 }: {
   agenda: PublicAgenda;
   /** Echoed into every generated link exactly as the host page supplied it. */
@@ -156,6 +187,9 @@ export function EmbedSchedule({
   /** Where this page's own filter links and search form return to: the
    *  canonical `/schedule` or the frameable `/embed/schedule`. */
   basePath?: PublicSurfacePath;
+  /** The speaker directory on the SAME surface: a framed reader must not be
+   *  navigated onto the standalone site, nor the reverse. */
+  speakersPath?: PublicSurfacePath;
 }) {
   const tz = agenda.event.timezone;
   const dayKeys = eventDayKeys(agenda);
@@ -174,6 +208,7 @@ export function EmbedSchedule({
   const isFiltered = filters.track !== ALL || filters.day !== ALL || filters.q !== "";
   const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides, basePath);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;
+  const speakersUrl = publicSurfaceUrl(speakersPath, eventParam ?? agenda.event.slug);
 
   return (
     <div className="embed-page">
@@ -192,15 +227,22 @@ export function EmbedSchedule({
               <p className="hint" role="status">{agendaTruncationNotice(agenda)}</p>
             ) : null}
           </div>
-          {agenda.sessions.length > 0 && (
-            <a
-              className="ghost-button"
-              href={calendarExportUrl(agenda.event.id)}
-              style={{ textDecoration: "none" }}
-            >
-              <CalendarPlus size={15} /> Add all to calendar
-            </a>
-          )}
+          <div className="row wrap" style={{ gap: 8 }}>
+            {/* The reverse of the gallery's own "Schedule" link, so the two
+                public pages are reachable from each other (§5-3). */}
+            <Link className="ghost-button" href={speakersUrl} prefetch={false}>
+              <Users size={15} aria-hidden="true" /> Speakers
+            </Link>
+            {agenda.sessions.length > 0 && (
+              <a
+                className="ghost-button"
+                href={calendarExportUrl(agenda.event.id)}
+                style={{ textDecoration: "none" }}
+              >
+                <CalendarPlus size={15} /> Add all to calendar
+              </a>
+            )}
+          </div>
         </div>
 
         {/* A plain GET form: submitting works without JavaScript and the result
@@ -308,7 +350,7 @@ export function EmbedSchedule({
             <section key={dayKey}>
               <h2 className="time-heading" style={{ fontSize: 13 }}>{formatDayLabel(dayKey, tz)}</h2>
               {items.map((s) => (
-                <SessionCard key={s.slotId} session={s} eventId={agenda.event.id} timeZone={tz} />
+                <SessionCard key={s.slotId} session={s} eventId={agenda.event.id} timeZone={tz} speakersUrl={speakersUrl} />
               ))}
             </section>
           ))

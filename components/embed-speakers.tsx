@@ -12,6 +12,7 @@ import {
 } from "@/lib/embed-alias";
 import { formatEventDateRange, timeZoneNote } from "@/lib/tz";
 import { boundedCountLabel } from "@/lib/bounded-count";
+import { speakerAnchorId } from "@/lib/speaker-anchor";
 import {
   headshotAlt,
   initials,
@@ -192,7 +193,10 @@ export function EmbedSpeakers({
               const detail = speakerDetailLine(speaker);
               const key = `${speaker.name}-${speaker.sessions.map((session) => session.id).join("-")}-${index}`;
               return (
-                <article className="speaker-card" key={key}>
+                // The anchor a session card links back to (§5-3). Derived from
+                // the name, which is the only identifier this projection
+                // publishes — see lib/speaker-anchor.ts.
+                <article className="speaker-card" id={speakerAnchorId(speaker.name)} key={key}>
                   <div className="speaker-avatar">
                     <span aria-hidden="true">{initials(speaker.name)}</span>
                     {speaker.headshotUrl ? (

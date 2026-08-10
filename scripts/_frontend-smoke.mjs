@@ -2975,6 +2975,40 @@ try {
     speakersEmbed.text.includes("Scratch Session A") && speakersEmbed.text.includes("Hall A"));
   check("speaker session line carries a placement, not just a title",
     speakersEmbed.text.includes("speaker-session-when"));
+
+  // --- §5-3: the session <-> speaker round trip ------------------------------
+  // Derived here the way the pages derive it, then walked in both directions.
+  // A fragment that does not exist fails silently in a browser, so the anchor
+  // is asserted present on the target rather than inferred from the link.
+  const anchorSlug = (name) => name
+    .normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const embedSpeakerAnchor = `speaker-${anchorSlug(EMBED_SPEAKER_NAME)}`;
+  check("§5-3 the speaker card carries the anchor a session card links to",
+    speakersEmbed.text.includes(`id="${embedSpeakerAnchor}"`),
+    `expected id="${embedSpeakerAnchor}" on the gallery`);
+  check("§5-3 the session card links each speaker name into the directory",
+    enriched.text.includes(`/embed/speakers?event=${EVENT_ID}#${embedSpeakerAnchor}`),
+    `expected a #${embedSpeakerAnchor} link on the schedule embed`);
+  check("§5-3 the schedule embed offers a header link to the speaker directory",
+    enriched.text.includes(`href="/embed/speakers?event=${EVENT_ID}"`)
+    && (renderedText(enriched.text) ?? "").includes("Speakers"));
+  check("§5-3 the speaker gallery offers the return link to the schedule",
+    speakersEmbed.text.includes(`href="/embed/schedule?event=${EVENT_ID}"`)
+    && (renderedText(speakersEmbed.text) ?? "").includes("Schedule"));
+  // ...and the speaker -> session direction still lands on a real anchor.
+  check("§5-3 a speaker's session link targets an anchor the schedule renders",
+    speakersEmbed.text.includes(`/embed/schedule?event=${EVENT_ID}#session-${fx.sessionA.id}`)
+    && enriched.text.includes(`id="session-${fx.sessionA.id}"`),
+    "expected the session anchor round trip to close");
+  // Both surfaces link within themselves: a framed reader is never navigated
+  // onto the standalone site, and a canonical reader never into the frame.
+  const canonicalSchedule = await req("GET", `/schedule?event=${EVENT_ID}`, null, null);
+  check("§5-3 the canonical schedule cross-links to the canonical directory",
+    canonicalSchedule.status === 200
+    && canonicalSchedule.text.includes(`/speakers?event=${EVENT_ID}#${embedSpeakerAnchor}`)
+    && !canonicalSchedule.text.includes(`/embed/speakers?event=${EVENT_ID}#`),
+    "expected canonical-to-canonical speaker links");
   check("speaker detail opens with native details, not a JS-only modal",
     speakersEmbed.text.includes('<details class="speaker-detail">')
     && speakersEmbed.text.includes("Full profile")
