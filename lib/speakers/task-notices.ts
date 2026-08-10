@@ -6,7 +6,7 @@
  * only feedback an organizer gets about whether speakers can now see the task,
  * and it is easy to write one that is quietly false.
  *
- * Two facts have to be respected, and each has already been got wrong once:
+ * Three facts have to be respected, and each has already been got wrong once:
  *
  *  1. An OPTIONAL template deliberately skips the fan-out, so it reports
  *     `assigned: 0` while nobody holds it. That is the opposite of a required
@@ -17,6 +17,10 @@
  *     backfill reconciles every template in the checklist, so a create can
  *     return rows belonging to other tasks that were previously missing.
  *     Claiming "assigned it to N" attributes those to the task just written.
+ *  3. An event with no confirmed sessions has an empty cohort, so a required
+ *     write reports `assigned: 0` there too. "Every confirmed speaker already
+ *     has it" is then vacuously true and reads as confirmed coverage of a
+ *     cohort that does not exist.
  */
 export type TaskWriteOutcome = {
   /** The past-tense verb for the write itself, e.g. "Added" or "Saved". */
@@ -26,15 +30,32 @@ export type TaskWriteOutcome = {
   required: boolean;
   /** Assignments the fan-out actually created, across the whole checklist. */
   assigned: number;
+  /**
+   * Confirmed sessions the fan-out reconciled — the size of the cohort this
+   * write actually reached.
+   *
+   * Only meaningful when `required` is true. An optional write never runs the
+   * fan-out and the route reports a literal `sessions: 0` for it, so reading
+   * this as "no speakers are confirmed" on that branch would be wrong. The
+   * `required` check below therefore has to stay ahead of the cohort check.
+   */
+  sessions: number;
 };
 
-export function taskFanOutNotice({ verb, title, required, assigned }: TaskWriteOutcome): string {
+export function taskFanOutNotice({ verb, title, required, assigned, sessions }: TaskWriteOutcome): string {
   const subject = `${verb} “${title}”`;
 
   if (!required) {
     // No fan-out ran. Say so, and say how it would reach anyone, so the next
-    // step is obvious rather than a silent gap.
+    // step is obvious rather than a silent gap. Deliberately ahead of the
+    // cohort check: `sessions` is a hard 0 here regardless of the real cohort.
     return `${subject}. Optional tasks are not assigned automatically — mark it required, or use “Assign checklist to all confirmed speakers”, to give it to speakers.`;
+  }
+
+  if (sessions === 0) {
+    // Nobody to reach yet. Accepting a proposal provisions its session and
+    // hands its speakers the whole checklist, so this resolves itself.
+    return `${subject}. No speakers are confirmed yet, so nobody has it — it will be assigned automatically as talks are confirmed.`;
   }
 
   if (assigned === 0) {

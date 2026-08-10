@@ -7,43 +7,78 @@ test("an optional task never claims speakers already have it", () => {
   // fan-out for an optional template and reports `assigned: 0`, which read
   // identically to "everyone already had it" and told an organizer their
   // speakers could see a task that had been assigned to nobody.
-  const notice = taskFanOutNotice({ verb: "Added", title: "Send your slides", required: false, assigned: 0 });
+  const notice = taskFanOutNotice({ verb: "Added", title: "Send your slides", required: false, assigned: 0, sessions: 0 });
   assert.doesNotMatch(notice, /already ha[sd]/i);
   assert.match(notice, /not assigned automatically/i);
   assert.match(notice, /Added “Send your slides”/);
 });
 
 test("an optional task names both ways it can still reach speakers", () => {
-  const notice = taskFanOutNotice({ verb: "Saved", title: "Hotel form", required: false, assigned: 0 });
+  const notice = taskFanOutNotice({ verb: "Saved", title: "Hotel form", required: false, assigned: 0, sessions: 0 });
   assert.match(notice, /required/i);
   assert.match(notice, /Assign checklist to all confirmed speakers/);
 });
 
 test("a required task reporting nothing new means everyone already has it", () => {
-  const notice = taskFanOutNotice({ verb: "Saved", title: "Hotel form", required: true, assigned: 0 });
+  const notice = taskFanOutNotice({ verb: "Saved", title: "Hotel form", required: true, assigned: 0, sessions: 4 });
   assert.equal(notice, "Saved “Hotel form”. Every confirmed speaker already has it.");
+});
+
+test("an empty cohort is never reported as confirmed coverage — on create", () => {
+  // `assigned: 0` with no confirmed sessions is vacuous, not reassuring: there
+  // is no cohort to have "already" received anything.
+  const notice = taskFanOutNotice({ verb: "Added", title: "Send your slides", required: true, assigned: 0, sessions: 0 });
+  assert.doesNotMatch(notice, /already has/i);
+  assert.match(notice, /No speakers are confirmed yet/);
+  assert.match(notice, /nobody has it/);
+});
+
+test("an empty cohort is never reported as confirmed coverage — on save", () => {
+  const notice = taskFanOutNotice({ verb: "Saved", title: "Hotel form", required: true, assigned: 0, sessions: 0 });
+  assert.doesNotMatch(notice, /already has/i);
+  assert.match(notice, /^Saved “Hotel form”\. No speakers are confirmed yet/);
+});
+
+test("the empty-cohort notice says the gap closes on its own", () => {
+  // Accepting a proposal provisions its session and hands its speakers the
+  // whole checklist, so the organizer has nothing to remember to do.
+  const notice = taskFanOutNotice({ verb: "Added", title: "Bio", required: true, assigned: 0, sessions: 0 });
+  assert.match(notice, /assigned automatically as talks are confirmed/);
+});
+
+test("an optional write is not mistaken for an empty cohort", () => {
+  // The route reports a literal `sessions: 0` for every optional write, because
+  // no fan-out ran — it says nothing about whether speakers exist. If the
+  // cohort check ever moves ahead of the required check, this fails.
+  const notice = taskFanOutNotice({ verb: "Added", title: "Bio", required: false, assigned: 0, sessions: 0 });
+  assert.doesNotMatch(notice, /No speakers are confirmed yet/);
+  assert.match(notice, /not assigned automatically/i);
 });
 
 test("a real fan-out is reported as checklist-wide, not as this task's share", () => {
   // `assigned` is the whole reconciliation: the backfill fixes every template,
   // so a create can return rows belonging to other tasks that were missing.
   // "assigned it to 7" would attribute those to the task just written.
-  const notice = taskFanOutNotice({ verb: "Added", title: "Send your slides", required: true, assigned: 7 });
+  const notice = taskFanOutNotice({ verb: "Added", title: "Send your slides", required: true, assigned: 7, sessions: 3 });
   assert.match(notice, /7 missing tasks across the checklist/);
   assert.doesNotMatch(notice, /assigned it to/i);
 });
 
 test("the single-assignment case reads as one task, not one tasks", () => {
-  const notice = taskFanOutNotice({ verb: "Added", title: "Bio", required: true, assigned: 1 });
+  const notice = taskFanOutNotice({ verb: "Added", title: "Bio", required: true, assigned: 1, sessions: 1 });
   assert.match(notice, /1 missing task across the checklist/);
   assert.doesNotMatch(notice, /1 missing tasks/);
 });
 
 test("the verb and title come through for every branch", () => {
+  // Covers all four branches: optional, empty cohort, already-covered, and a
+  // real fan-out. Every one of them still has to name what was written.
   for (const required of [true, false]) {
     for (const assigned of [0, 3]) {
-      const notice = taskFanOutNotice({ verb: "Added", title: "A/V check", required, assigned });
-      assert.match(notice, /^Added “A\/V check”/, `required=${required} assigned=${assigned}`);
+      for (const sessions of [0, 2]) {
+        const notice = taskFanOutNotice({ verb: "Added", title: "A/V check", required, assigned, sessions });
+        assert.match(notice, /^Added “A\/V check”/, `required=${required} assigned=${assigned} sessions=${sessions}`);
+      }
     }
   }
 });
@@ -69,7 +104,7 @@ test("an optional task says the same thing whether or not the checklist moved", 
   // An optional write runs no fan-out, so a non-zero count here would mean the
   // route changed behavior. The sentence must not start claiming this task was
   // assigned if that ever happens.
-  const quiet = taskFanOutNotice({ verb: "Added", title: "Bio", required: false, assigned: 0 });
-  const noisy = taskFanOutNotice({ verb: "Added", title: "Bio", required: false, assigned: 4 });
+  const quiet = taskFanOutNotice({ verb: "Added", title: "Bio", required: false, assigned: 0, sessions: 0 });
+  const noisy = taskFanOutNotice({ verb: "Added", title: "Bio", required: false, assigned: 4, sessions: 6 });
   assert.equal(quiet, noisy);
 });

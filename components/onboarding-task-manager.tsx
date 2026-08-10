@@ -92,7 +92,7 @@ export function OnboardingTaskManager({
     }
     setBusy("new");
     reset();
-    const res = await apiPost<{ task: OnboardingTaskView; assigned: number }>(
+    const res = await apiPost<{ task: OnboardingTaskView; assigned: number; sessions: number }>(
       "/api/admin/tasks",
       payloadFromDraft(draft),
     );
@@ -110,6 +110,7 @@ export function OnboardingTaskManager({
       title: res.data.task.title,
       required: res.data.task.required,
       assigned: res.data.assigned,
+      sessions: res.data.sessions,
     }));
     refresh();
   }
@@ -121,7 +122,7 @@ export function OnboardingTaskManager({
     }
     setBusy(taskId);
     reset();
-    const res = await apiPatch<{ task: OnboardingTaskView; assigned: number }>("/api/admin/tasks", {
+    const res = await apiPatch<{ task: OnboardingTaskView; assigned: number; sessions: number }>("/api/admin/tasks", {
       id: taskId,
       ...payloadFromDraft(editDraft),
     });
@@ -137,6 +138,7 @@ export function OnboardingTaskManager({
       title: res.data.task.title,
       required: res.data.task.required,
       assigned: res.data.assigned,
+      sessions: res.data.sessions,
     }));
     refresh();
   }
