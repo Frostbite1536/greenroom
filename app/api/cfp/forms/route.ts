@@ -12,6 +12,11 @@ import {
   findUsedRemovedOptions,
   hasAnswerValue,
 } from "@/lib/services/form-config";
+import {
+  findFormShapeIssues,
+  formShapeFieldErrors,
+  type ShapeField,
+} from "@/lib/services/form-shape-validation";
 import { parseFieldOptions } from "@/lib/services/field-visibility";
 import { lockFormFieldsForShapeWrite } from "@/lib/services/form-field-lock";
 import { lockFormConfigForShapeWrite } from "@/lib/services/form-config-lock";
@@ -78,6 +83,14 @@ export const POST = handle(async (req) => {
         throw new ApiError(404, "FORM_NOT_FOUND", "Form not found.");
       }
     }
+
+    // D-C5-2: one shared shape contract for create and update, inside the lock
+    // order and before any mutation. This refuses forms that cannot work at all
+    // — orphan rule sources, dependency loops, unanswerable rules, options with
+    // no stored value. It composes with the answer protection below: this asks
+    // "can this form ever be filled in", that asks "does this destroy answers
+    // people already gave".
+    assertFormShapeIsCoherent(input.fields);
 
     const slugTaken = await tx.formConfig.findFirst({
       where: {
@@ -171,6 +184,20 @@ export const POST = handle(async (req) => {
 
   return ok(serializeForm(form), input.id ? 200 : 201);
 });
+
+/**
+ * Refuse a form shape that could never be filled in (C4 / D-C5-2).
+ *
+ * The failure is field-scoped so the builder can point at the question that has
+ * to change, and the code is stable per rule class. When several things are
+ * wrong the first one names the response, and `fieldErrors` carries them all.
+ */
+function assertFormShapeIsCoherent(fields: readonly ShapeField[]): void {
+  const issues = findFormShapeIssues(fields);
+  const first = issues[0];
+  if (!first) return;
+  throw new ApiError(400, first.code, first.message, formShapeFieldErrors(issues));
+}
 
 const ANSWER_SCAN_PAGE_SIZE = 500;
 
