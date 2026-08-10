@@ -3511,6 +3511,77 @@ try {
   check("W2 the reversed decision does not delete the confirmed session (INV-DOMAIN-001)",
     !!stillThere && !!stillThere.scheduleSlot);
 
+  // 23b. ABS-13 — ADMIN-only CSV export of review results. Runs last so the
+  // event already holds real plans, completed reviews, scores, and decisions.
+  const csvPath = "/api/admin/abstracts/export";
+  const csvAnon = await j("GET", csvPath);
+  check("ABS-13 anonymous cannot export review results", csvAnon.status === 401, csvAnon.status);
+  const csvSpeaker = await j("GET", csvPath, null, speaker);
+  check("ABS-13 a speaker cannot export review results", csvSpeaker.status === 403, csvSpeaker.status);
+  const csvEvaluator = await j("GET", csvPath, null, evalr);
+  check("ABS-13 an evaluator cannot export review results (ADMIN only)",
+    csvEvaluator.status === 403, csvEvaluator.status);
+
+  // A hostile title proves the escaping and the formula guard on a real row,
+  // written directly because the CFP form's own validation would never be the
+  // thing under test here.
+  const csvNastyTitle = '=cmd|"calc"!A1, "quoted", and\na newline';
+  const csvNasty = await prisma.abstract.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      formConfigId: formId,
+      submitterId: adminUserId,
+      title: csvNastyTitle,
+      status: "SUBMITTED",
+      submittedAt: new Date(),
+    },
+    select: { id: true },
+  });
+
+  const csvExport = await j("GET", csvPath, null, admin);
+  const csvBody = typeof csvExport.data === "string" ? csvExport.data : "";
+  check("ABS-13 admin export returns text/csv as an attachment",
+    csvExport.status === 200 &&
+      (csvExport.headers.get("content-type") || "").startsWith("text/csv") &&
+      /attachment; filename="greenroom-review-results-\d{4}-\d{2}-\d{2}\.csv"/.test(
+        csvExport.headers.get("content-disposition") || ""),
+    `${csvExport.status}/${csvExport.headers.get("content-type")}`);
+  const csvLines = csvBody.split("\r\n").filter((line) => line.length > 0);
+  check("ABS-13 the export opens with the documented header row",
+    csvLines[0] === "abstract_id,title,status,category,speakers,submitted_at,decided_at,review_round,completed_reviews,included_reviews,weighted_average",
+    csvLines[0]);
+  check("ABS-13 the export carries the event's proposals under its bound",
+    csvLines.length > 1 && csvLines.length <= 102, csvLines.length);
+
+  check("ABS-13 a formula-shaped title is quoted and neutralized, and the record survives it",
+    csvBody.includes(`"'=cmd|""calc""!A1, ""quoted"", and\na newline"`) &&
+      csvBody.includes(csvNasty.id),
+    csvBody.split("\r\n").find((line) => line.includes(csvNasty.id))?.slice(0, 120));
+
+  // Blind-review policy: the decision summary projects counts and one weighted
+  // average, never a reviewer. The export must not be the place that widens it.
+  check("ABS-13 the export contains no evaluator identity",
+    !csvBody.includes(evalr.user.email) && !csvBody.includes(evalr.user.id) &&
+      !/evaluator/i.test(csvBody) && !/reviewer/i.test(csvBody));
+  // Speaker email is absent from the admin decision surface, so it stays absent
+  // from an export of that surface too.
+  check("ABS-13 the export does not widen the surface to speaker email",
+    !csvBody.includes(speaker.user.email) && csvBody.includes(speaker.user.name));
+
+  const csvRound = await j("GET", `${csvPath}?planId=${planId}`, null, admin);
+  const csvRoundBody = typeof csvRound.data === "string" ? csvRound.data : "";
+  const csvRoundPlan = await prisma.evaluationPlan.findUnique({
+    where: { id: planId }, select: { name: true, ordinal: true },
+  });
+  check("ABS-13 an explicit round is named in every row exactly as the table labels it",
+    csvRound.status === 200 &&
+      csvRoundBody.includes(`Round ${csvRoundPlan?.ordinal} — ${csvRoundPlan?.name}`),
+    csvRound.status);
+  const csvUnknownRound = await j("GET", `${csvPath}?planId=no-such-plan`, null, admin);
+  check("ABS-13 an unknown round is a stable 404, never a silent default export",
+    csvUnknownRound.status === 404 && csvUnknownRound.data?.error?.code === "PLAN_NOT_FOUND",
+    `${csvUnknownRound.status}/${csvUnknownRound.data?.error?.code}`);
+
   // 24. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
