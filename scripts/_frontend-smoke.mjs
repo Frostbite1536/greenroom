@@ -2992,12 +2992,33 @@ try {
     `expected "${expectedNote}" on the speaker gallery`);
   // The contradiction Greptile caught: whatever the header says, it must never
   // assert a single abbreviation while a card on the same page shows another.
-  const shownAbbrevs = [...new Set(
-    [...enrichedText.matchAll(/\d:\d\d\s?(?:AM|PM)\s([A-Z]{2,5})/g)].map((m) => m[1]),
-  )];
+  //
+  // Extraction anchors on the markup's own structure. The shared `renderedText`
+  // drops tags with NO separator — many assertions depend on that exact
+  // behaviour, so it is left alone — which fuses adjacent text nodes:
+  // `…MDT</span><span class="sr-only">Format: ` collapses to "MDTFormat", and a
+  // bare uppercase run then swallows the next word's first letter ("MDTF"), as
+  // does `…MDT</dd>` before `<dt>Room</dt>` ("MDTR"). Turning every tag
+  // boundary into a space restores the word boundary the abbreviation needs;
+  // the negative lookahead then makes an overcapture impossible rather than
+  // merely unlikely.
+  const spacedText = (html) => (html ?? "")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[^;]+;/g, " ");
+  // Both surfaces: the gallery's placement line ends "· Redwood Hall", so its
+  // abbreviation sits mid-text-node and a closing-tag anchor would miss it.
+  const abbrevsIn = (html) => [...spacedText(html)
+    .matchAll(/\d{1,2}:\d{2}\s*(?:AM|PM)\s+([A-Z]{2,5})(?![A-Za-z])/g)].map((m) => m[1]);
+  const shownAbbrevs = [...new Set([...abbrevsIn(enriched.text), ...abbrevsIn(speakersZone.text)])];
   check("§5-2 the header note never claims one zone while a card shows another",
-    shownAbbrevs.length <= 1 || expectedNote === `All times in ${liveTz}`,
-    `cards showed ${shownAbbrevs.join(",")} under note "${expectedNote}"`);
+    // Non-vacuity first: a stricter pattern that matched nothing would satisfy
+    // the consistency clause below while proving nothing at all.
+    shownAbbrevs.length >= 1
+    && (shownAbbrevs.length === 1 || expectedNote === `All times in ${liveTz}`),
+    shownAbbrevs.length === 0
+      ? "no card time-range abbreviation could be extracted from either surface"
+      : `cards showed ${shownAbbrevs.join(",")} under note "${expectedNote}"`);
 
   // Search: a GET form, so the query lives in the URL and needs no hydration.
   check("embed search is a GET form",
