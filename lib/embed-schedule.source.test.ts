@@ -1,0 +1,65 @@
+/**
+ * Source contract for the public schedule embed.
+ *
+ * The embed's value in a headless or JS-disabled context is a rendering
+ * property, not a pure function, so it cannot be asserted through
+ * embed-schedule-view.test.ts. What can be locked is the shape that makes the
+ * property true: no client boundary, native <details> for expansion, a GET form
+ * for search, and links (not stateful buttons) for the day and track filters.
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("the schedule embed renders on the server with no client boundary", () => {
+  const component = source("components/embed-schedule.tsx");
+  assert.equal(component.includes('"use client"'), false);
+  // A client hook here would silently reintroduce the hydration requirement.
+  assert.equal(/\buseState\(|\buseMemo\(|\buseEffect\(/.test(component), false);
+});
+
+test("descriptions and their expand control are in the served markup", () => {
+  const component = source("components/embed-schedule.tsx");
+  assert.match(component, /<details className="embed-session-detail">/);
+  assert.match(component, /<summary>/);
+  assert.match(component, /Show more/);
+  assert.match(component, /Show less/);
+  // <details> keeps its body in the DOM while collapsed, so the full text is
+  // served even before a click — that is what makes it crawlable and no-JS.
+  assert.match(component, /embed-session-full/);
+});
+
+test("search is a GET form that preserves the other filters", () => {
+  const component = source("components/embed-schedule.tsx");
+  assert.match(component, /<form[^>]*method="get"/s);
+  assert.match(component, /action="\/embed\/schedule"/);
+  assert.match(component, /name="q"/);
+  assert.match(component, /type="hidden" name="event"/);
+  assert.match(component, /type="hidden" name="track"/);
+  assert.match(component, /type="hidden" name="day"/);
+});
+
+test("day and track filters are links carrying aria-current, not colour-only buttons", () => {
+  const component = source("components/embed-schedule.tsx");
+  assert.match(component, /aria-label="Filter by day"/);
+  assert.match(component, /aria-label="Filter by track"/);
+  assert.match(component, /aria-current=\{filters\.day === ALL \? "page" : undefined\}/);
+  assert.match(component, /aria-current=\{filters\.track === t\.id \? "true" : undefined\}/);
+
+  const css = source("components/feature.css");
+  const selected = css.match(/\n\.embed-filters a\[aria-current\]\s*\{([^}]*)\}/);
+  assert.ok(selected, "expected a rule for .embed-filters a[aria-current]");
+  // Weight plus background, not hue alone — WCAG 1.4.1.
+  assert.match(selected![1]!, /font-weight:\s*700/);
+  assert.match(selected![1]!, /background:/);
+});
+
+test("the collapsed preview is hidden only when its own details is open", () => {
+  const css = source("components/feature.css");
+  // Scoped through `[open] > summary`, so one expanded card cannot blank the
+  // preview of the sibling cards next to it.
+  assert.match(css, /\.embed-session-detail\[open\] > summary \.embed-session-preview \{ display: none; \}/);
+  assert.match(css, /\.embed-session-detail > summary::-webkit-details-marker/);
+});

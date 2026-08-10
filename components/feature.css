@@ -219,6 +219,44 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .ics-button { margin-top: 10px; }
 .time-heading { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 8px 2px 0; }
 
+/* Filter state must never be colour-only: the selected link also carries weight,
+   a filled background and an inset marker, plus aria-current for assistive tech. */
+.embed-filters a[aria-current] { position: relative; border-color: var(--brand); background: var(--soft); color: var(--brand-strong); font-weight: 700; }
+.embed-filters a[aria-current]::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 3px; height: 2px; border-radius: 2px; background: var(--brand-strong); }
+.embed-daytabs { padding-bottom: 2px; }
+.embed-tab-count { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: 500; }
+.embed-filters a[aria-current] .embed-tab-count { color: inherit; }
+
+.embed-search-form { display: flex; align-items: center; gap: 8px; padding: 12px 18px 0; }
+.embed-search { min-width: 0; flex: 1; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 11px; border: 1px solid var(--line); border-radius: var(--radius); background: white; color: var(--muted); }
+.embed-search:focus-within { outline: 2px solid var(--brand); outline-offset: -1px; border-color: var(--brand); }
+.embed-search input { min-width: 0; width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 13px; }
+.embed-search input::placeholder { color: var(--muted); }
+.embed-search-form .ghost-button { white-space: nowrap; text-decoration: none; }
+
+.embed-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.embed-chip { padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: #f7faf9; color: var(--ink); font-size: 11.5px; line-height: 1.6; }
+.embed-chip-format { border-color: var(--brand); background: var(--soft); color: var(--brand-strong); font-weight: 600; }
+
+.embed-session-desc { margin: 8px 0 0; overflow-wrap: anywhere; color: var(--ink); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+.embed-session-detail { margin-top: 8px; }
+.embed-session-detail > summary { display: block; cursor: pointer; list-style: none; }
+.embed-session-detail > summary::-webkit-details-marker { display: none; }
+.embed-session-detail > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+.embed-session-preview { display: block; overflow-wrap: anywhere; color: var(--ink); font-size: 12.5px; line-height: 1.5; }
+.embed-more { display: inline-block; margin-top: 4px; color: var(--brand-strong); font-size: 12px; font-weight: 600; text-decoration: underline; }
+.embed-more-open { display: none; }
+.embed-session-detail[open] > summary .embed-session-preview { display: none; }
+.embed-session-detail[open] > summary .embed-more-closed { display: none; }
+.embed-session-detail[open] > summary .embed-more-open { display: inline; }
+.embed-session-full { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.embed-session-facts { display: grid; gap: 4px; margin: 8px 0 0; font-size: 12px; }
+.embed-session-facts > div { display: grid; grid-template-columns: 74px 1fr; gap: 8px; }
+.embed-session-facts dt { color: var(--muted); }
+.embed-session-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); }
+.embed-empty { display: grid; justify-items: center; gap: 4px; }
+.embed-empty .ghost-button { text-decoration: none; }
+
 /* ---- compact speakers embed (approved Superdesign Compact Grid draft) ---- */
 .speaker-embed-header { padding: 0; z-index: 3; }
 .embed-header-inner { width: min(760px, 100%); margin: 0 auto; padding: 20px 18px; }
@@ -418,4 +456,7 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   .embed-snippet { padding: 16px; }
   .embed-snippet-field .row { flex-direction: column; align-items: stretch; }
   .speaker-avatar { width: 48px; height: 48px; flex-basis: 48px; font-size: 14px; }
+  .embed-search-form { flex-wrap: wrap; }
+  .embed-search { flex-basis: 100%; }
+  .embed-session-facts > div { grid-template-columns: 1fr; gap: 0; }
 }
