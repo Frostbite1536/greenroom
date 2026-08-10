@@ -2028,6 +2028,34 @@ try {
   check("partial completed review is counted but withheld from the decision score",
     partialRoundText.includes("No included reviews")
     && partialRoundText.includes("0 of 1 completed"));
+
+  // --- D-C5-8 §3.2: ABS-10 decision-score sort ----------------------------
+  // The ordering itself is client state; the comparator, missing-scores-last in
+  // both directions and the ties live in lib/decision-score-sort.test.ts. What
+  // the served markup proves is the contract around it — that the control is on
+  // the score column and only there, that the page still opens unsorted, and
+  // that PR #65's newest-round default is untouched by the sort.
+  const scoreSortHead = (() => {
+    const start = multiplePlanPage.text.indexOf("<thead");
+    const end = multiplePlanPage.text.indexOf("</thead>");
+    return start === -1 || end === -1 ? "" : multiplePlanPage.text.slice(start, end + "</thead>".length);
+  })();
+  check("§3.2 exactly one abstracts header is sortable, and it is the decision score",
+    (scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length === 1
+    && scoreSortHead.includes("Decision score"),
+    `${(scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length} sortable headers`);
+  check("§3.2 the decision-review count is NOT sortable in this lane",
+    scoreSortHead.slice(scoreSortHead.indexOf("Decision reviews"), scoreSortHead.indexOf("Decision score"))
+      .includes("<button") === false);
+  check("§3.2 the abstracts table opens unsorted, with no aria-sort claimed",
+    !scoreSortHead.includes("aria-sort"), scoreSortHead.slice(0, 200));
+  check("§3.2 sorting does not disturb the newest-round default or the included-review copy",
+    multiplePlanText.includes("the newest one is shown")
+    && multiplePlanText.includes("only valid, completed reviews from the selected round"));
+  // A missing score must still read as an absence, never as a number, on a page
+  // whose score column is now sortable.
+  check("§3.2 an unscored proposal still reads 'No included reviews', not 0.00",
+    partialRoundText.includes("No included reviews") && !partialRoundText.includes("0.00"));
   const adminSubmissions = await req("GET", `/api/cfp/submissions?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
   const apiSummary = adminSubmissions.data?.data?.decisionSummary;
   const apiAbstract = (adminSubmissions.data?.data?.abstracts ?? []).find((abstract) => abstract.id === fx.abstract.id);
@@ -2225,7 +2253,10 @@ try {
   check("S20 reports global counts and an honest bounded-order notice",
     s20PageText.includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`)
     && s20PageText.includes("Submitted proposals are ordered newest first; drafts follow.")
-    && s20PageText.includes("Tabs and search cover only these loaded proposals.")
+    // Updated with ABS-10: the notice now scopes sorting too, because a sorted
+    // score column must not read as a ranking of every stored proposal.
+    && s20PageText.includes("Tabs, search and sorting cover only these loaded proposals")
+    && s20PageText.includes("it does not rank every stored proposal")
     && new RegExp(`Total\\s*${s20Total}`).test(s20PageText)
     && new RegExp(`Pending review\\s*${s20Pending}`).test(s20PageText)
     && new RegExp(`Accepted\\s*${s20Accepted}`).test(s20PageText));

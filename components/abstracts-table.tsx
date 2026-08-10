@@ -3,9 +3,15 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, CalendarPlus, Download, FileStack, Search, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CalendarPlus, Download, FileStack, Search, X } from "lucide-react";
 import type { AbstractRow, AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/data/reads";
 import { formatDecisionScore } from "@/lib/decision-summary-display";
+import {
+  decisionScoreAriaSort,
+  nextDecisionScoreSort,
+  sortByDecisionScore,
+  type DecisionScoreSortState,
+} from "@/lib/decision-score-sort";
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
@@ -82,6 +88,10 @@ export function AbstractsTable({
   const [tab, setTab] = useState("ALL");
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
+  // ABS-10. Null until the organizer clicks, so the table opens on the server's
+  // newest-first page order. Independent of the review-coverage table's sort:
+  // separate state, separate comparator, separate screen.
+  const [scoreSort, setScoreSort] = useState<DecisionScoreSortState>(null);
   // Lifted out of the drawer on purpose: the drawer closes on a backdrop click,
   // and this consequence is too easy to miss if it disappears with it.
   const [warning, setWarning] = useState<ProgrammeWarning | null>(null);
@@ -94,7 +104,7 @@ export function AbstractsTable({
 
   const rows = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    return abstracts
+    const filtered = abstracts
       .filter((a) => (tab === "ALL" ? true : a.status === tab))
       .filter(
         (a) =>
@@ -102,7 +112,15 @@ export function AbstractsTable({
           a.title.toLowerCase().includes(needle) ||
           a.speakers.some((s) => s.name.toLowerCase().includes(needle)),
       );
-  }, [abstracts, tab, q]);
+    // Local to the rows already loaded, and applied last so it reorders exactly
+    // what the tabs and search left on screen. `weightedAverage` is passed
+    // through as it arrived — an absent score stays absent rather than
+    // becoming a zero.
+    return sortByDecisionScore(
+      filtered.map((a) => ({ ...a, weightedAverage: a.decisionSummary?.weightedAverage ?? null })),
+      scoreSort,
+    );
+  }, [abstracts, tab, q, scoreSort]);
 
   const selected = abstracts.find((a) => a.id === selectedId)
     ?? (selectedId === initialSelectedAbstract?.id ? initialSelectedAbstract : null);
@@ -156,7 +174,7 @@ export function AbstractsTable({
       {hasMore ? (
         <p className="abstract-overflow-notice" role="status">
           <strong>Showing first {abstracts.length} of {total} proposals.</strong>{" "}
-          Submitted proposals are ordered newest first; drafts follow. Tabs and search cover only these loaded proposals. Older proposals remain stored; use a known direct proposal link or a narrower API status or form filter.
+          Submitted proposals are ordered newest first; drafts follow. Tabs, search and sorting cover only these loaded proposals — sorting by decision score reorders this page, it does not rank every stored proposal. Older proposals remain stored; use a known direct proposal link or a narrower API status or form filter.
         </p>
       ) : null}
 
@@ -193,8 +211,25 @@ export function AbstractsTable({
                 <th>Title</th>
                 <th>Category</th>
                 <th>Speakers</th>
+                {/* Decision-review-count sorting is deliberately NOT in this
+                    lane, so this header stays a plain label. */}
                 <th>Decision reviews</th>
-                <th>Decision score</th>
+                {decisionSummary.selectedPlan ? (
+                  <th scope="col" aria-sort={decisionScoreAriaSort(scoreSort)}>
+                    <button
+                      type="button"
+                      className="sort-header"
+                      onClick={() => setScoreSort((s) => nextDecisionScoreSort(s))}
+                    >
+                      Decision score
+                      <DecisionScoreSortIndicator state={scoreSort} />
+                    </button>
+                  </th>
+                ) : (
+                  // Without a round every cell reads "No review round", so
+                  // there is nothing to order and no control is offered.
+                  <th>Decision score</th>
+                )}
                 <th><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
@@ -269,6 +304,36 @@ export function AbstractsTable({
         />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Sort state of the decision-score header.
+ *
+ * Intentionally a local twin of the review-coverage indicator rather than a
+ * shared import: §3.2 keeps the two surfaces independent, and each file's own
+ * source test pins its own accessibility properties, so a regression in either
+ * fails on its own rather than hiding behind the other.
+ *
+ * Direction is the arrow's shape plus a screen-reader sentence — the colour
+ * change is a secondary cue only — and it sits beside the `aria-sort` the `th`
+ * already carries.
+ */
+function DecisionScoreSortIndicator({ state }: { state: DecisionScoreSortState }) {
+  if (state === null) {
+    return <ArrowUpDown size={13} className="sort-indicator" aria-hidden="true" />;
+  }
+  return (
+    <>
+      {state.direction === "asc" ? (
+        <ArrowUp size={13} className="sort-indicator active" aria-hidden="true" />
+      ) : (
+        <ArrowDown size={13} className="sort-indicator active" aria-hidden="true" />
+      )}
+      <span className="sr-only">
+        {state.direction === "asc" ? ", sorted ascending" : ", sorted descending"}
+      </span>
+    </>
   );
 }
 
