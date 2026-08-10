@@ -269,6 +269,16 @@ export function PATCH(req: Request, ctx: Params) {
 
       const fieldByKey = new Map(locks.fields.map((field) => [field.key, field]));
 
+      // This writes the Abstract and nothing else. In particular, changing
+      // `categoryId` on an ACCEPTED proposal does NOT propagate to the linked
+      // `Session.categoryId`, and that is the invariant rather than an
+      // oversight: per INV-EDIT-001 a speaker edit never silently mutates its
+      // linked Session, because that Session is the public programme and this
+      // caller is authorized as a speaker (`isAbstractSpeaker`), not as an
+      // organizer. C18 owns the reconciliation handoff that surfaces the
+      // divergence; until then an organizer repairs it by re-running
+      // accept/convert, which reconciles the topic under ADMIN authority (see
+      // `provisionSessionForAbstract`).
       await tx.abstract.update({
         where: { id: fresh.id },
         data: {

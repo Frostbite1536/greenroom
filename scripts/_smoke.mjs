@@ -2465,6 +2465,40 @@ try {
     acceptedAdminAgenda.status,
   );
 
+  // 11b. T3 — a topic that moves on the proposal after acceptance.
+  //
+  // The divergence is written directly here on purpose: the point under test is
+  // what an ORGANIZER re-run does about it, not which writer caused it. The
+  // matching invariant — that a speaker's own edit never propagates to the
+  // Session (INV-EDIT-001, C18 owns the handoff) — is pinned structurally in
+  // lib/services/session-provisioning.test.ts, because reaching that state over
+  // HTTP needs a speaker persona with a persisted membership on this abstract.
+  const systemsCategory = await prisma.category.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, name: "Systems" },
+    select: { id: true },
+  });
+  await prisma.abstract.update({ where: { id: abstractId }, data: { categoryId: systemsCategory?.id } });
+  check("T3 a proposal's topic moving does not silently rewrite the public programme",
+    (await prisma.session.findUnique({ where: { id: acceptedSession?.id }, select: { categoryId: true } }))
+      ?.categoryId === aiCategory?.id,
+    "the Session must still carry the topic it was created with");
+
+  const reconvert = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("T3 an admin re-run reconciles the stale topic and says it did",
+    reconvert.status === 200 &&
+      reconvert.data?.data?.created === false &&
+      reconvert.data?.data?.topicReconciled === true &&
+      (await prisma.session.findUnique({ where: { id: acceptedSession?.id }, select: { categoryId: true } }))
+        ?.categoryId === systemsCategory?.id,
+    `${reconvert.status} ${JSON.stringify(reconvert.data?.data ?? reconvert.data?.error ?? "none")}`);
+
+  const reconvertAgain = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("T3 a second re-run reports no reconciliation rather than rewriting an aligned talk",
+    reconvertAgain.status === 200 && reconvertAgain.data?.data?.topicReconciled === false,
+    JSON.stringify(reconvertAgain.data?.data ?? "none"));
+  check("T3 re-running never duplicates the session",
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1);
+
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
   }, admin);
