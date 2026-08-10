@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { ListChecks, Plus, Trash2, UsersRound } from "lucide-react";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
 import { formatEventDateTime } from "@/lib/tz";
+import { bulkAssignNotice, taskFanOutNotice } from "@/lib/speakers/task-notices";
 import type { OnboardingTaskView } from "@/lib/services/onboarding-task-view";
 import { EmptyState, Pill } from "@/components/ui";
 
@@ -84,12 +85,6 @@ export function OnboardingTaskManager({
     setNotice(null);
   }
 
-  /** One sentence an operator can act on, for every fan-out result. */
-  function fanOutNotice(verb: string, title: string, assigned: number): string {
-    if (assigned === 0) return `${verb} “${title}”. Every confirmed speaker already had it.`;
-    return `${verb} “${title}” and assigned it to ${assigned} speaker ${assigned === 1 ? "task" : "tasks"}.`;
-  }
-
   async function createTask() {
     if (draft.title.trim() === "") {
       setError("Give the task a title.");
@@ -108,7 +103,14 @@ export function OnboardingTaskManager({
       return;
     }
     setDraft(EMPTY_DRAFT);
-    setNotice(fanOutNotice("Added", res.data.task.title, res.data.assigned));
+    // `required` comes from the stored task the server returned, not the local
+    // draft: the notice must describe what was actually persisted.
+    setNotice(taskFanOutNotice({
+      verb: "Added",
+      title: res.data.task.title,
+      required: res.data.task.required,
+      assigned: res.data.assigned,
+    }));
     refresh();
   }
 
@@ -130,7 +132,12 @@ export function OnboardingTaskManager({
       return;
     }
     setEditingId(null);
-    setNotice(fanOutNotice("Saved", res.data.task.title, res.data.assigned));
+    setNotice(taskFanOutNotice({
+      verb: "Saved",
+      title: res.data.task.title,
+      required: res.data.task.required,
+      assigned: res.data.assigned,
+    }));
     refresh();
   }
 
@@ -161,11 +168,7 @@ export function OnboardingTaskManager({
       setError(res.error.message);
       return;
     }
-    setNotice(
-      res.data.assigned === 0
-        ? `Every speaker on all ${res.data.sessions} confirmed sessions already has the full checklist.`
-        : `Assigned ${res.data.assigned} missing task${res.data.assigned === 1 ? "" : "s"} across ${res.data.sessions} confirmed sessions.`,
-    );
+    setNotice(bulkAssignNotice(res.data.assigned, res.data.sessions));
     refresh();
   }
 
