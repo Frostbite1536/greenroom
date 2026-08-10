@@ -26,6 +26,7 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getApiContext, type ApiContext } from "@/lib/api/context";
+import { ApiError } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
   ADMIN_ABSTRACT_LIST_TAKE,
@@ -717,9 +718,25 @@ export type QueueRow = {
   myComment: string | null;
 };
 
+/**
+ * One selectable round, carrying the caller's *own* assignment count.
+ *
+ * `assignedToMe` is deliberately the only per-round volume exposed here: it is
+ * the same self-scoped set the queue below projects, so the selector can make
+ * other rounds discoverable without widening whose assignments are readable.
+ */
+export type EvaluationRoundOption = {
+  id: string;
+  name: string;
+  ordinal: number;
+  assignedToMe: number;
+};
+
 export type EvaluationView = {
   eventId: string;
   role: string;
+  /** Every round of this event, newest ordinal first. Empty when none exist. */
+  rounds: EvaluationRoundOption[];
   plan: {
     id: string;
     name: string;
@@ -733,22 +750,76 @@ export type EvaluationView = {
 };
 
 /**
+ * Choose which round the reviewer lands on.
+ *
+ * This read used to pin to the highest-ordinal round, which made an assignment
+ * held in any earlier round completely invisible to the reviewer who held it.
+ * The default is now the newest round the caller actually has work in, so no
+ * assignment is silently hidden; an explicit request always wins, which keeps a
+ * round the caller holds nothing in reachable from the selector.
+ *
+ * `rounds` must already be ordered newest-first.
+ */
+export function resolveEvaluationRound(
+  rounds: readonly EvaluationRoundOption[],
+  requestedPlanId?: string | null,
+): EvaluationRoundOption | null {
+  const planId = requestedPlanId?.trim() || null;
+  if (planId) {
+    const requested = rounds.find((round) => round.id === planId);
+    if (!requested) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
+    return requested;
+  }
+  return rounds.find((round) => round.assignedToMe > 0) ?? rounds[0] ?? null;
+}
+
+/**
  * The scoring queue for the signed-in reviewer.
  *
  * Always filtered to the caller's own assignments: `POST /api/evaluations/scores`
  * rejects an unassigned reviewer with `NOT_ASSIGNED`, so showing another
  * reviewer's rows would render an unusable form.
  */
-export async function getEvaluationQueue(): Promise<EvaluationView> {
+export async function getEvaluationQueue(requestedPlanId?: string | null): Promise<EvaluationView> {
   const ctx = await pageContext(["ADMIN", "EVALUATOR"]);
 
-  const plan = await prisma.evaluationPlan.findFirst({
-    where: { eventId: ctx.eventId },
-    orderBy: { ordinal: "desc" },
-    include: { _count: { select: { assignments: true } } },
-  });
+  const [planRows, myRoundCounts] = await Promise.all([
+    prisma.evaluationPlan.findMany({
+      where: { eventId: ctx.eventId },
+      // Metadata only: the selected round's rubric JSON is read separately
+      // below rather than materializing every round's blob for the selector.
+      select: { id: true, name: true, ordinal: true },
+      orderBy: [{ ordinal: "desc" }, { id: "asc" }],
+      // The event's rounds are the same bounded set the decision summary caps.
+      take: OPERATOR_QUERY_LIMITS.adminDecisionPlans + 1,
+    }),
+    // Self-scoped exactly like the queue: this widens which rounds are
+    // projected, never whose assignments are counted or shown.
+    prisma.reviewAssignment.groupBy({
+      by: ["planId"],
+      where: { evaluatorId: ctx.userId, plan: { eventId: ctx.eventId } },
+      _count: { _all: true },
+    }),
+  ]);
+  assertEventQueryBound(planRows, OPERATOR_QUERY_LIMITS.adminDecisionPlans, "evaluation plans");
+
+  const countByPlanId = new Map(myRoundCounts.map((row) => [row.planId, row._count._all]));
+  const rounds: EvaluationRoundOption[] = planRows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    ordinal: row.ordinal,
+    assignedToMe: countByPlanId.get(row.id) ?? 0,
+  }));
+
+  const selectedRound = resolveEvaluationRound(rounds, requestedPlanId);
+  const plan = selectedRound
+    ? await prisma.evaluationPlan.findFirst({
+        where: { id: selectedRound.id, eventId: ctx.eventId },
+        include: { _count: { select: { assignments: true } } },
+      })
+    : null;
   if (!plan) {
-    return { eventId: ctx.eventId, role: ctx.role, plan: null, queue: [] };
+    return { eventId: ctx.eventId, role: ctx.role, rounds, plan: null, queue: [] };
   }
 
   const [assignments, myScores, completedCount] = await Promise.all([
@@ -792,6 +863,7 @@ export async function getEvaluationQueue(): Promise<EvaluationView> {
   return {
     eventId: ctx.eventId,
     role: ctx.role,
+    rounds,
     plan: {
       id: plan.id,
       name: plan.name,

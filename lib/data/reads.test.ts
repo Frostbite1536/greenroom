@@ -5,6 +5,7 @@ import {
   indexAdminAnswers,
   indexOrganizerReviewComments,
   planAdminAnswerRead,
+  resolveEvaluationRound,
   summarizeAdminAbstractMetrics,
 } from "./reads";
 import { ApiError } from "@/lib/api/http";
@@ -115,5 +116,49 @@ test("organizer review comments fail closed at their bound", () => {
     (error: unknown) =>
       error instanceof ApiError &&
       error.code === "EVENT_QUERY_LIMIT_EXCEEDED",
+  );
+});
+
+test("the reviewer queue lands on the newest round holding their own work, not the newest round", () => {
+  // Newest-first, exactly as the read orders them. The harness shape: two
+  // rounds, every assignment in the older one.
+  const rounds = [
+    { id: "plan-2", name: "Second round", ordinal: 2, assignedToMe: 0 },
+    { id: "plan-1", name: "First round", ordinal: 1, assignedToMe: 3 },
+  ];
+
+  assert.equal(resolveEvaluationRound(rounds, undefined)?.id, "plan-1");
+  assert.equal(resolveEvaluationRound(rounds, null)?.id, "plan-1");
+  assert.equal(resolveEvaluationRound(rounds, "   ")?.id, "plan-1");
+  // An explicit pick always wins, so an empty round stays reachable.
+  assert.equal(resolveEvaluationRound(rounds, "plan-2")?.id, "plan-2");
+  // Work in several rounds still opens on the newest of them.
+  assert.equal(
+    resolveEvaluationRound(
+      [{ ...rounds[0], assignedToMe: 1 }, rounds[1]],
+      undefined,
+    )?.id,
+    "plan-2",
+  );
+  // No assignments anywhere keeps the previous newest-round landing.
+  assert.equal(
+    resolveEvaluationRound([rounds[0], { ...rounds[1], assignedToMe: 0 }], undefined)?.id,
+    "plan-2",
+  );
+  assert.equal(resolveEvaluationRound([], undefined), null);
+});
+
+test("an evaluation round from outside this event is a 404, never a silent fallback", () => {
+  assert.throws(
+    () => resolveEvaluationRound(
+      [{ id: "plan-1", name: "First round", ordinal: 1, assignedToMe: 2 }],
+      "other-event-plan",
+    ),
+    (error: unknown) =>
+      error instanceof ApiError && error.status === 404 && error.code === "PLAN_NOT_FOUND",
+  );
+  assert.throws(
+    () => resolveEvaluationRound([], "any-plan"),
+    (error: unknown) => error instanceof ApiError && error.code === "PLAN_NOT_FOUND",
   );
 });

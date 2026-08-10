@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ClipboardCheck, EyeOff, Inbox } from "lucide-react";
-import type { EvaluationView, QueueRow } from "@/lib/data/reads";
+import type { EvaluationRoundOption, EvaluationView, QueueRow } from "@/lib/data/reads";
 import { apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -28,16 +28,21 @@ const STATUS_LABEL: Record<string, string> = {
   DECLINED: "Declined",
 };
 
+/** The row the workspace should open on: first still-actionable, else first. */
+function preferredActiveAbstractId(queue: readonly QueueRow[]): string | null {
+  return (
+    queue.find((q) => q.status !== "COMPLETED" && q.abstractStatus !== "WITHDRAWN")?.abstractId
+    ?? queue.find((q) => q.status !== "COMPLETED")?.abstractId
+    ?? queue[0]?.abstractId
+    ?? null
+  );
+}
+
 export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [activeId, setActiveId] = useState<string | null>(
-    view.queue.find((q) => q.status !== "COMPLETED" && q.abstractStatus !== "WITHDRAWN")
-      ?.abstractId
-      ?? view.queue.find((q) => q.status !== "COMPLETED")?.abstractId
-      ?? view.queue[0]?.abstractId
-      ?? null,
-  );
+  const [activeId, setActiveId] = useState<string | null>(preferredActiveAbstractId(view.queue));
+  const [renderedPlanId, setRenderedPlanId] = useState<string | null>(view.plan?.id ?? null);
   // Local score edits layered over the server state, keyed by abstract id.
   const [edits, setEdits] = useState<Record<string, Record<string, number>>>({});
   const [commentDrafts, setCommentDrafts] = useState<Record<string, ReviewCommentDraft>>({});
@@ -50,6 +55,21 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   // used to sit after them, so a queue going from empty to non-empty without a
   // remount changed the hook count and would crash the workspace.
   const plan = view.plan;
+
+  // Switching rounds re-renders this component with a different queue and a
+  // possibly different rubric, so unsaved edits and the open row must not carry
+  // across. Adjusting state during render (rather than in an effect) means the
+  // stale round's selection is never committed to the DOM.
+  if (renderedPlanId !== (plan?.id ?? null)) {
+    setRenderedPlanId(plan?.id ?? null);
+    setActiveId(preferredActiveAbstractId(view.queue));
+    setEdits({});
+    setCommentDrafts({});
+    commentDraftsRef.current = {};
+    setError(null);
+    setNotice(null);
+  }
+
   // Explicitly annotated: without `noUncheckedIndexedAccess`, `queue[0]` types as
   // QueueRow even when the queue is empty, which would hide the null case from
   // the compiler while it still happens at runtime.
@@ -98,24 +118,53 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     return wsum ? (sum / wsum).toFixed(2) : "—";
   }, [scores, plan]);
 
+  // Declared before the early returns so every branch — including the empty
+  // ones — can offer the switcher. An assignment in another round must never be
+  // unreachable just because the round the page opened on happens to be empty.
+  function selectRound(planId: string) {
+    if (!planId || planId === view.plan?.id) return;
+    startTransition(() => {
+      router.push(`/admin/evaluations?planId=${encodeURIComponent(planId)}`);
+    });
+  }
+
+  const roundNav = (
+    <EvaluationRoundNav
+      rounds={view.rounds}
+      selectedPlanId={plan?.id ?? null}
+      onSelect={selectRound}
+      disabled={pending}
+    />
+  );
+
   if (!plan) {
     return (
-      <div className="card">
-        <EmptyState icon={<Inbox size={22} />} title="No evaluation round yet">
-          An admin needs to create a review round before scoring can start.
-        </EmptyState>
+      <div className="stack">
+        {roundNav}
+        <div className="card">
+          <EmptyState icon={<Inbox size={22} />} title="No evaluation round yet">
+            An admin needs to create a review round before scoring can start.
+          </EmptyState>
+        </div>
       </div>
     );
   }
 
+  const elsewhere = view.rounds.filter((r) => r.id !== plan.id && r.assignedToMe > 0);
+
   if (!active) {
     return (
-      <div className="card">
-        <EmptyState icon={<Inbox size={22} />} title="Nothing assigned to you">
-          {view.role === "ADMIN"
-            ? "You have no review assignments in this round. Assign proposals to yourself in the panel above, or sign in with the Evaluator persona to see a populated scoring queue."
-            : "You have no review assignments in this round yet. Check back once the program team assigns proposals."}
-        </EmptyState>
+      <div className="stack">
+        {roundNav}
+        <div className="card">
+          <EmptyState icon={<Inbox size={22} />} title="Nothing assigned to you in this round">
+            {elsewhere.length > 0
+              ? `You hold no assignments in ${plan.name}. Switch to ${elsewhere.map((r) => `Round ${r.ordinal}`).join(" or ")} above to reach the work assigned to you.`
+              : view.role === "ADMIN"
+                ? "You have no review assignments in this round. Assign proposals to yourself in the panel above, or sign in with the Evaluator persona to see a populated scoring queue."
+                : "You have no review assignments in this round yet. Check back once the program team assigns proposals."}
+          </EmptyState>
+        </div>
       </div>
     );
   }
@@ -204,7 +253,9 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     startTransition(() => router.refresh());
   }
 
-  return (
+  // Held in a local so the two-column grid keeps its own element: the switcher
+  // is a sibling above it, never a third grid cell.
+  const workspaceGrid = (
     <div className="eval-grid">
       <div className="card">
         <div style={{ padding: "16px 16px 12px", borderBottom: "1px solid var(--line)" }}>
@@ -351,5 +402,68 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
         ) : null}
       </div>
     </div>
+  );
+
+  return (
+    <div className="stack">
+      {roundNav}
+      {workspaceGrid}
+    </div>
+  );
+}
+
+/**
+ * Round switcher for the reviewer's own queue.
+ *
+ * Every option carries the caller's own assignment count, so a round holding
+ * work is discoverable from the closed control rather than only after picking
+ * it. Hidden when the event has a single round: there is nothing to switch to.
+ */
+function EvaluationRoundNav({
+  rounds,
+  selectedPlanId,
+  onSelect,
+  disabled,
+}: {
+  rounds: EvaluationRoundOption[];
+  selectedPlanId: string | null;
+  onSelect: (planId: string) => void;
+  disabled: boolean;
+}) {
+  const headingId = "evaluation-round-heading";
+  const helpId = "evaluation-round-help";
+  if (rounds.length < 2) return null;
+
+  const elsewhere = rounds.filter((round) => round.id !== selectedPlanId && round.assignedToMe > 0);
+  const elsewhereTotal = elsewhere.reduce((total, round) => total + round.assignedToMe, 0);
+
+  return (
+    <section className="table-toolbar" aria-labelledby={headingId}>
+      <div>
+        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>Review round</h2>
+        <p className="hint" id={helpId} style={{ margin: 0 }}>
+          {elsewhere.length === 0
+            ? "This event has several review rounds. Every proposal assigned to you in the selected round is listed below."
+            : `${elsewhereTotal} more proposal${elsewhereTotal === 1 ? " is" : "s are"} assigned to you in ${elsewhere.length === 1 ? "another round" : `${elsewhere.length} other rounds`}.`}
+        </p>
+      </div>
+      <label className="field-label" htmlFor="evaluation-round-select">
+        <span className="sr-only">Review round</span>
+        <select
+          id="evaluation-round-select"
+          className="text-input"
+          value={selectedPlanId ?? ""}
+          disabled={disabled}
+          onChange={(event) => onSelect(event.target.value)}
+          aria-describedby={helpId}
+        >
+          {rounds.map((round) => (
+            <option key={round.id} value={round.id}>
+              {`Round ${round.ordinal} — ${round.name} · ${round.assignedToMe} assigned to you`}
+            </option>
+          ))}
+        </select>
+      </label>
+    </section>
   );
 }
