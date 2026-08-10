@@ -440,5 +440,10 @@ export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
 
 export type ApiSuccess<T> = { ok: true; data: T };
-export type ApiFailure = { ok: false; error: { code: string; message: string; fieldErrors?: Record<string, string[]> } };
+// `retryAfterSeconds` is an additive extension: present only on refusals that
+// know when they clear (rate limits), and always mirrored by `Retry-After`.
+export type ApiFailure = {
+  ok: false;
+  error: { code: string; message: string; fieldErrors?: Record<string, string[]>; retryAfterSeconds?: number };
+};
 export type ApiResponse<T> = ApiSuccess<T> | ApiFailure;

@@ -13,6 +13,12 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly fieldErrors?: Record<string, string[]>,
+    /**
+     * Whole seconds until the caller may retry. Refusals that know when they
+     * clear (rate limits) set this; it is emitted as both the `Retry-After`
+     * header and `error.retryAfterSeconds` so a client never has to guess.
+     */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "ApiError";
@@ -28,9 +34,19 @@ export function fail(
   code: string,
   message: string,
   fieldErrors?: Record<string, string[]>,
+  retryAfterSeconds?: number,
 ): Response {
-  const body: ApiFailure = { ok: false, error: { code, message, fieldErrors } };
-  return Response.json(body, { status });
+  const retryAfter = typeof retryAfterSeconds === "number" && Number.isFinite(retryAfterSeconds)
+    ? Math.max(1, Math.ceil(retryAfterSeconds))
+    : undefined;
+  const body: ApiFailure = {
+    ok: false,
+    error: { code, message, fieldErrors, ...(retryAfter === undefined ? {} : { retryAfterSeconds: retryAfter }) },
+  };
+  return Response.json(body, {
+    status,
+    ...(retryAfter === undefined ? {} : { headers: { "Retry-After": String(retryAfter) } }),
+  });
 }
 
 /** Parse + validate a JSON request body against a Zod schema. */
@@ -76,7 +92,7 @@ export function handle(
 
 export function toResponse(error: unknown): Response {
   if (error instanceof ApiError) {
-    return fail(error.status, error.code, error.message, error.fieldErrors);
+    return fail(error.status, error.code, error.message, error.fieldErrors, error.retryAfterSeconds);
   }
   if (error instanceof ZodError) {
     const apiError = fromZod(error);
