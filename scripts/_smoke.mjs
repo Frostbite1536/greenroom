@@ -2895,22 +2895,24 @@ try {
   });
   const s16OrderId = s16OrderSubmit.data?.data?.id;
   check("S16 order setup: submitted proposal created", s16OrderSubmit.status === 201 && !!s16OrderId);
-  const countRowShareLocks = async (relation) => {
+  // One combined query per observation: the waiting speaker PATCH burns its
+  // 5-second server transaction budget while this probe polls, and two
+  // sequential round-trips per attempt against a remote database repeatedly
+  // pushed the release past that budget (P2028 at ~5.09s in two runs).
+  const countSpeakerFormShareLocks = async () => {
     const rows = await prisma.$queryRaw`
-      SELECT count(*)::int AS "count"
+      SELECT
+        count(*) FILTER (WHERE relation = '"FormConfig"'::regclass)::int AS "formConfig",
+        count(*) FILTER (WHERE relation = '"FormField"'::regclass)::int AS "formField"
       FROM pg_locks
-      WHERE relation = ${relation}::regclass
-        AND mode = 'RowShareLock'
-        AND granted
+      WHERE mode = 'RowShareLock' AND granted
     `;
-    return rows[0]?.count ?? 0;
+    return rows[0] ?? { formConfig: 0, formField: 0 };
   };
   const waitForSpeakerFormLocks = async ({ baselineFormConfigShares, baselineFormFieldShares }) => {
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (
-        await countRowShareLocks('"FormConfig"') > baselineFormConfigShares &&
-        await countRowShareLocks('"FormField"') > baselineFormFieldShares
-      ) {
+      const shares = await countSpeakerFormShareLocks();
+      if (shares.formConfig > baselineFormConfigShares && shares.formField > baselineFormFieldShares) {
         return true;
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
@@ -2931,9 +2933,10 @@ try {
   // its finally release/commit survive host scheduling jitter.
   }, { timeout: 15_000 });
   await s16AbstractLockHeld;
+  const s16BaselineShares = await countSpeakerFormShareLocks();
   const s16OrderLockBaseline = {
-    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
-    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+    baselineFormConfigShares: s16BaselineShares.formConfig,
+    baselineFormFieldShares: s16BaselineShares.formField,
   };
   const waitingSpeakerEdit = j("PATCH", `/api/cfp/submissions/${s16OrderId}`, {
     title: "S16 ordered edit",
@@ -2949,7 +2952,10 @@ try {
   try {
     // If a lock-order regression blocks this public writer, do not leave the
     // held advisory lock waiting forever. The result still fails honestly.
-    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 4_000);
+    // 3s, not 4s: a healthy public submit completes well under this, and every
+    // spare second here is margin returned to the waiting speaker PATCH's
+    // 5-second server transaction budget.
+    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 3_000);
   } finally {
     if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
     releaseS16AbstractLock();
@@ -3003,9 +3009,10 @@ try {
     await s16SessionWriterRelease;
   });
   await s16SessionWriterReady;
+  const s16SessionBaselineShares = await countSpeakerFormShareLocks();
   const s16SessionLockBaseline = {
-    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
-    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+    baselineFormConfigShares: s16SessionBaselineShares.formConfig,
+    baselineFormFieldShares: s16SessionBaselineShares.formField,
   };
   const staleSessionRosterEdit = j("PATCH", `/api/cfp/submissions/${s16SessionId}`, {
     speakers: [
@@ -3057,9 +3064,10 @@ try {
     await s16TerminalWriterRelease;
   });
   await s16TerminalWriterReady;
+  const s16TerminalBaselineShares = await countSpeakerFormShareLocks();
   const s16TerminalLockBaseline = {
-    baselineFormConfigShares: await countRowShareLocks('"FormConfig"'),
-    baselineFormFieldShares: await countRowShareLocks('"FormField"'),
+    baselineFormConfigShares: s16TerminalBaselineShares.formConfig,
+    baselineFormFieldShares: s16TerminalBaselineShares.formField,
   };
   const staleTerminalEdit = j("PATCH", `/api/cfp/submissions/${s16TerminalId}`, {
     title: "S16 stale terminal attempt",
