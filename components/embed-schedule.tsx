@@ -12,7 +12,7 @@ import { CalendarDays, CalendarPlus, Download, MapPin, Search, User } from "luci
 import type { PublicAgenda } from "@/lib/data/reads";
 import { calendarExportUrl } from "@/lib/ics-embed";
 import { PUBLIC_SESSION_SUMMARY_FALLBACK } from "@/lib/public-session-copy";
-import { formatDayLabel, formatEventDateRange, formatTime, zonedParts } from "@/lib/tz";
+import { formatDayLabel, formatEventDateRange, formatTimeRange, timeZoneNote, zonedParts } from "@/lib/tz";
 import {
   ALL,
   agendaTruncationNotice,
@@ -43,7 +43,9 @@ function SessionCard({
 }) {
   const chips = sessionChips(session);
   const split = descriptionPreview(session.description);
-  const when = `${formatTime(session.startsAt, timeZone)}–${formatTime(session.endsAt, timeZone)}`;
+  // Labelled with the event's zone at this session's own instant, so a reader
+  // outside the venue's timezone is never left guessing which clock (§5-2).
+  const when = formatTimeRange(session.startsAt, session.endsAt, timeZone);
 
   return (
     <article className="embed-session" id={`session-${session.sessionId}`} style={{ marginTop: 8 }}>
@@ -161,6 +163,9 @@ export function EmbedSchedule({
   const tabs = dayTabs(agenda, filters, formatDayLabel);
   const days = groupByDay(filtered, tz);
   const dateRange = formatEventDateRange(agenda.event.startsAt, agenda.event.endsAt, tz);
+  // Derived at the event's own start, not at render time: a summer programme
+  // read in winter must still say PDT.
+  const zoneNote = timeZoneNote(tz, agenda.event.startsAt);
   const isFiltered = filters.track !== ALL || filters.day !== ALL || filters.q !== "";
   const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;
@@ -174,6 +179,7 @@ export function EmbedSchedule({
             <p className="hint">
               {resultSummary(agenda.sessions.length, filtered.length, isFiltered, agenda.truncated ?? false)}
               {dateRange ? ` · ${dateRange}` : ""}
+              {` · ${zoneNote}`}
             </p>
             {/* A reader whose programme was cut short is told, rather than
                 shown a confident count of a partial schedule (S20). */}

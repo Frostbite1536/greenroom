@@ -7,7 +7,7 @@
  * must never invent a time or a room it does not have: each part of a session
  * line is included only when the projection actually carries it.
  */
-import { formatDayLabel, formatTime, zonedParts } from "./tz";
+import { formatDayLabel, formatTimeRange, zonedParts } from "./tz";
 
 export type SpeakerViewSession = {
   id: string;
@@ -68,8 +68,12 @@ export function speakerDetailLine(speaker: SpeakerViewProfile): string | null {
 }
 
 /**
- * "Tue, May 12 · 9:00 – 9:45 AM · Redwood Hall", omitting whatever is missing.
- * Returns null when the session carries neither a time nor a room.
+ * "Tue, May 12 · 9:00 AM–9:45 AM PDT · Redwood Hall", omitting whatever is
+ * missing. Returns null when the session carries neither a time nor a room.
+ *
+ * The zone abbreviation is not decoration: a speaker card is the surface a
+ * remote attendee reads furthest from the venue, and a bare "9:00 AM" there is
+ * a time in nobody's particular day (§5-2).
  */
 export function sessionPlacementLine(session: SpeakerViewSession, timeZone: string): string | null {
   const parts: string[] = [];
@@ -79,11 +83,11 @@ export function sessionPlacementLine(session: SpeakerViewSession, timeZone: stri
     if (!Number.isNaN(start.getTime())) {
       parts.push(formatDayLabel(zonedParts(session.startsAt, timeZone).dateKey, timeZone));
       const end = session.endsAt ? new Date(session.endsAt) : null;
-      parts.push(
-        end && !Number.isNaN(end.getTime())
-          ? `${formatTime(session.startsAt, timeZone)}–${formatTime(session.endsAt!, timeZone)}`
-          : formatTime(session.startsAt, timeZone),
-      );
+      parts.push(formatTimeRange(
+        session.startsAt,
+        end && !Number.isNaN(end.getTime()) ? session.endsAt : null,
+        timeZone,
+      ));
     }
   }
 

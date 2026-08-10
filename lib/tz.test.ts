@@ -5,6 +5,9 @@ import {
   formatEventDateRange,
   formatEventDateTime,
   formatTime,
+  formatTimeRange,
+  timeZoneNote,
+  tzAbbreviation,
   zonedParts,
   zonedToUtcIso,
 } from "./tz";
@@ -105,4 +108,42 @@ test("formatEventDateRange renders in the event timezone, not the runtime zone",
     plain(formatEventDateRange("2026-05-12T02:00:00.000Z", "2026-05-13T02:00:00.000Z", LOS_ANGELES)),
     "May 11 – 12, 2026",
   );
+});
+
+test("a public time range names the clock it is on", () => {
+  assert.equal(
+    formatTimeRange("2026-05-12T17:00:00.000Z", "2026-05-12T17:45:00.000Z", LOS_ANGELES),
+    "10:00 AM–10:45 AM PDT",
+  );
+  // A session with a start but no stored end is still labelled.
+  assert.equal(formatTimeRange("2026-05-12T17:00:00.000Z", null, LOS_ANGELES), "10:00 AM PDT");
+});
+
+test("the zone label is derived at the session's own instant, never at 'now'", () => {
+  // The regression this exists to prevent: `tzAbbreviation` defaults `at` to
+  // the current date, so a summer programme read in winter would have printed
+  // PST over every May session. Both of these are the SAME zone, one instant
+  // either side of the DST boundary.
+  assert.equal(
+    formatTimeRange("2026-05-12T17:00:00.000Z", "2026-05-12T17:45:00.000Z", LOS_ANGELES),
+    "10:00 AM–10:45 AM PDT",
+  );
+  assert.equal(
+    formatTimeRange("2026-01-12T17:00:00.000Z", "2026-01-12T17:45:00.000Z", LOS_ANGELES),
+    "9:00 AM–9:45 AM PST",
+  );
+});
+
+test("the header note pins its abbreviation to the event, not the reader's calendar", () => {
+  assert.equal(timeZoneNote(LOS_ANGELES, "2026-05-12T17:00:00.000Z"), "All times PDT");
+  assert.equal(timeZoneNote(LOS_ANGELES, "2026-01-12T17:00:00.000Z"), "All times PST");
+  // An event with no stored start still gets an honest label rather than none.
+  assert.match(timeZoneNote(LOS_ANGELES, null), /^All times P[DS]T$/);
+  // A corrupt stored instant must not produce "All times Invalid Date".
+  assert.match(timeZoneNote(LOS_ANGELES, "not-a-date"), /^All times P[DS]T$/);
+});
+
+test("tzAbbreviation itself is DST-aware at the instant it is given", () => {
+  assert.equal(tzAbbreviation(LOS_ANGELES, new Date("2026-05-12T17:00:00.000Z")), "PDT");
+  assert.equal(tzAbbreviation(LOS_ANGELES, new Date("2026-01-12T17:00:00.000Z")), "PST");
 });

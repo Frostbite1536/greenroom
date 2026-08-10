@@ -63,3 +63,15 @@ test("the collapsed preview is hidden only when its own details is open", () => 
   assert.match(css, /\.embed-session-detail\[open\] > summary \.embed-session-preview \{ display: none; \}/);
   assert.match(css, /\.embed-session-detail > summary::-webkit-details-marker/);
 });
+
+test("§5-2: every public time is labelled with the event's own timezone", () => {
+  const component = source("components/embed-schedule.tsx");
+  // The card's time range and the header note both come from lib/tz, which
+  // derives the abbreviation at the event's instant rather than at render time.
+  assert.match(component, /formatTimeRange\(session\.startsAt, session\.endsAt, timeZone\)/);
+  assert.match(component, /timeZoneNote\(tz, agenda\.event\.startsAt\)/);
+  // A bare formatTime pair here would silently drop the label again.
+  assert.equal(/formatTime\(session\.(?:starts|ends)At/.test(component), false);
+  // Formatting stays in lib/tz.ts rather than being re-implemented beside it.
+  assert.equal(/new Intl\.DateTimeFormat/.test(component), false);
+});

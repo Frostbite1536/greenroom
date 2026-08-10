@@ -83,12 +83,26 @@ test("a stored profile always wins over the derived credit", () => {
 });
 
 test("the session line names day, time and room in the event timezone", () => {
-  assert.equal(sessionPlacementLine(session(), LOS_ANGELES), "Tue, May 12 · 10:00 AM–10:45 AM · Redwood Hall");
+  assert.equal(sessionPlacementLine(session(), LOS_ANGELES), "Tue, May 12 · 10:00 AM–10:45 AM PDT · Redwood Hall");
+});
+
+test("the session line names the event's clock, not a bare local time", () => {
+  // §5-2: a speaker card is read furthest from the venue, so an unlabelled
+  // "10:00 AM" there is a time in nobody's particular day. The abbreviation is
+  // taken at the session's own instant, so a January talk reads PST.
+  assert.match(sessionPlacementLine(session(), LOS_ANGELES) ?? "", /10:00 AM–10:45 AM PDT/);
+  assert.match(
+    sessionPlacementLine(
+      session({ startsAt: "2026-01-12T18:00:00.000Z", endsAt: "2026-01-12T18:45:00.000Z" }),
+      LOS_ANGELES,
+    ) ?? "",
+    /10:00 AM–10:45 AM PST/,
+  );
 });
 
 test("the session line omits what is missing instead of inventing it", () => {
-  assert.equal(sessionPlacementLine(session({ room: null }), LOS_ANGELES), "Tue, May 12 · 10:00 AM–10:45 AM");
-  assert.equal(sessionPlacementLine(session({ endsAt: null }), LOS_ANGELES), "Tue, May 12 · 10:00 AM · Redwood Hall");
+  assert.equal(sessionPlacementLine(session({ room: null }), LOS_ANGELES), "Tue, May 12 · 10:00 AM–10:45 AM PDT");
+  assert.equal(sessionPlacementLine(session({ endsAt: null }), LOS_ANGELES), "Tue, May 12 · 10:00 AM PDT · Redwood Hall");
   assert.equal(sessionPlacementLine(session({ startsAt: null, endsAt: null }), LOS_ANGELES), "Redwood Hall");
   assert.equal(sessionPlacementLine(session({ startsAt: null, endsAt: null, room: null }), LOS_ANGELES), null);
   // Corrupt stored instants must not throw on a public page.

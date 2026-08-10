@@ -2879,6 +2879,27 @@ try {
     enrichedText.includes(expectedRange) && expectedRange.includes("–"),
     `expected ${expectedRange}`);
 
+  // --- §5-2: public times name the clock they are on ------------------------
+  // Derived here the same way the page derives it — at the event's own start
+  // instant — so this cannot pass by accident in one half of the year and fail
+  // in the other.
+  const expectedZone = new Intl.DateTimeFormat("en-US", { timeZone: liveTz, timeZoneName: "short" })
+    .formatToParts(new Date(liveEvent.startsAt ?? Date.now()))
+    .find((p) => p.type === "timeZoneName")?.value;
+  check("§5-2 the schedule header names the timezone every time is printed in",
+    enrichedText.includes(`All times ${expectedZone}`),
+    `expected "All times ${expectedZone}" in the header`);
+  check("§5-2 the session card's time range carries the timezone abbreviation",
+    new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s${expectedZone}`).test(enrichedText),
+    `expected a "…AM ${expectedZone}" time range on a card`);
+  const speakersZone = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  const speakersZoneText = renderedText(speakersZone.text) ?? "";
+  check("§5-2 the speaker gallery names the same clock in its header and its lines",
+    speakersZone.status === 200
+    && speakersZoneText.includes(`All times ${expectedZone}`)
+    && new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s${expectedZone}`).test(speakersZoneText),
+    `expected the ${expectedZone} label on the speaker gallery`);
+
   // Search: a GET form, so the query lives in the URL and needs no hydration.
   check("embed search is a GET form",
     enriched.text.includes('method="get"') && enriched.text.includes('action="/embed/schedule"'));

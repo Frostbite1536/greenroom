@@ -169,6 +169,39 @@ export function tzAbbreviation(timeZone: string, at = new Date()): string {
   return parts.find((p) => p.type === "timeZoneName")?.value ?? timeZone;
 }
 
+/**
+ * A public time range that says which clock it is on: "10:00 AM–10:45 AM PDT".
+ *
+ * A bare time on a public programme is ambiguous to every reader who is not
+ * standing at the venue, and it is the one number an attendee acts on. The
+ * abbreviation is derived **at the session's own start instant**, never at
+ * "now": an event in May read in December must still say PDT, and defaulting
+ * `tzAbbreviation` to the current date would have printed PST.
+ *
+ * `endIso` is optional so a session with a start but no stored end still gets a
+ * labelled time rather than being dropped back to a bare one.
+ */
+export function formatTimeRange(
+  startIso: string,
+  endIso: string | null | undefined,
+  timeZone: string,
+): string {
+  const zone = tzAbbreviation(timeZone, new Date(startIso));
+  const start = formatTime(startIso, timeZone);
+  return endIso ? `${start}–${formatTime(endIso, timeZone)} ${zone}` : `${start} ${zone}`;
+}
+
+/**
+ * The header note naming the clock every time on the page is printed in.
+ *
+ * Pinned to an instant for the same reason as `formatTimeRange`; callers pass
+ * the event's own start so the note cannot drift with the reader's calendar.
+ */
+export function timeZoneNote(timeZone: string, at?: string | Date | null): string {
+  const instant = at ? new Date(at) : new Date();
+  return `All times ${tzAbbreviation(timeZone, Number.isNaN(instant.getTime()) ? new Date() : instant)}`;
+}
+
 export function minutesToTimeInput(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

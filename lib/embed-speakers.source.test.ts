@@ -61,3 +61,12 @@ test("no admin-only field reaches the gallery component", () => {
     assert.equal(component.includes(forbidden), false, `${forbidden} must not render publicly`);
   }
 });
+
+test("§5-2: the gallery names the clock its session times are on", () => {
+  const component = source("components/embed-speakers.tsx");
+  assert.match(component, /timeZoneNote\(gallery\.event\.timezone, gallery\.event\.startsAt\)/);
+  // The per-session line gets its label from the shared placement helper.
+  const view = source("lib/embed-speaker-view.ts");
+  assert.match(view, /formatTimeRange\(/);
+  assert.equal(/formatTime\(session\.startsAt, timeZone\)/.test(view), false);
+});

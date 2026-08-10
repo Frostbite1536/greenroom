@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Mic2, Search, Users } from "lucide-react";
 import type { PublicSpeaker, PublicSpeakers } from "@/lib/public-speakers";
-import { formatEventDateRange } from "@/lib/tz";
+import { formatEventDateRange, timeZoneNote } from "@/lib/tz";
 import { boundedCountLabel } from "@/lib/bounded-count";
 import {
   headshotAlt,
@@ -59,6 +59,9 @@ export function EmbedSpeakers({
 
   const scheduleUrl = `/embed/schedule?event=${encodeURIComponent(gallery.event.slug)}`;
   const dates = formatEventDateRange(gallery.event.startsAt, gallery.event.endsAt, gallery.event.timezone);
+  // Every session line below prints an event-local time; the header names the
+  // clock once so each card does not have to explain itself (§5-2).
+  const zoneNote = timeZoneNote(gallery.event.timezone, gallery.event.startsAt);
 
   const updateUrl = (nextQuery: string, nextTrack: string, historyMode: "push" | "replace") => {
     const url = new URL(window.location.href);
@@ -93,6 +96,7 @@ export function EmbedSpeakers({
                     below says so in words, and this must not contradict it. */}
                 {boundedCountLabel(gallery.speakers.length, gallery.truncated, "speaker")}
                 {dates ? ` · ${dates}` : ""}
+                {` · ${zoneNote}`}
               </p>
             </div>
             <Link className="ghost-button" href={scheduleUrl}>
