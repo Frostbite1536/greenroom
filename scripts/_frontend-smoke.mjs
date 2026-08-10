@@ -2916,7 +2916,9 @@ try {
     }
   }
   const placedSlots = await prisma.scheduleSlot.findMany({
-    where: { eventId: EVENT_ID }, select: { startsAt: true },
+    // `endsAt` as well as `startsAt`: the §5-2 note below is derived from every
+    // instant the page labels, exactly as the page derives it.
+    where: { eventId: EVENT_ID }, select: { startsAt: true, endsAt: true },
   });
   const sessionDays = [...new Set(placedSlots.map((slot) => dayKeyIn(slot.startsAt)))];
   const expectedDays = [...new Set([...rangeDays, ...sessionDays])].sort();
@@ -2953,25 +2955,49 @@ try {
     `expected ${expectedRange}`);
 
   // --- §5-2: public times name the clock they are on ------------------------
-  // Derived here the same way the page derives it — at the event's own start
-  // instant — so this cannot pass by accident in one half of the year and fail
-  // in the other.
-  const expectedZone = new Intl.DateTimeFormat("en-US", { timeZone: liveTz, timeZoneName: "short" })
-    .formatToParts(new Date(liveEvent.startsAt ?? Date.now()))
+  // Derived here the way the page derives it, over the same instants, rather
+  // than pinned to one branch. The fixture's two-day window is DST-uniform for
+  // most of the year, but `now + 30d .. now + 32d` straddles the November
+  // transition when the harness runs in early October — and on those days the
+  // zone-name form is the CORRECT output, not a failure. Pinning the
+  // abbreviation would have turned a right answer into a red gate once a year.
+  const zoneAbbrevAt = (value) => new Intl.DateTimeFormat("en-US", { timeZone: liveTz, timeZoneName: "short" })
+    .formatToParts(new Date(value))
     .find((p) => p.type === "timeZoneName")?.value;
-  check("§5-2 the schedule header names the timezone every time is printed in",
-    enrichedText.includes(`All times ${expectedZone}`),
-    `expected "All times ${expectedZone}" in the header`);
+  const programmeInstants = [
+    liveEvent.startsAt,
+    liveEvent.endsAt,
+    ...placedSlots.flatMap((slot) => [slot.startsAt, slot.endsAt]),
+  ].filter(Boolean);
+  const zoneAbbrevs = [...new Set(programmeInstants.map(zoneAbbrevAt))];
+  const expectedNote = zoneAbbrevs.length === 1
+    ? `All times ${zoneAbbrevs[0]}`
+    : `All times in ${liveTz}`;
+  // A card always carries a bare abbreviation at its OWN instant, whichever
+  // branch the header note took.
+  const cardZonePattern = new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s(?:${zoneAbbrevs.join("|")})`);
+
+  check("§5-2 the schedule header names the clock every time is printed in",
+    enrichedText.includes(expectedNote),
+    `expected "${expectedNote}" in the header (abbrevs seen: ${zoneAbbrevs.join(",")})`);
   check("§5-2 the session card's time range carries the timezone abbreviation",
-    new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s${expectedZone}`).test(enrichedText),
-    `expected a "…AM ${expectedZone}" time range on a card`);
+    cardZonePattern.test(enrichedText),
+    `expected a "…AM ${zoneAbbrevs[0]}" time range on a card`);
   const speakersZone = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
   const speakersZoneText = renderedText(speakersZone.text) ?? "";
   check("§5-2 the speaker gallery names the same clock in its header and its lines",
     speakersZone.status === 200
-    && speakersZoneText.includes(`All times ${expectedZone}`)
-    && new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s${expectedZone}`).test(speakersZoneText),
-    `expected the ${expectedZone} label on the speaker gallery`);
+    && speakersZoneText.includes(expectedNote)
+    && cardZonePattern.test(speakersZoneText),
+    `expected "${expectedNote}" on the speaker gallery`);
+  // The contradiction Greptile caught: whatever the header says, it must never
+  // assert a single abbreviation while a card on the same page shows another.
+  const shownAbbrevs = [...new Set(
+    [...enrichedText.matchAll(/\d:\d\d\s?(?:AM|PM)\s([A-Z]{2,5})/g)].map((m) => m[1]),
+  )];
+  check("§5-2 the header note never claims one zone while a card shows another",
+    shownAbbrevs.length <= 1 || expectedNote === `All times in ${liveTz}`,
+    `cards showed ${shownAbbrevs.join(",")} under note "${expectedNote}"`);
 
   // Search: a GET form, so the query lives in the URL and needs no hydration.
   check("embed search is a GET form",

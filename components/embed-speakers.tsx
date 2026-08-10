@@ -82,8 +82,18 @@ export function EmbedSpeakers({
   const scheduleUrl = publicSurfaceUrl(schedulePath, eventValue);
   const dates = formatEventDateRange(gallery.event.startsAt, gallery.event.endsAt, gallery.event.timezone);
   // Every session line below prints an event-local time; the header names the
-  // clock once so each card does not have to explain itself (§5-2).
-  const zoneNote = timeZoneNote(gallery.event.timezone, gallery.event.startsAt);
+  // clock once so each card does not have to explain itself (§5-2). Fed the
+  // placement instants those lines actually label, so a lineup spanning a DST
+  // change is described by the zone name rather than one card's abbreviation.
+  // `gallery.speakers`, not `filtered`: the clock must not change as the reader
+  // searches.
+  const zoneNote = timeZoneNote(gallery.event.timezone, [
+    gallery.event.startsAt,
+    gallery.event.endsAt,
+    ...gallery.speakers.flatMap((speaker) =>
+      speaker.sessions.flatMap((session) => [session.startsAt, session.endsAt]),
+    ),
+  ]);
 
   const updateUrl = (nextQuery: string, nextTrack: string, historyMode: "push" | "replace") => {
     const url = new URL(window.location.href);

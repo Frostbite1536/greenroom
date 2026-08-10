@@ -74,7 +74,14 @@ test("§5-2: every public time is labelled with the event's own timezone", () =>
   // The card's time range and the header note both come from lib/tz, which
   // derives the abbreviation at the event's instant rather than at render time.
   assert.match(component, /formatTimeRange\(session\.startsAt, session\.endsAt, timeZone\)/);
-  assert.match(component, /timeZoneNote\(tz, agenda\.event\.startsAt\)/);
+  // The note is fed the event bounds AND every session instant the page shows,
+  // so a programme spanning a DST change cannot be given a single abbreviation
+  // that half its cards contradict.
+  assert.match(component, /timeZoneNote\(tz, \[\s*agenda\.event\.startsAt,\s*agenda\.event\.endsAt,/);
+  assert.match(component, /\.\.\.agenda\.sessions\.flatMap\(\(session\) => \[session\.startsAt, session\.endsAt\]\)/);
+  // Off the unfiltered agenda: the page's clock must not change as the reader
+  // filters or searches.
+  assert.equal(/timeZoneNote\(tz, \[[\s\S]{0,200}?filtered/.test(component), false);
   // A bare formatTime pair here would silently drop the label again.
   assert.equal(/formatTime\(session\.(?:starts|ends)At/.test(component), false);
   // Formatting stays in lib/tz.ts rather than being re-implemented beside it.

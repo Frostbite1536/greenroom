@@ -202,9 +202,17 @@ export function EmbedSchedule({
   const tabs = dayTabs(agenda, filters, formatDayLabel);
   const days = groupByDay(filtered, tz);
   const dateRange = formatEventDateRange(agenda.event.startsAt, agenda.event.endsAt, tz);
-  // Derived at the event's own start, not at render time: a summer programme
-  // read in winter must still say PDT.
-  const zoneNote = timeZoneNote(tz, agenda.event.startsAt);
+  // Derived from real instants, not render time, so a summer programme read in
+  // winter still says PDT. The whole programme is offered — not just the event
+  // bounds — because a card labels its own instant, and a programme spanning a
+  // DST change must not be given a header claiming a single abbreviation that
+  // half its cards contradict. `agenda.sessions`, not `filtered`: the note
+  // describes the page's clock, which must not change as the reader filters.
+  const zoneNote = timeZoneNote(tz, [
+    agenda.event.startsAt,
+    agenda.event.endsAt,
+    ...agenda.sessions.flatMap((session) => [session.startsAt, session.endsAt]),
+  ]);
   const isFiltered = filters.track !== ALL || filters.day !== ALL || filters.q !== "";
   const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides, basePath);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;

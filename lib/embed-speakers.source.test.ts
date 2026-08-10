@@ -68,7 +68,11 @@ test("no admin-only field reaches the gallery component", () => {
 
 test("§5-2: the gallery names the clock its session times are on", () => {
   const component = source("components/embed-speakers.tsx");
-  assert.match(component, /timeZoneNote\(gallery\.event\.timezone, gallery\.event\.startsAt\)/);
+  assert.match(component, /timeZoneNote\(gallery\.event\.timezone, \[\s*gallery\.event\.startsAt,\s*gallery\.event\.endsAt,/);
+  // Fed the placement instants its own session lines label, off the unfiltered
+  // gallery so the stated clock does not change as the reader searches.
+  assert.match(component, /\.\.\.gallery\.speakers\.flatMap\(/);
+  assert.equal(/timeZoneNote\(gallery\.event\.timezone, \[[\s\S]{0,200}?filtered/.test(component), false);
   // The per-session line gets its label from the shared placement helper.
   const view = source("lib/embed-speaker-view.ts");
   assert.match(view, /formatTimeRange\(/);
