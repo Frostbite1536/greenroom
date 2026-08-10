@@ -162,8 +162,8 @@ npm run db:seed          # = tsx prisma/seed.ts
 Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
 3 tracks, 4 rooms, **4 forms** (the public CFP plus three used inside tasks),
 40 abstracts across every status, an evaluation plan with 3 evaluators +
-scores, 13 sessions (incl. a guaranteed keynote), 11 schedule slots **with one
-deliberate room conflict**, **6 onboarding tasks (three carry a form:
+scores, 13 sessions (incl. a guaranteed keynote), 11 conflict-free schedule
+slots across all three event days, **6 onboarding tasks (three carry a form:
 hotel stay, flight reimbursement, A/V logistics)**, per-speaker task status,
 5 email templates, 2 resources. Persona users are upserted by email so
 fixed-persona access survives a reseed; a database seeded before the Cycle 5
