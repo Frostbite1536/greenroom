@@ -18,7 +18,14 @@ export const PUBLIC_SUBMISSION_RATE_LIMITS = {
   submitEvent: { scope: "submit_event_1h", limit: 60, windowMs: 60 * 60 * 1_000, order: 40 },
 } as const;
 
-type RateRule = (typeof PUBLIC_SUBMISSION_RATE_LIMITS)[keyof typeof PUBLIC_SUBMISSION_RATE_LIMITS];
+/**
+ * One durable-bucket rule. Other throttles (credential login, S19-style) declare
+ * their own rules in this shape and reuse the machinery below rather than
+ * forking `PublicSubmissionRateBucket` — the table is partitioned by event and
+ * keyed by `(scope, fingerprint, windowStart)`, so a new throttle is a new
+ * scope string, never a new table.
+ */
+export type RateRule = { scope: string; limit: number; windowMs: number; order: number };
 
 export type PublicRateBucketPlan = {
   scope: string;
@@ -55,7 +62,8 @@ function bucketWindow(now: Date, rule: RateRule): Pick<PublicRateBucketPlan, "wi
   return { windowStart, expiresAt: new Date(windowStart.getTime() + rule.windowMs) };
 }
 
-function planFor(
+/** Build one bucket plan. Shared by every throttle that rides this table. */
+export function rateBucketPlan(
   secret: string,
   rule: RateRule,
   domain: string,
@@ -82,25 +90,38 @@ export function publicSubmissionRatePlan(input: {
 }): PublicRateBucketPlan[] {
   const now = input.now ?? new Date();
   const plans = [
-    planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeIp, "ip", input.clientIp, now),
+    rateBucketPlan(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeIp, "ip", input.clientIp, now),
     // This event-wide bucket applies to drafts as well as submits, so a client
     // cannot bypass the public intake ceiling simply by rotating IP addresses.
-    planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent, "event", input.eventId, now),
+    rateBucketPlan(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.writeEvent, "event", input.eventId, now),
   ];
   if (input.intent === "submit") {
     plans.push(
-      planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.submitPrimaryEmail, "primary-email", input.primaryEmail.trim().toLowerCase(), now),
-      planFor(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.submitEvent, "event", input.eventId, now),
+      rateBucketPlan(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.submitPrimaryEmail, "primary-email", input.primaryEmail.trim().toLowerCase(), now),
+      rateBucketPlan(input.secret, PUBLIC_SUBMISSION_RATE_LIMITS.submitEvent, "event", input.eventId, now),
     );
   }
   return plans.sort((left, right) => left.order - right.order || left.scope.localeCompare(right.scope));
 }
 
-/** The rate transaction takes these broad scope keys in this exact order. */
-export function publicSubmissionRateLockKeys(eventId: string, plans: readonly PublicRateBucketPlan[]): string[] {
+/**
+ * Advisory keys for one throttle's transaction, in the exact order they must be
+ * taken. `namespace` separates unrelated throttles sharing the table so a login
+ * burst can never wait behind a public-submission burst.
+ */
+export function rateBucketLockKeys(
+  namespace: string,
+  eventId: string,
+  plans: readonly PublicRateBucketPlan[],
+): string[] {
   return [...plans]
     .sort((left, right) => left.order - right.order || left.scope.localeCompare(right.scope))
-    .map((plan) => `public-submission-rate:${eventId}:${String(plan.order).padStart(3, "0")}:${plan.scope}`);
+    .map((plan) => `${namespace}:${eventId}:${String(plan.order).padStart(3, "0")}:${plan.scope}`);
+}
+
+/** The rate transaction takes these broad scope keys in this exact order. */
+export function publicSubmissionRateLockKeys(eventId: string, plans: readonly PublicRateBucketPlan[]): string[] {
+  return rateBucketLockKeys("public-submission-rate", eventId, plans);
 }
 
 /**
@@ -156,10 +177,45 @@ async function incrementRateBucket(
 }
 
 /**
+ * Take the advisory keys, sweep expired rows, then increment each plan's bucket
+ * and refuse on the first one over its limit.
+ *
  * Rate limits intentionally use their own short transaction. It commits before
- * the business writer starts, so advisory locks never compose with FormConfig,
+ * any business writer starts, so advisory locks never compose with FormConfig,
  * FormField, identity, or Abstract locks.
  */
+export async function enforceRateBucketPlans(input: {
+  namespace: string;
+  eventId: string;
+  plans: readonly PublicRateBucketPlan[];
+  now: Date;
+  refuse: (plan: PublicRateBucketPlan, refusedAt: Date) => ApiError;
+}): Promise<void> {
+  const { namespace, eventId, plans, now, refuse } = input;
+  await prisma.$transaction(async (tx) => {
+    for (const key of rateBucketLockKeys(namespace, eventId, plans)) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    }
+    await tx.$executeRaw`
+      DELETE FROM "PublicSubmissionRateBucket"
+      WHERE "id" IN (
+        SELECT "id"
+        FROM "PublicSubmissionRateBucket"
+        WHERE "eventId" = ${eventId} AND "expiresAt" <= ${now}
+        ORDER BY "expiresAt" ASC, "id" ASC
+        LIMIT ${PUBLIC_RATE_EXPIRED_BUCKET_CLEANUP_LIMIT}
+      )
+    `;
+    for (const plan of plans) {
+      const count = await incrementRateBucket(tx, eventId, plan, now);
+      // Measure the advertised wait from the refusal moment, not the request's
+      // pre-transaction timestamp: a lock-delayed request would otherwise tell
+      // a compliant client to wait longer than the bucket's real remainder.
+      if (count > plan.limit) throw refuse(plan, new Date());
+    }
+  });
+}
+
 export async function enforcePublicSubmissionRateLimit(input: {
   eventId: string;
   intent: "saveDraft" | "submit";
@@ -172,27 +228,11 @@ export async function enforcePublicSubmissionRateLimit(input: {
     throw new ApiError(503, "RATE_LIMIT_UNAVAILABLE", "Public submissions are temporarily unavailable.");
   }
   const now = input.now ?? new Date();
-  const plans = publicSubmissionRatePlan({ ...input, secret, now });
-  await prisma.$transaction(async (tx) => {
-    for (const key of publicSubmissionRateLockKeys(input.eventId, plans)) {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
-    }
-    await tx.$executeRaw`
-      DELETE FROM "PublicSubmissionRateBucket"
-      WHERE "id" IN (
-        SELECT "id"
-        FROM "PublicSubmissionRateBucket"
-        WHERE "eventId" = ${input.eventId} AND "expiresAt" <= ${now}
-        ORDER BY "expiresAt" ASC, "id" ASC
-        LIMIT ${PUBLIC_RATE_EXPIRED_BUCKET_CLEANUP_LIMIT}
-      )
-    `;
-    for (const plan of plans) {
-      const count = await incrementRateBucket(tx, input.eventId, plan, now);
-      // Measure the advertised wait from the refusal moment, not the request's
-      // pre-transaction timestamp: a lock-delayed request would otherwise tell
-      // a compliant client to wait longer than the bucket's real remainder.
-      if (count > plan.limit) throw publicSubmissionRateLimitError(plan, new Date());
-    }
+  await enforceRateBucketPlans({
+    namespace: "public-submission-rate",
+    eventId: input.eventId,
+    plans: publicSubmissionRatePlan({ ...input, secret, now }),
+    now,
+    refuse: publicSubmissionRateLimitError,
   });
 }

@@ -71,6 +71,17 @@ test("a missing credential and a wrong password are indistinguishable to the cal
 test("a malformed stored credential fails closed instead of throwing", async () => {
   const good = await hashPassword("password-under-test", FAST);
   const [, , , , , , salt, hash] = good.split("$");
+  // Deterministic payloads: a case built by mutating the random hash could
+  // silently become a *valid* credential when that hash happens to contain no
+  // character the mutation touches.
+  const zeros = Buffer.alloc(FAST.keyLength, 0).toString("base64url");
+  // Same 32 bytes, but with a padding bit set in the final sextet — one
+  // credential must have exactly one representation.
+  const nonCanonicalHash = `${zeros.slice(0, -1)}B`;
+  const zeroSalt = Buffer.alloc(FAST.saltBytes, 0).toString("base64url");
+  const nonCanonicalSalt = `${zeroSalt.slice(0, -1)}B`;
+  // Standard base64 alphabet (`+`, `/`, `=`) is not base64url.
+  const standardAlphabetHash = Buffer.alloc(FAST.keyLength, 0xfb).toString("base64");
   const malformed = [
     "",
     " ",
@@ -97,9 +108,10 @@ test("a malformed stored credential fails closed instead of throwing", async () 
     `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$64$${salt}$${hash}`,
     // Truncated / re-encoded payloads.
     `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${salt}$${hash.slice(0, -2)}`,
-    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$AA$${hash}`,
-    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${salt}$${hash.replace(/[-_]/g, "+")}`,
-    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${salt}$${Buffer.from(hash, "base64url").toString("base64")}`,
+    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$AA$${hash}`, // salt below the floor
+    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${salt}$${nonCanonicalHash}`,
+    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${salt}$${standardAlphabetHash}`,
+    `scrypt$${PASSWORD_CREDENTIAL_VERSION}$1024$8$1$32$${nonCanonicalSalt}$${hash}`,
   ];
   for (const stored of malformed) {
     assert.equal(parsePasswordCredential(stored), null, `parse: ${JSON.stringify(stored)}`);

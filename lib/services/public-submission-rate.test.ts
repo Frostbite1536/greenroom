@@ -71,7 +71,11 @@ test("rate locks have exact IP, event, primary-email, then submit-event order an
   assert.match(source, /new ApiError\(429, "PUBLIC_SUBMISSION_RATE_LIMITED"/);
   // The advertised wait is measured from the refusal moment, not the request's
   // pre-transaction timestamp (Greptile PR #66).
-  assert.match(source, /if \(count > plan\.limit\) throw publicSubmissionRateLimitError\(plan, new Date\(\)\)/);
+  // The shared enforcement now takes the refusal as a callback, so pin both
+  // halves: the refusal is stamped at the refusal moment, and the public
+  // throttle still wires its own `PUBLIC_SUBMISSION_RATE_LIMITED` error in.
+  assert.match(source, /if \(count > plan\.limit\) throw refuse\(plan, new Date\(\)\)/);
+  assert.match(source, /refuse: publicSubmissionRateLimitError,/);
 });
 
 test("the named public rate ceilings are the ratified values", () => {
