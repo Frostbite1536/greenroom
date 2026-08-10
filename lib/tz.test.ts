@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   formatDayLabel,
+  formatEventDateRange,
   formatEventDateTime,
   formatTime,
   zonedParts,
@@ -66,4 +67,42 @@ test("pins agenda and embed formatter output to en-US instead of the runtime def
   }
 
   assert.deepEqual(seenLocales, ["en-US", "en-US"]);
+});
+
+// Intl range output separates the parts with THIN SPACE (U+2009) around the en
+// dash. Normalising here keeps the assertions readable while still proving the
+// dates themselves; the smoke script normalises the same way.
+const plain = (value: string | null) => value?.replace(/ /g, " ") ?? null;
+
+test("formatEventDateRange spans a multi-day event instead of printing only its first day", () => {
+  // The seeded event runs May 12–14 local. Printing `startsAt` alone (the old
+  // embed header) claimed a three-day conference lasted one day.
+  assert.equal(
+    plain(formatEventDateRange("2026-05-12T07:00:00.000Z", "2026-05-15T06:59:00.000Z", LOS_ANGELES)),
+    "May 12 – 14, 2026",
+  );
+});
+
+test("formatEventDateRange collapses a single-day event and survives missing or inverted ends", () => {
+  assert.equal(
+    formatEventDateRange("2026-05-12T17:00:00.000Z", "2026-05-12T23:00:00.000Z", LOS_ANGELES),
+    "May 12, 2026",
+  );
+  assert.equal(formatEventDateRange("2026-05-12T17:00:00.000Z", null, LOS_ANGELES), "May 12, 2026");
+  // An inverted range is bad data, not a reason to throw on a public page.
+  assert.equal(
+    formatEventDateRange("2026-05-12T17:00:00.000Z", "2026-05-01T17:00:00.000Z", LOS_ANGELES),
+    "May 12, 2026",
+  );
+  assert.equal(formatEventDateRange(null, null, LOS_ANGELES), null);
+  assert.equal(formatEventDateRange("not-a-date", null, LOS_ANGELES), null);
+});
+
+test("formatEventDateRange renders in the event timezone, not the runtime zone", () => {
+  // 07:00Z on May 12 is still May 12 in Los Angeles but May 12 evening in Tokyo;
+  // the boundary case that matters is the UTC-midnight-crossing end instant.
+  assert.equal(
+    plain(formatEventDateRange("2026-05-12T02:00:00.000Z", "2026-05-13T02:00:00.000Z", LOS_ANGELES)),
+    "May 11 – 12, 2026",
+  );
 });

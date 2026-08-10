@@ -19,6 +19,28 @@ const EVENT_ID = "scratch-frontend";
 const BLIND_SPEAKER_EMAIL = "blind-boundary@scratch.test";
 const SECOND_EVALUATOR_EMAIL = "second-evaluator@scratch.test";
 const C17_REVIEWER_EMAIL = "c17-reviewer@scratch.test";
+// A scratch-only co-speaker with a filled profile. Deliberately NOT one of the
+// shared demo users: writing a QA bio onto sofia@greenroom.demo would surface
+// in the seeded event's own public speaker widget, which is exactly the litter
+// the eval run flagged. This identity is created and deleted with the scratch
+// event.
+const EMBED_SPEAKER_EMAIL = "embed-speaker@scratch.test";
+// A second scratch co-speaker deliberately left WITHOUT a SpeakerProfile, to
+// exercise the derived fallback line. It cannot be one of the demo speakers:
+// lib/demo/seed.ts:245-258 upserts a global SpeakerProfile (jobTitle "Staff
+// Engineer", company "Acme Labs") for every demo speaker user, and that row is
+// keyed by userId, so it survives this script's event-scoped wipe entirely.
+const EMBED_NOPROFILE_EMAIL = "embed-noprofile@scratch.test";
+const EMBED_NOPROFILE_NAME = "Theo Lindqvist";
+const EMBED_SPEAKER_NAME = "Nadia Okonkwo";
+const EMBED_SPEAKER_BIO = "Nadia leads platform reliability at Northwind and has spent a decade "
+  + "keeping large event systems online under load. She writes about incident review culture.";
+const EMBED_SPEAKER_HEADSHOT = "https://images.example.test/nadia-okonkwo.jpg";
+// Longer than DESCRIPTION_PREVIEW_CHARS (180) so the collapsed preview and the
+// Show more control are both exercised.
+const SESSION_A_DESCRIPTION = "This session walks through the production incident that took our "
+  + "scheduling pipeline down for six hours, the three false root causes we chased first, and the "
+  + "instrumentation change that would have caught it in minutes. Bring questions about on-call.";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -99,7 +121,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -228,10 +250,54 @@ async function resetScratch() {
     },
   });
 
+  // A co-speaker whose profile is fully populated, so the public speaker card
+  // can be asserted on real stored bio/headshot rather than on absence.
+  const embedSpeaker = await prisma.user.upsert({
+    where: { email: EMBED_SPEAKER_EMAIL },
+    update: { name: EMBED_SPEAKER_NAME },
+    create: { email: EMBED_SPEAKER_EMAIL, name: EMBED_SPEAKER_NAME },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: embedSpeaker.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: EVENT_ID, userId: embedSpeaker.id, role: "SPEAKER" },
+  });
+  await prisma.speakerProfile.upsert({
+    where: { userId: embedSpeaker.id },
+    update: {
+      bio: EMBED_SPEAKER_BIO, company: "Northwind", jobTitle: "Head of Reliability",
+      headshotUrl: EMBED_SPEAKER_HEADSHOT,
+    },
+    create: {
+      userId: embedSpeaker.id, bio: EMBED_SPEAKER_BIO, company: "Northwind",
+      jobTitle: "Head of Reliability", headshotUrl: EMBED_SPEAKER_HEADSHOT,
+    },
+  });
+
+  const noProfileSpeaker = await prisma.user.upsert({
+    where: { email: EMBED_NOPROFILE_EMAIL },
+    update: { name: EMBED_NOPROFILE_NAME },
+    create: { email: EMBED_NOPROFILE_EMAIL, name: EMBED_NOPROFILE_NAME },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: noProfileSpeaker.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: EVENT_ID, userId: noProfileSpeaker.id, role: "SPEAKER" },
+  });
+  // No speakerProfile row on purpose — this is the derived-fallback fixture.
+  await prisma.speakerProfile.deleteMany({ where: { userId: noProfileSpeaker.id } });
+
   const sessionA = await prisma.session.create({
     data: {
       eventId: EVENT_ID, title: "Scratch Session A", durationMinutes: 30, format: "Talk",
-      speakers: { create: [{ userId: users.speaker, isPrimary: true }] },
+      description: SESSION_A_DESCRIPTION,
+      speakers: {
+        create: [
+          { userId: users.speaker, isPrimary: true },
+          { userId: embedSpeaker.id, isPrimary: false },
+          { userId: noProfileSpeaker.id, isPrimary: false },
+        ],
+      },
     },
   });
   const dayKey = new Date(now + 30 * 86400000).toISOString().slice(0, 10);
@@ -261,7 +327,7 @@ async function resetScratch() {
 
   return {
     event, form, abstract, maybeSetupAbstract, acceptedAbstract, plan, sessionA, sessionB,
-    roomA, roomB, track, category, users, dayKey,
+    roomA, roomB, track, category, users, dayKey, embedSpeaker, noProfileSpeaker,
   };
 }
 
@@ -304,7 +370,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -2079,6 +2145,183 @@ try {
   check("an unknown ?event= never pairs one event's links with another's CFP panel",
     !(renderedText(unknownMain) ?? "").includes("no-such-event-slug")
     && !(renderedText(unknownMain) ?? "").includes("No public programme is published yet."));
+
+  // --- embed enrichment (eval EMB-01 / defects 12, 13, 18) ------------------
+  // The judged failure was that descriptions and formats existed in the data
+  // and rendered on no public surface. Everything here is asserted against the
+  // served markup with no JavaScript executed, because that is the contract:
+  // the schedule embed is server-rendered and its controls are links and a GET
+  // form.
+  const embedScheduleUrl = (query = "") => `/embed/schedule?event=${EVENT_ID}${query}`;
+  const enriched = await req("GET", embedScheduleUrl(), null, null);
+  check("embed schedule still renders for an anonymous visitor", enriched.status === 200, `got ${enriched.status}`);
+
+  check("embed session card renders the stored description",
+    enriched.text.includes(SESSION_A_DESCRIPTION.slice(0, 60)));
+  check("embed ships the full description in the collapsed markup",
+    enriched.text.includes(SESSION_A_DESCRIPTION.slice(-50)));
+  check("embed offers a Show more affordance",
+    enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
+  check("session detail expands with native details, not a JS-only modal",
+    enriched.text.includes('<details class="embed-session-detail">')
+    && !enriched.text.includes('role="dialog"'));
+
+  const chipText = (kind) => renderedText(
+    enriched.text.match(new RegExp(`<li class="embed-chip embed-chip-${kind}"[^>]*>([\\s\\S]*?)</li>`))?.[1] ?? "",
+  ) ?? "";
+  check("embed renders a format chip", chipText("format").includes("Talk"), chipText("format"));
+  check("embed renders a track chip", chipText("track").includes("Mainstage"), chipText("track"));
+  check("embed renders a room chip", chipText("room").includes("Hall A"), chipText("room"));
+
+  // Day tabs come from Event.startsAt..endsAt, unioned with any day that holds
+  // a placed session outside that range.
+  //
+  // Read the event LIVE rather than from `fx`: this script's own settings tests
+  // above PATCH the scratch event's dates to 2032-05-12..14 and its timezone to
+  // America/Denver, so the creation-time values are stale by the time these
+  // checks run. The whole point of the feature is that the tabs track the
+  // event's real range, so the assertion has to read that range the same way.
+  const liveEvent = await prisma.event.findUniqueOrThrow({
+    where: { id: EVENT_ID },
+    select: { startsAt: true, endsAt: true, timezone: true },
+  });
+  const liveTz = liveEvent.timezone;
+  const dayKeyIn = (value) => new Intl.DateTimeFormat("en-CA", {
+    timeZone: liveTz, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(new Date(value));
+  // Calendar arithmetic on the key itself (noon UTC), so a DST transition
+  // inside the range cannot duplicate or skip a day.
+  const addDayKey = (key, days) => {
+    const date = new Date(`${key}T12:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  };
+  const rangeDays = [];
+  if (liveEvent.startsAt) {
+    const endKey = dayKeyIn(liveEvent.endsAt ?? liveEvent.startsAt);
+    let cursor = dayKeyIn(liveEvent.startsAt);
+    for (let i = 0; i < 31 && cursor <= endKey; i += 1) {
+      rangeDays.push(cursor);
+      cursor = addDayKey(cursor, 1);
+    }
+  }
+  const placedSlots = await prisma.scheduleSlot.findMany({
+    where: { eventId: EVENT_ID }, select: { startsAt: true },
+  });
+  const sessionDays = [...new Set(placedSlots.map((slot) => dayKeyIn(slot.startsAt)))];
+  const expectedDays = [...new Set([...rangeDays, ...sessionDays])].sort();
+  const renderedDays = [...new Set(
+    [...enriched.text.matchAll(/href="\/embed\/schedule\?[^"]*day=(\d{4}-\d{2}-\d{2})/g)].map((m) => m[1]),
+  )].sort();
+  check("day tabs cover the event date range unioned with any out-of-range session day",
+    renderedDays.length === expectedDays.length && expectedDays.every((day) => renderedDays.includes(day)),
+    `expected ${expectedDays.join(",")} got ${renderedDays.join(",")}`);
+  check("the schedule exposes a day filter landmark", enriched.text.includes('aria-label="Filter by day"'));
+
+  // The property under test needs an event day that holds nothing. Assert the
+  // premise rather than assuming it, so this cannot pass vacuously if a future
+  // fixture change places a session on every day of the range.
+  const emptyDay = rangeDays.find((day) => !sessionDays.includes(day));
+  check("the fixture leaves at least one event day empty",
+    Boolean(emptyDay), `range ${rangeDays.join(",")} sessions ${sessionDays.join(",")}`);
+  check("an event day with no sessions still renders a tab with a zero count",
+    enriched.text.includes('<span class="embed-tab-count">(0)</span>'));
+
+  const emptyDayPage = await req("GET", embedScheduleUrl(`&day=${emptyDay}`), null, null);
+  check("selecting an empty event day is reachable and explains itself",
+    emptyDayPage.status === 200 && (renderedText(emptyDayPage.text) ?? "").includes("Nothing scheduled on"),
+    `${emptyDayPage.status} day=${emptyDay}`);
+
+  // Header date summary: the judged defect was "18 sessions · May 12, 2026" for
+  // a multi-day listing. Intl separates a range with THIN SPACE (U+2009).
+  const expectedRange = new Intl.DateTimeFormat("en-US", {
+    timeZone: liveTz, month: "short", day: "numeric", year: "numeric",
+  }).formatRange(new Date(liveEvent.startsAt), new Date(liveEvent.endsAt ?? liveEvent.startsAt));
+  const enrichedText = renderedText(enriched.text) ?? "";
+  check("embed header shows the real event date range, not just the first day",
+    enrichedText.includes(expectedRange) && expectedRange.includes("–"),
+    `expected ${expectedRange}`);
+
+  // Search: a GET form, so the query lives in the URL and needs no hydration.
+  check("embed search is a GET form",
+    enriched.text.includes('method="get"') && enriched.text.includes('action="/embed/schedule"'));
+  const searchHit = await req("GET", embedScheduleUrl("&q=Scratch+Session+A"), null, null);
+  check("search keeps a matching session", searchHit.text.includes("Scratch Session A"));
+  const searchSpeaker = await req("GET", `${embedScheduleUrl("&q=")}${encodeURIComponent(EMBED_SPEAKER_NAME)}`, null, null);
+  check("search matches on speaker name", searchSpeaker.text.includes("Scratch Session A"));
+  const searchMiss = await req("GET", embedScheduleUrl("&q=zzz-no-such-session"), null, null);
+  const searchMissText = renderedText(searchMiss.text) ?? "";
+  check("search narrows the listing and reports the narrowing",
+    searchMiss.status === 200
+    && !searchMissText.includes("Scratch Session A")
+    && searchMissText.includes("0 sessions of")
+    && searchMissText.includes("No sessions match"),
+    `${searchMiss.status}`);
+
+  // An unknown filter value must degrade to the full listing, never 404 or
+  // render an empty page a host site would embed as a broken widget.
+  const badFilters = await req("GET", embedScheduleUrl("&day=1999-01-01&track=no-such-track"), null, null);
+  check("unknown day and track values fall back to the full schedule",
+    badFilters.status === 200 && badFilters.text.includes("Scratch Session A"), `got ${badFilters.status}`);
+
+  // --- speaker cards (defect 18) --------------------------------------------
+  const speakersEmbed = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  check("speaker embed renders for an anonymous visitor", speakersEmbed.status === 200, `got ${speakersEmbed.status}`);
+  check("speaker card renders the stored bio", speakersEmbed.text.includes(EMBED_SPEAKER_BIO.slice(0, 60)));
+  check("speaker card renders the headshot as a real image with alt text",
+    speakersEmbed.text.includes(EMBED_SPEAKER_HEADSHOT)
+    && speakersEmbed.text.includes(`alt="Headshot of ${EMBED_SPEAKER_NAME}"`));
+  check("speaker card renders the stored role and company",
+    speakersEmbed.text.includes("Head of Reliability") && speakersEmbed.text.includes("Northwind"));
+  check("speaker card lists the speaker's session with its room",
+    speakersEmbed.text.includes("Scratch Session A") && speakersEmbed.text.includes("Hall A"));
+  check("speaker session line carries a placement, not just a title",
+    speakersEmbed.text.includes("speaker-session-when"));
+  check("speaker detail opens with native details, not a JS-only modal",
+    speakersEmbed.text.includes('<details class="speaker-detail">')
+    && speakersEmbed.text.includes("Full profile")
+    && !speakersEmbed.text.includes('role="dialog"'));
+  // The derived-fallback case needs a speaker with genuinely no SpeakerProfile.
+  // That cannot be one of the demo users: lib/demo/seed.ts:245-258 upserts a
+  // global profile ("Staff Engineer at Acme Labs") for every demo speaker, and
+  // the row is keyed by userId so the event-scoped wipe never touches it.
+  // Confirm the premise against the DB, then assert the rendered line.
+  const noProfileRow = await prisma.speakerProfile.findUnique({
+    where: { userId: fx.noProfileSpeaker.id }, select: { userId: true },
+  });
+  check("the derived-fallback fixture speaker really has no stored profile",
+    noProfileRow === null, noProfileRow ? "a SpeakerProfile exists" : "none");
+
+  const liveTrackName = (await prisma.scheduleSlot.findFirstOrThrow({
+    where: { eventId: EVENT_ID, sessionId: fx.sessionA.id }, select: { track: { select: { name: true } } },
+  })).track?.name ?? "";
+  const speakersText = renderedText(speakersEmbed.text) ?? "";
+  const expectedDerived = `1 session · ${liveTrackName}`;
+  const renderedNoProfileLine = speakersEmbed.text
+    .match(/<p class="speaker-metadata">([\s\S]*?)<\/p>/g)
+    ?.map((block) => renderedText(block))
+    .join(" | ") ?? "none";
+  check("a speaker with no stored profile gets a derived line, not filler",
+    speakersText.includes(expectedDerived),
+    `expected "${expectedDerived}"; metadata lines rendered: ${renderedNoProfileLine}`);
+  // The complementary half: a stored profile must still win over the fallback.
+  check("a speaker with a stored profile shows it instead of the derived line",
+    speakersText.includes("Head of Reliability at Northwind"),
+    renderedNoProfileLine);
+
+  // --- no admin-only data on any public embed --------------------------------
+  // Scanned over the whole document, flight payload included: the speaker
+  // gallery is a client island, so its props are serialized into the response.
+  const embedLeaks = [
+    "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo",
+    EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL,
+    "UNDER_REVIEW", "Scratch: Agents in Production", "Scratch: Maybe historical coverage",
+    "Scratch Session B", "team-ai", "Applied AI",
+  ];
+  for (const [label, html] of [["schedule", enriched.text], ["speakers", speakersEmbed.text]]) {
+    const found = embedLeaks.filter((needle) => html.includes(needle));
+    check(`no admin-only data in the ${label} embed response`, found.length === 0, found.join(" | ") || "none");
+  }
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
