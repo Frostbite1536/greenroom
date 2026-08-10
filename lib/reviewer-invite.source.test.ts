@@ -66,4 +66,40 @@ test("a stale-page resend cooldown refreshes authoritative availability without 
     controls,
     /res\.error\.code === "INVITE_RESEND_COOLDOWN"[\s\S]*?startTransition\(\(\) => router\.refresh\(\)\)/,
   );
+  // The cooldown must name when it clears rather than read as permanent.
+  assert.doesNotMatch(controls, /Resend is not available yet/);
+  assert.match(controls, /reviewerInviteResendHint\(resendAt, now\)/);
+  assert.match(controls, /<time dateTime=\{resendAt\}>\{resendHint\}<\/time>/);
+});
+
+test("the admin invite controls copy a revealed bearer without storing, logging, or navigating it", () => {
+  const controls = source("components/reviewer-invite-controls.tsx");
+  assert.match(controls, /apiPost<ReviewerInviteLinkResult>\("\/api\/evaluations\/reviewer-invites\/link", \{ email \}\)/);
+  // Success is claimed only after the clipboard write resolves, and a rejected
+  // or unavailable Clipboard API falls back to a selected field for manual copy.
+  assert.match(controls, /await navigator\.clipboard\.writeText\(url\);\s*setCopyState\("copied"\);/);
+  assert.match(controls, /if \(!navigator\.clipboard\?\.writeText\) throw new Error\("clipboard unavailable"\)/);
+  assert.match(controls, /setCopyState\("manual"\);\s*linkField\.current\?\.focus\(\);\s*linkField\.current\?\.select\(\);/);
+  assert.match(controls, /press Ctrl\/Cmd \+ C/);
+  // The bearer stays in component state: never storage, never a URL, never a log.
+  assert.doesNotMatch(controls, /localStorage|sessionStorage|document\.cookie|window\.location|router\.push|router\.replace/);
+  assert.match(
+    controls,
+    /console\.warn\("Reviewer invite link copy failed", error instanceof Error \? error\.name : "unknown"\)/,
+  );
+  // No console call may pass the bearer-bearing value itself as an argument.
+  assert.doesNotMatch(controls, /console\.[a-z]+\([^)]*\b(?:url|link|inviteUrl|token|res\.data)\b\s*[,)]/);
+  // A rotated, accepted, or expired invitation drops any link still on screen.
+  assert.match(controls, /setLink\(null\);\s*setCopyState\("idle"\);\s*\}, \[resendAt, inviteExpiresAt, invite\?\.state\]\)/);
+});
+
+test("only the reveal endpoint and the outgoing email ever materialize an invite URL", () => {
+  // Every listing projection stays token-free; a bearer is derived on demand
+  // for one authorized ADMIN response and for the rendered invitation only.
+  for (const path of ["lib/data/reads.ts", "app/api/evaluations/evaluators/route.ts"]) {
+    assert.doesNotMatch(source(path), /createReviewerInviteToken|reviewerInviteUrl|inviteUrl/, path);
+  }
+  const postRoute = source("app/api/evaluations/reviewer-invites/route.ts");
+  assert.match(postRoute, /inviteUrl: reviewerInviteUrl\(appUrl, planned\.delivery\.token\)/);
+  assert.doesNotMatch(postRoute, /return ok\(\{[^}]*inviteUrl/);
 });

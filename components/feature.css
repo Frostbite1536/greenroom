@@ -369,6 +369,12 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .reviewer-pick-label .cell-title, .reviewer-pick-label .cell-sub { display: block; }
 .reviewer-resend { display: grid; justify-items: start; gap: 4px; }
 .reviewer-resend .link-button { min-height: 32px; padding: 4px 0; }
+.reviewer-resend .row.wrap { gap: 14px; align-items: center; }
+.reviewer-invite-link { display: grid; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; }
+.reviewer-invite-link .stack { gap: 4px; }
+.reviewer-invite-link input.text-input { font-size: 12px; background: #fff; }
+.reviewer-invite-link .link-button { display: inline-flex; align-items: center; gap: 6px; }
+.reviewer-invite-link .hint { margin: 0; }
 
 .criterion-row { display: grid; grid-template-columns: minmax(0, 1fr) 84px 84px 84px auto; gap: 8px; align-items: end; margin-bottom: 10px; }
 .criterion-main { display: grid; gap: 8px; min-width: 0; }
