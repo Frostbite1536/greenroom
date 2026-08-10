@@ -957,6 +957,9 @@ export type PublicAgendaSession = {
   sessionId: string;
   title: string;
   description: string | null;
+  /** Public session format label ("Keynote", "Workshop"), already exposed by
+   *  GET /api/agenda/public; the server-rendered embed needs it for its chips. */
+  format: string | null;
   room: { id: string; name: string };
   track: { id: string; name: string; color: string } | null;
   startsAt: string;
@@ -997,6 +1000,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
           select: {
             title: true,
             description: true,
+            format: true,
             speakers: { select: { user: { select: { name: true } } } },
           },
         },
@@ -1016,6 +1020,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       sessionId: slot.sessionId,
       title: slot.session.title,
       description: slot.session.description,
+      format: slot.session.format,
       room: slot.room,
       track: slot.track,
       startsAt: slot.startsAt.toISOString(),
@@ -1064,7 +1069,14 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
             select: {
               id: true,
               title: true,
-              scheduleSlot: { select: { track: { select: { name: true } } } },
+              scheduleSlot: {
+                select: {
+                  track: { select: { name: true } },
+                  startsAt: true,
+                  endsAt: true,
+                  room: { select: { name: true } },
+                },
+              },
             },
           },
         },

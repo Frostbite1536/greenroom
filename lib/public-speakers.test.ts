@@ -28,7 +28,12 @@ test("buildPublicSpeakers projects distinct speakers and exposes only public pro
         session: {
           id: "session-1",
           title: "Scaling to 10M",
-          scheduleSlot: { track: { name: "Engineering" } },
+          scheduleSlot: {
+            track: { name: "Engineering" },
+            startsAt: new Date("2026-05-12T17:00:00.000Z"),
+            endsAt: new Date("2026-05-12T17:45:00.000Z"),
+            room: { name: "Redwood Hall" },
+          },
         },
       },
       {
@@ -52,8 +57,24 @@ test("buildPublicSpeakers projects distinct speakers and exposes only public pro
     jobTitle: profile.jobTitle,
     headshotUrl: "https://images.example.test/elena.jpg",
     sessions: [
-      { id: "session-1", title: "Scaling to 10M", track: { name: "Engineering" } },
-      { id: "session-2", title: "Operating at the edge", track: { name: "Architecture" } },
+      {
+        id: "session-1",
+        title: "Scaling to 10M",
+        track: { name: "Engineering" },
+        startsAt: "2026-05-12T17:00:00.000Z",
+        endsAt: "2026-05-12T17:45:00.000Z",
+        room: "Redwood Hall",
+      },
+      // An unplaced-time slot still projects; the card degrades to title-only
+      // rather than dropping the session or inventing a time.
+      {
+        id: "session-2",
+        title: "Operating at the edge",
+        track: { name: "Architecture" },
+        startsAt: null,
+        endsAt: null,
+        room: null,
+      },
     ],
     sessionsTruncated: false,
   });

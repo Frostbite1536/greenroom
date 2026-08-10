@@ -123,6 +123,36 @@ export function formatEventDateTime(value: Date | string | null | undefined, tim
   }).format(date);
 }
 
+/**
+ * Render an event's calendar span as one honest label.
+ *
+ * A multi-day listing that prints only `startsAt` reads as a one-day event, so
+ * every public header goes through this. `formatRange` collapses shared parts
+ * ("May 12 – 14, 2026") and prints a single date when the range is one day.
+ * Locale and zone are pinned for the same reason the other helpers pin them.
+ */
+export function formatEventDateRange(
+  startsAt: string | Date | null | undefined,
+  endsAt: string | Date | null | undefined,
+  timeZone: string,
+): string | null {
+  const start = startsAt ? new Date(startsAt) : null;
+  if (!start || Number.isNaN(start.getTime())) return null;
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  const end = endsAt ? new Date(endsAt) : null;
+  if (!end || Number.isNaN(end.getTime()) || end.getTime() < start.getTime()) {
+    return formatter.format(start);
+  }
+  return formatter.formatRange(start, end);
+}
+
 export function formatDayLabel(dateKey: string, timeZone: string): string {
   // Noon avoids any DST edge when labelling a whole day.
   return new Intl.DateTimeFormat("en-US", {

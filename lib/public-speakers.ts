@@ -11,6 +11,12 @@ export type PublicSpeakerSession = {
   id: string;
   title: string;
   track: PublicSpeakerTrack | null;
+  /** Placement facts already public on the schedule embed. A speaker card that
+   *  cannot say when or where a talk happens forces the reader back to the
+   *  agenda for the one thing they came for. */
+  startsAt: string | null;
+  endsAt: string | null;
+  room: string | null;
 };
 
 export type PublicSpeaker = {
@@ -50,19 +56,34 @@ export type PublicSpeakerSource = {
     session: {
       id: string;
       title: string;
-      scheduleSlot: { track: { name: string } | null } | null;
+      scheduleSlot: {
+        track: { name: string } | null;
+        startsAt?: Date | string | null;
+        endsAt?: Date | string | null;
+        room?: { name: string } | null;
+      } | null;
     };
   }>;
 };
 
 type SpeakerAccumulator = PublicSpeaker & { sortKey: string };
 
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
 function sessionProjection(source: PublicSpeakerSource["sessionSpeakers"][number]): PublicSpeakerSession | null {
-  if (!source.session.scheduleSlot) return null;
+  const slot = source.session.scheduleSlot;
+  if (!slot) return null;
   return {
     id: source.session.id,
     title: source.session.title,
-    track: source.session.scheduleSlot.track ? { name: source.session.scheduleSlot.track.name } : null,
+    track: slot.track ? { name: slot.track.name } : null,
+    startsAt: isoOrNull(slot.startsAt),
+    endsAt: isoOrNull(slot.endsAt),
+    room: slot.room?.name ?? null,
   };
 }
 
