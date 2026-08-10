@@ -3100,6 +3100,18 @@ try {
   // released, the score completes before withdrawal closes only the remaining
   // open assignment. This exercises the fresh post-lock status check instead
   // of relying on request timing.
+  //
+  // Earlier sections legitimately consume the 3/24h submit budget for this
+  // reused scratch primary email, so clear that one scratch-owned bucket first
+  // — otherwise this anonymous setup submit is correctly refused by S19 and
+  // the race never forms. Same scratch hygiene as the harness's teardown.
+  await prisma.publicSubmissionRateBucket.deleteMany({
+    where: {
+      eventId: SCRATCH_EVENT.id,
+      scope: "submit_primary_email_24h",
+      fingerprint: publicSubmissionRateFingerprint("primary-email", speaker.user.email.trim().toLowerCase()),
+    },
+  });
   const c6RaceSubmit = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "C6 score withdrawal serialization",
     speakers: [{ email: speaker.user.email, name: speaker.user.name, isPrimary: true }],
@@ -3122,7 +3134,10 @@ try {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
     signalC6AbstractLock();
     await c6AbstractLockRelease;
-  }, { timeout: 15_000 });
+    // 60s, not the 15s default: the two advisory-waiter polls run up to 200
+    // sequential queries on a separate connection, and remote-database RTT
+    // accumulation must not expire the deliberately held holder mid-test.
+  }, { timeout: 60_000 });
   await c6AbstractLockHeld;
   const countWaitingAdvisoryLocks = async () => {
     const rows = await prisma.$queryRaw`
