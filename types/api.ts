@@ -360,6 +360,15 @@ export const reviewerInviteCreateSchema = z
   })
   .strict();
 
+/**
+ * ADMIN input for revealing one pending reviewer's invite link. Like the
+ * create contract, email is an identity lookup and never an authority id: the
+ * event comes from the signed session alone.
+ */
+export const reviewerInviteLinkSchema = z
+  .object({ email: z.string().trim().toLowerCase().max(254).email() })
+  .strict();
+
 /** Bearer input stays broad so malformed credentials remain generic 404s. */
 export const reviewerInviteAcceptSchema = z
   .object({ token: z.unknown().optional() })

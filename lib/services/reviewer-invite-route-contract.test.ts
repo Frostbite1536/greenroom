@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { reviewerInviteAcceptSchema, reviewerInviteCreateSchema } from "@/types/api";
+import { reviewerInviteAcceptSchema, reviewerInviteCreateSchema, reviewerInviteLinkSchema } from "@/types/api";
 
 const source = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
@@ -70,6 +70,44 @@ test("reviewer invite acceptance is POST-only, no-store, structurally verifies b
   assert.doesNotMatch(route, /new URL\("\/admin\/evaluations", req\.url\)/);
   assert.match(route, /httpOnly: true/);
   assert.match(route, /sameSite: "lax"/);
+});
+
+test("reviewer invite link reveal is ADMIN-only, event-scoped, read-only, and no-store on every outcome", () => {
+  assert.equal(reviewerInviteLinkSchema.safeParse({ email: "Reviewer@Example.test" }).success, true);
+  // No authority id, and no way to name another event or a bearer directly.
+  assert.equal(reviewerInviteLinkSchema.safeParse({ email: "reviewer@example.test", eventId: "other" }).success, false);
+  assert.equal(reviewerInviteLinkSchema.safeParse({ email: "reviewer@example.test", token: "x" }).success, false);
+  assert.equal(reviewerInviteLinkSchema.safeParse({ email: "not-an-email" }).success, false);
+
+  const route = source("app/api/evaluations/reviewer-invites/link/route.ts");
+  assert.match(route, /requireContext\(\["ADMIN"\]\)/);
+  assert.match(route, /trustedReviewerInviteAppUrl\(\)/);
+  assert.doesNotMatch(route, /export const GET/);
+  assert.match(route, /export const POST = async \(req: Request\): Promise<Response> => noStore\(await reveal\(req\)\)/);
+  assert.match(route, /Cache-Control", "no-store/);
+  assert.match(route, /Referrer-Policy", "no-referrer/);
+
+  // The reveal is scoped to the caller's own event and applies the acceptance
+  // path's membership predicate under the same shared authority lock.
+  assert.match(route, /WHERE "eventId" = \$\{ctx\.eventId\} AND "userId" = \$\{user\.id\}/);
+  assert.ok(route.indexOf("lockEventMemberAuthorities") < route.indexOf("lockExistingEventMembersForShare"));
+  assert.ok(route.indexOf("lockExistingEventMembersForShare") < route.indexOf('FROM "ReviewerInvite"'));
+  assert.match(route, /!== "ADMIN"[\s\S]*?"FORBIDDEN"/);
+  assert.match(route, /!== "EVALUATOR"\) throw inviteNotFound\(\)/);
+  assert.match(route, /!row \|\| !isReviewerInvitePending\(row\)\) throw inviteNotFound\(\)/);
+  assert.match(route, /"INVITE_NOT_FOUND"/);
+
+  // Read-only: a reveal must never write, reserve a send window, dispatch, or
+  // rotate the bearer it derives.
+  assert.doesNotMatch(route, /\.(?:create|update|updateMany|upsert|delete|deleteMany)\(/);
+  assert.doesNotMatch(route, /\$executeRaw(?!`\s*SELECT pg_advisory)/);
+  assert.doesNotMatch(route, /dispatchEmail|lockReviewerInviteEventHour|canReserveReviewerInviteSend|planReviewerInviteSend/);
+  assert.doesNotMatch(route, /FOR UPDATE/);
+
+  // The bearer is derived at request time and lives only in the response body.
+  assert.match(route, /createReviewerInviteToken\(\s*\{ inviteId: invite\.id, version: invite\.tokenVersion, expiresAt: invite\.expiresAt \}/);
+  assert.match(route, /ok\(\{ inviteUrl: reviewerInviteUrl\(appUrl, token\), expiresAt: invite\.expiresAt \}\)/);
+  assert.doesNotMatch(route, /console\.(?:log|warn|error|info|debug)/);
 });
 
 test("reviewer setup projection is bounded and does not include a bearer token", () => {
