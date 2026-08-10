@@ -163,6 +163,9 @@ async function seedWithin(db: Prisma.TransactionClient): Promise<SeedSummary> {
   // --- 1. Reset all event-scoped data (idempotent reseed) --------------------
   // Sequential deletes: we are already inside one transaction, and child rows
   // must go before their parents.
+  await db.reviewerInvite.deleteMany({ where: { eventId } });
+  await db.publicSubmissionRateBucket.deleteMany({ where: { eventId } });
+  await db.importJob.deleteMany({ where: { eventId } });
   await db.emailDispatch.deleteMany({ where: { template: { eventId } } });
   await db.reviewScore.deleteMany({ where: { abstract: { eventId } } });
   await db.reviewAssignment.deleteMany({ where: { abstract: { eventId } } });
