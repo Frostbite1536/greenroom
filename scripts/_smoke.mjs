@@ -3990,7 +3990,8 @@ try {
   check("T3 the v1 schedule drops it, and its total agrees with its page",
     v1ScheduleUnpublished.status === 200
       && !v1ScheduleUnpublished.data?.data?.some((row) => row.session?.id === sessionId)
-      && v1ScheduleUnpublished.data?.meta?.total === v1ScheduleUnpublished.data?.data?.length,
+      // v1 list envelope nests the count at meta.pagination.total.
+      && v1ScheduleUnpublished.data?.meta?.pagination?.total === v1ScheduleUnpublished.data?.data?.length,
     JSON.stringify(v1ScheduleUnpublished.data?.meta ?? "none"));
   // The control for the submission branch: an ACCEPTED proposal that was never
   // converted, so it has no linked Session at all. Nothing about it was ever
@@ -4045,8 +4046,9 @@ try {
     publishUnknown.data?.error?.code);
   const publishWithEvent = await j("PATCH", "/api/agenda/sessions",
     { sessionId, contentStatus: "PUBLISHED", eventId: SCRATCH_EVENT.id }, admin);
+  // 422, the repo's strict-schema refusal for an unexpected key — not 400.
   check("T3 the publication body may not name an event",
-    publishWithEvent.status === 400, publishWithEvent.status);
+    publishWithEvent.status === 422, publishWithEvent.status);
 
   const republish = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, admin);
   check("T3 an admin can publish a talk back onto the programme",
