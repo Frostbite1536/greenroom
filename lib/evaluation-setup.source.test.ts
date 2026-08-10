@@ -50,12 +50,48 @@ test("each criterion shows its share of the rubric weight, and the limit is shar
   // Decimals must remain typeable.
   assert.match(component, /step="any"/);
 
+  // The ceiling is NOT a value-level Zod rule — see the layering test below.
+  // The schema keeps only the invariants that can never be grandfathered.
   const contract = source("types/api.ts");
-  assert.match(contract, /import \{ RUBRIC_WEIGHT_MAX \} from "@\/lib\/rubric-weight"/);
-  assert.match(
-    contract,
-    /weight: z\.number\(\)\.finite\(\)\.positive\(\)\.max\(RUBRIC_WEIGHT_MAX\)\.default\(1\)/,
+  assert.match(contract, /weight: z\.number\(\)\.finite\(\)\.positive\(\)\.default\(1\)/);
+});
+
+test("the weight ceiling is layered in the route, never on the schema that reads stored rubrics", () => {
+  // `rubricCriterionSchema` also parses already-stored rubric JSON through
+  // `parseDecisionRubric`, which returns null for the whole rubric on any
+  // failure. A `.max()` there does not reject bad input — it makes a legacy
+  // round's decision scores disappear. Pinned so it cannot come back.
+  const contract = source("types/api.ts");
+  const criterion = contract.slice(
+    contract.indexOf("export const rubricCriterionSchema"),
+    contract.indexOf("export const evaluationPlanInputSchema"),
   );
+  // Scoped to the weight declaration: `label` and `description` legitimately
+  // carry their own `.max()` length caps, and a whole-block ban would fail on
+  // those instead.
+  const weightLine = criterion.split("\n").find((line) => line.includes("weight: z.number()")) ?? "";
+  assert.notEqual(weightLine, "", "weight declaration not found in rubricCriterionSchema");
+  assert.equal(/\.max\(/.test(weightLine), false, weightLine);
+  assert.match(contract, /parseDecisionRubric/, "the reason must stay documented where the rule lives");
+
+  const route = source("app/api/evaluations/plans/route.ts");
+  assert.match(route, /import \{ rubricWeightBoundErrors \} from "@\/lib\/rubric-weight"/);
+  // A create has nothing to carry forward, so it is checked against no rubric.
+  assert.match(route, /if \(!input\.id\) refuseWeights\(null\);/);
+  // An update is checked against the row it is about to overwrite, read
+  // FOR UPDATE inside the same transaction — never a client-supplied claim.
+  const transaction = route.slice(route.indexOf("$transaction"), route.indexOf("evaluationPlan.update"));
+  assert.match(transaction, /FOR UPDATE/);
+  assert.match(transaction, /refuseWeights\(owned\.rubric\)/);
+  assert.equal(/refuseWeights\(input\./.test(route), false, "the stored side must never come from the body");
+  // Same refusal shape as the schema's own, so callers see one contract.
+  assert.match(route, /new ApiError\(422, "VALIDATION_ERROR", "Request validation failed\.", fieldErrors\)/);
+});
+
+test("a legacy round carries a calm note where the admin will see it", () => {
+  const component = setup();
+  assert.match(component, /const legacyWeights = legacyRubricWeightNote\(p\.rubric\)/);
+  assert.match(component, /\{legacyWeights \? <div className="cell-sub muted">\{legacyWeights\}<\/div> : null\}/);
 });
 
 test("the rubric total is never treated as a validity target", () => {

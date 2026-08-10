@@ -146,3 +146,98 @@ export function rubricRangesDiffer(criteria: readonly RubricScoreRange[]): boole
 export function rubricRangeWarning(criteria: readonly RubricScoreRange[]): string | null {
   return rubricRangesDiffer(criteria) ? RUBRIC_RANGE_WARNING : null;
 }
+
+// ---------------------------------------------------------------------------
+// The ceiling as an AUTHORING rule, with honest grandfathering
+// ---------------------------------------------------------------------------
+
+/**
+ * Why `RUBRIC_WEIGHT_MAX` is enforced here and not in `rubricCriterionSchema`:
+ *
+ * A plan authored before the ceiling existed can hold a criterion weighted
+ * above it. That value is not bad input — it is the event's established scoring
+ * configuration, and reviews have already been scored against it. Expressing
+ * the ceiling as a value-level Zod rule punished exactly the wrong party twice:
+ *
+ * 1. `parseDecisionRubric` parses **stored** rubric JSON through that same
+ *    schema and returns null for the whole rubric on any failure, so a legacy
+ *    weight silently blanked that round's decision scores.
+ * 2. Editing anything else about the round — its name, its window — resubmits
+ *    the complete rubric, so the unchanged legacy weight was rejected and the
+ *    admin could only save by altering established scoring weights.
+ *
+ * The rule that is actually wanted is about the *edit*, not the *value*: a
+ * weight you are merely carrying forward is fine; a weight you are introducing
+ * or changing must meet the ceiling. That needs the stored value for
+ * comparison, which Zod does not have — hence a route-layer check over a fresh
+ * server-side read. A client-supplied "this one is unchanged" flag would be
+ * trivially forgeable and is never trusted.
+ */
+export type IncomingRubricWeight = { key: string; label?: string; weight: number };
+
+/**
+ * Weights already stored on a plan, by criterion key.
+ *
+ * Deliberately tolerant: this reads whatever is in the database, including
+ * shapes a current write would refuse, because its only job is to answer "what
+ * was this criterion's weight before this edit". Anything unreadable simply
+ * fails to match, which denies the exception rather than granting it.
+ */
+export function readStoredRubricWeights(raw: unknown): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const { key, weight } = record;
+    if (typeof key !== "string" || typeof weight !== "number") continue;
+    if (!Number.isFinite(weight)) continue;
+    out.set(key, weight);
+  }
+  return out;
+}
+
+/**
+ * Field errors for every incoming weight that breaks the ceiling *and* is not a
+ * grandfathered carry-over, or `null` when the rubric may be saved.
+ *
+ * `storedRubric` must be the rubric as read from the database inside the same
+ * transaction that will perform the write. Pass `null`/`undefined` when
+ * creating: a brand-new plan has nothing to carry forward, so every weight
+ * above the ceiling is refused.
+ */
+export function rubricWeightBoundErrors(
+  incoming: readonly IncomingRubricWeight[],
+  storedRubric: unknown,
+): Record<string, string[]> | null {
+  const stored = readStoredRubricWeights(storedRubric);
+  const messages: string[] = [];
+  for (const criterion of incoming) {
+    if (criterion.weight <= RUBRIC_WEIGHT_MAX) continue;
+    // Exact equality on the number: carrying 150 forward is allowed, nudging it
+    // to 149 is not. "Changed" and "still above the ceiling" is a new choice.
+    if (stored.get(criterion.key) === criterion.weight) continue;
+    messages.push(
+      `“${criterion.label ?? criterion.key}”: weight ${criterion.weight} is above the ${RUBRIC_WEIGHT_MAX} limit. `
+        + `An existing weight above the limit can stay exactly as it is, but a new or changed weight must be ${RUBRIC_WEIGHT_MAX} or less.`,
+    );
+  }
+  return messages.length > 0 ? { rubric: messages } : null;
+}
+
+/**
+ * A gentle, admin-facing note for a stored rubric that predates the ceiling, or
+ * `null` when every weight is within it.
+ *
+ * Deliberately not phrased as a problem: nothing is wrong with the round, and
+ * nothing needs fixing. It exists so an admin who later hits the authoring
+ * refusal already knows which criterion it is about.
+ */
+export function legacyRubricWeightNote(
+  criteria: readonly { label: string; weight: number }[],
+): string | null {
+  const over = criteria.filter((c) => c.weight > RUBRIC_WEIGHT_MAX);
+  if (over.length === 0) return null;
+  const named = over.map((c) => `${c.label} (${c.weight})`).join(", ");
+  return `${named} ${over.length === 1 ? "was" : "were"} set above the current ${RUBRIC_WEIGHT_MAX} weight limit and ${over.length === 1 ? "is" : "are"} kept as configured. Scoring is unaffected.`;
+}

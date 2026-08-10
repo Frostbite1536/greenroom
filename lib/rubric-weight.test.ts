@@ -4,14 +4,19 @@ import {
   RUBRIC_RANGE_WARNING,
   RUBRIC_WEIGHT_MAX,
   isValidRubricWeight,
+  legacyRubricWeightNote,
   parseRubricWeight,
+  readStoredRubricWeights,
   rubricRangeWarning,
   rubricRangesDiffer,
+  rubricWeightBoundErrors,
   rubricWeightError,
   rubricWeightShare,
   rubricWeightShareLine,
 } from "./rubric-weight";
 import { weightedScore, type RubricCriterion } from "./services/rubric";
+import { parseDecisionRubric } from "./services/admin-decision-summary";
+import { evaluationPlanInputSchema } from "@/types/api";
 
 /** The seven weight test classes required by D-C5-8 §2.5. */
 
@@ -144,6 +149,153 @@ test("consistent ranges raise no warning, and neither does a half-typed one", ()
   // on every keystroke would train the author to ignore it.
   assert.equal(rubricRangeWarning([{ min: 1, max: 5 }, { min: 5, max: 5 }]), null);
   assert.equal(rubricRangeWarning([{ min: 1, max: 5 }, { min: Number.NaN, max: 10 }]), null);
+});
+
+// ---- the ceiling is an authoring rule, with honest grandfathering ----------
+
+const LEGACY_STORED = [
+  { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 150 },
+  { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 50 },
+];
+
+test("an unchanged over-limit weight is carried forward, not refused", () => {
+  // The whole rubric is resubmitted for an unrelated edit (a rename, a window).
+  // The legacy 150 is unchanged, so the save must go through — an admin must
+  // never have to alter established scoring weights to rename a round.
+  assert.equal(rubricWeightBoundErrors(LEGACY_STORED, LEGACY_STORED), null);
+  // Other fields may change freely; only the weight decides the exception.
+  assert.equal(
+    rubricWeightBoundErrors(
+      [{ key: "relevance", label: "Renamed relevance", weight: 150 }],
+      LEGACY_STORED,
+    ),
+    null,
+  );
+});
+
+test("a CHANGED over-limit weight is refused even when the stored one was higher", () => {
+  const errors = rubricWeightBoundErrors(
+    [{ key: "relevance", label: "Relevance", weight: 149 }],
+    LEGACY_STORED,
+  );
+  assert.notEqual(errors, null, "nudging 150 to 149 is a new choice, not a carry-forward");
+  assert.match(errors!.rubric[0], /“Relevance”: weight 149 is above the 100 limit\./);
+  assert.match(errors!.rubric[0], /a new or changed weight must be 100 or less\./);
+  // Raising it is refused too.
+  assert.notEqual(
+    rubricWeightBoundErrors([{ key: "relevance", label: "Relevance", weight: 151 }], LEGACY_STORED),
+    null,
+  );
+});
+
+test("a NEW over-limit criterion is refused, and so is every weight on a create", () => {
+  assert.notEqual(
+    rubricWeightBoundErrors(
+      [{ key: "freshness", label: "Freshness", weight: 120 }],
+      LEGACY_STORED,
+    ),
+    null,
+    "an unseen key has nothing to carry forward",
+  );
+  // Creating a plan passes no stored rubric at all.
+  for (const stored of [null, undefined, [], "not-a-rubric"]) {
+    assert.notEqual(
+      rubricWeightBoundErrors([{ key: "relevance", label: "Relevance", weight: 150 }], stored),
+      null,
+      `stored ${JSON.stringify(stored)} must grant no exception`,
+    );
+  }
+});
+
+test("weights within the limit are unaffected, and every offender is named", () => {
+  assert.equal(rubricWeightBoundErrors([{ key: "a", label: "A", weight: 100 }], null), null);
+  assert.equal(rubricWeightBoundErrors([{ key: "a", label: "A", weight: 0.5 }], null), null);
+  assert.equal(rubricWeightBoundErrors([], null), null);
+  const many = rubricWeightBoundErrors(
+    [
+      { key: "a", label: "A", weight: 120 },
+      { key: "b", label: "B", weight: 5 },
+      { key: "c", label: "C", weight: 300 },
+    ],
+    null,
+  );
+  assert.equal(many!.rubric.length, 2, "one message per offending criterion, not a single lump");
+  assert.match(many!.rubric[0], /“A”/);
+  assert.match(many!.rubric[1], /“C”/);
+});
+
+test("stored weights are read tolerantly, and an unreadable one denies the exception", () => {
+  assert.deepEqual([...readStoredRubricWeights(LEGACY_STORED)], [["relevance", 150], ["clarity", 50]]);
+  // Shapes a current write would refuse are still readable, because the only
+  // question is what this criterion weighed before the edit.
+  assert.deepEqual([...readStoredRubricWeights([{ key: "k", weight: 999 }])], [["k", 999]]);
+  // Anything unreadable simply fails to match, which denies the exception
+  // rather than granting it — the safe direction.
+  for (const raw of [null, "x", 7, [null], [{ key: 1, weight: 2 }], [{ key: "k" }], [{ key: "k", weight: "150" }]]) {
+    assert.equal(readStoredRubricWeights(raw).size, 0, JSON.stringify(raw));
+  }
+  assert.notEqual(
+    rubricWeightBoundErrors([{ key: "k", label: "K", weight: 150 }], [{ key: "k", weight: "150" }]),
+    null,
+    "a stored weight that is not a number cannot grandfather anything",
+  );
+});
+
+test("a legacy round gets a calm admin-facing note, and a normal round gets none", () => {
+  assert.equal(legacyRubricWeightNote([{ label: "Relevance", weight: 100 }]), null);
+  assert.equal(legacyRubricWeightNote([]), null);
+  const note = legacyRubricWeightNote([
+    { label: "Relevance", weight: 150 },
+    { label: "Clarity", weight: 50 },
+  ]);
+  assert.equal(
+    note,
+    "Relevance (150) was set above the current 100 weight limit and is kept as configured. Scoring is unaffected.",
+  );
+  // Not phrased as a fault, and it never tells the admin to change anything.
+  assert.equal(/must|error|invalid|fix|too high/i.test(note!), false);
+  const plural = legacyRubricWeightNote([
+    { label: "A", weight: 150 },
+    { label: "B", weight: 200 },
+  ]);
+  assert.match(plural!, /^A \(150\), B \(200\) were set above/);
+  assert.match(plural!, /are kept as configured/);
+});
+
+// ---- regression: the ceiling must never make stored data unreadable --------
+
+test("a stored legacy rubric still parses for decision scoring", () => {
+  // parseDecisionRubric returns null for the WHOLE rubric on any failure, and
+  // summarizeCompletedDecisionReviews then skips every abstract — so a
+  // value-level ceiling on this schema silently blanked a legacy round's
+  // decision scores to "No included reviews". It must stay readable.
+  const parsed = parseDecisionRubric(LEGACY_STORED);
+  assert.notEqual(parsed, null);
+  assert.equal(parsed![0].weight, 150, "the stored weight is read as it is, not clamped");
+});
+
+test("resubmitting an unchanged legacy rubric passes schema validation", () => {
+  const result = evaluationPlanInputSchema.safeParse({
+    eventId: "event-1",
+    id: "plan-1",
+    name: "Round 1 — renamed",
+    ordinal: 1,
+    rubric: LEGACY_STORED,
+  });
+  assert.equal(result.success, true, "the ceiling must not block an unrelated edit at parse time");
+});
+
+test("the invariants that are NOT policy stay in the schema", () => {
+  // These break the weighted average outright and are never grandfathered.
+  for (const weight of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const result = evaluationPlanInputSchema.safeParse({
+      eventId: "event-1",
+      name: "Round 1",
+      ordinal: 1,
+      rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight }],
+    });
+    assert.equal(result.success, false, `weight ${String(weight)} must still be refused by the schema`);
+  }
 });
 
 // ---- the scoring formula itself is untouched --------------------------------

@@ -1644,6 +1644,74 @@ try {
     mixedRanges.status === 201, `got ${mixedRanges.status}`);
   await prisma.evaluationPlan.deleteMany({ where: { eventId: EVENT_ID, ordinal: { in: [91, 92] } } });
 
+  // --- PR #80 Greptile: a legacy over-limit weight is grandfathered --------
+  // The row is written straight through Prisma, exactly as a plan authored
+  // before the ceiling existed would look. No schema games — this is ordinary
+  // data the API can no longer author but must still accept back unchanged.
+  const legacyPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: EVENT_ID, name: "Scratch legacy-weight round", ordinal: 93, isBlind: false,
+      rubric: [
+        { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 150 },
+        { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 50 },
+      ],
+    },
+  });
+  const legacyRubric = [
+    { key: "relevance", label: "Relevance", min: 1, max: 5, weight: 150 },
+    { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 50 },
+  ];
+  const renameLegacy = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false, rubric: legacyRubric,
+  }, admin);
+  check("legacy: an unrelated edit resubmitting an UNCHANGED over-limit weight saves → 200",
+    renameLegacy.status === 200,
+    `${renameLegacy.status} ${JSON.stringify(renameLegacy.data?.error ?? "")}`);
+  const legacyAfterRename = await prisma.evaluationPlan.findUnique({ where: { id: legacyPlan.id } });
+  check("legacy: the established scoring weight is preserved byte-for-byte, not clamped",
+    legacyAfterRename?.name === "Scratch legacy-weight round (renamed)"
+    && legacyAfterRename?.rubric?.[0]?.weight === 150,
+    `name ${legacyAfterRename?.name}, weight ${legacyAfterRename?.rubric?.[0]?.weight}`);
+  // Changing that weight, while still above the ceiling, is a NEW choice.
+  const nudgeLegacy = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false,
+    rubric: [{ ...legacyRubric[0], weight: 149 }, legacyRubric[1]],
+  }, admin);
+  check("legacy: CHANGING an over-limit weight is still refused → 422",
+    nudgeLegacy.status === 422 && nudgeLegacy.data?.error?.code === "VALIDATION_ERROR",
+    `${nudgeLegacy.status} ${JSON.stringify(nudgeLegacy.data?.error?.code ?? "")}`);
+  // A brand-new criterion has nothing to carry forward.
+  const newOverLimit = await req("POST", "/api/evaluations/plans", {
+    eventId: EVENT_ID, id: legacyPlan.id, name: "Scratch legacy-weight round (renamed)",
+    ordinal: 93, isBlind: false,
+    rubric: [...legacyRubric, { key: "freshness", label: "Freshness", min: 1, max: 5, weight: 120 }],
+  }, admin);
+  check("legacy: a NEW over-limit criterion on the same plan is refused → 422",
+    newOverLimit.status === 422, `got ${newOverLimit.status}`);
+  const legacyUntouched = await prisma.evaluationPlan.findUnique({ where: { id: legacyPlan.id } });
+  check("legacy: no refused edit wrote anything to the plan",
+    legacyUntouched?.rubric?.length === 2 && legacyUntouched?.rubric?.[0]?.weight === 150,
+    JSON.stringify(legacyUntouched?.rubric ?? "none"));
+  // The regression that mattered most: a legacy rubric must stay READABLE, or
+  // the round's decision scores silently blank to "No included reviews".
+  const legacyDecisionPage = await req(
+    "GET", `/admin/abstracts?planId=${encodeURIComponent(legacyPlan.id)}`, null, admin,
+  );
+  const legacyDecisionText = renderedText(legacyDecisionPage.text) ?? "";
+  check("legacy: the round is selectable and its rubric still parses for decision scoring",
+    legacyDecisionPage.status === 200
+    && legacyDecisionText.includes("Scratch legacy-weight round (renamed)"),
+    `${legacyDecisionPage.status}`);
+  // And the admin sees a calm note rather than a warning.
+  const legacySetupPage = await req("GET", "/admin/evaluations", null, admin);
+  const legacySetupText = renderedText(legacySetupPage.text) ?? "";
+  check("legacy: the round card explains the kept weight without calling it an error",
+    legacySetupText.includes("Relevance (150) was set above the current 100 weight limit")
+    && legacySetupText.includes("Scoring is unaffected."));
+  await prisma.evaluationPlan.delete({ where: { id: legacyPlan.id } });
+
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator does NOT see the setup panel",

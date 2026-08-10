@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { isIanaTimeZone } from "@/lib/tz";
-import { RUBRIC_WEIGHT_MAX } from "@/lib/rubric-weight";
 
 // NOTE: relaxed from z.string().cuid() by the backend worker to accept the
 // seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
@@ -327,13 +326,28 @@ export const rubricCriterionSchema = z
     description: z.string().max(500).optional(),
     min: z.number().int(),
     max: z.number().int(),
-    // The bound is shared with the round dialog rather than restated here, so
-    // the client and this contract cannot drift. `.finite()` is load-bearing:
-    // z.number() by itself admits Infinity, which would divide the whole
-    // rubric's weighted average down to a single criterion. The maximum is an
-    // input-safety limit — weights are relative multipliers and are NOT
-    // required to total 100 (D-C5-8 §2.4).
-    weight: z.number().finite().positive().max(RUBRIC_WEIGHT_MAX).default(1),
+    /**
+     * NO `.max()` here, deliberately — see `rubricWeightBoundErrors`.
+     *
+     * This schema is not only a request contract: `parseDecisionRubric`
+     * (lib/services/admin-decision-summary.ts) parses **already-stored** rubric
+     * JSON through it, and returns null for the whole rubric on any failure,
+     * which blanks that round's decision scores to "No included reviews". A
+     * value-level ceiling here therefore does not reject bad input — it makes
+     * existing data unreadable, and blocks an unrelated edit that merely
+     * resubmits an unchanged legacy weight.
+     *
+     * The `RUBRIC_WEIGHT_MAX` ceiling is an **authoring** rule, so it lives in
+     * the plans route, which can compare each incoming weight against the
+     * freshly-read stored one and grandfather a genuinely unchanged value.
+     *
+     * `.finite()` and `.positive()` stay: they are true invariants rather than
+     * a policy ceiling. A non-finite or non-positive weight breaks the weighted
+     * average outright, and neither can survive a JSON round trip into storage
+     * anyway (`JSON.stringify(Infinity)` is `null`), so keeping them rejects no
+     * row that already exists.
+     */
+    weight: z.number().finite().positive().default(1),
   })
   .refine((criterion) => criterion.min < criterion.max, {
     message: "max must be greater than min",

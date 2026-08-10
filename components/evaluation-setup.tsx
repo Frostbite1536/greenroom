@@ -26,6 +26,7 @@ import {
 import { uniqueRubricKeys } from "@/lib/rubric-key";
 import {
   RUBRIC_WEIGHT_MAX,
+  legacyRubricWeightNote,
   parseRubricWeight,
   rubricRangeWarning,
   rubricWeightError,
@@ -255,6 +256,10 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
         <div className="round-list">
           {view.plans.map((p) => {
             const roundWindow = formatRoundWindow(p.startsAt, p.endsAt, view.timezone);
+            // Only ever present on a round authored before the weight ceiling.
+            // Informational, not a warning: the round is valid, its scoring is
+            // unaffected, and the weight is kept exactly as configured.
+            const legacyWeights = legacyRubricWeightNote(p.rubric);
             return (
               <button
                 type="button"
@@ -278,6 +283,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                 {/* Only rendered when the round actually carries a window: an
                     absent date is left absent rather than shown as a dash. */}
                 {roundWindow ? <div className="cell-sub">{roundWindow}</div> : null}
+                {legacyWeights ? <div className="cell-sub muted">{legacyWeights}</div> : null}
               </button>
             );
           })}
