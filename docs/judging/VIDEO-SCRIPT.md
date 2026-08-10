@@ -185,8 +185,9 @@ Pause on the refusal message and read what it collides with.*
 > would write the slot. A collision is refused outright — it never becomes a
 > warning somebody can dismiss."
 
-*Now place it in a free slot. The seeded programme leaves **14 May 2026 entirely
-empty**, so put the talk in **Grand Ballroom, 14 May 2026, 10:00**.*
+*Now place it in a free slot. The seeded programme keeps **Grand Ballroom free
+on 14 May 2026**, so put the talk there at **10:00** (one seeded session sits in
+Hall B that afternoon — the day is populated but the ballroom morning is open).*
 
 > "A free placement lands immediately."
 

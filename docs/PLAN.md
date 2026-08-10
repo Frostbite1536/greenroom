@@ -30,7 +30,7 @@ Goal: a demo-able vertical slice on a deployed URL.
   admin speaker-status dashboard, `.ics` generation, email dispatch (log-only
   behind `MOCK_EXTERNAL_APIS=true`), seed script (`prisma/seed.ts`): 1 event,
   4 categories, 3 tracks, 4 rooms, ~40 abstracts across all states, 3 evaluators
-  with scores, a schedule with one deliberate conflict, demo personas as Users.
+  with scores, a conflict-free three-day schedule, demo personas as Users.
 
 Exit: judge-persona can do the full walkthrough on the deployed URL.
 

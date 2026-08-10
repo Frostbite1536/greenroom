@@ -184,6 +184,111 @@ const RUBRIC: Prisma.InputJsonValue = [
 
 const RUBRIC_KEYS = ["relevance", "originality", "clarity", "speaker"] as const;
 
+/**
+ * The `RUBRIC` weights again, positionally aligned to `RUBRIC_KEYS`.
+ *
+ * Only the seeded-score tests read this — the app reads the weights out of the
+ * stored `RUBRIC` JSON — but a drift between the two would make every asserted
+ * average wrong while every test still passed, so `seed-invariants.test.ts`
+ * holds the two equal.
+ */
+export const DEMO_RUBRIC_WEIGHTS = [1.5, 1, 1, 1] as const;
+
+/**
+ * Seeded reviewer verdicts: one entry per DECIDED proposal, in seed order —
+ * indices 0-11 are the twelve ACCEPTED proposals, 12-19 the eight REJECTED
+ * ones. Each entry is three rows of four scores: one row per evaluator, one
+ * score per `RUBRIC_KEYS` entry.
+ *
+ * This replaces a formula (`base + ((rubricIndex + evaluatorIndex) % 2)`, base
+ * 4 for accepted and 2 for rejected) whose arithmetic collapsed: EVERY accepted
+ * proposal scored exactly 4.48 and every rejected one exactly 2.48, so the
+ * review queue was two numbers repeated twenty times and no reviewer ever
+ * disagreed with another. The table is deliberately shaped instead:
+ *
+ * - the weighted means run from about 2.0 to about 4.9 with no two identical;
+ * - indices 11 and 12 straddle the accept line — the weakest accepted proposal
+ *   scores BELOW the strongest rejected one, which is what a real committee
+ *   decision that went beyond the rubric looks like;
+ * - indices 7 and 13 are split decisions, where one reviewer is enthusiastic
+ *   and another is not, so the "reviewers disagree" case is visible on screen.
+ *
+ * Fixed values, never randomised: a demo reset has to reproduce the same
+ * screenshot.
+ */
+export const DEMO_REVIEW_PROFILES = [
+  // --- ACCEPTED (0-11), strongest first ---
+  [[5, 5, 5, 5], [5, 5, 4, 5], [5, 4, 5, 5]],
+  [[5, 4, 5, 5], [5, 5, 4, 4], [4, 5, 5, 5]],
+  [[5, 4, 4, 5], [4, 5, 5, 4], [5, 4, 5, 4]],
+  [[4, 5, 4, 5], [5, 4, 4, 4], [4, 4, 5, 5]],
+  [[5, 3, 5, 4], [4, 4, 4, 5], [5, 4, 4, 4]],
+  [[4, 4, 5, 4], [5, 4, 3, 4], [4, 5, 4, 4]],
+  [[4, 4, 4, 4], [4, 5, 4, 3], [5, 3, 4, 4]],
+  [[5, 5, 5, 5], [2, 3, 2, 3], [4, 4, 5, 4]], // split decision
+  [[4, 3, 4, 4], [4, 4, 4, 4], [3, 4, 4, 4]],
+  [[4, 3, 4, 3], [3, 4, 4, 4], [4, 4, 3, 4]],
+  [[3, 4, 4, 3], [4, 3, 3, 4], [3, 4, 3, 4]],
+  [[3, 4, 3, 4], [4, 3, 3, 3], [3, 3, 4, 3]], // weakest accept — below the top reject
+  // --- REJECTED (12-19), strongest first ---
+  [[4, 3, 4, 3], [3, 4, 3, 4], [4, 3, 3, 4]], // strongest reject — above the weakest accept
+  [[5, 4, 4, 4], [2, 2, 3, 2], [3, 3, 3, 3]], // split decision
+  [[3, 3, 4, 3], [3, 3, 3, 3], [4, 3, 3, 2]],
+  [[3, 3, 3, 3], [2, 3, 3, 3], [3, 3, 2, 3]],
+  [[3, 2, 3, 3], [2, 3, 3, 2], [3, 3, 2, 2]],
+  [[2, 3, 2, 3], [3, 2, 2, 3], [2, 2, 3, 2]],
+  [[2, 2, 3, 2], [2, 3, 2, 2], [2, 2, 2, 3]],
+  [[2, 2, 2, 2], [1, 2, 3, 2], [2, 2, 2, 2]],
+] as const satisfies readonly (readonly (readonly [number, number, number, number])[])[];
+
+/**
+ * Ten distinct reviewer comments, pooled by verdict.
+ *
+ * The old seed wrote one of two sentences site-wide, and wrote the positive one
+ * onto every accepted proposal regardless of what that reviewer had scored.
+ * `demoReviewComment()` picks from the pool that matches THIS reviewer's own
+ * weighted mean, so on a split decision the enthusiastic row and the sceptical
+ * row read like two people who disagreed rather than one template.
+ */
+export const DEMO_REVIEW_COMMENTS = {
+  positive: [
+    "Exactly the talk this track needs — the tradeoffs are named up front and the takeaways are concrete.",
+    "Clear structure with a real production story behind it. I would happily put this on the mainstage.",
+    "Strong material, and the abstract already reads like a finished talk. No reservations from me.",
+    "The examples are specific and it is honest about what it will not cover. Easy yes.",
+  ],
+  mixed: [
+    "Solid material, but the abstract promises more than the slot can hold. Worth taking if the speaker narrows it.",
+    "I like the topic and I think the speaker can deliver it; the takeaways are still vague enough that I hesitated.",
+    "Useful and well scoped, though it overlaps with two other submissions in this category.",
+  ],
+  critical: [
+    "The problem is real, but the abstract never says what the audience actually leaves with.",
+    "Reads more like a product walkthrough than a talk — I could not find the transferable lesson.",
+    "Too introductory for this audience, and the outline stops just before the hard part.",
+  ],
+} as const;
+
+/** Weighted mean of one reviewer's four rubric scores, on the rubric's scale. */
+export function demoWeightedMean(scores: readonly number[]): number {
+  const total = DEMO_RUBRIC_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+  return scores.reduce((sum, score, i) => sum + score * DEMO_RUBRIC_WEIGHTS[i], 0) / total;
+}
+
+/**
+ * The comment this reviewer leaves, chosen by their own verdict and then
+ * rotated by position so one pool does not repeat a single sentence.
+ */
+export function demoReviewComment(scores: readonly number[], decidedIndex: number, evaluatorIndex: number): string {
+  const mean = demoWeightedMean(scores);
+  const pool = mean >= 4
+    ? DEMO_REVIEW_COMMENTS.positive
+    : mean >= 3
+      ? DEMO_REVIEW_COMMENTS.mixed
+      : DEMO_REVIEW_COMMENTS.critical;
+  return pool[(decidedIndex + evaluatorIndex) % pool.length];
+}
+
 const FIRST = [
   "Alex", "Priya", "Diego", "Mei", "Noah", "Fatima", "Lucas", "Aisha", "Kenji", "Zoe",
   "Omar", "Nadia", "Ivan", "Grace", "Mateo", "Leila", "Sven", "Yara", "Tomas", "Isla",
@@ -202,15 +307,247 @@ const LAST = [
 const FORMATS = ["Talk (30 min)", "Deep Dive (45 min)", "Workshop (90 min)", "Lightning (10 min)"] as const;
 const DURATIONS = [30, 45, 90, 10] as const;
 
-const TITLE_PREFIX = [
-  "Scaling", "Rethinking", "Inside", "Beyond", "Practical", "The Hidden Cost of", "Building", "Debugging",
-  "From Zero to", "Lessons from", "A Field Guide to", "Taming", "Designing", "Operating", "The Future of",
-];
-const TITLE_SUBJECT = [
-  "Vector Search", "Event-Driven Systems", "Design Systems", "Zero-Trust Networks", "LLM Evaluation",
-  "Multi-Region Postgres", "Incident Response", "Feature Flags", "Edge Rendering", "Observability",
-  "Developer Platforms", "Data Contracts", "Realtime Pipelines", "Accessibility", "Cost Governance",
-];
+/**
+ * The 40 seeded proposals, in seed order.
+ *
+ * Authored as an explicit table rather than generated from a prefix x subject
+ * cross-product. The generator produced only 15 distinct strings for 40 rows —
+ * ten titles appeared three times and five twice — so the pipeline, the review
+ * queue and the public schedule all showed the same handful of talks over and
+ * over, and a reviewer could not tell two rows apart. Every title here is
+ * distinct; `seed-invariants.test.ts` holds that.
+ *
+ * Order is load-bearing twice over. `DEMO_STATUS_PLAN` walks this list in
+ * order, so index 0-11 are the ACCEPTED proposals (and therefore the sessions
+ * that get scheduled), and the category is `index % 4` against `CATEGORIES` —
+ * so each entry is written to fit the category it will land in.
+ *
+ * `topic` is the noun phrase the seeded abstract body uses; it keeps the body
+ * about the same subject as the title without repeating it verbatim.
+ */
+export const DEMO_TALKS = [
+  // Category cycles AI / Platform / Product / Security every four entries.
+  { title: "Scaling Vector Search Past the First Million Documents", topic: "vector search at scale" },
+  { title: "Multi-Region Postgres Without the 3 a.m. Pager", topic: "multi-region Postgres" },
+  { title: "Designing a System Your Designers Will Actually Use", topic: "design system adoption" },
+  { title: "Zero-Trust Networks for People Who Own One Cluster", topic: "zero-trust networking" },
+  { title: "Evaluating LLM Output Without a Human in the Loop", topic: "automated LLM evaluation" },
+  { title: "Rethinking Event-Driven Systems After Two Outages", topic: "event-driven architecture" },
+  { title: "The Hidden Cost of a Settings Page", topic: "product surface area" },
+  { title: "Debugging a Breach That Never Happened", topic: "triaging false-positive security alerts" },
+  { title: "Retrieval That Survives Contact With Real Documents", topic: "retrieval-augmented generation" },
+  { title: "Lessons from Rebuilding Our Realtime Pipeline", topic: "realtime data pipelines" },
+  { title: "Accessibility Is a Release Blocker", topic: "accessibility in the release process" },
+  { title: "Secrets Rotation Without a Maintenance Window", topic: "secrets rotation" },
+  { title: "Fine-Tuning Was the Wrong Answer Three Times", topic: "when not to fine-tune a model" },
+  { title: "Feature Flags Are a Database You Did Not Design", topic: "feature flag hygiene" },
+  { title: "Onboarding Flows That Do Not Lie", topic: "honest onboarding" },
+  { title: "The Audit Log You Wish You Had Written", topic: "audit logging" },
+  { title: "Prompt Regressions Are Regressions", topic: "regression testing for prompts" },
+  { title: "Observability on a Budget", topic: "cost-aware observability" },
+  { title: "Killing a Feature Gracefully", topic: "feature deprecation" },
+  { title: "Threat Modelling in Ninety Minutes", topic: "lightweight threat modelling" },
+  { title: "The Cost Curve of a Chat Feature", topic: "inference cost control" },
+  { title: "The Internal Platform Nobody Asked For", topic: "internal developer platforms" },
+  { title: "Research Notes Nobody Reads", topic: "making user research usable" },
+  { title: "Supply Chain Risk in Your Own Build", topic: "build supply chain security" },
+  { title: "Small Models, Boring Wins", topic: "small-model deployments" },
+  { title: "Data Contracts Between Teams That Do Not Talk", topic: "data contracts" },
+  { title: "Pricing Pages Are an Engineering Problem", topic: "pricing page implementation" },
+  { title: "A Field Guide to Least Privilege", topic: "least-privilege access" },
+  { title: "Guardrails That Do Not Break the Product", topic: "safety guardrails in production" },
+  { title: "Edge Rendering: What Actually Got Faster", topic: "edge rendering tradeoffs" },
+  { title: "One Empty State, Rewritten Eleven Times", topic: "empty-state design" },
+  { title: "Passkeys in a Legacy Codebase", topic: "migrating to passkeys" },
+  { title: "Teaching a Model Your Company's Vocabulary", topic: "domain adaptation" },
+  { title: "Taming a Monorepo of Forty Services", topic: "monorepo build systems" },
+  { title: "The Roadmap Survived First Contact", topic: "roadmap planning" },
+  { title: "What Our Bug Bounty Actually Bought", topic: "running a bug bounty" },
+  { title: "From Notebook to Nightly Batch", topic: "productionising a model pipeline" },
+  { title: "Incident Response for Teams of Four", topic: "small-team incident response" },
+  { title: "Writing Error Messages People Can Act On", topic: "error message design" },
+  { title: "Tabletop Exercises That Are Not Theatre", topic: "security tabletop exercises" },
+] as const satisfies readonly { title: string; topic: string }[];
+
+/**
+ * How the 40 proposals are distributed across statuses. Exported because the
+ * total is a published contract — the judging docs, the install rehearsal and
+ * the reset summary all say "40 abstracts" — so a test can hold it equal to
+ * `DEMO_TALKS.length` instead of leaving the two to drift apart.
+ */
+export const DEMO_STATUS_PLAN = [
+  { status: "ACCEPTED", count: 12 },
+  { status: "REJECTED", count: 8 },
+  { status: "UNDER_REVIEW", count: 8 },
+  { status: "SUBMITTED", count: 8 },
+  { status: "WITHDRAWN", count: 2 },
+  { status: "DRAFT", count: 2 },
+] as const satisfies readonly {
+  status: "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "ACCEPTED" | "REJECTED" | "WITHDRAWN";
+  count: number;
+}[];
+
+/** Pool position of the invited keynote speaker, and the keynote's length. */
+const KEYNOTE_SPEAKER_POOL_INDEX = 3;
+const KEYNOTE_DURATION_MINUTES = 45;
+
+/** The three event-local calendar days, in order. */
+const SCHEDULE_DAYS = [DEMO_EVENT_DATES.startsOn, "2026-05-13", DEMO_EVENT_DATES.endsOn] as const;
+const SLOT_HOURS = [9, 10, 11, 13, 14, 15] as const;
+const SLOT_ROOM_ORDER = ["ballroom", "hall-a", "hall-b", "lab"] as const;
+const SLOT_TRACK_ORDER = ["mainstage", "deepdive", "deepdive", "workshops"] as const;
+
+/**
+ * Format (and therefore duration) for the proposal at seed position `index`.
+ *
+ * Steps once per group of four so it does NOT move in lockstep with the
+ * category, which is `index % 4`. Keying both off the same modulus made every
+ * Security & Trust proposal a ten-minute lightning talk and every Product &
+ * Design one a 90-minute workshop.
+ */
+export function demoFormatIndex(index: number): number {
+  return Math.floor(index / FORMATS.length) % FORMATS.length;
+}
+
+export type DemoPlacement = {
+  /** Position in the seeded session list; 0 is the invited keynote. */
+  sessionIndex: number;
+  /** Pool position of the session's primary speaker. */
+  speakerPoolIndex: number;
+  durationMinutes: number;
+  /** Event-local calendar date. */
+  day: string;
+  /** Event-local start hour, on the hour. */
+  hour: number;
+  roomKey: string;
+  trackKey: string;
+};
+
+/**
+ * The whole seeded programme as a pure plan, so the placements can be checked
+ * without a database.
+ *
+ * Exported because "the seeded programme is conflict-free and uses all three
+ * days" is now a real claim: the seed used to ship a deliberate room
+ * double-booking (the keynote's own slot, re-used) and to leave 14 May empty on
+ * a three-day event. `seed-invariants.test.ts` walks this plan for room and
+ * speaker overlaps and for day coverage.
+ *
+ * Sessions are indexed as the seed builds them: 0 is the invited keynote, and
+ * session `k` (k >= 1) is the k-1'th ACCEPTED proposal, whose primary speaker
+ * is pool position k-1.
+ */
+export function demoSchedulePlan(): DemoPlacement[] {
+  const durationOf = (sessionIndex: number) =>
+    sessionIndex === 0 ? KEYNOTE_DURATION_MINUTES : DURATIONS[demoFormatIndex(sessionIndex - 1)];
+  const speakerOf = (sessionIndex: number) =>
+    sessionIndex === 0 ? KEYNOTE_SPEAKER_POOL_INDEX : sessionIndex - 1;
+
+  const placements: DemoPlacement[] = [];
+  for (let i = 0; i < 10; i++) {
+    const roomI = i % SLOT_ROOM_ORDER.length;
+    placements.push({
+      sessionIndex: i,
+      speakerPoolIndex: speakerOf(i),
+      durationMinutes: durationOf(i),
+      day: i < 6 ? SCHEDULE_DAYS[0] : SCHEDULE_DAYS[1],
+      hour: SLOT_HOURS[i % SLOT_HOURS.length],
+      roomKey: SLOT_ROOM_ORDER[roomI],
+      trackKey: SLOT_TRACK_ORDER[roomI],
+    });
+  }
+  // The eleventh placement closes the event on DAY 3.
+  //
+  // It used to be a deliberate double-booking — the same room and time as the
+  // opening keynote — seeded so the admin Conflicts view had something in it.
+  // That is superseded: the walkthrough demonstrates the refusal live by trying
+  // an occupied slot, so the seeded programme no longer has to ship a mistake,
+  // and a Conflicts view reading zero is the honest result.
+  //
+  // Day 3 being empty on a three-day event was the other half of the same
+  // problem. Moving this placement fixes both and keeps the count at 11.
+  //
+  // Room and hour are not free choices: the walkthrough is scripted against
+  // this programme and needs Hall A on 12 May at 10:00 to stay OCCUPIED (the
+  // refusal it demonstrates) and the Grand Ballroom on 14 May to stay FREE (the
+  // clean placement that follows it). Hall B in the afternoon satisfies both.
+  placements.push({
+    sessionIndex: 10,
+    speakerPoolIndex: speakerOf(10),
+    durationMinutes: durationOf(10),
+    day: SCHEDULE_DAYS[2],
+    hour: 13,
+    roomKey: "hall-b",
+    trackKey: "deepdive",
+  });
+  return placements;
+}
+
+/**
+ * Distinct profiles for the ten speakers who reach the public gallery.
+ *
+ * `/speakers` lists exactly the speakers on a SCHEDULED, published session, and
+ * the seeded schedule places the keynote plus the first ten accepted proposals
+ * — whose primary speakers are pool positions 0-9. Every one of them used to
+ * carry the same "Staff Engineer at Acme Labs" and the same one-line bio, so
+ * the gallery read as one person copied ten times.
+ *
+ * Positional: entry `i` is applied to speaker pool position `i` (0 is Sofia
+ * Marques, the speaker persona). Nothing here names a person, so a reordering
+ * of the pool cannot attach the wrong name to a bio — the bio sentence is
+ * built from the speaker's own `name` plus the `bio` tail below.
+ *
+ * Each entry also fits the category its owner submits to: pool position `i`
+ * submits the proposal at index `i`, whose category is `i % 4`, so the search
+ * engineer is on the AI proposal and the SRE on the platform one.
+ *
+ * Companies are invented. Every seeded speaker address is on the non-routable
+ * `@speakers.demo` domain and none of these organisations exists.
+ */
+export const HEADLINE_SPEAKER_PROFILES = [
+  { jobTitle: "Principal Engineer", company: "Foxglove Labs",
+    bio: "leads the search platform team at Foxglove Labs and has spent the last six years making retrieval boring." },
+  { jobTitle: "Staff Site Reliability Engineer", company: "Ironwood Bank",
+    bio: "keeps a regulated payments platform online at Ironwood Bank, and has the incident reviews to prove it." },
+  { jobTitle: "Design Systems Lead", company: "Cobalt Ferry",
+    bio: "owns the component library every Cobalt Ferry product ships on, and negotiates the exceptions to it." },
+  { jobTitle: "VP of Engineering", company: "Lumeria",
+    bio: "has grown Lumeria's engineering organisation from nine people to two hundred, and writes about what broke on the way." },
+  { jobTitle: "Director of Applied ML", company: "Petrichor Health",
+    bio: "runs the applied machine learning group at Petrichor Health, where a wrong answer is a clinical problem and not a metric." },
+  { jobTitle: "Principal Platform Engineer", company: "Saltmarsh Media",
+    bio: "rebuilt Saltmarsh Media's publishing backbone after two outages nobody wants described in a conference bio." },
+  { jobTitle: "Principal Product Manager", company: "Tessellate",
+    bio: "has shipped and then deliberately removed more Tessellate features than most people have launched." },
+  { jobTitle: "Security Operations Lead", company: "Bluewhistle",
+    bio: "runs detection and response at Bluewhistle and spends more time on false positives than on real intrusions." },
+  { jobTitle: "Head of Search & Discovery", company: "Meridian Freight",
+    bio: "makes Meridian Freight's document search work against the paperwork freight actually generates." },
+  { jobTitle: "Staff Engineer", company: "Kestrel Analytics",
+    bio: "builds the realtime ingest path at Kestrel Analytics and has migrated it, twice, without a maintenance window." },
+] as const;
+
+/**
+ * Everyone else in the 40-strong pool. Rotated on co-prime cycle lengths
+ * (11 companies x 7 titles) so the supporting cast in the admin speaker list
+ * is not visibly one row repeated either; the bio sentence carries the
+ * speaker's own name, so no two are identical.
+ */
+const SUPPORTING_COMPANIES = [
+  "Halcyon Systems", "Cindermark", "Vantage Loom", "Tidewater Logistics", "Marlowe & Fern",
+  "Quillfeather", "Ashgrove Energy", "Steepwater", "Nine Rivers Media", "Baytree Robotics", "Oxbow Financial",
+] as const;
+const SUPPORTING_TITLES = [
+  "Senior Software Engineer", "Engineering Manager", "Platform Engineer", "Product Designer",
+  "Data Engineer", "Security Engineer", "Developer Advocate",
+] as const;
+const SUPPORTING_BIOS = [
+  "has been building and operating production systems for a decade and speaks about the parts that do not fit in a blog post.",
+  "works on the unglamorous middle of the stack and enjoys explaining it to people who would rather not think about it.",
+  "spends most of the week on migrations nobody asked for, and the rest writing down what they cost.",
+  "joined a small team, watched it become a large one, and has opinions about which parts of that were avoidable.",
+  "is a first-time conference speaker bringing a case study straight out of last quarter.",
+] as const;
 
 type SeedSummary = Record<string, number>;
 
@@ -380,6 +717,17 @@ async function seedWithin(
   }
 
   // --- 4. Memberships --------------------------------------------------------
+  // Note on the fixture rows, so this is not re-litigated: the admin reviewer
+  // roster (`getEvaluationSetup`, lib/data/reads.ts) lists every EventMember
+  // whose role is EVALUATOR **or ADMIN**, so the four fixture memberships below
+  // — Jordan Alvarez and Sam Whitfield, each on two address forms — show up
+  // there with nothing assigned. That is untidy but load-bearing: D-C5-6 seeds
+  // those credentials so the harness can sign in as either address form, and
+  // the membership is what gives that session its role. Drop them and the
+  // fixture login lands on a page it has no permission for. The duplication is
+  // not accidental either — the harness types `sbek-<role>@example.com` in one
+  // place and `<first>.<role>@sbek-test.example.com` in another, so BOTH forms
+  // need the role. Nothing to prune here without breaking the harness.
   const memberships: Prisma.EventMemberCreateManyInput[] = [
     { eventId, userId: adminId, role: "ADMIN" },
     ...evaluatorIds.map((userId) => ({ eventId, userId, role: "EVALUATOR" as const })),
@@ -393,11 +741,18 @@ async function seedWithin(
   // event-scoped wipe above. Reset the demo fields explicitly on update as well
   // as create, otherwise edits made through the portal survive a reseed and the
   // demo drifts (observed: a smoke-test job title persisting across seeds).
-  for (const s of [...speakerUsers, ...fixtureUsers.filter((f) => f.role === "SPEAKER")]) {
+  const profileTargets = [...speakerUsers, ...fixtureUsers.filter((f) => f.role === "SPEAKER")];
+  for (const [i, s] of profileTargets.entries()) {
+    const headline = HEADLINE_SPEAKER_PROFILES[i];
+    const persona = headline ?? {
+      jobTitle: SUPPORTING_TITLES[i % SUPPORTING_TITLES.length],
+      company: SUPPORTING_COMPANIES[i % SUPPORTING_COMPANIES.length],
+      bio: SUPPORTING_BIOS[i % SUPPORTING_BIOS.length],
+    };
     const demoProfile = {
-      bio: `${s.name} is a practitioner and frequent conference speaker.`,
-      company: "Acme Labs",
-      jobTitle: "Staff Engineer",
+      bio: `${s.name} ${persona.bio}`,
+      company: persona.company,
+      jobTitle: persona.jobTitle,
       headshotUrl: null,
       slideDeckUrl: null,
       socialLinks: Prisma.DbNull,
@@ -438,6 +793,21 @@ async function seedWithin(
       thankYouText: "Thanks for submitting! You'll hear from the program team within three weeks.",
       // Relative to seed time so the CFP is always open when the demo runs
       // (requests/frontend-seed-cfp-window-closed.md — a fixed window went stale).
+      //
+      // KNOWN TENSION, deliberately left: this window is relative to the reseed
+      // while the rest of the demo timeline is fixed in 2026 (submissions in
+      // February, reviews in March, onboarding in April, the event on 12-14
+      // May). Once wall-clock time passes the event, the landing page reads
+      // "closes" on a date AFTER the conference. Both alternatives are worse:
+      // a close date before the event is in the past, which shuts the public
+      // form and breaks the golden-path walkthrough and every smoke that
+      // submits to it — the exact regression the request above was filed for.
+      // Making it coherent means moving the whole demo timeline forward, which
+      // is an Architect-level change: `DEMO_EVENT_DATES`, the six task due
+      // dates, the review round, the schedule days and the verbatim dates in
+      // the video script and judging docs all move together. Until then the
+      // form stays OPEN, because a demo that cannot accept a submission is a
+      // broken demo and a date that reads oddly is not.
       opensAt: new Date(Date.now() - 30 * 86400000),
       closesAt: new Date(Date.now() + 60 * 86400000),
       submissionLimit: 3,
@@ -547,14 +917,7 @@ async function seedWithin(
   });
 
   // --- 8. Abstracts across every status -------------------------------------
-  const STATUS_PLAN: { status: "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "ACCEPTED" | "REJECTED" | "WITHDRAWN"; count: number }[] = [
-    { status: "ACCEPTED", count: 12 },
-    { status: "REJECTED", count: 8 },
-    { status: "UNDER_REVIEW", count: 8 },
-    { status: "SUBMITTED", count: 8 },
-    { status: "WITHDRAWN", count: 2 },
-    { status: "DRAFT", count: 2 },
-  ];
+  const STATUS_PLAN = DEMO_STATUS_PLAN;
 
   const catKeys = CATEGORIES.map((c) => c.key);
   type SeededAbstract = { id: string; status: string; categoryKey: string; submitterId: string; primarySpeakerId: string; title: string; durationMinutes: number; format: string };
@@ -566,8 +929,14 @@ async function seedWithin(
       // speaker persona) so she owns a confirmed session + onboarding tasks.
       const submitter = speakerUsers[idx % speakerUsers.length] ?? speakerUsers[1];
       const catKey = catKeys[idx % catKeys.length];
-      const fmt = idx % FORMATS.length;
-      const title = `${TITLE_PREFIX[idx % TITLE_PREFIX.length]} ${TITLE_SUBJECT[(idx * 3) % TITLE_SUBJECT.length]}`;
+      // Format must NOT key off `idx % 4` — the category already does, so the
+      // two moved in lockstep and every Security & Trust proposal was a
+      // ten-minute lightning talk while every Product one was a 90-minute
+      // workshop. Stepping once per group of four decorrelates them, so all
+      // sixteen category/format pairs appear.
+      const fmt = demoFormatIndex(idx);
+      const talk = DEMO_TALKS[idx % DEMO_TALKS.length];
+      const title = talk.title;
       const isDecided = bucket.status === "ACCEPTED" || bucket.status === "REJECTED";
       const isSubmitted = bucket.status !== "DRAFT";
       const submittedAt = isSubmitted ? new Date(2026, 1, 1 + (idx % 20), 9, 0, 0) : null;
@@ -579,7 +948,7 @@ async function seedWithin(
           formConfigId: cfp.id,
           submitterId: submitter.id,
           title,
-          abstract: `A practical, example-driven session on ${TITLE_SUBJECT[(idx * 3) % TITLE_SUBJECT.length].toLowerCase()}. Attendees leave with patterns they can apply on Monday.`,
+          abstract: `A practical, example-driven session on ${talk.topic}. Attendees leave with patterns they can apply on Monday.`,
           format: FORMATS[fmt],
           durationMinutes: DURATIONS[fmt],
           categoryId: categoryIds[catKey],
@@ -613,10 +982,15 @@ async function seedWithin(
   });
 
   const reviewed = abstracts.filter((a) => ["UNDER_REVIEW", "ACCEPTED", "REJECTED"].includes(a.status));
+  // `abstracts` is built in `STATUS_PLAN` order, so the decided rows come
+  // first and in the same order as `DEMO_REVIEW_PROFILES`: twelve ACCEPTED,
+  // then eight REJECTED, then the UNDER_REVIEW ones, which score nothing.
+  let decidedIndex = 0;
   for (const a of reviewed) {
     const teamKey = CATEGORIES.find((c) => c.key === a.categoryKey)?.teamKey ?? null;
     const decided = a.status !== "UNDER_REVIEW";
-    for (const evalId of evaluatorIds) {
+    const profile = decided ? DEMO_REVIEW_PROFILES[decidedIndex % DEMO_REVIEW_PROFILES.length] : null;
+    for (const [ei, evalId] of evaluatorIds.entries()) {
       await db.reviewAssignment.create({
         data: {
           planId: plan.id, abstractId: a.id, evaluatorId: evalId, teamKey,
@@ -624,18 +998,20 @@ async function seedWithin(
           completedAt: decided ? new Date("2026-03-15T00:00:00.000Z") : null,
         },
       });
-      if (decided) {
-        // Accepted abstracts score higher than rejected.
-        const base = a.status === "ACCEPTED" ? 4 : 2;
+      if (profile) {
+        const scores = profile[ei % profile.length];
+        // One comment per reviewer, on the first rubric row, matched to what
+        // that reviewer actually scored.
+        const comment = demoReviewComment(scores, decidedIndex, ei);
         for (const [ri, key] of RUBRIC_KEYS.entries()) {
-          const score = Math.min(5, Math.max(1, base + ((ri + evaluatorIds.indexOf(evalId)) % 2)));
           await db.reviewScore.create({
-            data: { planId: plan.id, abstractId: a.id, evaluatorId: evalId, rubricKey: key, score,
-              comment: ri === 0 ? (a.status === "ACCEPTED" ? "Strong fit, clear takeaways." : "Interesting but needs sharper focus.") : null },
+            data: { planId: plan.id, abstractId: a.id, evaluatorId: evalId, rubricKey: key, score: scores[ri],
+              comment: ri === 0 ? comment : null },
           });
         }
       }
     }
+    if (decided) decidedIndex++;
   }
 
   // --- 10. Sessions (accepted -> session) + one guaranteed keynote ----------
@@ -656,40 +1032,31 @@ async function seedWithin(
     data: {
       eventId, title: "Opening Keynote: The Next Decade of Developer Experience",
       description: "Invited keynote (guaranteed session, no source abstract).",
-      format: "Keynote (45 min)", durationMinutes: 45,
-      speakers: { create: [{ userId: speakerUsers[3].id, isPrimary: true }] },
+      format: `Keynote (${KEYNOTE_DURATION_MINUTES} min)`, durationMinutes: KEYNOTE_DURATION_MINUTES,
+      speakers: { create: [{ userId: speakerUsers[KEYNOTE_SPEAKER_POOL_INDEX].id, isPrimary: true }] },
     },
   });
-  sessions.unshift({ id: keynote.id, title: keynote.title, durationMinutes: 45, primarySpeakerId: speakerUsers[3].id });
+  sessions.unshift({
+    id: keynote.id, title: keynote.title, durationMinutes: KEYNOTE_DURATION_MINUTES,
+    primarySpeakerId: speakerUsers[KEYNOTE_SPEAKER_POOL_INDEX].id,
+  });
 
-  // --- 11. Schedule most sessions; leave a DELIBERATE room conflict ---------
-  const day1 = "2026-05-12";
-  const day2 = "2026-05-13";
-  const roomOrder = [roomIds["ballroom"], roomIds["hall-a"], roomIds["hall-b"], roomIds["lab"]];
-  const trackOrder = [trackIds["mainstage"], trackIds["deepdive"], trackIds["deepdive"], trackIds["workshops"]];
-  const startHours = [9, 10, 11, 13, 14, 15];
-
-  const toSchedule = sessions.slice(0, 10);
-  let slotIdx = 0;
-  for (const s of toSchedule) {
-    const day = slotIdx < 6 ? day1 : day2;
-    const roomI = slotIdx % roomOrder.length;
-    const hour = startHours[slotIdx % startHours.length];
-    const startsAtSlot = new Date(zonedToUtcIso(day, `${String(hour).padStart(2, "0")}:00`, DEMO_EVENT.timezone));
+  // --- 11. Schedule 11 of the 13 sessions, across all three days ------------
+  // The geometry lives in `demoSchedulePlan()` so it can be checked for room
+  // and speaker overlaps without a database; this loop only resolves ids and
+  // converts each event-local day/hour to a UTC instant.
+  for (const placement of demoSchedulePlan()) {
+    const s = sessions[placement.sessionIndex];
+    if (!s) continue;
+    const startsAtSlot = new Date(
+      zonedToUtcIso(placement.day, `${String(placement.hour).padStart(2, "0")}:00`, DEMO_EVENT.timezone),
+    );
     const endsAtSlot = new Date(startsAtSlot.getTime() + s.durationMinutes * 60_000);
     await db.scheduleSlot.create({
-      data: { eventId, sessionId: s.id, roomId: roomOrder[roomI], trackId: trackOrder[roomI], startsAt: startsAtSlot, endsAt: endsAtSlot },
-    });
-    slotIdx++;
-  }
-  // Deliberate conflict: schedule one more session in the SAME room + time as the first slot.
-  if (sessions.length > 10) {
-    const conflictStart = new Date(zonedToUtcIso(day1, "09:00", DEMO_EVENT.timezone));
-    const conflicting = sessions[10];
-    await db.scheduleSlot.create({
       data: {
-        eventId, sessionId: conflicting.id, roomId: roomOrder[0], trackId: trackOrder[0],
-        startsAt: conflictStart, endsAt: new Date(conflictStart.getTime() + conflicting.durationMinutes * 60_000),
+        eventId, sessionId: s.id,
+        roomId: roomIds[placement.roomKey], trackId: trackIds[placement.trackKey],
+        startsAt: startsAtSlot, endsAt: endsAtSlot,
       },
     });
   }
