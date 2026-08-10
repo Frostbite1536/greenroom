@@ -2395,6 +2395,130 @@ try {
   check("every agenda slot chip clears 4.5:1 contrast", badChips.length === 0,
     badChips.join(" | ") || "none");
 
+  // --- ABS-12: an evaluator declares a conflict of interest ----------------
+  // Its own abstract and assignment, created here rather than reusing a queue
+  // row whose counts an earlier section already asserted.
+  const conflictAbstract = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID, formConfigId: fx.form.id, submitterId: fx.users.speaker,
+      title: "Scratch: Conflict of interest", abstract: "A proposal from a close colleague.",
+      format: "Talk", durationMinutes: 30, categoryId: fx.category.id,
+      status: "UNDER_REVIEW", submittedAt: new Date(),
+      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.reviewAssignment.create({
+    data: {
+      planId: fx.plan.id, abstractId: conflictAbstract.id,
+      evaluatorId: fx.users.evaluator, teamKey: "team-ai", status: "ASSIGNED",
+    },
+  });
+
+  // The queue size the reviewer is measured against, before and after.
+  const queueDenominator = (html) => {
+    const match = /(\d+) of (\d+) reviewable proposal/.exec(renderedText(html) ?? "");
+    return match ? Number(match[2]) : null;
+  };
+  const conflictBefore = await req("GET", "/admin/evaluations", null, evaluator);
+  const denominatorBefore = queueDenominator(conflictBefore.text);
+  check("the new assignment counts towards the reviewer's queue before the declaration",
+    conflictBefore.status === 200 && denominatorBefore !== null
+    && conflictBefore.text.includes("Scratch: Conflict of interest"),
+    `denominator=${denominatorBefore}`);
+  check("an open assignment offers the declare-a-conflict control",
+    conflictBefore.text.includes("Declare a conflict"));
+
+  // The reviewer's finished work on another proposal, captured to prove the
+  // declaration leaves it exactly as it was.
+  const completedBefore = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  const scoresBefore = await prisma.reviewScore.count({
+    where: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator },
+  });
+
+  const declare = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: conflictAbstract.id,
+  }, evaluator);
+  check("an evaluator can declare a conflict on their own assignment → 200",
+    declare.status === 200 && declare.data?.data?.status === "DECLINED",
+    `${declare.status} ${JSON.stringify(declare.data?.error ?? declare.data?.data ?? "")}`);
+
+  const declaredRow = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: conflictAbstract.id, evaluatorId: fx.users.evaluator,
+      },
+    },
+    select: { status: true },
+  });
+  check("the declaration writes the existing DECLINED assignment status",
+    declaredRow?.status === "DECLINED", declaredRow?.status ?? "missing");
+
+  const conflictAfter = await req("GET", "/admin/evaluations", null, evaluator);
+  const denominatorAfter = queueDenominator(conflictAfter.text);
+  check("the declined assignment leaves the reviewer's active queue",
+    denominatorAfter !== null && denominatorBefore !== null
+    && denominatorAfter === denominatorBefore - 1,
+    `before=${denominatorBefore} after=${denominatorAfter}`);
+  check("the declined row reports an honest completed state, not a bare status",
+    conflictAfter.text.includes("Conflict declared")
+    && renderedText(conflictAfter.text).includes("You declared a conflict of interest"));
+
+  // Nothing about the reviewer's finished review may move.
+  const completedAfter = await prisma.reviewAssignment.findUnique({
+    where: {
+      planId_abstractId_evaluatorId: {
+        planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator,
+      },
+    },
+    select: { status: true, completedAt: true },
+  });
+  const scoresAfter = await prisma.reviewScore.count({
+    where: { planId: fx.plan.id, abstractId: fx.abstract.id, evaluatorId: fx.users.evaluator },
+  });
+  check("a completed review elsewhere is untouched by the declaration",
+    completedBefore?.status === "COMPLETED"
+    && completedAfter?.status === "COMPLETED"
+    && String(completedAfter?.completedAt) === String(completedBefore?.completedAt)
+    && scoresAfter === scoresBefore && scoresBefore > 0,
+    `status ${completedBefore?.status}→${completedAfter?.status}, scores ${scoresBefore}→${scoresAfter}`);
+
+  // The refusals: the same rule the button uses, enforced server-side.
+  const declareAgain = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: conflictAbstract.id,
+  }, evaluator);
+  check("declaring the same conflict twice is refused → 409",
+    declareAgain.status === 409 && declareAgain.data?.error?.code === "CONFLICT_ALREADY_DECLARED",
+    `${declareAgain.status} ${declareAgain.data?.error?.code ?? "none"}`);
+
+  const declareCompleted = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: fx.abstract.id,
+  }, evaluator);
+  check("a submitted review cannot be self-declined away → 409",
+    declareCompleted.status === 409
+    && declareCompleted.data?.error?.code === "REVIEW_ALREADY_SUBMITTED",
+    `${declareCompleted.status} ${declareCompleted.data?.error?.code ?? "none"}`);
+
+  const declareUnassigned = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: fx.maybeSetupAbstract.id,
+  }, evaluator);
+  check("a proposal assigned to somebody else cannot be declined → 403",
+    declareUnassigned.status === 403 && declareUnassigned.data?.error?.code === "NOT_ASSIGNED",
+    `${declareUnassigned.status} ${declareUnassigned.data?.error?.code ?? "none"}`);
+
+  const declareAsSpeaker = await req("POST", "/api/evaluations/assignments/decline", {
+    planId: fx.plan.id, abstractId: conflictAbstract.id,
+  }, { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "EVALUATOR" });
+  check("a speaker cannot reach the decline path even with a forged role claim",
+    declareAsSpeaker.status === 401 || declareAsSpeaker.status === 403,
+    `got ${declareAsSpeaker.status}`);
+
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data
   // read races the layout's requireSession(), so the read has to redirect too.
