@@ -4118,7 +4118,10 @@ try {
     loginPageResponse.status === 200 &&
       loginHtml.includes('action="/api/auth/login"') &&
       loginHtml.includes('name="email"') && loginHtml.includes('name="password"') &&
-      loginHtml.includes('autocomplete="username"') && loginHtml.includes('autocomplete="current-password"') &&
+      // Case-insensitive: the served markup preserves JSX camelCase
+      // (autoComplete=), which browsers parse identically — attribute names
+      // are ASCII case-insensitive in HTML.
+      /autocomplete="username"/i.test(loginHtml) && /autocomplete="current-password"/i.test(loginHtml) &&
       (loginHtml.match(/name="persona"/g) || []).length === 3 &&
       /No password required\./.test(loginHtml) &&
       /Organizers provision accounts\./.test(loginHtml) &&
