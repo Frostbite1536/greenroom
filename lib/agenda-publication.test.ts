@@ -116,9 +116,46 @@ test("both v1 reads gate the programme on PUBLISHED, counts included", () => {
   // The same bound object drives eligibility and the appearance count, so an
   // unpublished talk can neither surface a speaker nor be counted for them.
   assert.deepEqual(speakers.match(/eventSessionSpeakers/g)?.length, 3);
-  // The submission half is deliberately untouched: `contentStatus` says nothing
-  // about an abstract, and gating it there would hide real submissions.
-  assert.match(speakers, /const eventAbstractSpeakers = \{ abstract: \{ eventId: event\.id \} \}/);
+});
+
+/**
+ * The submission branch is gated too, and by the *linked session* rather than
+ * by the abstract's own status.
+ *
+ * This replaces a boundary I recorded the wrong way round. I had argued a
+ * submission was a separate disclosure axis from a published programme; it is
+ * not, when the submission's talk is the thing that was held back. An organizer
+ * unpublishing a surprise keynote whose speaker has no other appearance was
+ * still finding them listed here, with zero counted appearances — the absence
+ * itself pointing at what was hidden.
+ */
+test("the v1 submission branch qualifies a speaker only by their linked session", () => {
+  const speakers = source("app/api/v1/speakers/route.ts");
+  // No linked Session at all — accepted-but-unconverted, or still under review.
+  // Nothing was withheld because nothing was ever published, so this is the
+  // participation case the branch exists for and it stays listed.
+  assert.match(speakers, /\{ session: \{ is: null \} \}/);
+  // Or a linked Session that is published.
+  assert.match(speakers, /\{ session: \{ is: \{ contentStatus: "PUBLISHED" as const \} \} \}/);
+  // Expressed in the same shared object as the session branch, so eligibility
+  // and the appearance count can never diverge.
+  assert.match(speakers, /const eventAbstractSpeakers = \{\s*\n\s*abstract: \{/);
+  assert.deepEqual(speakers.match(/eventAbstractSpeakers/g)?.length, 3);
+  // The abstract's own status is deliberately NOT the gate: a rejected or
+  // withdrawn submission is a different question, owned elsewhere.
+  assert.doesNotMatch(speakers, /abstract: \{[\s\S]{0,200}status:/);
+});
+
+test("the public speaker gallery has no submission branch to gate", () => {
+  // Checked, not assumed: `getPublicSpeakers` derives eligibility from
+  // `sessionSpeakers` alone, so the linked-session rule has nothing to attach
+  // to there — it is already session-gated end to end. If an abstract branch is
+  // ever added, this assertion fails and sends the author to the rule above.
+  const reads = source("lib/data/reads.ts");
+  const publicSpeakers = reads.slice(reads.indexOf("export const getPublicSpeakers"));
+  const body = publicSpeakers.slice(0, publicSpeakers.indexOf("\nexport "));
+  assert.doesNotMatch(body, /abstractSpeakers/);
+  assert.match(body, /contentStatus: "PUBLISHED"/);
 });
 
 test("the reads this slice deliberately leaves on the old contract are still unguarded", () => {

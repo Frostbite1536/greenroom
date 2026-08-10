@@ -3992,9 +3992,47 @@ try {
       && !v1ScheduleUnpublished.data?.data?.some((row) => row.session?.id === sessionId)
       && v1ScheduleUnpublished.data?.meta?.total === v1ScheduleUnpublished.data?.data?.length,
     JSON.stringify(v1ScheduleUnpublished.data?.meta ?? "none"));
+  // The control for the submission branch: an ACCEPTED proposal that was never
+  // converted, so it has no linked Session at all. Nothing about it was ever
+  // published, so nothing about it is being withheld — this speaker must stay
+  // listed, which is the participation case that branch exists for. Written
+  // directly because the CFP form's own window is not the thing under test.
+  const sessionlessUser = await prisma.user.upsert({
+    where: { email: "sessionless@x.com" },
+    update: {},
+    create: { email: "sessionless@x.com", name: "Sessionless One" },
+    select: { id: true },
+  });
+  await prisma.abstract.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      formConfigId: formId,
+      submitterId: sessionlessUser.id,
+      title: "Accepted but never converted",
+      status: "ACCEPTED",
+      submittedAt: new Date(),
+      decidedAt: new Date(),
+      speakers: { create: [{ userId: sessionlessUser.id, isPrimary: true }] },
+    },
+    select: { id: true },
+  });
+  check("T3 setup: an accepted proposal with no linked session exists",
+    await prisma.session.count({ where: { sourceAbstract: { is: { title: "Accepted but never converted" } } } }) === 0);
+
   const v1SpeakersUnpublished = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
   const sessionAppearances = (payload) =>
     payload.data?.data?.find((row) => row.email === "spk@x.com")?.appearances?.sessions ?? null;
+  const v1SpeakerEmails = (payload) => (payload.data?.data ?? []).map((row) => row.email);
+  // `co@x.com` is a co-speaker on this one proposal and nothing else, so the
+  // unpublished talk is their only appearance. Before the submission branch
+  // carried the same rule they stayed listed here with zero counted
+  // appearances — the absence itself pointing at what had been hidden.
+  check("T3 a speaker whose only talk is unpublished is not listed at all",
+    !v1SpeakerEmails(v1SpeakersUnpublished).includes("co@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersUnpublished)));
+  check("T3 a speaker whose proposal never became a talk is still listed",
+    v1SpeakerEmails(v1SpeakersUnpublished).includes("sessionless@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersUnpublished)));
 
   const publishAnon = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" });
   check("T3 anonymous callers cannot publish a talk", publishAnon.status === 401, publishAnon.status);
@@ -4034,6 +4072,11 @@ try {
     sessionAppearances(v1SpeakersUnpublished) !== null
       && sessionAppearances(v1SpeakersRepublished) === sessionAppearances(v1SpeakersUnpublished) + 1,
     `${sessionAppearances(v1SpeakersUnpublished)} → ${sessionAppearances(v1SpeakersRepublished)}`);
+  check("T3 publishing lists the co-speaker again, through both branches",
+    v1SpeakerEmails(v1SpeakersRepublished).includes("co@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersRepublished)));
+  check("T3 the session-less speaker was never affected either way",
+    v1SpeakerEmails(v1SpeakersRepublished).includes("sessionless@x.com"));
   const unpublishAgain = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "DRAFT" }, admin);
   check("T3 the rejected talk is left off the public programme",
     unpublishAgain.status === 200 && unpublishAgain.data?.data?.contentStatus === "DRAFT",
