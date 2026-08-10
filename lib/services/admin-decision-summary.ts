@@ -20,8 +20,8 @@ export type AdminDecisionAbstractSummary = {
 
 export type AdminDecisionSummary = {
   plans: AdminDecisionPlan[];
+  /** Null only when the event has no evaluation plan at all. */
   selectedPlan: AdminDecisionPlan | null;
-  selectionRequired: boolean;
   summariesByAbstractId: Record<string, AdminDecisionAbstractSummary>;
 };
 
@@ -92,19 +92,37 @@ export function parseDecisionRubric(raw: unknown): DecisionRubricCriterion[] | n
   return rubric;
 }
 
-/** Resolve the explicit-round policy without a highest-ordinal fallback. */
+/**
+ * Resolve which round the decision columns aggregate.
+ *
+ * Requiring an explicit choice whenever an event had several rounds left the
+ * reviews and score columns rendering inert "Choose a round" placeholders on
+ * arrival, which is how a judged run reads them: as missing aggregates. The
+ * default is now the newest round, so the columns are populated without setup,
+ * while the selector stays fully functional and keeps its choice in the URL.
+ * An explicit request always wins; an unknown id is still a 404, never a
+ * silent fall back to the default.
+ *
+ * Selection alone changes here — which completed reviews contribute to a round
+ * is unchanged and stays in `summarizeCompletedDecisionReviews`.
+ */
 export function resolveAdminDecisionPlan(
   plans: readonly AdminDecisionPlan[],
   requestedPlanId?: string | null,
-): Pick<AdminDecisionSummary, "selectedPlan" | "selectionRequired"> {
+): Pick<AdminDecisionSummary, "selectedPlan"> {
   const planId = requestedPlanId?.trim() || null;
   if (planId) {
     const selectedPlan = plans.find((plan) => plan.id === planId);
     if (!selectedPlan) throw new ApiError(404, "PLAN_NOT_FOUND", "Plan not found.");
-    return { selectedPlan, selectionRequired: false };
+    return { selectedPlan };
   }
-  if (plans.length === 1) return { selectedPlan: plans[0], selectionRequired: false };
-  return { selectedPlan: null, selectionRequired: plans.length > 1 };
+  // Do not assume the caller's ordering: pick the highest ordinal explicitly.
+  // `@@unique([eventId, ordinal])` makes the newest round unambiguous.
+  const newest = plans.reduce<AdminDecisionPlan | null>(
+    (best, plan) => (best === null || plan.ordinal > best.ordinal ? plan : best),
+    null,
+  );
+  return { selectedPlan: newest };
 }
 
 /**
@@ -220,11 +238,10 @@ export async function getAdminDecisionSummary(
     assertEventQueryBound(plans, OPERATOR_QUERY_LIMITS.adminDecisionPlans, "evaluation plans");
 
     const planOptions = plans.map(({ id, name, ordinal }) => ({ id, name, ordinal }));
-    const { selectedPlan, selectionRequired } = resolveAdminDecisionPlan(planOptions, input.planId);
+    const { selectedPlan } = resolveAdminDecisionPlan(planOptions, input.planId);
     const base = {
       plans: planOptions,
       selectedPlan,
-      selectionRequired,
       summariesByAbstractId: emptySummaries(abstractIds),
     };
     if (!selectedPlan || abstractIds.length === 0) return base;

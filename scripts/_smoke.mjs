@@ -1283,8 +1283,7 @@ try {
     list.status === 200 &&
       list.data?.data?.abstracts?.some((item) => item.id === abstractId) &&
       list.data?.data?.decisionSummary?.plans?.length === 0 &&
-      list.data?.data?.decisionSummary?.selectedPlan === null &&
-      list.data?.data?.decisionSummary?.selectionRequired === false,
+      list.data?.data?.decisionSummary?.selectedPlan === null,
     list.status,
   );
   const evaluatorGlobalAbstracts = await j("GET", "/api/cfp/submissions?status=SUBMITTED", null, evalr);
@@ -1307,7 +1306,6 @@ try {
     "C15 exactly one plan auto-selects without a numeric score before review",
     onePlanList.status === 200 &&
       onePlanList.data?.data?.decisionSummary?.selectedPlan?.id === planId &&
-      onePlanList.data?.data?.decisionSummary?.selectionRequired === false &&
       onePlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === null,
     onePlanList.status,
   );
@@ -2177,14 +2175,14 @@ try {
   }, evalr);
   const multiplePlanList = await j("GET", "/api/cfp/submissions", null, admin);
   check(
-    "C15 multiple plans require an explicit selection and return no numeric decision",
+    "C15 multiple plans default to the newest round's completed weighted decision",
     blindDecisionScore.status === 200 &&
       multiplePlanList.status === 200 &&
       multiplePlanList.data?.data?.decisionSummary?.plans?.map((plan) => plan.id).join(",") ===
         [planId, blindDecisionPlan.id].join(",") &&
-      multiplePlanList.data?.data?.decisionSummary?.selectedPlan === null &&
-      multiplePlanList.data?.data?.decisionSummary?.selectionRequired === true &&
-      multiplePlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === null,
+      multiplePlanList.data?.data?.decisionSummary?.selectedPlan?.id === blindDecisionPlan.id &&
+      !Object.hasOwn(multiplePlanList.data?.data?.decisionSummary ?? {}, "selectionRequired") &&
+      multiplePlanList.data?.data?.decisionSummary?.summariesByAbstractId?.[abstractId]?.weightedAverage === 3,
     multiplePlanList.status,
   );
   const selectedBlindPlanList = await j("GET", `/api/cfp/submissions?planId=${blindDecisionPlan.id}`, null, admin);

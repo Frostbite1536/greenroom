@@ -18,23 +18,17 @@ const rubric = [
   { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 1 },
 ];
 
-test("decision summary only auto-selects one plan and requires an explicit multi-plan choice", () => {
-  assert.deepEqual(resolveAdminDecisionPlan([], undefined), {
-    selectedPlan: null,
-    selectionRequired: false,
-  });
-  assert.deepEqual(resolveAdminDecisionPlan([plans[0]], undefined), {
-    selectedPlan: plans[0],
-    selectionRequired: false,
-  });
-  assert.deepEqual(resolveAdminDecisionPlan(plans, undefined), {
-    selectedPlan: null,
-    selectionRequired: true,
-  });
-  assert.deepEqual(resolveAdminDecisionPlan(plans, "plan-2"), {
+test("decision summary defaults to the newest round and honours an explicit choice", () => {
+  assert.deepEqual(resolveAdminDecisionPlan([], undefined), { selectedPlan: null });
+  assert.deepEqual(resolveAdminDecisionPlan([plans[0]], undefined), { selectedPlan: plans[0] });
+  // Several rounds no longer render inert placeholders: the newest is shown.
+  assert.deepEqual(resolveAdminDecisionPlan(plans, undefined), { selectedPlan: plans[1] });
+  // The newest round is the highest ordinal, not the last argument.
+  assert.deepEqual(resolveAdminDecisionPlan([plans[1], plans[0]], undefined), {
     selectedPlan: plans[1],
-    selectionRequired: false,
   });
+  assert.deepEqual(resolveAdminDecisionPlan(plans, "plan-1"), { selectedPlan: plans[0] });
+  assert.deepEqual(resolveAdminDecisionPlan(plans, "  "), { selectedPlan: plans[1] });
   assert.throws(
     () => resolveAdminDecisionPlan(plans, "other-event-plan"),
     (error: unknown) =>
