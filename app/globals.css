@@ -68,6 +68,26 @@ button { letter-spacing: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .logout-form { margin-left: auto; }
 
+/* ---- C16 "Submit a talk" entry (D-C5-3) ---- */
+/* Lives in globals so every entry surface — workspace shell, speaker portal,
+   portal resources, and the public landing page — renders it identically
+   without depending on a per-page stylesheet import. */
+.nav-cfp { display: grid; gap: 3px; margin-top: 14px; padding-top: 12px; border-top: 1px solid #394446; }
+.nav-static { margin: 0; color: #9fabad; cursor: default; }
+.nav-static:hover { background: none; }
+
+.open-cfp { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 10px; align-content: start; }
+.open-cfp-heading { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--ink); }
+.open-cfp-empty, .open-cfp-meta { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.open-cfp-cta { min-height: 38px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--brand-strong); border-radius: 5px; background: var(--brand); color: #ffffff; font-size: 13.5px; font-weight: 600; }
+.open-cfp-cta:hover, .open-cfp-cta:focus-visible { background: var(--brand-strong); }
+.open-cfp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.open-cfp-list li { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; }
+.open-cfp-choice { min-height: 24px; display: inline-flex; align-items: center; gap: 7px; color: var(--brand-strong); font-size: 13.5px; font-weight: 600; }
+.open-cfp-choice:hover, .open-cfp-choice:focus-visible { text-decoration: underline; }
+.open-cfp-compact { padding: 14px 16px; border-radius: 8px; }
+.open-cfp-compact .open-cfp-heading { font-size: 14px; }
+
 .login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--canvas); padding: 24px; }
 .login-card { width: 100%; max-width: 420px; background: var(--surface, white); border: 1px solid var(--line); border-radius: var(--radius, 8px); padding: 32px 28px; display: flex; flex-direction: column; gap: 14px; }
 .login-brand { pointer-events: none; }
@@ -89,6 +109,8 @@ button { letter-spacing: 0; }
   .mobile-nav-panel nav { display: grid; gap: 3px; }
   .mobile-nav-link { min-height: 42px; padding: 0 10px; display: flex; align-items: center; border-radius: 5px; color: #c7d0d0; font-size: 14px; }
   .mobile-nav-link:hover, .mobile-nav-link:focus-visible { color: white; background: #303b3d; outline: none; }
+  .mobile-nav-static { margin: 0; color: #9fabad; cursor: default; }
+  .mobile-nav-static:hover { background: none; }
   .main-content { padding: 22px 16px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .primary-button { width: 100%; }

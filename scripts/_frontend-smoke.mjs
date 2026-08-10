@@ -1691,6 +1691,79 @@ try {
     && s20NormalDrawer.text.includes("S20 normal answer value")
     && !s20NormalDrawer.text.includes("Its answers are unavailable rather than partially shown."));
 
+  // --- C16: "Submit a talk" discoverability (D-C5-3) -----------------------
+  // The scratch event has TWO open published forms by this point (the windowed
+  // "Scratch CFP" and the window-less "S2 Unique Legacy CFP"), plus one
+  // unpublished form. That is the `many` state: every open call must be listed,
+  // ordered closesAt-ascending with nulls last, and none may be silently chosen.
+  const c16LegacyPath = `/cfp/${EVENT_ID}/${s2UniqueLegacyForm.slug}`;
+  const c16UnpublishedPath = `/cfp/${EVENT_ID}/${s2UnpublishedForm.slug}`;
+  const c16Portal = await req("GET", "/portal", null, speaker);
+  const c16PortalText = renderedText(c16Portal.text) ?? "";
+  check("C16 speaker portal renders → 200", c16Portal.status === 200, `got ${c16Portal.status}`);
+  check("C16 nav offers a Submit a talk entry per open call",
+    c16Portal.text.includes("Submit a talk: Scratch CFP")
+    && c16Portal.text.includes(`Submit a talk: ${s2UniqueLegacyForm.name}`)
+    && c16Portal.text.includes(`href="${canonicalCfpPath}"`)
+    && c16Portal.text.includes(`href="${c16LegacyPath}"`));
+  check("C16 chooser lists every open call and never collapses to one",
+    c16PortalText.includes("Choose which call for proposals you want to submit to.")
+    && !c16PortalText.includes("There is no open call for proposals"));
+  check("C16 chooser order is closesAt ascending with nulls last",
+    c16Portal.text.indexOf(`href="${canonicalCfpPath}"`) < c16Portal.text.indexOf(`href="${c16LegacyPath}"`));
+  check("C16 never exposes an unpublished form",
+    !c16Portal.text.includes(c16UnpublishedPath) && !c16Portal.text.includes(s2UnpublishedForm.name));
+
+  const c16Resource = await prisma.resourceWiki.create({
+    data: {
+      eventId: EVENT_ID,
+      slug: "c16-speaker-handbook",
+      title: "C16 Speaker Handbook",
+      summary: "Logistics for confirmed speakers.",
+      htmlContent: "<p>Arrive thirty minutes early.</p>",
+      published: true,
+    },
+  });
+  const c16ResourcePage = await req("GET", `/portal/resources/${c16Resource.slug}`, null, speaker);
+  check("C16 resource page carries the same entry", c16ResourcePage.status === 200
+    && c16ResourcePage.text.includes(c16Resource.title)
+    && c16ResourcePage.text.includes(`href="${canonicalCfpPath}"`)
+    && c16ResourcePage.text.includes(`href="${c16LegacyPath}"`), `got ${c16ResourcePage.status}`);
+
+  // Zero open calls: the entry stays visible and honest instead of vanishing or
+  // linking nowhere. The fresh event has no forms at all.
+  const c16FreshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
+  const c16Zero = await req("GET", "/portal", null, c16FreshAdmin);
+  const c16ZeroText = renderedText(c16Zero.text) ?? "";
+  check("C16 zero open calls renders an honest visible state", c16Zero.status === 200
+    && c16ZeroText.includes("No open call for proposals")
+    && c16ZeroText.includes("There is no open call for proposals for Scratch Fresh right now."),
+    `got ${c16Zero.status}`);
+  check("C16 zero open calls offers no CFP link at all", !/href="\/cfp\//.test(c16Zero.text));
+
+  // Exactly one open call: a direct link, no chooser.
+  const c16OnlyForm = await prisma.formConfig.create({
+    data: {
+      eventId: FRESH_EVENT_ID,
+      name: "Fresh Only CFP",
+      slug: "fresh-only-cfp",
+      published: true,
+      minSpeakers: 1,
+      maxSpeakers: 1,
+      closesAt: new Date(Date.now() + 7 * 86400000),
+    },
+  });
+  const c16OnlyPath = `/cfp/${FRESH_EVENT_ID}/${c16OnlyForm.slug}`;
+  const c16One = await req("GET", "/portal", null, c16FreshAdmin);
+  const c16OneText = renderedText(c16One.text) ?? "";
+  check("C16 exactly one open call links straight to the canonical path",
+    c16One.status === 200
+    && c16One.text.includes(`href="${c16OnlyPath}"`)
+    && c16OneText.includes(`Submit to ${c16OnlyForm.name}`), `got ${c16One.status}`);
+  check("C16 a single open call shows no chooser and no empty state",
+    !c16OneText.includes("Choose which call for proposals you want to submit to.")
+    && !c16OneText.includes("No open call for proposals"));
+
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
   // has its own unit tests, so re-using it here would only prove it agrees with
