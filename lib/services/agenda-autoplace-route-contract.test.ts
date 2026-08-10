@@ -272,6 +272,41 @@ test("the event row is locked FOR SHARE, which is what the settings PATCH confli
   assert.ok(lock.indexOf("lockEventForShare") < lock.indexOf("lockScheduleRoomsForShare"));
 });
 
+/**
+ * The no-cycle argument for taking Event first rests on a claim about every
+ * writer that locks the row, so it is asserted over all of them rather than
+ * described. Event-before-its-children is an existing convention here; apply
+ * joins it rather than inventing a position.
+ */
+test("every Event locker takes that row before the resources it scopes", () => {
+  const speakers = source("app/api/admin/speakers/route.ts");
+  const speakersPost = speakers.slice(speakers.indexOf("export const POST"));
+  assert.match(speakersPost, /SELECT "id" FROM "Event" WHERE "id" = \$\{ctx\.eventId\} FOR SHARE/);
+  assert.ok(
+    speakersPost.indexOf('FROM "Event"') < speakersPost.indexOf("lockPublicSubmissionIdentities"),
+    "the speaker writer locks Event before its identity locks",
+  );
+
+  const invites = source("app/api/evaluations/reviewer-invites/route.ts");
+  const invitesPost = invites.slice(invites.indexOf("export const POST"));
+  assert.match(invitesPost, /SELECT "id", "name", "slug" FROM "Event" WHERE "id" = \$\{ctx\.eventId\} FOR SHARE/);
+  assert.ok(
+    invitesPost.indexOf('FROM "Event"') < invitesPost.indexOf("lockPublicSubmissionIdentities"),
+    "the reviewer-invite writer locks Event before its identity locks",
+  );
+
+  // The only exclusive taker holds Event alone, so it can never wait on a class
+  // this path holds while this path waits on Event.
+  const settings = source("app/api/admin/settings/route.ts");
+  const settingsPatch = settings.slice(settings.indexOf("export const PATCH"));
+  assert.equal((settingsPatch.match(/FOR UPDATE/g) ?? []).length, 1);
+  assert.doesNotMatch(settingsPatch, /lock[A-Z]/);
+
+  // ...and the room writers take Room alone, never Event.
+  const rooms = source("app/api/admin/settings/rooms/route.ts");
+  assert.doesNotMatch(rooms, /FROM "Event"/);
+});
+
 test("every schedule lock read is ordinally ordered and row-locked", () => {
   const lock = source(LOCK);
   assert.match(lock, /pg_advisory_xact_lock\(hashtextextended\(\$\{key\}, 0\)\)/);
