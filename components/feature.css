@@ -283,6 +283,27 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .speaker-session-link { display: flex; align-items: flex-start; gap: 6px; min-width: 0; overflow-wrap: anywhere; color: var(--brand); font-size: 12.5px; font-weight: 500; line-height: 1.35; }
 .speaker-session-link svg { flex: 0 0 auto; margin-top: 1px; }
 .speaker-session-link:hover { text-decoration: underline; }
+.speaker-search-submit { white-space: nowrap; }
+.speaker-session-when { display: block; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.speaker-detail { margin-top: 10px; }
+.speaker-detail > summary { display: inline-block; cursor: pointer; list-style: none; color: var(--brand-strong); font-size: 12px; font-weight: 600; text-decoration: underline; }
+.speaker-detail > summary::-webkit-details-marker { display: none; }
+.speaker-detail > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+.speaker-detail-close { display: none; }
+.speaker-detail[open] > summary .speaker-detail-open { display: none; }
+.speaker-detail[open] > summary .speaker-detail-close { display: inline; }
+.speaker-detail-body { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.speaker-detail-bio { margin: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; }
+.speaker-detail-missing { color: var(--muted); font-style: italic; }
+.speaker-detail-facts { display: grid; gap: 6px; margin: 10px 0 0; font-size: 12px; }
+.speaker-detail-facts > div { display: grid; grid-template-columns: 70px 1fr; gap: 8px; }
+.speaker-detail-facts dt { color: var(--muted); }
+.speaker-detail-facts dd { margin: 0; overflow-wrap: anywhere; color: var(--ink); }
+.speaker-detail-sessions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.speaker-detail-sessions a { color: var(--brand); font-weight: 500; }
+.speaker-detail-sessions a:hover { text-decoration: underline; }
+.speaker-detail-track { display: block; color: var(--ink); font-size: 11.5px; }
+.speaker-detail-when { display: block; color: var(--muted); font-size: 11.5px; }
 .speaker-clear-filters { margin-top: 8px; }
 .speaker-empty-state { display: grid; place-items: center; padding-bottom: 44px; }
 .speaker-empty-state .empty-state { padding-bottom: 4px; }

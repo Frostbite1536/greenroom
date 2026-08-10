@@ -4,34 +4,14 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Mic2, Search, Users } from "lucide-react";
 import type { PublicSpeaker, PublicSpeakers } from "@/lib/public-speakers";
+import { formatEventDateRange } from "@/lib/tz";
+import {
+  headshotAlt,
+  initials,
+  sessionPlacementLine,
+  speakerDetailLine,
+} from "@/lib/embed-speaker-view";
 import { EmptyState } from "@/components/ui";
-
-function initials(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]!.toUpperCase())
-    .join("");
-}
-
-function profileLine(speaker: PublicSpeaker): string | null {
-  if (speaker.jobTitle && speaker.company) return `${speaker.jobTitle} at ${speaker.company}`;
-  return speaker.jobTitle ?? speaker.company;
-}
-
-function eventDateRange(gallery: PublicSpeakers): string | null {
-  const { startsAt, endsAt, timezone } = gallery.event;
-  if (!startsAt) return null;
-
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-  return endsAt ? formatter.formatRange(new Date(startsAt), new Date(endsAt)) : formatter.format(new Date(startsAt));
-}
 
 export function EmbedSpeakers({
   gallery,
@@ -63,7 +43,13 @@ export function EmbedSpeakers({
       const matchesTrack = track === "all" || speaker.sessions.some((session) => session.track?.name === track);
       if (!matchesTrack) return false;
       if (!normalizedQuery) return true;
-      return [speaker.name, speaker.company, speaker.jobTitle]
+      return [
+        speaker.name,
+        speaker.company,
+        speaker.jobTitle,
+        speaker.bio,
+        ...speaker.sessions.map((session) => session.title),
+      ]
         .filter((value): value is string => Boolean(value))
         .some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
     }),
@@ -71,7 +57,7 @@ export function EmbedSpeakers({
   );
 
   const scheduleUrl = `/embed/schedule?event=${encodeURIComponent(gallery.event.slug)}`;
-  const dates = eventDateRange(gallery);
+  const dates = formatEventDateRange(gallery.event.startsAt, gallery.event.endsAt, gallery.event.timezone);
 
   const updateUrl = (nextQuery: string, nextTrack: string, historyMode: "push" | "replace") => {
     const url = new URL(window.location.href);
@@ -111,9 +97,15 @@ export function EmbedSpeakers({
             </Link>
           </div>
 
-          <div className="speaker-gallery-controls">
+          {/* A real GET form so search still works with JavaScript disabled:
+              the page already reads `?q=` server-side. With JS the onChange
+              filters live and rewrites the URL, and Enter submits the same
+              query it would have produced. */}
+          <form className="speaker-gallery-controls" method="get" action="/embed/speakers" role="search">
+            <input type="hidden" name="event" value={gallery.event.slug} />
+            {track !== "all" ? <input type="hidden" name="track" value={track} /> : null}
             <label className="speaker-search">
-              <span className="sr-only">Search speakers by name or company</span>
+              <span className="sr-only">Search speakers by name, company, bio or session</span>
               <Search size={15} aria-hidden="true" />
               <input
                 type="search"
@@ -124,7 +116,7 @@ export function EmbedSpeakers({
                   setQuery(event.target.value);
                   updateUrl(event.target.value, track, "replace");
                 }}
-                placeholder="Search speakers by name or company…"
+                placeholder="Search speakers, companies, sessions…"
               />
             </label>
             {gallery.tracks.length > 0 ? (
@@ -145,7 +137,8 @@ export function EmbedSpeakers({
                 ))}
               </div>
             ) : null}
-          </div>
+            <button className="ghost-button speaker-search-submit" type="submit">Search</button>
+          </form>
         </div>
       </header>
 
@@ -168,16 +161,16 @@ export function EmbedSpeakers({
         ) : (
           <div className="speaker-grid">
             {filtered.map((speaker, index) => {
-              const detail = profileLine(speaker);
+              const detail = speakerDetailLine(speaker);
               const key = `${speaker.name}-${speaker.sessions.map((session) => session.id).join("-")}-${index}`;
               return (
                 <article className="speaker-card" key={key}>
-                  <div className="speaker-avatar" aria-hidden="true">
-                    <span>{initials(speaker.name)}</span>
+                  <div className="speaker-avatar">
+                    <span aria-hidden="true">{initials(speaker.name)}</span>
                     {speaker.headshotUrl ? (
                       <img
                         src={speaker.headshotUrl}
-                        alt=""
+                        alt={headshotAlt(speaker.name)}
                         width={52}
                         height={52}
                         loading="lazy"
@@ -191,12 +184,21 @@ export function EmbedSpeakers({
                     {detail ? <p className="speaker-metadata">{detail}</p> : null}
                     {speaker.bio ? <p className="speaker-bio">{speaker.bio}</p> : null}
                     <div className="speaker-session-links" aria-label={`${speaker.name}'s sessions`}>
-                      {speaker.sessions.map((session) => (
-                        <Link className="speaker-session-link" href={`${scheduleUrl}#session-${session.id}`} key={session.id}>
-                          <Mic2 size={14} aria-hidden="true" />
-                          <span>{session.title}</span>
-                        </Link>
-                      ))}
+                      {speaker.sessions.map((session) => {
+                        const placement = sessionPlacementLine(session, gallery.event.timezone);
+                        return (
+                          <Link className="speaker-session-link" href={`${scheduleUrl}#session-${session.id}`} key={session.id}>
+                            <Mic2 size={14} aria-hidden="true" />
+                            <span>
+                              {session.title}
+                              {/* Time and room, when the session is placed — the
+                                  one thing a reader otherwise had to open the
+                                  schedule to find. */}
+                              {placement ? <span className="speaker-session-when">{placement}</span> : null}
+                            </span>
+                          </Link>
+                        );
+                      })}
                       {speaker.sessionsTruncated ? (
                         <Link className="speaker-session-link" href={scheduleUrl}>
                           <CalendarDays size={14} aria-hidden="true" />
@@ -204,6 +206,47 @@ export function EmbedSpeakers({
                         </Link>
                       ) : null}
                     </div>
+
+                    {/* Native <details>: the full profile opens in place without
+                        hydration, so it is reachable with JavaScript disabled
+                        and keyboard-operable by default. */}
+                    <details className="speaker-detail">
+                      <summary>
+                        <span className="speaker-detail-open">Full profile</span>
+                        <span className="speaker-detail-close">Hide profile</span>
+                      </summary>
+                      <div className="speaker-detail-body">
+                        <h3 className="sr-only">About {speaker.name}</h3>
+                        {speaker.bio
+                          ? <p className="speaker-detail-bio">{speaker.bio}</p>
+                          : <p className="speaker-detail-bio speaker-detail-missing">No bio has been published for {speaker.name} yet.</p>}
+                        <dl className="speaker-detail-facts">
+                          {speaker.jobTitle ? (
+                            <div><dt>Role</dt><dd>{speaker.jobTitle}</dd></div>
+                          ) : null}
+                          {speaker.company ? (
+                            <div><dt>Company</dt><dd>{speaker.company}</dd></div>
+                          ) : null}
+                          <div>
+                            <dt>{speaker.sessions.length === 1 ? "Session" : "Sessions"}</dt>
+                            <dd>
+                              <ul className="speaker-detail-sessions">
+                                {speaker.sessions.map((session) => {
+                                  const placement = sessionPlacementLine(session, gallery.event.timezone);
+                                  return (
+                                    <li key={session.id}>
+                                      <Link href={`${scheduleUrl}#session-${session.id}`}>{session.title}</Link>
+                                      {session.track ? <span className="speaker-detail-track">{session.track.name}</span> : null}
+                                      {placement ? <span className="speaker-detail-when">{placement}</span> : null}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </dd>
+                          </div>
+                        </dl>
+                      </div>
+                    </details>
                   </div>
                 </article>
               );

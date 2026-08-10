@@ -33,7 +33,7 @@ test("descriptions and their expand control are in the served markup", () => {
 
 test("search is a GET form that preserves the other filters", () => {
   const component = source("components/embed-schedule.tsx");
-  assert.match(component, /<form[^>]*method="get"/s);
+  assert.match(component, /<form[^>]*method="get"/);
   assert.match(component, /action="\/embed\/schedule"/);
   assert.match(component, /name="q"/);
   assert.match(component, /type="hidden" name="event"/);
