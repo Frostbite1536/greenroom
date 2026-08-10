@@ -2743,6 +2743,35 @@ try {
     c12Reminder.status,
   );
 
+  // C5-EMAIL: the dispatch log written above is now readable. Before this panel
+  // an operator had no evidence any email ever left, and a bulk send's failure
+  // count named neither recipient nor reason.
+  const emailHistorySpeaker = await fetch(`${BASE}/admin/emails`, {
+    headers: { cookie: cookie(speaker) },
+    redirect: "manual",
+  });
+  check("C5 email history refuses a speaker",
+    [307, 308, 403].includes(emailHistorySpeaker.status), emailHistorySpeaker.status);
+  const emailHistoryAnon = await fetch(`${BASE}/admin/emails`, { redirect: "manual" });
+  check("C5 email history refuses an anonymous visitor",
+    [307, 308, 401, 403].includes(emailHistoryAnon.status), emailHistoryAnon.status);
+
+  const emailHistoryAdmin = await fetch(`${BASE}/admin/emails`, { headers: { cookie: cookie(admin) } });
+  const emailHistoryHtml = await emailHistoryAdmin.text();
+  check("C5 email history renders the mocked reminder dispatch as recorded, never delivered",
+    emailHistoryAdmin.status === 200 &&
+      emailHistoryHtml.includes(c12Speaker.email) &&
+      emailHistoryHtml.includes(c12Template.key) &&
+      emailHistoryHtml.includes("Mocked") &&
+      // The mocked row carries a sentAt like a real send; the panel must not
+      // let that timestamp become a delivery claim for this dispatch.
+      emailHistoryHtml.includes("not delivered"),
+    emailHistoryAdmin.status);
+  check("C5 email history leaks no provider credential, bearer, or dispatch variable bag",
+    !/RESEND_API_KEY|Bearer\s|Idempotency-Key|"providerId"|mock:/i.test(emailHistoryHtml) &&
+      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || " no-resend-key-configured"),
+    "credential appeared in /admin/emails");
+
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
   // the intended read models (no reviewer data or unplaced sessions).
   const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
