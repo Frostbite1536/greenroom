@@ -14,6 +14,7 @@ import { calendarExportUrl } from "@/lib/ics-embed";
 import { formatDayLabel, formatEventDateRange, formatTime, zonedParts } from "@/lib/tz";
 import {
   ALL,
+  agendaTruncationNotice,
   chipPrefix,
   dayTabs,
   descriptionPreview,
@@ -167,6 +168,11 @@ export function EmbedSchedule({
               {resultSummary(agenda.sessions.length, filtered.length, isFiltered)}
               {dateRange ? ` · ${dateRange}` : ""}
             </p>
+            {/* A reader whose programme was cut short is told, rather than
+                shown a confident count of a partial schedule (S20). */}
+            {agendaTruncationNotice(agenda) ? (
+              <p className="hint" role="status">{agendaTruncationNotice(agenda)}</p>
+            ) : null}
           </div>
           {agenda.sessions.length > 0 && (
             <a

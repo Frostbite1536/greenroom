@@ -1267,6 +1267,13 @@ try {
   const embedAfterManualUnpublish = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
   check("T3 the manually unpublished talk leaves the public schedule",
     !embedAfterManualUnpublish.text.includes(`session-${convertedSessionId}`));
+  // The embed's own "Add all to calendar" affordance must not hand out what the
+  // page just stopped showing.
+  const icsAfterManualUnpublish = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${convertedSessionId}`, null, null,
+  );
+  check("T3 the calendar export refuses the unpublished talk",
+    icsAfterManualUnpublish.status === 404, icsAfterManualUnpublish.status);
   const speakersAfterManualUnpublish = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
   check("T3 an unpublished talk is not announced on the public speaker gallery",
     speakersAfterManualUnpublish.status === 200

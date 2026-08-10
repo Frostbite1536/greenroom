@@ -30,7 +30,14 @@ export const GET = handleV1(async (req: Request): Promise<Response> => {
 
   // ScheduleSlot is the placement record, so this cannot return backlog or
   // unplaced sessions. Every relation is reached through this event-scoped slot.
-  const where = { eventId: event.id };
+  //
+  // The publication predicate applies here too. The v1 key is shared with
+  // integrations and evaluators rather than held by the organizer alone, so
+  // this is a publicly reachable read of the programme, not an admin one — a
+  // talk the organizer has held back must not stay fetchable through it. One
+  // `where` feeds both the page and the count, so `total` can never advertise
+  // rows the page refuses to return.
+  const where = { eventId: event.id, session: { contentStatus: "PUBLISHED" as const } };
   const [slots, total] = await Promise.all([
     prisma.scheduleSlot.findMany({
       where,

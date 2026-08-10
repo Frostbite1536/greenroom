@@ -71,6 +71,65 @@ test("every unauthenticated programme read filters on PUBLISHED", () => {
   );
 });
 
+/**
+ * The toggle is only as good as its least-guarded consumer. These three were
+ * missed on the first pass: a downloadable calendar file and two key-protected
+ * reads whose key is shared with integrations and evaluators rather than held
+ * by the organizer alone, which makes them publicly reachable programme reads.
+ */
+test("the calendar export cannot hand out an unpublished talk", () => {
+  const ics = source("app/api/comms/calendar/route.ts");
+  assert.match(ics, /contentStatus: "PUBLISHED"/);
+  // The predicate sits in the one query that builds the file, beside the
+  // placement check, so a single-session export is gated the same way.
+  assert.ok(ics.indexOf("scheduleSlot: { isNot: null }") < ics.indexOf('contentStatus: "PUBLISHED"'));
+  assert.ok(ics.indexOf('contentStatus: "PUBLISHED"') < ics.indexOf("const events: IcsEvent[]"));
+  // "not scheduled" and "not published" must not be distinguishable, or an
+  // anonymous caller can probe for held-back talks. Asserted on the refusal
+  // copy itself, not the file — the comments above it say "unpublished" on
+  // purpose and are not shipped to anyone.
+  const refusals = ics.match(/"[^"]*(?:published|scheduled)[^"]*\."/g) ?? [];
+  assert.deepEqual(refusals, [
+    '"That session is not on the published schedule."',
+    '"No published sessions to export."',
+  ]);
+  for (const refusal of refusals) {
+    assert.doesNotMatch(refusal, /unpublished|DRAFT|held back/i);
+  }
+});
+
+test("both v1 reads gate the programme on PUBLISHED, counts included", () => {
+  const schedule = source("app/api/v1/schedule/route.ts");
+  // One `where` feeds findMany and count, so `total` cannot advertise rows the
+  // page refuses to return.
+  assert.match(schedule, /const where = \{ eventId: event\.id, session: \{ contentStatus: "PUBLISHED" as const \} \}/);
+  // Exactly one `where` is declared, and both the page and the count read it.
+  assert.deepEqual(schedule.match(/const where =/g)?.length, 1);
+  assert.match(schedule, /prisma\.scheduleSlot\.findMany\(\{\s*where,/);
+  assert.match(schedule, /prisma\.scheduleSlot\.count\(\{ where \}\)/);
+
+  const speakers = source("app/api/v1/speakers/route.ts");
+  assert.match(
+    speakers,
+    /const eventSessionSpeakers = \{ session: \{ eventId: event\.id, contentStatus: "PUBLISHED" as const \} \}/,
+  );
+  // The same bound object drives eligibility and the appearance count, so an
+  // unpublished talk can neither surface a speaker nor be counted for them.
+  assert.deepEqual(speakers.match(/eventSessionSpeakers/g)?.length, 3);
+  // The submission half is deliberately untouched: `contentStatus` says nothing
+  // about an abstract, and gating it there would hide real submissions.
+  assert.match(speakers, /const eventAbstractSpeakers = \{ abstract: \{ eventId: event\.id \} \}/);
+});
+
+test("the reads this slice deliberately leaves on the old contract are still unguarded", () => {
+  // Recorded, not fixed: reminder targeting and conflict detection read the
+  // programme for operational purposes, not to publish it, and unifying them
+  // is C10's predicate work. This test exists so the boundary is a decision
+  // somebody can find rather than an oversight — if C10 lands, delete it.
+  assert.doesNotMatch(source("lib/comms/reminders.ts"), /contentStatus/);
+  assert.doesNotMatch(source("lib/services/schedule.ts"), /contentStatus/);
+});
+
 test("the publication route writes only contentStatus, and only inside this event", () => {
   const file = source("app/api/agenda/sessions/route.ts");
   const route = file.slice(file.indexOf("export const PATCH"));

@@ -46,7 +46,23 @@ export type ScheduleViewAgenda = {
   };
   tracks: ScheduleViewTrack[];
   sessions: ScheduleViewSession[];
+  /** True when the event holds more placed sessions than one read materializes.
+   *  Optional so a caller built before the bound existed still type-checks. */
+  truncated?: boolean;
 };
+
+/**
+ * What to tell a reader whose agenda was cut short, or null when it was not.
+ * Never says "showing all 500 of 500" — a notice that reports no problem is a
+ * notice that should not be rendered.
+ */
+export function agendaTruncationNotice(
+  agenda: Pick<ScheduleViewAgenda, "sessions" | "truncated">,
+): string | null {
+  if (!agenda.truncated) return null;
+  return `This schedule is unusually large, so only the first ${agenda.sessions.length} sessions are shown here. `
+    + "Use the day tabs or search to narrow it, or open the event's own schedule page.";
+}
 
 export type ScheduleFilters = { track: string; day: string; q: string };
 
@@ -60,6 +76,16 @@ export const DESCRIPTION_PREVIEW_CHARS = 180;
  * not turn one public page render into thousands of tab elements.
  */
 export const MAX_EVENT_DAYS = 31;
+
+/**
+ * Ceiling on placed sessions materialized for one public agenda read (S20).
+ *
+ * The same shape as `PUBLIC_SPEAKER_LIMITS`: read this many plus one, render
+ * this many, and say so when there are more. A public page cannot fail closed
+ * the way an operator export does — refusing to render the programme because
+ * an event is large would be worse than rendering it and admitting the cut.
+ */
+export const PUBLIC_AGENDA_LIMITS = { sessions: 500 } as const;
 
 export const ALL = "all";
 

@@ -3938,6 +3938,30 @@ try {
       !!(await prisma.scheduleSlot.findUnique({ where: { sessionId } })),
     JSON.stringify(pubAfterReversal.data?.data?.sessions?.map((s) => s.sessionId)));
 
+  // Every other publicly reachable read of the programme carries the same
+  // predicate. The v1 key is shared with integrations and evaluators, and the
+  // calendar file keeps speaking after it is downloaded, so both are places an
+  // unpublished talk could keep leaking after the page stopped showing it.
+  const icsWhileUnpublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}`);
+  check("T3 the calendar export drops an unpublished talk",
+    icsWhileUnpublished.status === 200 && !String(icsWhileUnpublished.data).includes("SUMMARY:My great talk"),
+    icsWhileUnpublished.status);
+  const icsOneUnpublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}&sessionId=${sessionId}`);
+  check("T3 exporting the unpublished talk alone is refused, and says nothing about why",
+    icsOneUnpublished.status === 404
+      && /not on the published schedule/.test(JSON.stringify(icsOneUnpublished.data))
+      && !/unpublished|DRAFT/i.test(JSON.stringify(icsOneUnpublished.data)),
+    JSON.stringify(icsOneUnpublished.data));
+  const v1ScheduleUnpublished = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the v1 schedule drops it, and its total agrees with its page",
+    v1ScheduleUnpublished.status === 200
+      && !v1ScheduleUnpublished.data?.data?.some((row) => row.session?.id === sessionId)
+      && v1ScheduleUnpublished.data?.meta?.total === v1ScheduleUnpublished.data?.data?.length,
+    JSON.stringify(v1ScheduleUnpublished.data?.meta ?? "none"));
+  const v1SpeakersUnpublished = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  const sessionAppearances = (payload) =>
+    payload.data?.data?.find((row) => row.email === "spk@x.com")?.appearances?.sessions ?? null;
+
   const publishAnon = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" });
   check("T3 anonymous callers cannot publish a talk", publishAnon.status === 401, publishAnon.status);
   const publishEvaluator = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, evalr);
@@ -3959,6 +3983,23 @@ try {
   check("T3 publishing restores the same talk to the same slot",
     pubAfterRepublish.data?.data?.sessions?.some((s) => s.sessionId === sessionId),
     JSON.stringify(pubAfterRepublish.data?.data?.sessions?.map((s) => s.sessionId)));
+  check("T3 the public agenda reports whether it was cut short",
+    pubAfterRepublish.data?.data?.truncated === false, JSON.stringify(pubAfterRepublish.data?.data?.truncated));
+  const icsRepublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}`);
+  check("T3 the calendar export carries it again",
+    icsRepublished.status === 200 && String(icsRepublished.data).includes("SUMMARY:My great talk"),
+    icsRepublished.status);
+  const v1ScheduleRepublished = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the v1 schedule carries it again",
+    v1ScheduleRepublished.data?.data?.some((row) => row.session?.id === sessionId));
+  // A differential rather than an absolute: this speaker legitimately appears
+  // on other sessions, so what proves the predicate is that unpublishing one
+  // talk stopped counting exactly one appearance for them.
+  const v1SpeakersRepublished = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  check("T3 an unpublished talk is not counted as one of its speaker's appearances",
+    sessionAppearances(v1SpeakersUnpublished) !== null
+      && sessionAppearances(v1SpeakersRepublished) === sessionAppearances(v1SpeakersUnpublished) + 1,
+    `${sessionAppearances(v1SpeakersUnpublished)} → ${sessionAppearances(v1SpeakersRepublished)}`);
   const unpublishAgain = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "DRAFT" }, admin);
   check("T3 the rejected talk is left off the public programme",
     unpublishAgain.status === 200 && unpublishAgain.data?.data?.contentStatus === "DRAFT",

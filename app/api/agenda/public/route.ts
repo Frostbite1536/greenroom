@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, ok } from "@/lib/api/http";
+import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,9 @@ export const GET = handle(async (req) => {
       // embed (`getPublicAgenda`), so the JSON twin cannot announce a talk the
       // page has stopped showing.
       where: { eventId: event.id, session: { contentStatus: "PUBLISHED" } },
+      // Same bound and the same stable order as the embed, so the two cannot
+      // disagree about which sessions fall inside the cap (S20).
+      take: PUBLIC_AGENDA_LIMITS.sessions + 1,
       include: {
         room: { select: { id: true, name: true } },
         track: { select: { id: true, name: true, color: true } },
@@ -35,7 +39,7 @@ export const GET = handle(async (req) => {
           },
         },
       },
-      orderBy: [{ startsAt: "asc" }],
+      orderBy: [{ startsAt: "asc" }, { id: "asc" }],
     }),
   ]);
 
@@ -43,7 +47,10 @@ export const GET = handle(async (req) => {
     event,
     rooms: rooms.map((r) => ({ id: r.id, name: r.name })),
     tracks: tracks.map((t) => ({ id: t.id, name: t.name, color: t.color })),
-    sessions: slots.map((slot) => ({
+    // Additive and honest: a consumer that reads exactly the cap must be able
+    // to tell a complete programme from a cut one.
+    truncated: slots.length > PUBLIC_AGENDA_LIMITS.sessions,
+    sessions: slots.slice(0, PUBLIC_AGENDA_LIMITS.sessions).map((slot) => ({
       slotId: slot.id,
       sessionId: slot.sessionId,
       title: slot.session.title,

@@ -70,6 +70,7 @@ import {
   PUBLIC_SPEAKER_LIMITS,
   type PublicSpeakers,
 } from "@/lib/public-speakers";
+import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -671,6 +672,9 @@ export type AgendaData = {
   rooms: { id: string; name: string; capacity: number | null }[];
   tracks: { id: string; name: string; color: string }[];
   sessions: AgendaSession[];
+  /** True when the event holds more sessions than one read materializes (S20).
+   *  The builder says so rather than laying out a partial programme silently. */
+  truncated: boolean;
 };
 
 export async function getAgendaData(): Promise<AgendaData> {
@@ -689,7 +693,12 @@ export async function getAgendaData(): Promise<AgendaData> {
     }),
     prisma.session.findMany({
       where: { eventId: ctx.eventId },
-      orderBy: { createdAt: "asc" },
+      // Bounded, stably ordered, cap-plus-one (S20). `id` breaks `createdAt`
+      // ties so the grid cannot reshuffle between renders. The builder reports
+      // the cut rather than silently laying out a partial programme — a
+      // conflict it never loaded is a conflict it cannot warn about.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.agendaSessions + 1,
       select: {
         id: true,
         title: true,
@@ -710,7 +719,8 @@ export async function getAgendaData(): Promise<AgendaData> {
     timezone: event?.timezone ?? "UTC",
     rooms,
     tracks,
-    sessions: sessions.map((s) => ({
+    truncated: sessions.length > OPERATOR_QUERY_LIMITS.agendaSessions,
+    sessions: sessions.slice(0, OPERATOR_QUERY_LIMITS.agendaSessions).map((s) => ({
       id: s.id,
       title: s.title,
       format: s.format,
@@ -985,6 +995,9 @@ export type PublicAgenda = {
   event: { id: string; name: string; slug: string; timezone: string; startsAt: string | null; endsAt: string | null };
   tracks: { id: string; name: string; color: string }[];
   sessions: PublicAgendaSession[];
+  /** True when this event holds more published placed sessions than one read
+   *  materializes (S20). Surfaced to the reader rather than silently cutting. */
+  truncated: boolean;
 };
 
 export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
@@ -1005,7 +1018,11 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       // unpublished session keeps its slot, its speakers and its place in the
       // admin grid — it simply stops being announced (CNT-12, AIA-07).
       where: { eventId: event.id, session: { contentStatus: "PUBLISHED" } },
-      orderBy: { startsAt: "asc" },
+      // Bounded, stably ordered, cap-plus-one (S20). `id` breaks ties so two
+      // sessions starting at the same instant cannot swap places between
+      // renders and silently change which one falls outside the cap.
+      orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+      take: PUBLIC_AGENDA_LIMITS.sessions + 1,
       select: {
         id: true,
         sessionId: true,
@@ -1033,7 +1050,8 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       endsAt: event.endsAt?.toISOString() ?? null,
     },
     tracks,
-    sessions: slots.map((slot) => ({
+    truncated: slots.length > PUBLIC_AGENDA_LIMITS.sessions,
+    sessions: slots.slice(0, PUBLIC_AGENDA_LIMITS.sessions).map((slot) => ({
       slotId: slot.id,
       sessionId: slot.sessionId,
       title: slot.session.title,

@@ -30,14 +30,21 @@ export const GET = handleV1(async (req: Request): Promise<Response> => {
 
   // A user is eligible only through an abstract or session for this one event;
   // membership and global user tables are intentionally not a source here.
+  //
+  // The session half carries the publication predicate: an unpublished talk
+  // must not make its speaker reachable here, nor be counted in their
+  // appearances, or unpublishing would hide the talk while still announcing
+  // who is giving it. The abstract half is deliberately untouched — a
+  // submission is a different disclosure axis from a published programme, and
+  // `contentStatus` says nothing about it.
+  const eventSessionSpeakers = { session: { eventId: event.id, contentStatus: "PUBLISHED" as const } };
+  const eventAbstractSpeakers = { abstract: { eventId: event.id } };
   const where = {
     OR: [
-      { abstractSpeakers: { some: { abstract: { eventId: event.id } } } },
-      { sessionSpeakers: { some: { session: { eventId: event.id } } } },
+      { abstractSpeakers: { some: eventAbstractSpeakers } },
+      { sessionSpeakers: { some: eventSessionSpeakers } },
     ],
   };
-  const eventAbstractSpeakers = { abstract: { eventId: event.id } };
-  const eventSessionSpeakers = { session: { eventId: event.id } };
   const [speakers, total] = await Promise.all([
     prisma.user.findMany({
       where,

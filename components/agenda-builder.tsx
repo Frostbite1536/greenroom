@@ -202,6 +202,18 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         </div>
       )}
 
+      {/* An operator laying out a partial programme must be told so: a conflict
+          in the sessions this read never loaded is one the grid cannot warn
+          about, and silence here would read as "no conflicts" (S20). */}
+      {data.truncated ? (
+        <div style={{ padding: "12px 12px 0" }}>
+          <p className="hint" role="status">
+            This event has more sessions than this page loads at once. The grid, the backlog and the conflict
+            count below cover only the sessions listed here — reduce the event data to see the whole programme.
+          </p>
+        </div>
+      ) : null}
+
       {/* Says nothing at all when the whole programme is published, rather than
           reporting a reassuring zero. */}
       {unpublishedNotice(sessions.map((s) => s.contentStatus)) ? (

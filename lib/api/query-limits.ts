@@ -17,6 +17,11 @@ export const OPERATOR_QUERY_LIMITS = {
   importCategories: 1_000,
   importFieldsPerForm: 250,
   settingsRooms: 500,
+  // The agenda builder lays out every session at once, so this is a render
+  // bound as much as a query one. Cap-plus-one with an honest notice rather
+  // than a 422: refusing to open the grid would be worse for an operator than
+  // opening it and saying which part is missing.
+  agendaSessions: 2_000,
   // Onboarding-task templates are authored by hand, one checklist per event.
   onboardingTasks: 250,
   settingsTracks: 250,

@@ -4,6 +4,8 @@ import {
   ALL,
   DESCRIPTION_PREVIEW_CHARS,
   MAX_EVENT_DAYS,
+  PUBLIC_AGENDA_LIMITS,
+  agendaTruncationNotice,
   chipPrefix,
   dayTabs,
   descriptionPreview,
@@ -217,6 +219,26 @@ test("a blank or missing topic adds no chip", () => {
     sessionChips(session({ category: { id: "cat-1", name: "   " } })).some((chip) => chip.kind === "topic"),
     false,
   );
+});
+
+test("a complete agenda renders no truncation notice at all", () => {
+  assert.equal(agendaTruncationNotice({ sessions: [session()], truncated: false }), null);
+  // An older caller that predates the bound is not accused of being cut.
+  assert.equal(agendaTruncationNotice({ sessions: [session()] }), null);
+});
+
+test("a cut agenda says how many it is showing and how to narrow it", () => {
+  const notice = agendaTruncationNotice({
+    sessions: [session(), session({ slotId: "slot-2" })],
+    truncated: true,
+  });
+  assert.match(notice ?? "", /only the first 2 sessions/);
+  assert.match(notice ?? "", /day tabs or search/);
+});
+
+test("the public agenda bound is a real number the reads can page against", () => {
+  assert.equal(typeof PUBLIC_AGENDA_LIMITS.sessions, "number");
+  assert.ok(PUBLIC_AGENDA_LIMITS.sessions > 0);
 });
 
 test("keyword search reaches a session's topic", () => {
