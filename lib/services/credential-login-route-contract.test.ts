@@ -80,7 +80,9 @@ test("there is exactly one refusal, and it names neither the address nor the rea
 });
 
 test("every discarded failure leaves a bounded label, and no body, address, or secret", () => {
-  const logs = route.match(/console\.\w+\([^\n]*/g) ?? [];
+  // [^\r\n], not [^\n]: a CRLF checkout would otherwise smuggle the \r into
+  // the captured line and break every $-anchored assertion below.
+  const logs = route.match(/console\.\w+\([^\r\n]*/g) ?? [];
   // Greptile #76 issue 2: a swallowed category must still be recorded. The
   // parse catch used to discard the class entirely.
   assert.equal(logs.length, 3, "body-rejected, throttle-unavailable and attempt-failed each need a diagnostic");
@@ -202,7 +204,13 @@ test("passwordHash is confined to the credential path and never projected", () =
   // The routes that fetch a whole User row hand it to serializers that project
   // an explicit field list, so a new column cannot ride out with them.
   const abstractSerializer = read("lib/api/abstract-serialize.ts");
-  assert.match(abstractSerializer, /speakers: \(abstract\.speakers \?\? \[\]\)\.map\(\(s\) => \(\{\s*userId: s\.userId,\s*email: s\.user\.email,\s*name: s\.user\.name,\s*isPrimary: s\.isPrimary,\s*\}\)\)/);
+  // The explicit projection now carries the ABS-11 per-proposal role label
+  // (with its comment lines) between isPrimary and the close. The point of
+  // this pin is the explicit field list itself, so it names every projected
+  // field and tolerates interleaved comments rather than freezing exact bytes.
+  // Each interleaved comment must consume through its own line ending, so a
+  // commented-out `// role: s.role,` can never satisfy the field pin.
+  assert.match(abstractSerializer, /speakers: \(abstract\.speakers \?\? \[\]\)\.map\(\(s\) => \(\{\s*userId: s\.userId,\s*email: s\.user\.email,\s*name: s\.user\.name,\s*isPrimary: s\.isPrimary,(\s|\/\/[^\r\n]*\r?\n)*role: s\.role,\s*\}\)\)/);
   for (const serializer of ["lib/api/abstract-serialize.ts", "lib/api/v1-serialize.ts", "lib/api/form-serialize.ts", "lib/api/speaker-submission.ts"]) {
     assert.doesNotMatch(read(serializer), /\.\.\.\w*[uU]ser\b/, `${serializer} must not spread a User row`);
   }
