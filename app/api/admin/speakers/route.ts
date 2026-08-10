@@ -8,8 +8,11 @@ import {
 } from "@/lib/services/event-member-lock";
 import { lockPublicSubmissionIdentities } from "@/lib/services/public-submission";
 import {
+  SPEAKER_SHARED_ACROSS_EVENTS,
+  SPEAKER_SHARED_MESSAGE,
   adminSpeakerCreateSchema,
   adminSpeakerProfilePatchSchema,
+  countOtherEventMemberships,
   lockSpeakerProfile,
   speakerProfileWriteData,
 } from "@/lib/services/speaker-roster";
@@ -36,6 +39,11 @@ export const dynamic = "force-dynamic";
  *
  * `User.email` is never written by either handler. Changing a global identity is
  * out of scope by design (S10 uniqueness, C26 recipient derivation).
+ *
+ * `SpeakerProfile` is global too — one row per person, read by every public
+ * speaker surface — so an organizer may write it only for a speaker who belongs
+ * to no other event. Both handlers take that decision from a fresh read inside
+ * their own transaction; see `countOtherEventMemberships`.
  */
 
 const profileSelect = {
@@ -113,21 +121,37 @@ export const POST = handle(async (req) => {
 
     // Only what the organizer actually typed. An all-omitted profile leaves any
     // existing row completely untouched rather than creating an empty one.
-    if (Object.keys(profileData).length > 0) {
+    const profileRequested = Object.keys(profileData).length > 0;
+    let profileApplied = false;
+    let sharedAcrossEvents = false;
+    if (profileRequested) {
+      // The profile key is taken before the membership count, so two organizers
+      // adding the same person to different events cannot both read "exclusive".
       await lockSpeakerProfile(tx, user.id);
-      await tx.speakerProfile.upsert({
-        where: { userId: user.id },
-        update: profileData,
-        create: { userId: user.id, ...profileData },
-        select: { id: true },
-      });
+      sharedAcrossEvents = (await countOtherEventMemberships(tx, user.id, ctx.eventId)) > 0;
+      if (!sharedAcrossEvents) {
+        await tx.speakerProfile.upsert({
+          where: { userId: user.id },
+          update: profileData,
+          create: { userId: user.id, ...profileData },
+          select: { id: true },
+        });
+        profileApplied = true;
+      }
     }
 
+    // A shared speaker is still added to this event: the membership is this
+    // event's own row and writing it is squarely within its authority. Only the
+    // global profile half is withheld, and the response says so rather than
+    // letting the organizer believe the details they typed were stored.
     return {
       speaker: { userId: user.id, name: user.name, email: user.email },
       requestedName: name,
       userCreated: existing === null,
       membershipCreated: !target,
+      profileRequested,
+      profileApplied,
+      sharedAcrossEvents,
     };
   });
 
@@ -172,6 +196,12 @@ export const PATCH = handle(async (req) => {
     if (!user) throw speakerNotFound();
 
     await lockSpeakerProfile(tx, userId);
+    // Strictly after the roster check above, and never before it: a 409 here for
+    // somebody who is not on this event's roster would confirm that they exist
+    // somewhere, which is exactly what the single 404 refuses to reveal.
+    if ((await countOtherEventMemberships(tx, userId, ctx.eventId)) > 0) {
+      throw new ApiError(409, SPEAKER_SHARED_ACROSS_EVENTS, SPEAKER_SHARED_MESSAGE);
+    }
     const stored = await tx.speakerProfile.upsert({
       where: { userId },
       update: profileData,

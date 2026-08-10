@@ -5,6 +5,7 @@ import {
   filterSpeakerRosterRows,
   matchesSpeakerQuery,
   parseSpeakerQuery,
+  speakerDialogRecovery,
   speakerProvisionNotice,
   speakerRosterHref,
 } from "./roster";
@@ -155,4 +156,60 @@ test("re-adding an existing speaker reports the no-op instead of implying a chan
   assert.match(notice, /already a speaker on this event, so nothing was duplicated/);
   // The typed name only differed by whitespace, so there is no name to report.
   assert.doesNotMatch(notice, /was kept rather than replaced/);
+});
+
+test("a withheld shared profile is reported, not quietly dropped", () => {
+  const notice = speakerProvisionNotice({
+    name: "Nadia Okonkwo",
+    email: "nadia@northwind.test",
+    requestedName: "Nadia Okonkwo",
+    userCreated: false,
+    membershipCreated: true,
+    profileRequested: true,
+    profileApplied: false,
+  });
+  // Both halves of the truth: the membership landed, the profile did not.
+  assert.match(notice, /added to this event as a speaker/);
+  assert.match(notice, /profile details you typed were not saved/);
+  assert.match(notice, /speaker portal/);
+});
+
+test("a profile that was actually stored produces no withholding claim", () => {
+  for (const result of [
+    { profileRequested: true, profileApplied: true },
+    { profileRequested: false, profileApplied: false },
+    {},
+  ]) {
+    const notice = speakerProvisionNotice({
+      name: "Nadia Okonkwo",
+      email: "nadia@northwind.test",
+      requestedName: "Nadia Okonkwo",
+      userCreated: true,
+      membershipCreated: true,
+      ...result,
+    });
+    assert.doesNotMatch(notice, /were not saved/, `unexpected withholding claim for ${JSON.stringify(result)}`);
+  }
+});
+
+test("a reused name and a withheld profile are both reported, in one notice", () => {
+  const notice = speakerProvisionNotice({
+    name: "Nadia Okonkwo",
+    email: "nadia@northwind.test",
+    requestedName: "N. Okonkwo",
+    userCreated: false,
+    membershipCreated: true,
+    profileRequested: true,
+    profileApplied: false,
+  });
+  assert.match(notice, /saved name “Nadia Okonkwo” was kept/);
+  assert.match(notice, /were not saved/);
+});
+
+test("a submit that throws outright still tells the operator what to do", () => {
+  assert.match(speakerDialogRecovery("add"), /Could not add the speaker/);
+  assert.match(speakerDialogRecovery("save"), /Could not save the profile/);
+  for (const action of ["add", "save"] as const) {
+    assert.match(speakerDialogRecovery(action), /try again/);
+  }
 });

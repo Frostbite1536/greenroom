@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, UserPlus } from "lucide-react";
 import { apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
-import { speakerProvisionNotice } from "@/lib/speakers/roster";
+import { speakerDialogRecovery, speakerProvisionNotice } from "@/lib/speakers/roster";
 
 /**
  * Add and edit speakers from the roster (SPK-02).
@@ -66,6 +66,8 @@ type SpeakerResponse = {
   requestedName: string;
   userCreated: boolean;
   membershipCreated: boolean;
+  profileRequested: boolean;
+  profileApplied: boolean;
 };
 
 export function AddSpeakerDialog() {
@@ -115,6 +117,8 @@ export function AddSpeakerDialog() {
       requestedName: res.data.requestedName,
       userCreated: res.data.userCreated,
       membershipCreated: res.data.membershipCreated,
+      profileRequested: res.data.profileRequested,
+      profileApplied: res.data.profileApplied,
     }));
     close();
     router.refresh();
@@ -135,7 +139,16 @@ export function AddSpeakerDialog() {
           submitting={submitting}
           rootError={errors._root}
           onClose={close}
-          onSubmit={() => void submit()}
+          // An unexpected throw must never leave the dialog stuck behind a
+          // disabled button with nothing said: clear the submitting state and
+          // give the operator something to act on.
+          onSubmit={() => {
+            submit().catch((error) => {
+              console.warn("Adding a speaker failed", error);
+              setSubmitting(false);
+              setErrors({ _root: speakerDialogRecovery("add") });
+            });
+          }}
         >
           {(ids) => (
             <>
@@ -232,7 +245,13 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
           submitting={submitting}
           rootError={errors._root}
           onClose={close}
-          onSubmit={() => void submit()}
+          onSubmit={() => {
+            submit().catch((error) => {
+              console.warn("Saving a speaker profile failed", error);
+              setSubmitting(false);
+              setErrors({ _root: speakerDialogRecovery("save") });
+            });
+          }}
         >
           {(ids) => (
             <>

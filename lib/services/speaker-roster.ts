@@ -100,6 +100,47 @@ export function speakerProfileWriteData(
 }
 
 /**
+ * `SpeakerProfile` is keyed by a unique `userId` and nothing else: there is one
+ * row per person for the whole instance, and it is what every public speaker
+ * surface reads (`lib/public-speakers.ts`, `lib/data/reads.ts`,
+ * `app/api/v1/speakers`). So an organizer writing it is not writing their own
+ * event's data — for a speaker who also takes part in another event, that write
+ * lands in the other event's public gallery and API too.
+ *
+ * Event authority does not extend that far (S1). An organizer may write the
+ * global profile only of a speaker who is theirs alone; for a shared speaker
+ * the profile stays the speaker's own, editable by them from the portal. Fixing
+ * this properly means per-event profiles, which is a schema change and
+ * deliberately not taken here.
+ */
+export const SPEAKER_SHARED_ACROSS_EVENTS = "SPEAKER_SHARED_ACROSS_EVENTS";
+
+/** Plain language for a non-technical organizer, naming the way forward. */
+export const SPEAKER_SHARED_MESSAGE =
+  "This speaker also takes part in another event, and speaker profiles are shared across every event a person "
+  + "appears in. Editing it here would change how they appear on the other event's public page, so only they can "
+  + "change it — ask them to update it from their speaker portal.";
+
+/**
+ * How many OTHER events this person belongs to. Deliberately a fresh read taken
+ * inside the write's own transaction, after the profile key is held: a
+ * pre-flight check outside the transaction could be true when it was read and
+ * false when the write landed.
+ *
+ * What this does not close: a membership created concurrently by a *different*
+ * event's writer. Holding that event's authority key is not ours to do. Taking
+ * the profile key first does serialize this against every other organizer write
+ * to the same person's profile, which is the path that could actually overwrite.
+ */
+export async function countOtherEventMemberships(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  eventId: string,
+): Promise<number> {
+  return tx.eventMember.count({ where: { userId, eventId: { not: eventId } } });
+}
+
+/**
  * Serializing key for one user's global profile row.
  *
  * `SpeakerProfile` is keyed by a unique `userId`, so two concurrent upserts for

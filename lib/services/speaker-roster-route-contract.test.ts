@@ -71,7 +71,8 @@ test("the profile write is serialized and only touches supplied fields", () => {
     assert.match(handler, /update: profileData/);
   }
   // An add with no profile fields must not create an empty profile row.
-  assert.match(post, /if \(Object\.keys\(profileData\)\.length > 0\) \{/);
+  assert.match(post, /const profileRequested = Object\.keys\(profileData\)\.length > 0;/);
+  assert.match(post, /if \(profileRequested\) \{/);
 });
 
 test("an unknown, cross-event, or non-speaker user id is one indistinguishable 404", () => {
@@ -83,4 +84,33 @@ test("an unknown, cross-event, or non-speaker user id is one indistinguishable 4
   assert.match(patch, /if \(!onRoster\) throw speakerNotFound\(\)/);
   // Only one refusal shape exists, so the two cases cannot drift apart.
   assert.equal((route.match(/SPEAKER_NOT_FOUND/g) ?? []).length, 1);
+});
+
+test("an organizer may write a global profile only for a speaker who is theirs alone", () => {
+  // The write is gated on a fresh in-transaction read, not a pre-flight check.
+  for (const handler of [post, patch]) {
+    assert.match(handler, /countOtherEventMemberships\(tx, /);
+    // Taken after the profile key, so two organizers adding the same person to
+    // different events cannot both read "exclusive" and both write.
+    assert.ok(handler.indexOf("lockSpeakerProfile") < handler.indexOf("countOtherEventMemberships"));
+    assert.ok(handler.indexOf("countOtherEventMemberships") < handler.indexOf("tx.speakerProfile.upsert"));
+  }
+});
+
+test("the shared-profile refusal never precedes the roster check that hides existence", () => {
+  // A 409 for somebody not on this event's roster would confirm they exist
+  // somewhere — exactly what the single 404 is there to refuse to reveal.
+  assert.ok(patch.indexOf("if (!onRoster) throw speakerNotFound()") < patch.indexOf("countOtherEventMemberships"));
+  assert.match(patch, /throw new ApiError\(409, SPEAKER_SHARED_ACROSS_EVENTS, SPEAKER_SHARED_MESSAGE\)/);
+});
+
+test("adding a shared speaker still joins them to this event, withholding only the profile", () => {
+  // The membership is this event's own row and stays within its authority; only
+  // the global half is skipped, and the response reports which half landed.
+  assert.ok(post.indexOf("tx.eventMember.create") < post.indexOf("countOtherEventMemberships"));
+  assert.match(post, /if \(!sharedAcrossEvents\) \{/);
+  assert.match(post, /profileRequested,\s*\n\s*profileApplied,\s*\n\s*sharedAcrossEvents,/);
+  // The add is never refused for being shared — that would block a speaker who
+  // legitimately appears at two events.
+  assert.doesNotMatch(post, /SPEAKER_SHARED_ACROSS_EVENTS/);
 });

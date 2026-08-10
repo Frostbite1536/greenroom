@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   ADMIN_SPEAKER_PROFILE_FIELDS,
+  SPEAKER_SHARED_ACROSS_EVENTS,
+  SPEAKER_SHARED_MESSAGE,
   adminSpeakerCreateSchema,
   adminSpeakerProfileFields,
   adminSpeakerProfilePatchSchema,
+  countOtherEventMemberships,
   speakerProfileLockKey,
   speakerProfileWriteData,
 } from "./speaker-roster";
@@ -77,4 +80,40 @@ test("only supplied fields reach the database, and null reaches it as null", () 
 test("the profile lock key is stable and per-user", () => {
   assert.equal(speakerProfileLockKey("user-1"), "speaker-profile:user-1");
   assert.notEqual(speakerProfileLockKey("user-1"), speakerProfileLockKey("user-2"));
+});
+
+// ---- a global profile is not an event's to write ---------------------------
+
+function countingTx(result: number) {
+  const calls: unknown[] = [];
+  const tx = {
+    eventMember: {
+      count: async (args: unknown) => {
+        calls.push(args);
+        return result;
+      },
+    },
+  };
+  return { tx: tx as never, calls };
+}
+
+test("the shared-profile question asks about OTHER events, never this one", async () => {
+  const { tx, calls } = countingTx(0);
+  const count = await countOtherEventMemberships(tx, "user-1", "event-a");
+  assert.equal(count, 0);
+  assert.deepEqual(calls, [{ where: { userId: "user-1", eventId: { not: "event-a" } } }]);
+});
+
+test("a speaker who belongs to another event is reported as shared", async () => {
+  const { tx } = countingTx(2);
+  assert.equal(await countOtherEventMemberships(tx, "user-1", "event-a"), 2);
+});
+
+test("the shared refusal is a stable code carrying a way forward, not a dead end", () => {
+  assert.equal(SPEAKER_SHARED_ACROSS_EVENTS, "SPEAKER_SHARED_ACROSS_EVENTS");
+  // Non-technical organizers read this, so it has to say why and what to do.
+  assert.match(SPEAKER_SHARED_MESSAGE, /also takes part in another event/);
+  assert.match(SPEAKER_SHARED_MESSAGE, /shared across every event/);
+  assert.match(SPEAKER_SHARED_MESSAGE, /speaker portal/);
+  assert.doesNotMatch(SPEAKER_SHARED_MESSAGE, /EventMember|SpeakerProfile|409/);
 });

@@ -51,6 +51,11 @@ const ROSTER_NEW_NAME = "Marcus Bell";
 // A speaker who belongs to a different event entirely, so a cross-event id can
 // be proven indistinguishable from an unknown one.
 const ROSTER_FOREIGN_EMAIL = "roster-foreign@scratch.test";
+// A speaker on THIS event's roster who also takes part in another one. Her
+// SpeakerProfile is a single global row feeding both events' public pages, so
+// this event's organizer must not be able to write it (S1 authority class).
+const ROSTER_SHARED_EMAIL = "roster-shared@scratch.test";
+const ROSTER_SHARED_NAME = "Dana Okafor";
 const EMBED_NOPROFILE_NAME = "Theo Lindqvist";
 const EMBED_SPEAKER_NAME = "Nadia Okonkwo";
 const EMBED_SPEAKER_BIO = "Nadia leads platform reliability at Northwind and has spent a decade "
@@ -141,7 +146,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -415,7 +420,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -2840,6 +2845,11 @@ try {
     && addSpeaker.data?.data?.userCreated === true
     && addSpeaker.data?.data?.membershipCreated === true,
     `${addSpeaker.status} ${JSON.stringify(addSpeaker.data?.data ?? addSpeaker.data?.error ?? "none")}`);
+  check("a brand-new speaker belongs to this event alone, so their profile is stored",
+    addSpeaker.data?.data?.profileRequested === true
+    && addSpeaker.data?.data?.profileApplied === true
+    && addSpeaker.data?.data?.sharedAcrossEvents === false,
+    JSON.stringify(addSpeaker.data?.data ?? "none"));
   const afterAdd = await req("GET", "/admin/speakers", null, admin);
   check("the added speaker appears on the roster immediately",
     afterAdd.text.includes(ROSTER_NEW_NAME) && afterAdd.text.includes(ROSTER_NEW_EMAIL));
@@ -2937,6 +2947,50 @@ try {
   const foreignProfile = await prisma.speakerProfile.findUnique({ where: { userId: foreignUser.id }, select: { bio: true } });
   check("the refused cross-event edit wrote no profile row at all", foreignProfile === null,
     `got ${JSON.stringify(foreignProfile)}`);
+
+  // A SpeakerProfile is one global row per person, read by every public speaker
+  // surface. Dana is on this event's roster AND another event's, so writing her
+  // profile here would change how she appears on the other event's public page.
+  // This event's authority does not reach that far.
+  const sharedUser = await prisma.user.create({ data: { email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME } });
+  await prisma.eventMember.create({ data: { eventId: S20_OTHER_EVENT_ID, userId: sharedUser.id, role: "SPEAKER" } });
+  const addShared = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME,
+    jobTitle: "Head of Content", company: "Two Events Ltd", bio: "should never be stored by this event",
+  }, admin);
+  check("a speaker shared with another event still joins this one → 201",
+    addShared.status === 201 && addShared.data?.data?.membershipCreated === true,
+    `${addShared.status} ${JSON.stringify(addShared.data?.data ?? addShared.data?.error ?? "none")}`);
+  check("but the profile details typed for a shared speaker are withheld, and said to be",
+    addShared.data?.data?.profileRequested === true
+    && addShared.data?.data?.profileApplied === false
+    && addShared.data?.data?.sharedAcrossEvents === true,
+    JSON.stringify(addShared.data?.data ?? "none"));
+  const sharedAfterAdd = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
+  check("adding a shared speaker created no global profile row", sharedAfterAdd === null,
+    `got ${JSON.stringify(sharedAfterAdd)}`);
+
+  const editShared = await req("PATCH", "/api/admin/speakers", {
+    userId: sharedUser.id, bio: "should never be stored by this event either",
+  }, admin);
+  check("editing a shared speaker's global profile is refused → 409",
+    editShared.status === 409 && editShared.data?.error?.code === "SPEAKER_SHARED_ACROSS_EVENTS",
+    `${editShared.status} ${editShared.data?.error?.code ?? "none"}`);
+  check("the refusal explains why and names the speaker's own portal as the way forward",
+    typeof editShared.data?.error?.message === "string"
+    && editShared.data.error.message.includes("another event")
+    && editShared.data.error.message.includes("speaker portal"),
+    editShared.data?.error?.message ?? "none");
+  const sharedAfterEdit = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
+  check("the refused shared edit wrote no global profile row", sharedAfterEdit === null,
+    `got ${JSON.stringify(sharedAfterEdit)}`);
+  // The refusal must be targeted, not a blanket lockout of the edit feature.
+  const editExclusive = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, company: "Lumen Grid Holdings",
+  }, admin);
+  check("a speaker who belongs to this event alone is still editable",
+    editExclusive.status === 200 && editExclusive.data?.data?.profile?.company === "Lumen Grid Holdings",
+    `${editExclusive.status} ${JSON.stringify(editExclusive.data?.data?.profile ?? editExclusive.data?.error ?? "none")}`);
 
   // ADMIN-only, enforced from the persisted membership rather than the cookie.
   const evaluatorAdd = await req("POST", "/api/admin/speakers", { email: "nope@scratch.test", name: "Nope" }, evaluator);
