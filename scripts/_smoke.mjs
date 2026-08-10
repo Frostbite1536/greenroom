@@ -2743,6 +2743,234 @@ try {
     c12Reminder.status,
   );
 
+  // ---------------------------------------------------------------------
+  // CNT-01/CNT-07/SPK-05 + C33: onboarding-task template CRUD, bulk assign,
+  // and due dates. Deliberately placed after the C12 block, which switched the
+  // scratch event to America/Los_Angeles — a deadline authored as a calendar
+  // day must land at the end of that day *there*, not in UTC or the runner's
+  // zone, and every check below depends on that having already happened.
+  // ---------------------------------------------------------------------
+  const taskAdminList = await j("GET", "/api/admin/tasks", null, admin);
+  check("CNT-01 admin reads the event checklist with its due dates and progress",
+    taskAdminList.status === 200 &&
+      Array.isArray(taskAdminList.data?.data?.tasks) &&
+      taskAdminList.data.data.tasks.length > 0 &&
+      taskAdminList.data?.data?.timezone === "America/Los_Angeles" &&
+      Array.isArray(taskAdminList.data?.data?.forms),
+    JSON.stringify({ status: taskAdminList.status, timezone: taskAdminList.data?.data?.timezone }));
+
+  for (const [label, identity] of [["speaker", speaker], ["evaluator", evalr]]) {
+    const readAsNonAdmin = await j("GET", "/api/admin/tasks", null, identity);
+    const createAsNonAdmin = await j("POST", "/api/admin/tasks", { title: `Nope ${label}` }, identity);
+    const editAsNonAdmin = await j("PATCH", "/api/admin/tasks", { id: taskTemplate.id, title: `Nope ${label}` }, identity);
+    const deleteAsNonAdmin = await j("DELETE", `/api/admin/tasks?taskId=${taskTemplate.id}`, null, identity);
+    const assignAsNonAdmin = await j("POST", "/api/admin/tasks/assign", {}, identity);
+    const statuses = [readAsNonAdmin.status, createAsNonAdmin.status, editAsNonAdmin.status, deleteAsNonAdmin.status, assignAsNonAdmin.status];
+    check(`CNT-01 template CRUD and bulk assign refuse a ${label}`,
+      statuses.every((status) => status === 403), JSON.stringify(statuses));
+  }
+  const anonCreateTask = await j("POST", "/api/admin/tasks", { title: "Nope anon" });
+  const anonAssignTask = await j("POST", "/api/admin/tasks/assign", {});
+  check("CNT-01 template writes refuse an anonymous caller",
+    anonCreateTask.status === 401 && anonAssignTask.status === 401,
+    JSON.stringify([anonCreateTask.status, anonAssignTask.status]));
+
+  // The confirmed cohort is derived from the same definition /admin/speakers
+  // uses — speakers on a Session of this event — so the C33 assertions below
+  // cannot silently drift as earlier fixtures add or remove talks.
+  const c33Cohort = await prisma.sessionSpeaker.findMany({
+    where: { session: { eventId: SCRATCH_EVENT.id } }, select: { userId: true }, take: 201,
+  });
+  const c33CohortSize = new Set(c33Cohort.map((row) => row.userId)).size;
+
+  const c33Create = await j("POST", "/api/admin/tasks", {
+    title: "C33 late required task",
+    description: "Added long after these talks were accepted.",
+    dueOn: "2026-05-12",
+    required: true,
+    formConfigId: null,
+  }, admin);
+  const c33TaskId = c33Create.data?.data?.task?.id;
+  const c33Rows = c33TaskId ? await prisma.speakerTask.count({ where: { taskId: c33TaskId } }) : -1;
+  check("C33 a required template created late reaches every confirmed speaker in the same write",
+    c33Create.status === 201 && !!c33TaskId && c33CohortSize > 0 &&
+      c33Rows === c33CohortSize && c33Create.data?.data?.assigned >= c33CohortSize,
+    JSON.stringify({ reported: c33Create.data?.data?.assigned, rows: c33Rows, cohort: c33CohortSize }));
+
+  check("CNT-07 a deadline is stored as the end of that day in the event's own zone",
+    // 23:59 on 12 May in Los Angeles is 06:59 UTC on 13 May. Storing the naive
+    // UTC instant instead would show speakers the wrong calendar day.
+    c33Create.data?.data?.task?.dueOn === "2026-05-12" &&
+      c33Create.data?.data?.task?.dueAt === "2026-05-13T06:59:00.000Z",
+    JSON.stringify({ dueOn: c33Create.data?.data?.task?.dueOn, dueAt: c33Create.data?.data?.task?.dueAt }));
+
+  const c33Reassign = await j("POST", "/api/admin/tasks/assign", {}, admin);
+  check("C33 the bulk fan-out is idempotent — a second run assigns nothing new",
+    c33Reassign.status === 200 && c33Reassign.data?.data?.assigned === 0 &&
+      c33Reassign.data?.data?.sessions > 0 &&
+      await prisma.speakerTask.count({ where: { taskId: c33TaskId } }) === c33Rows,
+    JSON.stringify(c33Reassign.data?.data));
+
+  const c33Rename = await j("PATCH", "/api/admin/tasks", {
+    id: c33TaskId, title: "C33 late required task (revised)",
+  }, admin);
+  check("CNT-01 an edit that omits the deadline preserves it rather than clearing it",
+    c33Rename.status === 200 &&
+      c33Rename.data?.data?.task?.title === "C33 late required task (revised)" &&
+      c33Rename.data?.data?.task?.dueOn === "2026-05-12" &&
+      // The fan-out still runs on every required edit; it just has nothing left
+      // to do, which is the honest way to report an already-reconciled event.
+      c33Rename.data?.data?.assigned === 0,
+    JSON.stringify(c33Rename.data?.data?.task));
+
+  const c33Optional = await j("POST", "/api/admin/tasks", {
+    title: "C33 optional then required", required: false, dueOn: "2026-05-14",
+  }, admin);
+  const c33OptionalId = c33Optional.data?.data?.task?.id;
+  const c33OptionalRows = c33OptionalId ? await prisma.speakerTask.count({ where: { taskId: c33OptionalId } }) : -1;
+  check("CNT-01 an optional template is created without being pushed at anyone",
+    c33Optional.status === 201 && !!c33OptionalId &&
+      c33Optional.data?.data?.assigned === 0 && c33OptionalRows === 0 &&
+      c33Optional.data?.data?.task?.dueOn === "2026-05-14",
+    JSON.stringify({ assigned: c33Optional.data?.data?.assigned, rows: c33OptionalRows }));
+
+  const c33ClearDue = await j("PATCH", "/api/admin/tasks", { id: c33OptionalId, dueOn: null }, admin);
+  check("CNT-07 an explicit null clears a deadline",
+    c33ClearDue.status === 200 &&
+      c33ClearDue.data?.data?.task?.dueOn === null && c33ClearDue.data?.data?.task?.dueAt === null,
+    JSON.stringify(c33ClearDue.data?.data?.task));
+
+  const c33Promote = await j("PATCH", "/api/admin/tasks", { id: c33OptionalId, required: true }, admin);
+  const c33PromotedRows = await prisma.speakerTask.count({ where: { taskId: c33OptionalId } });
+  check("C33 marking an existing template required backfills it instead of leaving speakers falsely Ready",
+    c33Promote.status === 200 && c33Promote.data?.data?.task?.required === true &&
+      c33Promote.data?.data?.assigned === c33CohortSize && c33PromotedRows === c33CohortSize,
+    JSON.stringify({ reported: c33Promote.data?.data?.assigned, rows: c33PromotedRows, cohort: c33CohortSize }));
+
+  const c33Duplicate = await j("POST", "/api/admin/tasks", { title: "C33 optional then required" }, admin);
+  check("CNT-01 a duplicate task title is refused with a stable, actionable code",
+    c33Duplicate.status === 409 && c33Duplicate.data?.error?.code === "TASK_TITLE_TAKEN",
+    c33Duplicate.data?.error?.code);
+
+  const c33BadDue = await j("POST", "/api/admin/tasks", { title: "C33 impossible deadline", dueOn: "2026-02-31" }, admin);
+  check("CNT-07 an impossible calendar day is refused, never silently stored",
+    c33BadDue.status === 422, c33BadDue.status);
+
+  const c33OtherEventForm = await prisma.formConfig.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      name: "Other event task form",
+      slug: `other-task-form-${Date.now().toString(36)}`,
+    },
+    select: { id: true },
+  });
+  const c33CrossForm = await j("POST", "/api/admin/tasks", {
+    title: "C33 cross-event form link", formConfigId: c33OtherEventForm.id,
+  }, admin);
+  check("CNT-01 a task cannot link a form belonging to another event",
+    c33CrossForm.status === 404 && c33CrossForm.data?.error?.code === "TASK_FORM_NOT_FOUND",
+    c33CrossForm.data?.error?.code);
+
+  const c33OtherEventTask = await prisma.onboardingTask.create({
+    data: { eventId: OTHER_SCRATCH_EVENT.id, title: "Other event task", required: true },
+    select: { id: true },
+  });
+  const c33CrossEdit = await j("PATCH", "/api/admin/tasks", { id: c33OtherEventTask.id, title: "Nope" }, admin);
+  const c33CrossDelete = await j("DELETE", `/api/admin/tasks?taskId=${c33OtherEventTask.id}`, null, admin);
+  const c33OtherEventTaskAfter = await prisma.onboardingTask.findUnique({
+    where: { id: c33OtherEventTask.id }, select: { title: true },
+  });
+  check("CNT-01 template writes cannot target another event, and reveal nothing about it",
+    c33CrossEdit.status === 404 && c33CrossEdit.data?.error?.code === "TASK_NOT_FOUND" &&
+      c33CrossDelete.status === 404 && c33CrossDelete.data?.error?.code === "TASK_NOT_FOUND" &&
+      c33OtherEventTaskAfter?.title === "Other event task",
+    JSON.stringify([c33CrossEdit.status, c33CrossDelete.status]));
+
+  // The hotel-form task above was completed with real answers by the scratch
+  // speaker, so deleting it would cascade that history away.
+  const answeredBefore = await prisma.speakerTask.findUnique({
+    where: { taskId_userId: { taskId: taskTemplate.id, userId: taskSpeaker.id } },
+    select: { status: true, responses: true, completedAt: true },
+  });
+  const answeredDelete = await j("DELETE", `/api/admin/tasks?taskId=${taskTemplate.id}`, null, admin);
+  const answeredAfter = await prisma.speakerTask.findUnique({
+    where: { taskId_userId: { taskId: taskTemplate.id, userId: taskSpeaker.id } },
+    select: { status: true, responses: true, completedAt: true },
+  });
+  const answeredTemplateAfter = await prisma.onboardingTask.findUnique({
+    where: { id: taskTemplate.id }, select: { id: true },
+  });
+  check("S15-style: a template speakers have answered refuses deletion and keeps every response",
+    answeredDelete.status === 409 && answeredDelete.data?.error?.code === "TASK_HAS_RESPONSES" &&
+      answeredTemplateAfter?.id === taskTemplate.id &&
+      answeredAfter?.status === "COMPLETED" &&
+      JSON.stringify(answeredAfter) === JSON.stringify(answeredBefore),
+    answeredDelete.data?.error?.code);
+
+  // A status-only refusal would miss this one: partial task-form answers are
+  // saved while the assignment is still TODO.
+  const partialTask = await prisma.onboardingTask.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: `C33 partially answered ${Date.now().toString(36)}`,
+      required: false,
+      sortOrder: 98,
+    },
+    select: { id: true },
+  });
+  await prisma.speakerTask.create({
+    data: { taskId: partialTask.id, userId: taskSpeaker.id, status: "TODO", responses: { check_in: "May 11" } },
+  });
+  const partialDelete = await j("DELETE", `/api/admin/tasks?taskId=${partialTask.id}`, null, admin);
+  const partialAfter = await prisma.speakerTask.findUnique({
+    where: { taskId_userId: { taskId: partialTask.id, userId: taskSpeaker.id } }, select: { responses: true },
+  });
+  check("S15-style: a half-filled task form is speaker work even while the assignment is still TODO",
+    partialDelete.status === 409 && partialDelete.data?.error?.code === "TASK_HAS_RESPONSES" &&
+      partialAfter?.responses?.check_in === "May 11",
+    partialDelete.data?.error?.code);
+
+  const untouchedRowsBefore = await prisma.speakerTask.count({ where: { taskId: c33OptionalId } });
+  const untouchedDelete = await j("DELETE", `/api/admin/tasks?taskId=${c33OptionalId}`, null, admin);
+  const untouchedTemplateAfter = await prisma.onboardingTask.findUnique({
+    where: { id: c33OptionalId }, select: { id: true },
+  });
+  check("CNT-01 a template nobody has started is removable, taking only its untouched assignments",
+    untouchedRowsBefore > 0 && untouchedDelete.status === 200 && !untouchedTemplateAfter &&
+      await prisma.speakerTask.count({ where: { taskId: c33OptionalId } }) === 0,
+    JSON.stringify({ before: untouchedRowsBefore, status: untouchedDelete.status }));
+
+  const taskListAfter = await j("GET", "/api/admin/tasks", null, admin);
+  const listedTasks = taskListAfter.data?.data?.tasks ?? [];
+  const listedC33 = listedTasks.find((task) => task.id === c33TaskId);
+  check("CNT-01 the list reflects the deletion and carries the surviving task's deadline and progress",
+    taskListAfter.status === 200 &&
+      !listedTasks.some((task) => task.id === c33OptionalId) &&
+      listedC33?.title === "C33 late required task (revised)" &&
+      listedC33?.dueOn === "2026-05-12" &&
+      listedC33?.assignedCount === c33CohortSize &&
+      listedC33?.settledCount === 0,
+    JSON.stringify(listedC33));
+
+  const speakersPageSpeaker = await fetch(`${BASE}/admin/speakers`, {
+    headers: { cookie: cookie(speaker) },
+    redirect: "manual",
+  });
+  check("SPK-05 the speaker onboarding surface refuses a speaker",
+    [307, 308, 403].includes(speakersPageSpeaker.status), speakersPageSpeaker.status);
+  const speakersPageAdmin = await fetch(`${BASE}/admin/speakers`, { headers: { cookie: cookie(admin) } });
+  const speakersHtml = await speakersPageAdmin.text();
+  check("SPK-05 the authoring surface and its due dates render on /admin/speakers",
+    speakersPageAdmin.status === 200 &&
+      speakersHtml.includes("Onboarding checklist") &&
+      speakersHtml.includes("C33 late required task (revised)") &&
+      // The template table's Due column, rendered in the event zone.
+      speakersHtml.includes("May 12, 2026"),
+    speakersPageAdmin.status);
+  check("SPK-05 the speaker table carries a due-date column driven by open required tasks",
+    speakersHtml.includes("Next required due") && speakersHtml.includes("Speakers overdue"),
+    speakersPageAdmin.status);
+
   // C5-EMAIL: the dispatch log written above is now readable. Before this panel
   // an operator had no evidence any email ever left, and a bulk send's failure
   // count named neither recipient nor reason.
