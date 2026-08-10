@@ -2338,6 +2338,148 @@ try {
     s18ClearTrigger.status === 200 && s18ClearTrigger.data?.data?.template?.trigger === null,
     s18ClearTrigger.status,
   );
+
+  // C21 (audit4#30) — email template truth. Every template must be in exactly
+  // one honest state: either its stored wording really drives the send through
+  // the escaped variable engine, or it is read-only and previews the real fixed
+  // message. Before this, an admin could rewrite an acceptance email, watch the
+  // preview show their words, and the speaker would receive something else.
+  //
+  // Self-contained on purpose: the `cfp-submitted` row created here is deleted
+  // at the end of the block and `EmailDispatch` cascades with it, so the later
+  // submits in this file keep logging against `commsTemplate` exactly as before.
+  const c21Template = await prisma.emailTemplate.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      key: "cfp-submitted",
+      subject: "We received {{talkTitle}}",
+      htmlBody: "<p>Hi {{speakerName}}, thanks for {{talkTitle}}.</p>",
+      trigger: "abstract.submitted",
+    },
+  });
+
+  const c21List = await j("GET", "/api/comms/templates", null, admin);
+  const c21Rows = Object.fromEntries((c21List.data?.data ?? []).map((row) => [row.key, row]));
+  // Carried to the decision section below, where the real send can be compared.
+  const c21AcceptedSentMessage = c21Rows["cfp-accepted"]?.sentMessage;
+  check(
+    "C21 the templates API states per template whether editing it changes what is sent",
+    c21List.status === 200 &&
+      c21Rows["cfp-submitted"]?.editable === true &&
+      c21Rows["cfp-submitted"]?.sentMessage === null &&
+      c21Rows["cfp-accepted"]?.editable === false &&
+      typeof c21Rows["cfp-accepted"]?.deliveryReason === "string" &&
+      typeof c21AcceptedSentMessage?.html === "string",
+    JSON.stringify(Object.entries(c21Rows).map(([key, row]) => [key, row.editable])),
+  );
+
+  // Case (a): the stored submission receipt genuinely drives the send.
+  const c21Edit = await j("PATCH", `/api/comms/templates/${c21Template.id}`, {
+    subject: "Proposal received: {{talkTitle}}",
+    htmlBody: "<p>{{speakerName}}, we have {{talkTitle}} — C21 stored wording.</p>",
+  }, admin);
+  check(
+    "C21 the submission receipt template accepts an edit",
+    c21Edit.status === 200 &&
+      c21Edit.data?.data?.template?.subject === "Proposal received: {{talkTitle}}",
+    c21Edit.status,
+  );
+
+  const c21Submit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "C21 receipt proof", abstract: "Receipt wiring",
+    speakers: [{ email: "c21@scratch.test", name: "C21 Speaker", isPrimary: true }],
+    answers: { title_note: "hi", consent: true }, intent: "submit",
+  });
+  const c21Dispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c21Template.id, recipient: "c21@scratch.test" },
+    select: { status: true, providerId: true, variables: true },
+  });
+  check(
+    "C21 the receipt is rendered from the stored template an admin just edited, still in mock mode",
+    c21Submit.status === 201 &&
+      c21Dispatch?.variables?.source === "template" &&
+      c21Dispatch.status === "mocked" &&
+      c21Dispatch.providerId?.startsWith("mock:"),
+    JSON.stringify(c21Dispatch?.variables ?? null),
+  );
+
+  // The S18/S19 boundaries still refuse hostile or lossy edits to a template
+  // that now really reaches a speaker.
+  const c21DropsTitle = await j("PATCH", `/api/comms/templates/${c21Template.id}`, {
+    subject: "Proposal received",
+    htmlBody: "<p>{{speakerName}}, we got it.</p>",
+  }, admin);
+  check(
+    "C21 a receipt edit that drops the proposal title is refused, not silently sent",
+    c21DropsTitle.status === 422 &&
+      c21DropsTitle.data?.error?.code === "MISSING_REQUIRED_TEMPLATE_VARIABLE",
+    c21DropsTitle.data?.error?.code,
+  );
+
+  const c21Hostile = await j("PATCH", `/api/comms/templates/${c21Template.id}`, {
+    subject: "Proposal received: {{talkTitle}}",
+    htmlBody: "<p onclick=\"steal()\">{{speakerName}} — {{talkTitle}}</p><script>alert(1)</script>",
+  }, admin);
+  check(
+    "C21 a hostile receipt edit is stored sanitized and reported, never executed",
+    c21Hostile.status === 200 &&
+      c21Hostile.data?.data?.sanitized === true &&
+      !/script|onclick/i.test(c21Hostile.data?.data?.template?.htmlBody ?? ""),
+    JSON.stringify(c21Hostile.data?.data?.template?.htmlBody),
+  );
+
+  // Case (b): a code-built template refuses edits at the write, not just in the UI.
+  const c21ReadOnlyEdit = await j("PATCH", `/api/comms/templates/${commsTemplate.id}`, {
+    subject: "Rewritten acceptance",
+    htmlBody: "<p>Rewritten acceptance</p>",
+  }, admin);
+  const c21AfterRefusal = await prisma.emailTemplate.findUnique({
+    where: { id: commsTemplate.id },
+    select: { subject: true, htmlBody: true },
+  });
+  check(
+    "C21 a decision template refuses edits instead of storing wording nothing sends",
+    c21ReadOnlyEdit.status === 409 &&
+      c21ReadOnlyEdit.data?.error?.code === "TEMPLATE_READ_ONLY" &&
+      c21AfterRefusal?.subject === "Scratch decision" &&
+      c21AfterRefusal?.htmlBody === "<p>Scratch only</p>",
+    c21ReadOnlyEdit.data?.error?.code,
+  );
+
+  // A `cfp-submitted` row edited BEFORE this template became load-bearing never
+  // passed the required-variable contract, because nothing rendered it then.
+  // Writing straight to the database reproduces that history exactly: it is the
+  // one way to get a row the PATCH route would now refuse. The send path must
+  // re-check it, fall back to the fixed builder, and say so on the audit row
+  // rather than claim a template drove a send it did not.
+  await prisma.emailTemplate.update({
+    where: { id: c21Template.id },
+    data: {
+      subject: "We got your proposal",
+      htmlBody: "<p>Hi {{speakerName}}, thanks. {{portalLink}}</p>",
+    },
+  });
+  const c21LegacySubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "C21 legacy row proof", abstract: "Legacy receipt wiring",
+    speakers: [{ email: "c21-legacy@scratch.test", name: "C21 Legacy Speaker", isPrimary: true }],
+    answers: { title_note: "hi", consent: true }, intent: "submit",
+  });
+  const c21LegacyDispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c21Template.id, recipient: "c21-legacy@scratch.test" },
+    select: { status: true, variables: true },
+  });
+  check(
+    "C21 a legacy receipt row that never passed the edit contract falls back and records why",
+    c21LegacySubmit.status === 201 &&
+      c21LegacyDispatch?.variables?.source === "fixed" &&
+      c21LegacyDispatch.variables?.fallbackReason === "missing_required,unfilled_placeholder" &&
+      c21LegacyDispatch.status === "mocked",
+    JSON.stringify(c21LegacyDispatch?.variables ?? null),
+  );
+
+  // Restore the pre-C21 template set so every later submit in this file logs
+  // against `commsTemplate` as it did before. Dispatches cascade with the row.
+  await prisma.emailTemplate.delete({ where: { id: c21Template.id } });
   const strandedEvaluatorQueue = await fetch(`${BASE}/admin/evaluations`, {
     headers: { cookie: cookie(evalr) },
   });
@@ -2584,6 +2726,31 @@ try {
     JSON.stringify([...(decisionPreview.data?.data?.recipients ?? [])].sort()) ===
       JSON.stringify(["co@x.com", "spk@x.com"]),
     JSON.stringify(decisionPreview.data?.data?.recipients),
+  );
+
+  // C21 case (b): the read-only preview an operator sees in the templates panel
+  // must be the very message the decision path renders — not the stored
+  // `cfp-accepted` wording, which nothing sends. Comparing tag structure (the
+  // sample preview and this real one carry different names and titles) plus
+  // proving neither carries the stored body catches the two ways this can rot:
+  // the preview drifting from the builder, or the builder starting to read the
+  // editable row again.
+  const c21NoFeedbackPreview = await j("POST", "/api/comms/decision", {
+    abstractId,
+    includeFeedback: false,
+  }, admin);
+  const c21TagShape = (html) => (String(html ?? "").match(/<[^>]+>/g) ?? []).join("");
+  check(
+    "C21 the read-only decision preview is the same code-built message the send renders",
+    c21NoFeedbackPreview.status === 200 &&
+      c21TagShape(c21NoFeedbackPreview.data?.data?.html) === c21TagShape(c21AcceptedSentMessage?.html) &&
+      c21TagShape(c21AcceptedSentMessage?.html).length > 0 &&
+      !/Scratch only/.test(c21NoFeedbackPreview.data?.data?.html ?? "") &&
+      !/Scratch only/.test(c21AcceptedSentMessage?.html ?? ""),
+    JSON.stringify({
+      real: c21TagShape(c21NoFeedbackPreview.data?.data?.html),
+      shown: c21TagShape(c21AcceptedSentMessage?.html),
+    }),
   );
 
   const unpreviewedDecisionSend = await j("POST", "/api/comms/decision", {

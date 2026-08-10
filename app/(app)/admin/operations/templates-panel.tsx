@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, Mail, RotateCcw } from "lucide-react";
+import { Check, Lock, Mail, RotateCcw } from "lucide-react";
 import { previewTemplate, TEMPLATE_VARIABLES, unknownTemplateVariables } from "@/lib/comms/template-edit";
+import { fixedTemplatePreview, templateDelivery } from "@/lib/comms/template-truth";
 import styles from "./operations.module.css";
 
 type Template = {
@@ -18,13 +19,21 @@ type Template = {
 type Saved = { tone: "good" | "warn" | "bad"; headline: string; note?: string };
 
 /**
- * Read and edit the wording each reminder sends.
+ * Read the wording each email uses — and edit it where editing is real.
  *
- * The preview uses the same pure renderer as the server (`previewTemplate`
- * sanitizes, then substitutes escaped sample values), so what an operator sees
- * here is what a speaker receives — including the fact that an unrecognised
- * placeholder renders as nothing, which is why unknown names are warned about
- * while typing rather than after sending.
+ * The audit4#30 defect this panel used to embody: every template was presented
+ * as editable and the preview showed the stored text, but the submission
+ * receipt and both decision emails were rendered by fixed code. An operator
+ * could rewrite an acceptance email, watch their words appear in the preview,
+ * and the speaker would receive something else.
+ *
+ * Now each template renders according to `templateDelivery(key)`:
+ * editable templates keep the live editor (their stored body genuinely drives
+ * the send through the escaped variable engine), and code-built templates are
+ * shown read-only with the *real* message — produced by the same builder the
+ * send path calls, so the preview cannot drift from what is delivered. The
+ * server refuses an edit to a read-only template regardless of what this
+ * component renders.
  */
 export function TemplatesPanel({ templates: initial }: { templates: Template[] }) {
   const [templates, setTemplates] = useState(initial);
@@ -34,7 +43,10 @@ export function TemplatesPanel({ templates: initial }: { templates: Template[] }
     <section className={styles.panel} aria-labelledby="ops-templates">
       <div className={styles.panelHead}>
         <h2 id="ops-templates">What your speakers receive</h2>
-        <p>The wording used by each reminder. Edit it and see exactly how it will look.</p>
+        <p>
+          The exact wording of each email this event sends. Most are yours to edit; a few are built by
+          Greenroom and shown here read-only, so what you preview is always what gets delivered.
+        </p>
       </div>
 
       {templates.length === 0 ? (
@@ -67,6 +79,10 @@ function TemplateItem({
   onToggle: () => void;
   onSaved: (template: Template) => void;
 }) {
+  const delivery = useMemo(() => templateDelivery(template.key), [template.key]);
+  // Non-null exactly when `delivery.editable` is false — the real fixed message.
+  const sentMessage = useMemo(() => fixedTemplatePreview(template.key), [template.key]);
+
   const [subject, setSubject] = useState(template.subject);
   const [htmlBody, setHtmlBody] = useState(template.htmlBody);
   const [busy, setBusy] = useState(false);
@@ -75,6 +91,10 @@ function TemplateItem({
   const preview = useMemo(() => previewTemplate({ subject, htmlBody }), [subject, htmlBody]);
   const unknown = useMemo(() => unknownTemplateVariables(subject, htmlBody), [subject, htmlBody]);
   const dirty = subject !== template.subject || htmlBody !== template.htmlBody;
+
+  // The stored subject of a read-only template is decoration; the delivered
+  // subject comes from the builder. Never show the one that will not be sent.
+  const headlineSubject = sentMessage ? sentMessage.subject : template.subject;
 
   function reset() {
     setSubject(template.subject);
@@ -103,7 +123,9 @@ function TemplateItem({
       onSaved(updated);
       setSaved({
         tone: body.data.sanitized || body.data.unknownVariables.length > 0 ? "warn" : "good",
-        headline: "Saved. Reminders will use this wording from now on.",
+        // Names the real trigger rather than claiming "reminders": this template
+        // may be the automatic submission receipt, which no operator triggers.
+        headline: `Saved. ${delivery.summary}`,
         note: body.data.sanitized
           ? "Some formatting isn't supported in email and was removed — the text above is exactly what will be sent."
           : body.data.unknownVariables.length > 0
@@ -121,17 +143,46 @@ function TemplateItem({
     <div className={styles.templateItem}>
       <div className="row wrap">
         <Mail size={15} aria-hidden="true" />
-        <strong>{template.subject}</strong>
+        <strong>{headlineSubject}</strong>
         {template.trigger ? <span className="pill neutral">{template.trigger.replace(/_/g, " ").toLowerCase()}</span> : null}
+        {delivery.editable ? null : (
+          <span className="pill info">
+            <Lock size={12} aria-hidden="true" /> Read-only
+          </span>
+        )}
       </div>
-      <span className={styles.templateKey}>Used by reminders as “{template.key}”</span>
+      <span className={styles.templateKey}>
+        Template key “{template.key}” · {delivery.summary}
+      </span>
       <div className={styles.actions}>
         <button className="ghost-button" type="button" aria-expanded={open} onClick={onToggle}>
-          {open ? "Close" : "Edit and preview"}
+          {open ? "Close" : delivery.editable ? "Edit and preview" : "See what is sent"}
         </button>
       </div>
 
-      {open ? (
+      {!open ? null : sentMessage ? (
+        /* Read-only: show the real message, not the stored text nothing renders. */
+        <>
+          <div className={styles.field}>
+            <span className="field-label">Why you can&rsquo;t edit this one</span>
+            <p className={styles.hintText}>{delivery.reason}</p>
+          </div>
+
+          <div className={styles.field}>
+            <span className="field-label">What is actually sent</span>
+            <p className={styles.hintText}>
+              Shown with example details for one speaker. This is built by the same code that sends the
+              email, so it cannot drift from the delivered message. An organizer&rsquo;s note and any
+              reviewer comments you choose to include are added on top of this when you send from Decisions.
+            </p>
+            <div className={styles.templatePreview}>
+              <strong>{sentMessage.subject}</strong>
+              {/* Built by `buildDecisionEmail`, which escapes every interpolated value. */}
+              <div dangerouslySetInnerHTML={{ __html: sentMessage.html }} />
+            </div>
+          </div>
+        </>
+      ) : (
         <>
           <div className={styles.field}>
             <label className="field-label" htmlFor={`subject-${template.id}`}>Subject line</label>
@@ -174,7 +225,9 @@ function TemplateItem({
 
           <div className={styles.field}>
             <span className="field-label">How it will look</span>
-            <p className={styles.hintText}>Shown with example details for one speaker.</p>
+            <p className={styles.hintText}>
+              Shown with example details for one speaker. This wording is what gets sent.
+            </p>
             <div className={styles.templatePreview}>
               <strong>{preview.subject}</strong>
               {/* Sanitized by previewTemplate with the same allowlist the server applies. */}
@@ -200,7 +253,7 @@ function TemplateItem({
             </div>
           ) : null}
         </>
-      ) : null}
+      )}
     </div>
   );
 }

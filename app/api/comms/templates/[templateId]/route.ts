@@ -10,6 +10,7 @@ import {
   templateTriggerPatch,
   unknownTemplateVariables,
 } from "@/lib/comms/template-edit";
+import { isEditableTemplateKey, readOnlyTemplateRefusal } from "@/lib/comms/template-truth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,10 @@ type Params = { params: Promise<{ templateId: string }> };
  *
  * ADMIN-only and event-scoped (INV-EVENT-001): a template belonging to another
  * event is a 404, not a 403, so this cannot be used to probe for ids.
+ *
+ * Templates whose delivered message is built in code (`lib/comms/template-truth.ts`)
+ * are refused outright with `TEMPLATE_READ_ONLY`. Accepting wording that no send
+ * path renders is the audit4#30 defect this route must not reintroduce.
  *
  * `key` is intentionally NOT editable. Reminders address a template by
  * `(eventId, key)`, so renaming one would silently break every trigger that
@@ -49,6 +54,12 @@ export function PATCH(req: Request, ctx: Params) {
         SELECT "id", "eventId", "key" FROM "EmailTemplate" WHERE "id" = ${templateId} FOR UPDATE
       `;
       const owned = requireEventOwnedRow(existing, auth.eventId, "TEMPLATE_NOT_FOUND", "Template");
+      // C21: a template whose message is built in code must not accept edits.
+      // Storing wording that nothing renders is what made the console lie, so
+      // the refusal lives here — on the write — not only in the UI.
+      if (!isEditableTemplateKey(owned.key)) {
+        throw new ApiError(409, "TEMPLATE_READ_ONLY", readOnlyTemplateRefusal(owned.key));
+      }
       const missing = missingRequiredTemplateVariables(owned.key, input.subject, htmlBody);
       if (missing.length > 0) {
         throw new ApiError(

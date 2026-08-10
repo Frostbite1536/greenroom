@@ -31,6 +31,12 @@ export const KNOWN_TEMPLATE_VARIABLES: readonly string[] = TEMPLATE_VARIABLES.ma
 
 const REQUIRED_TEMPLATE_VARIABLES: Readonly<Record<string, readonly string[]>> = {
   "reviewer-invite": ["inviteUrl"],
+  // The submission receipt genuinely renders from this stored template (C21),
+  // so an edit that drops the proposal title produces a receipt that does not
+  // say which proposal was received — the one fact the email exists to carry.
+  // The event name is not required: hardcoding it in the wording is a
+  // legitimate editorial choice, unlike losing the title.
+  "cfp-submitted": ["talkTitle"],
 };
 
 /** `{{ name }}` with optional inner spacing — same pattern the renderer uses. */
@@ -60,6 +66,72 @@ export function unknownTemplateVariables(...texts: string[]): string[] {
 export function missingRequiredTemplateVariables(key: string, ...texts: string[]): string[] {
   const present = new Set(extractTemplateVariables(...texts));
   return (REQUIRED_TEMPLATE_VARIABLES[key] ?? []).filter((variable) => !present.has(variable));
+}
+
+/**
+ * Why a stored template is not safe to render for a given send.
+ *
+ * Closed set, no free text: these codes are written to the `EmailDispatch`
+ * audit row, so they must never be able to carry operator or speaker content.
+ */
+export type StoredTemplateDefect =
+  | "empty_subject"
+  | "empty_body"
+  | "missing_required"
+  | "unfilled_placeholder"
+  | "malformed_placeholder";
+
+/**
+ * Hold a *stored* row to the same contract the edit path enforces.
+ *
+ * A template row only passed validation if it was written through
+ * `PATCH /api/comms/templates/:id` under today's rules. A row edited before a
+ * send path started rendering it — or written straight to the database — never
+ * did. When such a row becomes load-bearing it can render a receipt with
+ * silently blank substitutions or literal `{{braces}}` on a speaker's screen.
+ *
+ * So the send path re-checks rather than trusts, and it re-checks with this
+ * one predicate rather than a second opinion that could drift from the editor.
+ * Returning `[]` means "safe to render"; anything else means the caller must
+ * fall back and say so.
+ *
+ * `suppliedVariables` is the closed set the *caller* will pass to
+ * `renderEmailTemplate`. That is stricter and more honest than the global
+ * known-variable list: the submission receipt supplies exactly three names, and
+ * a placeholder outside them has nothing to fill it, whatever the editor's
+ * advisory warning said at the time.
+ */
+export function storedTemplateDefects(input: {
+  key: string;
+  subject: string;
+  htmlBody: string;
+  suppliedVariables: readonly string[];
+}): StoredTemplateDefect[] {
+  const defects = new Set<StoredTemplateDefect>();
+  const subject = normalizeEmailSubject(input.subject ?? "");
+  // Check what the renderer will actually emit: it sanitizes before substituting,
+  // so markup stripped at render time must not count toward the contract.
+  const htmlBody = sanitizeHtml(input.htmlBody ?? "");
+
+  if (!subject.trim()) defects.add("empty_subject");
+  if (!htmlBody.trim()) defects.add("empty_body");
+
+  if (missingRequiredTemplateVariables(input.key, subject, htmlBody).length > 0) {
+    defects.add("missing_required");
+  }
+
+  const supplied = new Set(input.suppliedVariables);
+  if (extractTemplateVariables(subject, htmlBody).some((name) => !supplied.has(name))) {
+    defects.add("unfilled_placeholder");
+  }
+
+  // A placeholder the renderer's pattern does not match survives substitution
+  // and reaches the recipient as literal braces.
+  for (const text of [subject, htmlBody]) {
+    if (text.replace(PLACEHOLDER, "").includes("{{")) defects.add("malformed_placeholder");
+  }
+
+  return [...defects].sort();
 }
 
 export const emailTemplateUpdateSchema = z.object({

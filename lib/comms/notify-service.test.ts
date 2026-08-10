@@ -41,3 +41,130 @@ test("a public submission records one mocked receipt only for Abstract.submitter
   assert.deepEqual(dispatched, [{ recipient: "primary@example.test" }]);
   assert.equal(providerCalled, false);
 });
+
+/**
+ * C21 (audit4#30): the operator console says editing `cfp-submitted` changes
+ * the receipt, so the send must really render that stored row. The dispatch
+ * records which wording produced the message, which is what these assert.
+ */
+type ReceiptTemplateRow = { id: string; subject?: string; htmlBody?: string } | null;
+
+function receiptDb(templates: { dedicated: ReceiptTemplateRow; fallback: ReceiptTemplateRow }) {
+  const variables: Record<string, string>[] = [];
+  const db = {
+    abstract: {
+      findUnique: async () => ({
+        id: "abstract-1",
+        title: "Scaling Vector Search",
+        status: "SUBMITTED",
+        eventId: "event-1",
+        event: { name: "Forward 2026" },
+        submitter: { name: "Sofia Marques", email: "primary@example.test" },
+      }),
+    },
+    emailTemplate: {
+      findUnique: async () => templates.dedicated,
+      findFirst: async () => templates.fallback,
+    },
+    emailDispatch: {
+      create: async ({ data }: { data: { variables: Record<string, string> } }) => {
+        variables.push(data.variables);
+        return { id: `dispatch-${variables.length}` };
+      },
+      update: async () => ({ id: "dispatch-1" }),
+    },
+  } as unknown as SubmissionNotificationDb;
+  return { db, variables };
+}
+
+test("the stored cfp-submitted template is what the receipt is rendered from", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: {
+      id: "template-submitted",
+      subject: "We received {{talkTitle}}",
+      htmlBody: "<p>Hi {{speakerName}}, thanks for {{talkTitle}}.</p>",
+    },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "template");
+  // Nothing to explain: the template really did produce the bytes.
+  assert.equal(variables[0]?.fallbackReason, undefined);
+});
+
+/**
+ * A `cfp-submitted` row edited BEFORE this template became load-bearing never
+ * passed the required-variable contract, because nothing rendered it then. The
+ * send path re-checks it and refuses to mail a broken receipt.
+ */
+test("a legacy receipt row missing a required variable falls back and records why", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: {
+      id: "template-submitted",
+      subject: "We got your proposal",
+      htmlBody: "<p>Hi {{speakerName}}, thanks.</p>",
+    },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "missing_required");
+});
+
+test("a legacy receipt row whose placeholders nothing fills never renders them blank", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: {
+      id: "template-submitted",
+      // `portalLink` has no supplier, and the malformed name is left untouched
+      // by the renderer — both would reach the speaker if this row were trusted.
+      subject: "We got {{talkTitle}}",
+      htmlBody: "<p>Hi {{speakerName}} — {{portalLink}} {{ not-a-name }}</p>",
+    },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "malformed_placeholder,unfilled_placeholder");
+});
+
+test("a legacy event without the dedicated key keeps fixed receipt copy, never another template's words", async () => {
+  // The fallback row exists only to satisfy the dispatch foreign key. Rendering
+  // from it could mail an acceptance notice to someone who merely submitted.
+  const { db, variables } = receiptDb({
+    dedicated: null,
+    fallback: {
+      id: "template-accepted",
+      subject: "Your talk was accepted 🎉",
+      htmlBody: "<p>Great news — you're in!</p>",
+    },
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  // There was no receipt template at all — a different truth from a bad one.
+  assert.equal(variables[0]?.fallbackReason, "no_receipt_template");
+});
+
+test("a dedicated receipt row with empty wording falls back rather than mailing a blank receipt", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: { id: "template-submitted", subject: "   ", htmlBody: "   " },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "empty_body,empty_subject,missing_required");
+});

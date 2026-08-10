@@ -5,6 +5,9 @@ import {
   buildSubmissionReceipt,
   CFP_SUBMITTED_TEMPLATE_KEY,
 } from "@/lib/comms/notifications";
+import { renderEmailTemplate } from "@/lib/comms/reminders";
+import { submissionReceiptVariables } from "@/lib/comms/template-truth";
+import { storedTemplateDefects } from "@/lib/comms/template-edit";
 
 /**
  * Submission notifications (requirements delta #2, answer 6 / audit1#10).
@@ -59,39 +62,78 @@ export async function notifyAbstractSubmitted(
 
     // Notifications hang off the event's own templates so an operator can see
     // every send in one place; without a template there is nothing to log to.
-    const template =
-      await db.emailTemplate.findUnique({
-        where: {
-          eventId_key: {
-            eventId: abstract.eventId,
-            key: CFP_SUBMITTED_TEMPLATE_KEY,
-          },
+    const dedicated = await db.emailTemplate.findUnique({
+      where: {
+        eventId_key: {
+          eventId: abstract.eventId,
+          key: CFP_SUBMITTED_TEMPLATE_KEY,
         },
-        select: { id: true },
-      }) ??
+      },
+      select: { id: true, subject: true, htmlBody: true },
+    });
+    const template =
+      dedicated ??
       // Compatibility for an already-running event between this code deploy
-      // and its next coordinated reseed. The rendered submission messages do
-      // not come from this row; it is the required dispatch-log parent only.
-      // Prefer the dedicated key as soon as it exists, but do not silently
-      // suppress receipts while legacy event templates are still in place.
-      await db.emailTemplate.findFirst({
+      // and its next coordinated reseed. This row is the required dispatch-log
+      // parent ONLY: it may be any template the event happens to have, so
+      // rendering the receipt from it could mail an acceptance notice to
+      // someone who has merely submitted. Fixed copy is the safe answer here.
+      (await db.emailTemplate.findFirst({
         where: { eventId: abstract.eventId },
-        select: { id: true },
+        select: { id: true, subject: true, htmlBody: true },
         orderBy: { key: "asc" },
-      });
+      }));
     if (!template) return { ...EMPTY, skipped: "no_template" };
 
-    const messages = [{
-      ...buildSubmissionReceipt({ eventName: abstract.event.name, speaker: abstract.submitter, title: abstract.title }),
-      to: abstract.submitter.email,
-    }];
+    // C21: the stored `cfp-submitted` template genuinely drives this send, so
+    // the operator console's claim that editing it changes the receipt is true.
+    //
+    // But a stored row is only trustworthy if it passed the edit contract, and
+    // a row edited before this template became load-bearing never did — nothing
+    // validated it, because nothing rendered it. Re-check it here against the
+    // very same predicate `PATCH /api/comms/templates/:id` applies, so a legacy
+    // row cannot mail a receipt full of blank substitutions or literal braces.
+    // Validation is not a fork of the edit rules; it is those rules.
+    const receiptVariables = submissionReceiptVariables({
+      eventName: abstract.event.name,
+      speakerName: abstract.submitter.name,
+      title: abstract.title,
+    });
+    const storedDefects = dedicated
+      ? storedTemplateDefects({
+          key: CFP_SUBMITTED_TEMPLATE_KEY,
+          subject: dedicated.subject ?? "",
+          htmlBody: dedicated.htmlBody ?? "",
+          suppliedVariables: Object.keys(receiptVariables),
+        })
+      : [];
+    const usesStoredTemplate = Boolean(dedicated) && storedDefects.length === 0;
+    const content = usesStoredTemplate && dedicated
+      ? renderEmailTemplate({ subject: dedicated.subject, htmlBody: dedicated.htmlBody }, receiptVariables)
+      : buildSubmissionReceipt({ eventName: abstract.event.name, speaker: abstract.submitter, title: abstract.title });
+    // Never claim the template drove a send it did not. The audit row carries
+    // why the fixed builder produced these bytes, using the closed defect codes.
+    const fallbackReason = usesStoredTemplate
+      ? null
+      : dedicated
+        ? storedDefects.join(",")
+        : "no_receipt_template";
+
+    const messages = [{ ...content, to: abstract.submitter.email }];
 
     const summary = { ...EMPTY, attempted: messages.length };
     for (const message of messages) {
       const outcome = await dispatchEmail(db, {
         templateId: template.id,
         message: { to: message.to, subject: message.subject, html: message.html },
-        variables: { abstractId: abstract.id, kind: "submission" },
+        // `source` records which wording produced this message, so the audit
+        // log can distinguish a stored-template receipt from the fallback.
+        variables: {
+          abstractId: abstract.id,
+          kind: "submission",
+          source: usesStoredTemplate ? "template" : "fixed",
+          ...(fallbackReason ? { fallbackReason } : {}),
+        },
         fetcher: options.fetcher,
       });
       if (outcome.status === "sent") summary.sent++;
