@@ -14,6 +14,12 @@ import {
 import type { EvaluationSetupView, SetupPlan } from "@/lib/data/reads";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EVALUATION_SETUP_STATUS_LABELS } from "@/lib/evaluation-setup-status";
+import {
+  EMPTY_ROUND_WINDOW,
+  formatRoundWindow,
+  roundWindowError,
+  roundWindowInput,
+} from "@/lib/evaluation-round-window";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
 import { reviewerInviteLifecycleText } from "@/lib/reviewer-invite-ui";
 import { ReviewerInviteForm, ReviewerInviteResend } from "@/components/reviewer-invite-controls";
@@ -123,6 +129,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
         {creating ? (
           <RoundDialog
             eventId={view.eventId}
+            timezone={view.timezone}
             nextOrdinal={1}
             onClose={() => setCreating(false)}
             onCreated={(id) => {
@@ -152,28 +159,34 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
         </div>
 
         <div className="round-list">
-          {view.plans.map((p) => (
-            <button
-              type="button"
-              key={p.id}
-              className={`round-card ${p.id === plan?.id ? "active" : ""}`}
-              aria-pressed={p.id === plan?.id}
-              onClick={() => selectPlan(p.id)}
-            >
-              <div className="row wrap" style={{ gap: 8 }}>
-                <strong>Round {p.ordinal}</strong>
-                {p.isBlind ? (
-                  <Pill tone="info"><EyeOff size={11} aria-hidden="true" /> Blind</Pill>
-                ) : null}
-              </div>
-              <div className="cell-sub">{p.name}</div>
-              <div className="cell-sub">
-                {p.rubric.length} criteria · {p.assignmentCount === 0
-                  ? "no active reviews"
-                  : `${p.completedCount}/${p.assignmentCount} reviews done`}
-              </div>
-            </button>
-          ))}
+          {view.plans.map((p) => {
+            const roundWindow = formatRoundWindow(p.startsAt, p.endsAt, view.timezone);
+            return (
+              <button
+                type="button"
+                key={p.id}
+                className={`round-card ${p.id === plan?.id ? "active" : ""}`}
+                aria-pressed={p.id === plan?.id}
+                onClick={() => selectPlan(p.id)}
+              >
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <strong>Round {p.ordinal}</strong>
+                  {p.isBlind ? (
+                    <Pill tone="info"><EyeOff size={11} aria-hidden="true" /> Blind</Pill>
+                  ) : null}
+                </div>
+                <div className="cell-sub">{p.name}</div>
+                <div className="cell-sub">
+                  {p.rubric.length} criteria · {p.assignmentCount === 0
+                    ? "no active reviews"
+                    : `${p.completedCount}/${p.assignmentCount} reviews done`}
+                </div>
+                {/* Only rendered when the round actually carries a window: an
+                    absent date is left absent rather than shown as a dash. */}
+                {roundWindow ? <div className="cell-sub">{roundWindow}</div> : null}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -452,6 +465,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
       {creating ? (
         <RoundDialog
           eventId={view.eventId}
+          timezone={view.timezone}
           nextOrdinal={Math.max(0, ...view.plans.map((p) => p.ordinal)) + 1}
           onClose={() => setCreating(false)}
           onCreated={(id) => {
@@ -465,14 +479,16 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   );
 }
 
-/** Create a round and its rubric in one step. */
+/** Create a round, its window and its rubric in one step. */
 function RoundDialog({
   eventId,
+  timezone,
   nextOrdinal,
   onClose,
   onCreated,
 }: {
   eventId: string;
+  timezone: string;
   nextOrdinal: number;
   onClose: () => void;
   onCreated: (planId: string) => void;
@@ -480,6 +496,10 @@ function RoundDialog({
   const [name, setName] = useState(`Round ${nextOrdinal} — Program Committee`);
   const [ordinal, setOrdinal] = useState(nextOrdinal);
   const [isBlind, setIsBlind] = useState(false);
+  // Both optional: an admin often knows only the deadline when the round is
+  // created. `EvaluationPlan.startsAt`/`endsAt` and the plans API have always
+  // accepted these — this dialog was the only place that dropped them.
+  const [roundWindow, setRoundWindow] = useState(EMPTY_ROUND_WINDOW);
   const [criteria, setCriteria] = useState<DraftCriterion[]>(
     STARTER_CRITERIA.map((c) => ({ ...c })),
   );
@@ -523,6 +543,11 @@ function RoundDialog({
       setError(`“${badWeight.label}”: weight must be greater than zero.`);
       return;
     }
+    const windowError = roundWindowError(roundWindow);
+    if (windowError) {
+      setError(windowError);
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -532,6 +557,9 @@ function RoundDialog({
       name: name.trim() || `Round ${ordinal}`,
       ordinal,
       isBlind,
+      // A blank date is omitted, not sent as null: the existing plans contract
+      // treats both bounds as optional and this path stays unchanged.
+      ...roundWindowInput(roundWindow, timezone),
       rubric: labelled.map((c, i) => ({
         key: keys[i],
         label: c.label.trim(),
@@ -597,6 +625,37 @@ function RoundDialog({
             />
           </label>
         </div>
+
+        <div className="grid-2" style={{ marginTop: 14 }}>
+          <label className="stack">
+            <span className="field-label">Reviewing opens (optional)</span>
+            <input
+              className="text-input"
+              name="roundOpensOn"
+              type="date"
+              value={roundWindow.opensOn}
+              aria-describedby="round-window-help"
+              onChange={(e) => setRoundWindow((w) => ({ ...w, opensOn: e.target.value }))}
+            />
+          </label>
+          <label className="stack">
+            <span className="field-label">Reviewing closes (optional)</span>
+            <input
+              className="text-input"
+              name="roundClosesOn"
+              type="date"
+              value={roundWindow.closesOn}
+              aria-describedby="round-window-help"
+              aria-invalid={roundWindowError(roundWindow) !== null}
+              onChange={(e) => setRoundWindow((w) => ({ ...w, closesOn: e.target.value }))}
+            />
+          </label>
+        </div>
+        <p className="hint" id="round-window-help" style={{ marginTop: 6 }}>
+          Dates are read in the event timezone ({timezone}), and the close date includes its own
+          day. They record when this round is meant to run and show on the round list — reviewers
+          are not blocked from scoring outside the window.
+        </p>
 
         <div className="row" style={{ marginTop: 14, gap: 10 }}>
           <Switch checked={isBlind} onChange={setIsBlind} label="Hide speaker profiles in reviewer queues" />

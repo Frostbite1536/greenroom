@@ -1449,6 +1449,46 @@ try {
   check("a fresh event with a round but no proposals says so",
     freshAfterRound.text.includes("No proposals to review yet"));
 
+  // --- ABS-01: optional round open/close dates ----------------------------
+  // Round 1 above was created with no window at all, which is the case that
+  // must keep working: the dates are optional on both the schema and the API.
+  const datelessRound = await prisma.evaluationPlan.findFirst({
+    where: { eventId: FRESH_EVENT_ID, ordinal: 1 },
+    select: { startsAt: true, endsAt: true },
+  });
+  check("a round created without dates is stored with an empty window",
+    datelessRound?.startsAt === null && datelessRound?.endsAt === null,
+    `startsAt=${datelessRound?.startsAt ?? "missing"} endsAt=${datelessRound?.endsAt ?? "missing"}`);
+  check("a dateless round renders no window line at all",
+    !freshAfterRound.text.includes("Opens ") && !freshAfterRound.text.includes("Closes "),
+    "an unset date must be left absent, not rendered as a placeholder");
+
+  // The scratch fresh event is America/Los_Angeles, so these instants are the
+  // exact ones the dialog derives for local 2 Mar 00:00 (PST) and 20 Mar 23:59
+  // (PDT, after the spring-forward). The rendered dates must be those local
+  // calendar days, not the UTC days the instants fall on.
+  const datedRound = await req("POST", "/api/evaluations/plans", {
+    eventId: FRESH_EVENT_ID,
+    name: "Round 2 — Final panel",
+    ordinal: 2,
+    isBlind: false,
+    startsAt: "2026-03-02T08:00:00.000Z",
+    endsAt: "2026-03-21T06:59:00.000Z",
+    rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight: 1.5 }],
+  }, freshAdmin);
+  check("setup panel can create a round carrying an open/close window → 201",
+    datedRound.status === 201,
+    `${datedRound.status} ${JSON.stringify(datedRound.data?.error ?? "")}`);
+
+  const freshAfterDatedRound = await req("GET", "/admin/evaluations", null, freshAdmin);
+  check("a round created with dates renders them in the event timezone",
+    freshAfterDatedRound.text.includes("Opens Mar 2, 2026")
+    && freshAfterDatedRound.text.includes("Closes Mar 20, 2026"),
+    "expected the event-local calendar days, not the stored UTC days");
+  check("the dateless round still renders alongside the dated one",
+    freshAfterDatedRound.text.includes("Round 1 — Program Committee")
+    && freshAfterDatedRound.text.includes("Round 2 — Final panel"));
+
   // --- C17: event-scoped reviewer invitations -----------------------------
   // This fresh identity is provisioned through the ADMIN route, so the UI must
   // present its token-free lifecycle without hiding a pending reviewer from
