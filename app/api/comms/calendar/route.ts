@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
 import { publicSessionSummary } from "@/lib/public-session-copy";
+import { CANONICAL_SCHEDULE_PATH, publicSurfaceUrl } from "@/lib/embed-alias";
 import type { ApiResponse } from "@/types/api";
 
 export const runtime = "nodejs";
@@ -29,7 +30,9 @@ export async function GET(request: Request) {
 
   const event = await prisma.event.findUnique({
     where: { id: eventId },
-    select: { id: true, name: true },
+    // `slug` so each VEVENT's URL can point at this event's own programme page
+    // rather than whichever one the schedule route defaults to.
+    select: { id: true, name: true, slug: true },
   });
   if (!event) return fail("NOT_FOUND", "Unknown event.", 404);
 
@@ -50,7 +53,15 @@ export async function GET(request: Request) {
       id: true,
       title: true,
       description: true,
-      scheduleSlot: { select: { startsAt: true, endsAt: true, room: { select: { name: true } } } },
+      scheduleSlot: {
+        select: {
+          startsAt: true,
+          endsAt: true,
+          room: { select: { name: true } },
+          // The track is the calendar client's grouping/colour hook (CATEGORIES).
+          track: { select: { name: true } },
+        },
+      },
     },
     orderBy: { scheduleSlot: { startsAt: "asc" } },
   });
@@ -66,6 +77,13 @@ export async function GET(request: Request) {
   }
 
   const appUrl = process.env.APP_URL?.replace(/\/$/, "");
+  // The canonical public programme, scoped to this event, with the fragment
+  // that scrolls to the talk itself. Previously every VEVENT in a 40-session
+  // file carried the identical bare embed URL, which told a reader nothing
+  // about which row they had clicked.
+  const scheduleUrl = appUrl
+    ? `${appUrl}${publicSurfaceUrl(CANONICAL_SCHEDULE_PATH, event.slug)}`
+    : null;
 
   const events: IcsEvent[] = sessions.map((s) => ({
     uid: `${s.id}@greenroom`,
@@ -78,11 +96,17 @@ export async function GET(request: Request) {
     location: s.scheduleSlot!.room.name,
     startsAt: s.scheduleSlot!.startsAt,
     endsAt: s.scheduleSlot!.endsAt,
-    url: appUrl ? `${appUrl}/embed/schedule` : null,
+    url: scheduleUrl ? `${scheduleUrl}#session-${s.id}` : null,
+    // Only when the talk actually sits on a track; an untracked session gets
+    // no CATEGORIES line rather than an empty or invented one.
+    categories: s.scheduleSlot!.track ? [s.scheduleSlot!.track.name] : null,
   }));
 
   const ics = buildIcsCalendar(events, {
-    calendarName: sessionId ? undefined : event.name,
+    // Named on the single-session file too. A one-event .ics that arrives with
+    // no calendar name is filed by the client under an untitled calendar, or
+    // silently merged into the user's default one.
+    calendarName: event.name,
   });
 
   const filename = sessionId ? icsFilename(sessions[0].title) : icsFilename(event.name);

@@ -125,6 +125,15 @@ async function req(method, path, body, sess) {
   return { status: res.status, data, text, headers: res.headers };
 }
 
+/**
+ * Undo RFC 5545 §3.1 line folding before asserting on .ics content.
+ *
+ * A content line over 75 octets is split with CRLF + a single leading space,
+ * so a naive `includes()` on a long URL or DESCRIPTION silently fails — and a
+ * naive `!includes()` silently PASSES, which is the dangerous direction.
+ */
+const unfoldIcs = (text) => text.replace(/\r\n /g, "");
+
 async function reqManual(path, sess) {
   const res = await fetch(BASE + path, {
     headers: sess ? { cookie: cookie(sess) } : undefined,
@@ -822,6 +831,30 @@ try {
   check("public session calendar export → 200", sessionCalendar.status === 200, `got ${sessionCalendar.status}`);
   check("public session calendar export has one event", (sessionCalendar.text.match(/BEGIN:VEVENT/g) ?? []).length === 1);
 
+  // --- §5-6: the calendar file says which talk, and on which track ----------
+  // A .ics is read entirely outside the product, so anything the file omits is
+  // simply unavailable to its reader.
+  check("§5-6 the single-session file is still named for its event",
+    unfoldIcs(sessionCalendar.text).includes(`X-WR-CALNAME:${ev.name}`),
+    "expected X-WR-CALNAME on the single-session export");
+  // The server is spawned with APP_URL=REVIEWER_INVITE_APP_URL, so the absolute
+  // URL is fully determined here rather than pattern-matched loosely.
+  check("§5-6 the VEVENT carries the session's own anchor on the canonical page",
+    unfoldIcs(sessionCalendar.text).includes(
+      `URL:${REVIEWER_INVITE_APP_URL}/schedule?event=${EVENT_ID}#session-${fx.sessionA.id}`,
+    )
+    && !unfoldIcs(sessionCalendar.text).includes("/embed/schedule"),
+    "expected a per-session /schedule#session-<id> URL");
+  check("§5-6 the talk's track reaches the calendar client as CATEGORIES",
+    unfoldIcs(sessionCalendar.text).includes(`CATEGORIES:${fx.track.name}`),
+    `expected CATEGORIES:${fx.track.name}`);
+  // Every VEVENT in the whole-event file gets its own distinct URL, which is
+  // the defect: they all used to carry the identical bare embed link.
+  const veventUrls = [...unfoldIcs(eventCalendar.text).matchAll(/URL:([^\r\n]+)/g)].map((m) => m[1]);
+  check("§5-6 each VEVENT in the full export points at a different talk",
+    veventUrls.length > 1 && new Set(veventUrls).size === veventUrls.length,
+    `${veventUrls.length} URLs, ${new Set(veventUrls).size} distinct`);
+
   // --- mutation 1: builder Save ---
   const savePayload = {
     eventId: EVENT_ID,
@@ -1309,9 +1342,9 @@ try {
   );
   check("§5-4 the converted talk's .ics DESCRIPTION carries that summary, not provenance",
     convertedIcs.status === 200
-    && convertedIcs.text.includes("DESCRIPTION:Three field-tested tactics")
-    && !convertedIcs.text.includes(PROVENANCE_DESCRIPTION)
-    && !convertedIcs.text.includes(PUBLIC_SUMMARY_FALLBACK),
+    && unfoldIcs(convertedIcs.text).includes("DESCRIPTION:Three field-tested tactics")
+    && !unfoldIcs(convertedIcs.text).includes(PROVENANCE_DESCRIPTION)
+    && !unfoldIcs(convertedIcs.text).includes(PUBLIC_SUMMARY_FALLBACK),
     "expected the real summary in the single-session calendar file");
   // A re-run must reconcile a talk whose description was never carried across,
   // and must not blank one an organizer wrote by hand.
@@ -2827,8 +2860,8 @@ try {
   );
   check("§5-4 the .ics export carries the honest fallback, never the provenance note",
     provenanceIcs.status === 200
-    && !provenanceIcs.text.includes(PROVENANCE_DESCRIPTION)
-    && provenanceIcs.text.includes(`DESCRIPTION:${PUBLIC_SUMMARY_FALLBACK.replace(/,/g, "\\,")}`),
+    && !unfoldIcs(provenanceIcs.text).includes(PROVENANCE_DESCRIPTION)
+    && unfoldIcs(provenanceIcs.text).includes(`DESCRIPTION:${PUBLIC_SUMMARY_FALLBACK.replace(/,/g, "\\,")}`),
     "expected the fallback DESCRIPTION and no provenance text in the calendar file");
   check("embed offers a Show more affordance",
     enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
