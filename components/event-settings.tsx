@@ -6,6 +6,7 @@ import { Building2, CalendarDays, Plus, Tags, Trash2 } from "lucide-react";
 import type { EventSettingsView } from "@/lib/data/reads";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
 import {
+  COMMON_TIME_ZONES,
   eventSettingsDraft,
   planEventSettingsPatch,
   reconcileEventSettingsDraft,
@@ -18,21 +19,6 @@ type EventForm = EventSettingsDraft;
 
 type RoomDraft = { id: string; name: string; capacity: string };
 type EventError = { message: string; field: "name" | "timezone" | "dates" | "general" };
-
-const COMMON_TIME_ZONES = [
-  "America/Los_Angeles",
-  "America/Denver",
-  "America/Chicago",
-  "America/New_York",
-  "America/Toronto",
-  "America/Sao_Paulo",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Singapore",
-  "Asia/Tokyo",
-  "Australia/Sydney",
-  "UTC",
-];
 
 function positiveCapacity(value: string): number | null | undefined {
   const trimmed = value.trim();

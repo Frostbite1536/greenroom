@@ -125,11 +125,37 @@ const eventDateKeySchema = z
     return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
   }, "Use a real calendar date.");
 
-/** Minimal, current-event-only settings update. Event creation/deletion stays out of M5. */
+/** Event name and timezone are the same bounded contract whether creating or updating. */
+const eventNameSchema = z.string().trim().min(1).max(160);
+const eventTimezoneSchema = z.string().trim().min(1).max(100).refine(isIanaTimeZone, "Use a valid IANA timezone.");
+
+/**
+ * The paired event-date contract, shared verbatim by the settings PATCH and the
+ * create POST so the two can never drift. Dates are event-local calendar keys:
+ * both are supplied, both are cleared, and the pair is never inverted.
+ */
+export function refineEventDatePair(
+  value: { startsOn?: string | null; endsOn?: string | null },
+  ctx: z.RefinementCtx,
+): void {
+  const datesProvided = value.startsOn !== undefined || value.endsOn !== undefined;
+  if (datesProvided && (value.startsOn === undefined || value.endsOn === undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["startsOn"], message: "Provide both event dates together." });
+    return;
+  }
+  if ((value.startsOn === null) !== (value.endsOn === null)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "Clear both event dates together." });
+  }
+  if (value.startsOn && value.endsOn && value.startsOn > value.endsOn) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "The event must end on or after its start date." });
+  }
+}
+
+/** Minimal, current-event-only settings update. Event deletion stays out of M5. */
 export const eventSettingsUpdateSchema = z
   .object({
-    name: z.string().trim().min(1).max(160).optional(),
-    timezone: z.string().trim().min(1).max(100).refine(isIanaTimeZone, "Use a valid IANA timezone.").optional(),
+    name: eventNameSchema.optional(),
+    timezone: eventTimezoneSchema.optional(),
     startsOn: eventDateKeySchema.nullable().optional(),
     endsOn: eventDateKeySchema.nullable().optional(),
   })
@@ -139,17 +165,39 @@ export const eventSettingsUpdateSchema = z
     if (!value.name && !value.timezone && !datesProvided) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: "Provide at least one setting to update." });
     }
-    if (datesProvided && (value.startsOn === undefined || value.endsOn === undefined)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["startsOn"], message: "Provide both event dates together." });
-      return;
-    }
-    if ((value.startsOn === null) !== (value.endsOn === null)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "Clear both event dates together." });
-    }
-    if (value.startsOn && value.endsOn && value.startsOn > value.endsOn) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["endsOn"], message: "The event must end on or after its start date." });
-    }
+    refineEventDatePair(value, ctx);
   });
+
+/**
+ * Web address for a new event (D-C5-9). Bounded and pattern-validated on the
+ * exact shape the public routes already assume: lowercase alphanumeric groups
+ * joined by single dashes. The slug is immutable after creation, so this is the
+ * only place it is ever accepted from a client.
+ */
+const eventSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, "A web address is required.")
+  .max(60, "Use 60 characters or fewer.")
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes.");
+
+/**
+ * Create one empty event (D-C5-9). Name, slug, dates and timezone only — no
+ * cloning, no cross-event copying, no deletion. Dates stay optional so an event
+ * can be opened before its dates are decided, but the pair rule is identical to
+ * the settings PATCH.
+ */
+export const eventCreateSchema = z
+  .object({
+    name: eventNameSchema,
+    slug: eventSlugSchema,
+    timezone: eventTimezoneSchema,
+    startsOn: eventDateKeySchema.nullable().optional(),
+    endsOn: eventDateKeySchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine(refineEventDatePair);
 
 const roomNameSchema = z.string().trim().min(1).max(120);
 const roomCapacitySchema = z.number().int().positive().max(1_000_000).nullable();

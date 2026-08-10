@@ -18,13 +18,18 @@
  */
 import { cache } from "react";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
 import { canonicalPublicFormPath } from "@/lib/services/public-form-resolver";
 
 /**
  * The public event the anonymous surfaces default to, matching
  * `getPublicAgenda()` / `getPublicSpeakers()` in `lib/data/reads.ts`.
+ *
+ * Re-exported from `lib/default-event.ts` so the pinned slug has one home that
+ * pure modules can import without pulling Prisma in. Existing importers of
+ * `DEFAULT_PUBLIC_EVENT` from this module are unaffected.
  */
-export const DEFAULT_PUBLIC_EVENT = "forward-2026";
+export { DEFAULT_PUBLIC_EVENT };
 
 /**
  * Safety bound on a single entry-point read, in the spirit of
