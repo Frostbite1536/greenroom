@@ -18,11 +18,13 @@ import {
   STALE_PREVIEW_MESSAGE,
 } from "@/lib/services/agenda-autoplace-request";
 import {
+  lockEventForShare,
   lockEventScheduleSlotsForUpdate,
   lockScheduleRoomsForShare,
   lockScheduleSessionsForShare,
   lockScheduleSpeakersForShare,
   lockScheduleWrite,
+  scheduleDayKeyForInstant,
 } from "@/lib/services/schedule-lock";
 
 export const dynamic = "force-dynamic";
@@ -33,10 +35,15 @@ export const dynamic = "force-dynamic";
  *
  * The client's copy of the preview is treated as a *request*, never as a
  * finding. Between preview and apply another administrator can move a session,
- * delete a room, or change a speaker assignment, so this route establishes the
- * authoritative transactional snapshot (S3 under `LOCK-ORDER-v1`), re-reads
- * sessions, speakers, rooms, event dates and existing slots, and revalidates
- * every target and every conflict from scratch. The fingerprint is checked too,
+ * delete a room, change a speaker assignment, or edit the event's timezone and
+ * dates, so this route establishes the authoritative transactional snapshot
+ * (S3 under `LOCK-ORDER-v1`), re-reads the event configuration, sessions,
+ * speakers, rooms and existing slots *under the locks*, and revalidates every
+ * target and every conflict from scratch. The event row is locked and re-read
+ * with the rest: timezone and the event date range decide which days exist and
+ * where the programme window falls, so validating a placement against an
+ * unlocked copy of them would be validating it against nothing. The
+ * fingerprint is checked too,
  * but only as a cheap early exit — it never replaces the fresh validation
  * below, and removing it would not weaken any refusal.
  *
@@ -65,38 +72,52 @@ export const POST = handle(async (req) => {
   };
 
   const applied = await prisma.$transaction(async (tx) => {
-    const event = await tx.event.findUnique({
-      where: { id: ctx.eventId },
-      select: { timezone: true, startsAt: true, endsAt: true },
-    });
-    if (!event) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
-    const timezone = event.timezone;
-
     const targetSessionIds = input.placements.map((placement) => placement.sessionId);
     const targetRoomIds = input.placements.map((placement) => placement.roomId);
-    const proposedDayKeys = input.placements.map(
-      (placement) => zonedParts(placement.startsAt, timezone).dateKey,
+    // Derived from the request alone. The advisory day keys are a partition, so
+    // they use the UTC calendar day rather than the event-local one: an
+    // event-local key would move the moment an administrator edits the timezone,
+    // and it would have to be derived from an Event read taken before the lock
+    // that read is supposed to be protected by.
+    const proposedDayKeys = input.placements.map((placement) =>
+      scheduleDayKeyForInstant(placement.startsAt),
     );
-
-    // Which sessions already hold a slot, read before any lock purely to know
-    // whose speaker rows must be locked: a conflict can involve a speaker on a
-    // session this plan never mentions. The set is re-derived under the slot
-    // lock below and any growth is refused, so an unlocked read here cannot
-    // widen what this transaction accepts.
-    const preLockSlotSessionIds = (
-      await tx.scheduleSlot.findMany({ where: { eventId: ctx.eventId }, select: { sessionId: true } })
-    ).map((slot) => slot.sessionId);
 
     // --- S3 / LOCK-ORDER-v1, in order ---
     await lockScheduleWrite(tx, ctx.eventId, proposedDayKeys);
+
+    // The configuration parent, before the resources it scopes. Timezone and the
+    // event date range are read here and nowhere else: every day, window and
+    // lattice decision below is made against this locked row, so a settings
+    // PATCH cannot slip new boundaries in between the check and the write.
+    const event = await lockEventForShare(tx, ctx.eventId);
+    if (!event) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
+    const timezone = event.timezone;
+
+    // Which sessions already hold a slot — needed before the speaker lock,
+    // because a conflict can involve a speaker on a session this plan never
+    // mentions. This is not an unlocked pre-check: the event-wide advisory key
+    // is already held, and every schedule writer takes it first, so no
+    // key-respecting writer can add a slot between here and the `FOR UPDATE`
+    // below. The guard after that read is kept anyway, as defence against a
+    // future writer that skips the key.
+    const slotSessionRows = await tx.scheduleSlot.findMany({
+      where: { eventId: ctx.eventId },
+      select: { sessionId: true },
+      orderBy: { id: "asc" },
+      take: OPERATOR_QUERY_LIMITS.agendaSessions + 1,
+    });
+    assertEventQueryBound(slotSessionRows, OPERATOR_QUERY_LIMITS.agendaSessions, "scheduled sessions");
+    const slotSessionIds = slotSessionRows.map((slot) => slot.sessionId);
+
     const lockedRooms = await lockScheduleRoomsForShare(tx, ctx.eventId, targetRoomIds);
     const lockedSpeakers = await lockScheduleSpeakersForShare(
       tx,
-      [...targetSessionIds, ...preLockSlotSessionIds],
+      [...targetSessionIds, ...slotSessionIds],
     );
     const lockedSessions = await lockScheduleSessionsForShare(
       tx,
-      [...targetSessionIds, ...preLockSlotSessionIds],
+      [...targetSessionIds, ...slotSessionIds],
     );
     const lockedSlots = await lockEventScheduleSlotsForUpdate(tx, ctx.eventId);
 

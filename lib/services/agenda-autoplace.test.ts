@@ -310,3 +310,41 @@ test("the fingerprint is stable across input order and changes with the schedule
   });
   assert.notEqual(placementSnapshotFingerprint(oneFewer), placementSnapshotFingerprint(base));
 });
+
+test("an event settings edit alone changes the fingerprint", () => {
+  // The race Greptile found: a settings PATCH between preview and apply moves
+  // the day and window boundaries without touching a single slot or session.
+  // The fingerprint has to notice, or apply would commit against boundaries
+  // that no longer exist.
+  const base = snapshot({ unscheduled: [session("s1")] });
+
+  const retimezoned = snapshot({ ...base, timezone: "America/Los_Angeles" });
+  assert.notEqual(placementSnapshotFingerprint(retimezoned), placementSnapshotFingerprint(base));
+
+  const redated = snapshot({ ...base, eventDayKeys: [DAY, "2026-05-13"] });
+  assert.notEqual(placementSnapshotFingerprint(redated), placementSnapshotFingerprint(base));
+
+  const narrowed = snapshot({ ...base, eventDayKeys: [] });
+  assert.notEqual(placementSnapshotFingerprint(narrowed), placementSnapshotFingerprint(base));
+
+  // ...and an unrelated re-read of the same settings does not.
+  assert.equal(
+    placementSnapshotFingerprint(snapshot({ ...base })),
+    placementSnapshotFingerprint(base),
+  );
+});
+
+test("moving the event timezone moves where a placement is legal", () => {
+  // Same instant, two timezones: the event-local minute-of-day the window and
+  // lattice are checked against differs, which is exactly why the event row has
+  // to be read under the lock rather than before it.
+  const utc = planOpenSlotPlacements(snapshot({
+    unscheduled: [session("s1", { durationMinutes: 60 })],
+  }));
+  const la = planOpenSlotPlacements(snapshot({
+    timezone: "America/Los_Angeles",
+    unscheduled: [session("s1", { durationMinutes: 60 })],
+  }));
+  assert.equal(utc.placements[0].startMinute, la.placements[0].startMinute);
+  assert.notEqual(utc.placements[0].startsAt, la.placements[0].startsAt);
+});

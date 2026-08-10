@@ -16,14 +16,35 @@ import { Prisma } from "@prisma/client";
  *      read actually evaluates.
  *   2. sorted `schedule-day:<eventId>:<dayKey>` keys — the finer partition, so
  *      a future per-day writer has a documented key to take. Sorted ordinally
- *      so two writers holding overlapping day sets cannot deadlock.
- *   3. room and speaker resources — `Room` and `SessionSpeaker` `FOR SHARE`, in
+ *      so two writers holding overlapping day sets cannot deadlock. Day keys are
+ *      the placement's **UTC** calendar day, deliberately: a partition key
+ *      derived from the event's timezone would move when an administrator edits
+ *      that timezone, and a lock key that moves is not a lock key.
+ *   3. the `Event` row `FOR SHARE` — the configuration parent. Timezone and the
+ *      event date range decide which days exist, where the programme window
+ *      falls, and which start times are on the lattice, so a placement validated
+ *      against an unlocked copy of them is validated against nothing. It is
+ *      taken first among the row locks because `LOCK-ORDER-v1` puts parent and
+ *      configuration rows before the resources they scope.
+ *   4. room and speaker resources — `Room` and `SessionSpeaker` `FOR SHARE`, in
  *      sorted id order. Sharing is the right strength: this path must observe a
  *      stable room and speaker set, not mutate it, and `FOR SHARE` on `Room`
  *      still excludes the settings delete path, which takes `FOR UPDATE`.
- *   4. `Session` rows `FOR SHARE`, then the event's `ScheduleSlot` rows
+ *   5. `Session` rows `FOR SHARE`, then the event's `ScheduleSlot` rows
  *      `FOR UPDATE` — the authoritative existing-placement set the caller
  *      re-reads and writes against.
+ *
+ * Why `Event` first is safe against the settings writer rather than merely
+ * untested: `PATCH /api/admin/settings` takes `Event FOR UPDATE` as the first
+ * statement of its transaction and acquires no second lock class at all
+ * (`app/api/admin/settings/route.ts`), and the room routes take `Room FOR
+ * UPDATE` alone. Neither can hold a class this path wants while waiting on a
+ * class this path holds, so no cycle exists in either direction. `FOR SHARE`
+ * and `FOR UPDATE` do conflict, which is the point: a settings PATCH that
+ * arrives mid-apply waits, and an apply that arrives mid-PATCH waits and then
+ * re-reads the committed boundaries — where the changed timezone or dates flow
+ * into the fingerprint and the plan is refused rather than written against
+ * boundaries that no longer exist.
  *
  * `COLLATE "C"` pins ordinal ordering so the lock sequence never depends on the
  * database's locale (the same correction `LOCK-ORDER-v1` made elsewhere).
@@ -56,10 +77,44 @@ export async function lockScheduleWrite(
   }
 }
 
+/**
+ * The placement's UTC calendar day, the derivation every taker of a
+ * `schedule-day` key must use. Timezone-independent on purpose (see step 2).
+ */
+export function scheduleDayKeyForInstant(startsAt: string | Date): string {
+  return new Date(startsAt).toISOString().slice(0, 10);
+}
+
+export type LockedEvent = {
+  id: string;
+  timezone: string;
+  startsAt: Date | null;
+  endsAt: Date | null;
+};
+
+/**
+ * Step 3: the configuration parent. Everything that decides *where* a placement
+ * may legally land — the timezone the day and window are reckoned in, and the
+ * event's own date range — is read here, under the lock, and nowhere else.
+ * Returns `null` when the event is gone, which the caller reports as a 404.
+ */
+export async function lockEventForShare(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+): Promise<LockedEvent | null> {
+  const [locked] = await tx.$queryRaw<LockedEvent[]>`
+    SELECT "id", "timezone", "startsAt", "endsAt"
+    FROM "Event"
+    WHERE "id" = ${eventId}
+    FOR SHARE
+  `;
+  return locked ?? null;
+}
+
 export type LockedRoom = { id: string };
 
 /**
- * Step 3a: the rooms this write targets, scoped to the event. A room that is
+ * Step 4a: the rooms this write targets, scoped to the event. A room that is
  * absent from the result either does not exist or belongs to another event —
  * the caller cannot tell the two apart, and must not disclose which.
  */
@@ -83,7 +138,7 @@ export async function lockScheduleRoomsForShare(
 export type LockedSessionSpeaker = { sessionId: string; userId: string };
 
 /**
- * Step 3b: the speaker assignments of the sessions this write targets. Held so
+ * Step 4b: the speaker assignments of the sessions this write targets. Held so
  * a concurrent speaker change cannot land between the conflict recomputation
  * and the insert and make a committed placement double-book someone.
  */
@@ -104,7 +159,7 @@ export async function lockScheduleSpeakersForShare(
 
 export type LockedSession = { id: string; eventId: string; durationMinutes: number };
 
-/** Step 4a: the target `Session` rows, so ownership and duration cannot move. */
+/** Step 5a: the target `Session` rows, so ownership and duration cannot move. */
 export async function lockScheduleSessionsForShare(
   tx: Prisma.TransactionClient,
   sessionIds: readonly string[],
@@ -129,7 +184,7 @@ export type LockedScheduleSlot = {
 };
 
 /**
- * Step 4b: every existing placement in the event, exclusively. This is the set
+ * Step 5b: every existing placement in the event, exclusively. This is the set
  * the conflict recomputation is evaluated against, so it is locked whole rather
  * than by target: a slot in a room this plan never touches can still be the one
  * a shared speaker collides with.

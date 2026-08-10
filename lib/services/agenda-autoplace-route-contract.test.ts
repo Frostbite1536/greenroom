@@ -8,7 +8,7 @@ import {
   OPEN_SLOT_STALE_CODE,
   STALE_PREVIEW_MESSAGE,
 } from "@/lib/services/agenda-autoplace-request";
-import { scheduleWriteLockKeys } from "@/lib/services/schedule-lock";
+import { scheduleDayKeyForInstant, scheduleWriteLockKeys } from "@/lib/services/schedule-lock";
 
 const source = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
@@ -58,6 +58,8 @@ test("apply takes the S3 locks in order before it reads or validates anything", 
 
   const order = [
     "lockScheduleWrite(tx, ctx.eventId, proposedDayKeys)",
+    // The configuration parent, before the resources it scopes.
+    "lockEventForShare(tx, ctx.eventId)",
     "lockScheduleRoomsForShare(",
     "lockScheduleSpeakersForShare(",
     "lockScheduleSessionsForShare(",
@@ -73,6 +75,48 @@ test("apply takes the S3 locks in order before it reads or validates anything", 
   assert.ok(previous < apply.indexOf("tx.session.findMany"));
   assert.ok(previous < apply.indexOf("placementSnapshotFingerprint(snapshot)"));
   assert.ok(previous < apply.indexOf("detectConflicts("));
+});
+
+test("event settings are read only under the lock, never before it", () => {
+  const apply = source(APPLY);
+  // Exactly one read of the event row, and it is the locked one.
+  assert.doesNotMatch(code(APPLY), /tx\.event\.find/);
+  assert.equal((code(APPLY).match(/lockEventForShare\(/g) ?? []).length, 1);
+
+  // Everything that decides where a placement may land derives from that row.
+  assert.match(apply, /const event = await lockEventForShare\(tx, ctx\.eventId\)/);
+  assert.match(apply, /const timezone = event\.timezone/);
+  assert.match(apply, /eventDayKeys: placementDayKeys\(event\.startsAt, event\.endsAt, timezone\)/);
+  const lockedAt = apply.indexOf("lockEventForShare(tx, ctx.eventId)");
+  for (const use of [
+    "const timezone = event.timezone",
+    "placementDayKeys(event.startsAt, event.endsAt, timezone)",
+    "const searchableDays",
+    "zonedParts(placement.startsAt, timezone)",
+  ]) {
+    assert.ok(apply.indexOf(use) > lockedAt, `${use} must read the locked event row`);
+  }
+
+  // The advisory day keys cannot depend on a timezone read before the lock.
+  assert.match(apply, /scheduleDayKeyForInstant\(placement\.startsAt\)/);
+  assert.ok(apply.indexOf("proposedDayKeys") < lockedAt);
+});
+
+test("the slot pre-read is bounded and covered by the advisory key", () => {
+  const apply = source(APPLY);
+  const keyAt = apply.indexOf("lockScheduleWrite(tx, ctx.eventId, proposedDayKeys)");
+  const preReadAt = apply.indexOf("tx.scheduleSlot.findMany");
+  // It reads slots only to build the speaker lock set, so it cannot be deleted
+  // — but it must sit inside the advisory key, and it must be bounded.
+  assert.ok(keyAt < preReadAt, "the slot read must follow the event-wide advisory key");
+  assert.ok(preReadAt < apply.indexOf("lockScheduleSpeakersForShare("));
+  assert.match(apply, /take: OPERATOR_QUERY_LIMITS\.agendaSessions \+ 1/);
+  assert.match(
+    apply,
+    /assertEventQueryBound\(slotSessionRows, OPERATOR_QUERY_LIMITS\.agendaSessions, "scheduled sessions"\)/,
+  );
+  // The defence-in-depth guard against a writer that skips the key is kept.
+  assert.match(apply, /refuse\("SCHEDULE_CHANGED"\)/);
 });
 
 test("apply revalidates every target against the locked rows, not the request", () => {
@@ -206,6 +250,26 @@ test("the schedule lock keys are ordinal, deduplicated, and event-wide first", (
     ],
   );
   assert.deepEqual(scheduleWriteLockKeys("event-1", []), ["schedule-write:event-1"]);
+});
+
+test("the advisory day key is timezone-independent", () => {
+  // The same instant, expressed with an offset, yields the same partition key —
+  // and the key never moves when an administrator edits the event timezone.
+  assert.equal(scheduleDayKeyForInstant("2026-05-12T23:30:00.000Z"), "2026-05-12");
+  assert.equal(scheduleDayKeyForInstant("2026-05-12T16:30:00-07:00"), "2026-05-12");
+  assert.equal(scheduleDayKeyForInstant(new Date("2026-05-13T00:30:00.000Z")), "2026-05-13");
+});
+
+test("the event row is locked FOR SHARE, which is what the settings PATCH conflicts with", () => {
+  const lock = source(LOCK);
+  assert.match(lock, /FROM "Event"\s*WHERE "id" = \$\{eventId\}\s*FOR SHARE/);
+  // The settings writer takes the same row exclusively and takes nothing else,
+  // so Event-first here cannot cycle with it.
+  const settings = source("app/api/admin/settings/route.ts");
+  assert.match(settings, /FROM "Event"\s*WHERE "id" = \$\{ctx\.eventId\}\s*FOR UPDATE/);
+  assert.doesNotMatch(settings, /FOR SHARE/);
+  // Event is the first row lock in the schedule sequence.
+  assert.ok(lock.indexOf("lockEventForShare") < lock.indexOf("lockScheduleRoomsForShare"));
 });
 
 test("every schedule lock read is ordinally ordered and row-locked", () => {

@@ -3655,6 +3655,37 @@ try {
   );
   await j("DELETE", `/api/agenda/slots?sessionId=${proposals[0].sessionId}`, null, admin);
 
+  // A settings PATCH is the other way the agenda can move under a preview: the
+  // event timezone and date range decide which days exist and where the
+  // programme window falls, without a single slot or session changing. Apply
+  // reads the event row under its own lock, so this must refuse identically.
+  const previewBeforeSettings = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, admin);
+  const planBeforeSettings = previewBeforeSettings.data?.data ?? {};
+  const settingsMoved = await j("PATCH", "/api/admin/settings", { timezone: "America/New_York" }, admin);
+  const settingsRaceApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: planBeforeSettings.fingerprint,
+    placements: planBeforeSettings.placements ?? [],
+  }, admin);
+  const afterSettingsRace = await readSlots();
+  check(
+    "AIA-08 a preview overtaken by an event settings change is refused verbatim",
+    previewBeforeSettings.status === 200 && (planBeforeSettings.placements ?? []).length > 0 &&
+      settingsMoved.status === 200 && settingsRaceApply.status === 409 &&
+      settingsRaceApply.data?.error?.code === "STALE_PREVIEW" &&
+      settingsRaceApply.data?.error?.message ===
+        "The agenda changed after this preview was created. Generate a new preview before applying it." &&
+      slotsFingerprint(afterSettingsRace) === slotsFingerprint(autoplaceBaseline),
+    settingsRaceApply.data?.error?.code,
+  );
+  // Restore the timezone C12 set, so nothing downstream reads a moved clock.
+  const settingsRestored = await j("PATCH", "/api/admin/settings", { timezone: "America/Los_Angeles" }, admin);
+  check(
+    "AIA-08 the settings-race probe leaves the event timezone as it found it",
+    settingsRestored.status === 200 && settingsRestored.data?.data?.event?.timezone === "America/Los_Angeles",
+    settingsRestored.data?.data?.event?.timezone,
+  );
+
   // The happy path, against a preview taken after all of the above.
   const preview3 = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, admin);
   const plan3 = preview3.data?.data ?? {};
