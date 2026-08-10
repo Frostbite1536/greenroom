@@ -23,6 +23,13 @@ export type ScheduleViewSession = {
   format: string | null;
   room: { id: string; name: string };
   track: ScheduleViewTrack | null;
+  /**
+   * The proposal's topic, carried onto the talk at acceptance. Optional so a
+   * caller built before this column existed still type-checks, and deliberately
+   * distinct from `track`: a track is a schedule swimlane owned by the slot,
+   * while a topic is what the speaker submitted under and survives unscheduling.
+   */
+  category?: { id: string; name: string } | null;
   startsAt: string;
   endsAt: string;
   speakers: string[];
@@ -39,7 +46,31 @@ export type ScheduleViewAgenda = {
   };
   tracks: ScheduleViewTrack[];
   sessions: ScheduleViewSession[];
+  /** True when the event holds more placed sessions than one read materializes.
+   *  Optional so a caller built before the bound existed still type-checks. */
+  truncated?: boolean;
 };
+
+/**
+ * What to tell a reader whose agenda was cut short, or null when it was not.
+ * Never says "showing all 500 of 500" — a notice that reports no problem is a
+ * notice that should not be rendered.
+ *
+ * It names the cut as chronological because that is what the read actually
+ * does: the query orders by `startsAt` and takes the first page, so the
+ * sessions missing are the *latest* ones. That single fact is what makes the
+ * day-tab counts interpretable — the early days are complete and only the last
+ * of the event is short — which is why the tabs are left as plain numbers
+ * instead of every one of them carrying a misleading "+".
+ */
+export function agendaTruncationNotice(
+  agenda: Pick<ScheduleViewAgenda, "sessions" | "truncated">,
+): string | null {
+  if (!agenda.truncated) return null;
+  return `This schedule is unusually large, so only the first ${agenda.sessions.length} sessions are shown, `
+    + "in start-time order — the latest sessions of the event are missing from this page. "
+    + "Use the day tabs or search to narrow it, or open the event's own schedule page.";
+}
 
 export type ScheduleFilters = { track: string; day: string; q: string };
 
@@ -53,6 +84,16 @@ export const DESCRIPTION_PREVIEW_CHARS = 180;
  * not turn one public page render into thousands of tab elements.
  */
 export const MAX_EVENT_DAYS = 31;
+
+/**
+ * Ceiling on placed sessions materialized for one public agenda read (S20).
+ *
+ * The same shape as `PUBLIC_SPEAKER_LIMITS`: read this many plus one, render
+ * this many, and say so when there are more. A public page cannot fail closed
+ * the way an operator export does — refusing to render the programme because
+ * an event is large would be worse than rendering it and admitting the cut.
+ */
+export const PUBLIC_AGENDA_LIMITS = { sessions: 500 } as const;
 
 export const ALL = "all";
 
@@ -119,6 +160,7 @@ export function matchesQuery(session: ScheduleViewSession, query: string): boole
     session.format,
     session.room.name,
     session.track?.name ?? null,
+    session.category?.name ?? null,
     ...session.speakers,
   ];
   return haystack.some((value) => Boolean(value) && value!.toLocaleLowerCase().includes(needle));
@@ -204,13 +246,38 @@ export function descriptionPreview(
   return { preview, truncated: true };
 }
 
-/** Non-colour labels for a session: format, track, room — in that order. */
-export function sessionChips(session: ScheduleViewSession): Array<{ kind: "format" | "track" | "room"; label: string }> {
-  const chips: Array<{ kind: "format" | "track" | "room"; label: string }> = [];
+export type ScheduleChipKind = "format" | "track" | "topic" | "room";
+
+/**
+ * Non-colour labels for a session: format, track, topic, room — in that order.
+ *
+ * The topic chip is what closes the "unlabelled coloured bar": a talk with no
+ * schedule track renders a grey rail and, before this, no words explaining it.
+ * It is a separate chip from the track rather than a fallback because the two
+ * are different facts — a session can legitimately carry both, and quietly
+ * printing a topic under a "Track" label would be a lie to a screen reader.
+ */
+export function sessionChips(session: ScheduleViewSession): Array<{ kind: ScheduleChipKind; label: string }> {
+  const chips: Array<{ kind: ScheduleChipKind; label: string }> = [];
   if (session.format?.trim()) chips.push({ kind: "format", label: session.format.trim() });
   if (session.track) chips.push({ kind: "track", label: session.track.name });
+  if (session.category?.name.trim()) chips.push({ kind: "topic", label: session.category.name.trim() });
   chips.push({ kind: "room", label: session.room.name });
   return chips;
+}
+
+/** Screen-reader prefix naming what a chip is, so the label is never bare. */
+export function chipPrefix(kind: ScheduleChipKind): string {
+  switch (kind) {
+    case "format":
+      return "Format";
+    case "track":
+      return "Track";
+    case "topic":
+      return "Topic";
+    default:
+      return "Room";
+  }
 }
 
 /**
@@ -234,8 +301,22 @@ export function scheduleHref(
   return query ? `/embed/schedule?${query}` : "/embed/schedule";
 }
 
-/** One-line summary for the header: session count under the current filters. */
-export function resultSummary(total: number, shown: number, filtered: boolean): string {
+/**
+ * One-line summary for the header: session count under the current filters.
+ *
+ * `truncated` qualifies the *total* only. What is shown is always exactly what
+ * is shown, so that half is never suffixed — but the number it is measured
+ * against becomes a floor ("3 sessions of 500+"), because past the cap the page
+ * cannot know how many there really are.
+ */
+export function resultSummary(
+  total: number,
+  shown: number,
+  filtered: boolean,
+  truncated = false,
+): string {
   const label = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
-  return filtered ? `${label(shown)} of ${total}` : label(total);
+  const totalLabel = truncated ? `${total}+` : `${total}`;
+  if (filtered) return `${label(shown)} of ${totalLabel}`;
+  return truncated ? `${totalLabel} sessions` : label(total);
 }

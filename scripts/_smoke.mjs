@@ -1099,9 +1099,22 @@ try {
   check("submit rejects missing required field", bad.status === 422 && bad.data?.error?.fieldErrors?.title_note, bad.data?.error?.code);
 
   // 4. Valid submit (public)
+  // A real topic is chosen here on purpose: it is the value that must survive
+  // acceptance onto the created Session (Session.categoryId) and reach the
+  // public agenda, which is asserted at sections 11 and 18.
+  const aiCategory = await prisma.category.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, name: "AI" },
+    select: { id: true },
+  });
   const sub = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My great talk", abstract: "About stuff",
-    speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
+    categoryId: aiCategory?.id,
+    speakers: [
+      { email: "spk@x.com", name: "Spk One", isPrimary: true },
+      // ABS-11: the harness's own fixture wording. Blank on the primary proves
+      // an unstated role stays an honest null rather than an empty label.
+      { email: "co@x.com", name: "Co Two", isPrimary: false, role: "Co-presenter" },
+    ],
     answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
   check(
@@ -1112,6 +1125,24 @@ try {
   );
   const abstractId = sub.data?.data?.id;
   check("co-speaker upserted by email", sub.data?.data?.speakers?.length === 2);
+  const subRoles = Object.fromEntries(
+    (sub.data?.data?.speakers ?? []).map((s) => [s.email, s.role]),
+  );
+  check("T3 a stated co-speaker role round-trips, and an unstated one stays null",
+    subRoles["co@x.com"] === "Co-presenter" && subRoles["spk@x.com"] === null,
+    JSON.stringify(subRoles));
+  check("T3 the role is stored on the proposal's own roster row",
+    (await prisma.abstractSpeaker.findFirst({
+      where: { abstractId, user: { email: "co@x.com" } },
+      select: { role: true },
+    }))?.role === "Co-presenter");
+  const roleTooLong = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Role bound probe", abstract: "Bounded",
+    speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true, role: "x".repeat(81) }],
+    answers: { title_note: "hi", consent: true }, intent: "saveDraft",
+  });
+  check("T3 an over-long role is refused rather than truncated",
+    roleTooLong.status === 422, roleTooLong.status);
   const submissionDispatches = await prisma.emailDispatch.findMany({
     where: { templateId: commsTemplate.id },
     select: { recipient: true, status: true, providerId: true },
@@ -2470,6 +2501,58 @@ try {
   const decision = await j("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("M4 MAYBE can later be accepted", decision.status === 200 && decision.data?.data?.status === "ACCEPTED", decision.status);
 
+  // The topic loss that made every accept-created talk an unlabelled colour.
+  const acceptedSession = await prisma.session.findUnique({
+    where: { sourceAbstractId: abstractId },
+    select: { id: true, categoryId: true },
+  });
+  check(
+    "T3 accepting carries the proposal's topic onto the created session",
+    !!aiCategory?.id && acceptedSession?.categoryId === aiCategory.id,
+    `${acceptedSession?.categoryId} vs ${aiCategory?.id}`,
+  );
+  const acceptedAdminAgenda = await j("GET", "/api/agenda", null, admin);
+  check(
+    "T3 the admin agenda names that topic on the session it created",
+    acceptedAdminAgenda.status === 200 &&
+      acceptedAdminAgenda.data?.data?.sessions?.find((s) => s.id === acceptedSession?.id)?.category?.name === "AI",
+    acceptedAdminAgenda.status,
+  );
+
+  // 11b. T3 — a topic that moves on the proposal after acceptance.
+  //
+  // The divergence is written directly here on purpose: the point under test is
+  // what an ORGANIZER re-run does about it, not which writer caused it. The
+  // matching invariant — that a speaker's own edit never propagates to the
+  // Session (INV-EDIT-001, C18 owns the handoff) — is pinned structurally in
+  // lib/services/session-provisioning.test.ts, because reaching that state over
+  // HTTP needs a speaker persona with a persisted membership on this abstract.
+  const systemsCategory = await prisma.category.findFirst({
+    where: { eventId: SCRATCH_EVENT.id, name: "Systems" },
+    select: { id: true },
+  });
+  await prisma.abstract.update({ where: { id: abstractId }, data: { categoryId: systemsCategory?.id } });
+  check("T3 a proposal's topic moving does not silently rewrite the public programme",
+    (await prisma.session.findUnique({ where: { id: acceptedSession?.id }, select: { categoryId: true } }))
+      ?.categoryId === aiCategory?.id,
+    "the Session must still carry the topic it was created with");
+
+  const reconvert = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("T3 an admin re-run reconciles the stale topic and says it did",
+    reconvert.status === 200 &&
+      reconvert.data?.data?.created === false &&
+      reconvert.data?.data?.topicReconciled === true &&
+      (await prisma.session.findUnique({ where: { id: acceptedSession?.id }, select: { categoryId: true } }))
+        ?.categoryId === systemsCategory?.id,
+    `${reconvert.status} ${JSON.stringify(reconvert.data?.data ?? reconvert.data?.error ?? "none")}`);
+
+  const reconvertAgain = await j("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 45 }, admin);
+  check("T3 a second re-run reports no reconciliation rather than rewriting an aligned talk",
+    reconvertAgain.status === 200 && reconvertAgain.data?.data?.topicReconciled === false,
+    JSON.stringify(reconvertAgain.data?.data ?? "none"));
+  check("T3 re-running never duplicates the session",
+    await prisma.session.count({ where: { sourceAbstractId: abstractId } }) === 1);
+
   const assignAccepted = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [abstractId], evaluatorIds: [adminUserId],
   }, admin);
@@ -2866,6 +2949,12 @@ try {
   // 18. Public embed shows placed sessions with a null session
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
   check("public agenda (no auth) lists placed sessions", pubAgenda.status === 200 && pubAgenda.data?.data?.sessions?.length === 2, pubAgenda.data?.data?.sessions?.length);
+  check(
+    "T3 the public agenda projects each placed session's topic key",
+    Array.isArray(pubAgenda.data?.data?.sessions) &&
+      pubAgenda.data.data.sessions.every((s) => Object.hasOwn(s, "category")),
+    JSON.stringify(pubAgenda.data?.data?.sessions?.map((s) => s.category?.name ?? null)),
+  );
 
   // C12: one real task deadline is rendered in the event timezone and the
   // invitation path remains forced-mock. This is scratch-only and deliberately
@@ -3924,6 +4013,128 @@ try {
   const stillThere = await prisma.session.findUnique({ where: { id: sessionId }, include: { scheduleSlot: true } });
   check("W2 the reversed decision does not delete the confirmed session (INV-DOMAIN-001)",
     !!stillThere && !!stillThere.scheduleSlot);
+
+  // 23a. T3 — nothing is deleted, but a reversed decision must stop speaking
+  // publicly. This is the leak the contentStatus column exists to close.
+  check("T3 reversing a decision unpublishes the talk it leaves behind",
+    stillThere?.contentStatus === "DRAFT", stillThere?.contentStatus);
+  const pubAfterReversal = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the unpublished talk leaves the public agenda while its slot survives",
+    pubAfterReversal.status === 200 &&
+      Array.isArray(pubAfterReversal.data?.data?.sessions) &&
+      !pubAfterReversal.data.data.sessions.some((s) => s.sessionId === sessionId) &&
+      !!(await prisma.scheduleSlot.findUnique({ where: { sessionId } })),
+    JSON.stringify(pubAfterReversal.data?.data?.sessions?.map((s) => s.sessionId)));
+
+  // Every other publicly reachable read of the programme carries the same
+  // predicate. The v1 key is shared with integrations and evaluators, and the
+  // calendar file keeps speaking after it is downloaded, so both are places an
+  // unpublished talk could keep leaking after the page stopped showing it.
+  const icsWhileUnpublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}`);
+  check("T3 the calendar export drops an unpublished talk",
+    icsWhileUnpublished.status === 200 && !String(icsWhileUnpublished.data).includes("SUMMARY:My great talk"),
+    icsWhileUnpublished.status);
+  const icsOneUnpublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}&sessionId=${sessionId}`);
+  check("T3 exporting the unpublished talk alone is refused, and says nothing about why",
+    icsOneUnpublished.status === 404
+      && /not on the published schedule/.test(JSON.stringify(icsOneUnpublished.data))
+      && !/unpublished|DRAFT/i.test(JSON.stringify(icsOneUnpublished.data)),
+    JSON.stringify(icsOneUnpublished.data));
+  const v1ScheduleUnpublished = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the v1 schedule drops it, and its total agrees with its page",
+    v1ScheduleUnpublished.status === 200
+      && !v1ScheduleUnpublished.data?.data?.some((row) => row.session?.id === sessionId)
+      && v1ScheduleUnpublished.data?.meta?.total === v1ScheduleUnpublished.data?.data?.length,
+    JSON.stringify(v1ScheduleUnpublished.data?.meta ?? "none"));
+  // The control for the submission branch: an ACCEPTED proposal that was never
+  // converted, so it has no linked Session at all. Nothing about it was ever
+  // published, so nothing about it is being withheld — this speaker must stay
+  // listed, which is the participation case that branch exists for. Written
+  // directly because the CFP form's own window is not the thing under test.
+  const sessionlessUser = await prisma.user.upsert({
+    where: { email: "sessionless@x.com" },
+    update: {},
+    create: { email: "sessionless@x.com", name: "Sessionless One" },
+    select: { id: true },
+  });
+  await prisma.abstract.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      formConfigId: formId,
+      submitterId: sessionlessUser.id,
+      title: "Accepted but never converted",
+      status: "ACCEPTED",
+      submittedAt: new Date(),
+      decidedAt: new Date(),
+      speakers: { create: [{ userId: sessionlessUser.id, isPrimary: true }] },
+    },
+    select: { id: true },
+  });
+  check("T3 setup: an accepted proposal with no linked session exists",
+    await prisma.session.count({ where: { sourceAbstract: { is: { title: "Accepted but never converted" } } } }) === 0);
+
+  const v1SpeakersUnpublished = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  const sessionAppearances = (payload) =>
+    payload.data?.data?.find((row) => row.email === "spk@x.com")?.appearances?.sessions ?? null;
+  const v1SpeakerEmails = (payload) => (payload.data?.data ?? []).map((row) => row.email);
+  // `co@x.com` is a co-speaker on this one proposal and nothing else, so the
+  // unpublished talk is their only appearance. Before the submission branch
+  // carried the same rule they stayed listed here with zero counted
+  // appearances — the absence itself pointing at what had been hidden.
+  check("T3 a speaker whose only talk is unpublished is not listed at all",
+    !v1SpeakerEmails(v1SpeakersUnpublished).includes("co@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersUnpublished)));
+  check("T3 a speaker whose proposal never became a talk is still listed",
+    v1SpeakerEmails(v1SpeakersUnpublished).includes("sessionless@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersUnpublished)));
+
+  const publishAnon = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" });
+  check("T3 anonymous callers cannot publish a talk", publishAnon.status === 401, publishAnon.status);
+  const publishEvaluator = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, evalr);
+  check("T3 an evaluator cannot publish a talk", publishEvaluator.status === 403, publishEvaluator.status);
+  const publishUnknown = await j("PATCH", "/api/agenda/sessions",
+    { sessionId: "session-does-not-exist", contentStatus: "PUBLISHED" }, admin);
+  check("T3 an unknown session id is an indistinguishable 404",
+    publishUnknown.status === 404 && publishUnknown.data?.error?.code === "SESSION_NOT_FOUND",
+    publishUnknown.data?.error?.code);
+  const publishWithEvent = await j("PATCH", "/api/agenda/sessions",
+    { sessionId, contentStatus: "PUBLISHED", eventId: SCRATCH_EVENT.id }, admin);
+  check("T3 the publication body may not name an event",
+    publishWithEvent.status === 400, publishWithEvent.status);
+
+  const republish = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, admin);
+  check("T3 an admin can publish a talk back onto the programme",
+    republish.status === 200 && republish.data?.data?.contentStatus === "PUBLISHED", republish.status);
+  const pubAfterRepublish = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
+  check("T3 publishing restores the same talk to the same slot",
+    pubAfterRepublish.data?.data?.sessions?.some((s) => s.sessionId === sessionId),
+    JSON.stringify(pubAfterRepublish.data?.data?.sessions?.map((s) => s.sessionId)));
+  check("T3 the public agenda reports whether it was cut short",
+    pubAfterRepublish.data?.data?.truncated === false, JSON.stringify(pubAfterRepublish.data?.data?.truncated));
+  const icsRepublished = await j("GET", `/api/comms/calendar?eventId=${SCRATCH_EVENT.id}`);
+  check("T3 the calendar export carries it again",
+    icsRepublished.status === 200 && String(icsRepublished.data).includes("SUMMARY:My great talk"),
+    icsRepublished.status);
+  const v1ScheduleRepublished = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the v1 schedule carries it again",
+    v1ScheduleRepublished.data?.data?.some((row) => row.session?.id === sessionId));
+  // A differential rather than an absolute: this speaker legitimately appears
+  // on other sessions, so what proves the predicate is that unpublishing one
+  // talk stopped counting exactly one appearance for them.
+  const v1SpeakersRepublished = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
+  check("T3 an unpublished talk is not counted as one of its speaker's appearances",
+    sessionAppearances(v1SpeakersUnpublished) !== null
+      && sessionAppearances(v1SpeakersRepublished) === sessionAppearances(v1SpeakersUnpublished) + 1,
+    `${sessionAppearances(v1SpeakersUnpublished)} → ${sessionAppearances(v1SpeakersRepublished)}`);
+  check("T3 publishing lists the co-speaker again, through both branches",
+    v1SpeakerEmails(v1SpeakersRepublished).includes("co@x.com"),
+    JSON.stringify(v1SpeakerEmails(v1SpeakersRepublished)));
+  check("T3 the session-less speaker was never affected either way",
+    v1SpeakerEmails(v1SpeakersRepublished).includes("sessionless@x.com"));
+  const unpublishAgain = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "DRAFT" }, admin);
+  check("T3 the rejected talk is left off the public programme",
+    unpublishAgain.status === 200 && unpublishAgain.data?.data?.contentStatus === "DRAFT",
+    unpublishAgain.status);
 
   // 23b. ABS-13 — ADMIN-only CSV export of review results. Runs last so the
   // event already holds real plans, completed reviews, scores, and decisions.

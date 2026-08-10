@@ -35,6 +35,27 @@ const EMBED_SPEAKER_EMAIL = "embed-speaker@scratch.test";
 // Engineer", company "Acme Labs") for every demo speaker user, and that row is
 // keyed by userId, so it survives this script's event-scoped wipe entirely.
 const EMBED_NOPROFILE_EMAIL = "embed-noprofile@scratch.test";
+// SPK-01 needs the case the old roster could not show at all: someone the
+// organizer has named a speaker who is on no session yet. She must not be on
+// any Session, or she would arrive through the old SessionSpeaker read and
+// prove nothing about the widened one.
+const ROSTER_MEMBER_EMAIL = "roster-member@scratch.test";
+const ROSTER_MEMBER_NAME = "Priya Raman";
+const ROSTER_MEMBER_COMPANY = "Lumen Grid";
+const ROSTER_MEMBER_BIO = "Priya has run platform reliability at Lumen Grid for eight years and "
+  + "writes about capacity planning for live events.";
+const ROSTER_MEMBER_HEADSHOT = "https://images.example.test/priya-raman.jpg";
+// SPK-02 provisioning target: created only through the API, never seeded.
+const ROSTER_NEW_EMAIL = "roster-new@scratch.test";
+const ROSTER_NEW_NAME = "Marcus Bell";
+// A speaker who belongs to a different event entirely, so a cross-event id can
+// be proven indistinguishable from an unknown one.
+const ROSTER_FOREIGN_EMAIL = "roster-foreign@scratch.test";
+// A speaker on THIS event's roster who also takes part in another one. Her
+// SpeakerProfile is a single global row feeding both events' public pages, so
+// this event's organizer must not be able to write it (S1 authority class).
+const ROSTER_SHARED_EMAIL = "roster-shared@scratch.test";
+const ROSTER_SHARED_NAME = "Dana Okafor";
 const EMBED_NOPROFILE_NAME = "Theo Lindqvist";
 const EMBED_SPEAKER_NAME = "Nadia Okonkwo";
 const EMBED_SPEAKER_BIO = "Nadia leads platform reliability at Northwind and has spent a decade "
@@ -125,7 +146,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -291,10 +312,38 @@ async function resetScratch() {
   // No speakerProfile row on purpose — this is the derived-fallback fixture.
   await prisma.speakerProfile.deleteMany({ where: { userId: noProfileSpeaker.id } });
 
+  // SPK-01: a named speaker with a full profile and no session at all. She is
+  // deliberately never added to a Session below, so every check that finds her
+  // on /admin/speakers is evidence of the widened EventMember read.
+  const rosterMember = await prisma.user.upsert({
+    where: { email: ROSTER_MEMBER_EMAIL },
+    update: { name: ROSTER_MEMBER_NAME },
+    create: { email: ROSTER_MEMBER_EMAIL, name: ROSTER_MEMBER_NAME },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: rosterMember.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: EVENT_ID, userId: rosterMember.id, role: "SPEAKER" },
+  });
+  await prisma.speakerProfile.upsert({
+    where: { userId: rosterMember.id },
+    update: {
+      bio: ROSTER_MEMBER_BIO, company: ROSTER_MEMBER_COMPANY,
+      jobTitle: "Director of Platform", headshotUrl: ROSTER_MEMBER_HEADSHOT,
+    },
+    create: {
+      userId: rosterMember.id, bio: ROSTER_MEMBER_BIO, company: ROSTER_MEMBER_COMPANY,
+      jobTitle: "Director of Platform", headshotUrl: ROSTER_MEMBER_HEADSHOT,
+    },
+  });
+
   const sessionA = await prisma.session.create({
     data: {
       eventId: EVENT_ID, title: "Scratch Session A", durationMinutes: 30, format: "Talk",
       description: SESSION_A_DESCRIPTION,
+      // The proposal's topic, carried onto the talk. Drives the topic chip that
+      // gives an otherwise unlabelled coloured rail some words.
+      categoryId: category.id,
       speakers: {
         create: [
           { userId: users.speaker, isPrimary: true },
@@ -331,7 +380,7 @@ async function resetScratch() {
 
   return {
     event, form, abstract, maybeSetupAbstract, acceptedAbstract, plan, sessionA, sessionB,
-    roomA, roomB, track, category, users, dayKey, embedSpeaker, noProfileSpeaker,
+    roomA, roomB, track, category, users, dayKey, embedSpeaker, noProfileSpeaker, rosterMember,
   };
 }
 
@@ -374,7 +423,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -979,12 +1028,17 @@ try {
     categoryId: fx.category.id,
     speakers: [
       { email: "smoke.speaker@example.com", name: "Smoke Speaker", isPrimary: true },
-      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false },
+      // ABS-11: the harness's own fixture wording, left unstated on the primary.
+      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false, role: "Co-presenter" },
     ],
     answers: { audience_level: "beginner", learning_objectives: "Three takeaways." },
     intent: "submit",
   }, null);
   check("CFP direct submit remains capability-free → 201", submit.status === 201, `${submit.status} ${JSON.stringify(submit.data?.error ?? "")}`);
+  check("T3 the submitted roster reports the stated role and the unstated null",
+    submit.data?.data?.speakers?.find((s) => s.email === "smoke.cospeaker@example.com")?.role === "Co-presenter"
+    && submit.data?.data?.speakers?.find((s) => s.email === "smoke.speaker@example.com")?.role === null,
+    JSON.stringify(submit.data?.data?.speakers));
   check("submitted abstract has SUBMITTED status", submit.data?.data?.status === "SUBMITTED");
   check("co-speaker upserted by email", (submit.data?.data?.speakers ?? []).length === 2);
 
@@ -1028,6 +1082,19 @@ try {
   const afterConvert = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts table shows an unscheduled talk as 'Talk created'",
     afterConvert.text.includes("Talk created"));
+
+  // T3 / ABS-11: the co-speaker's stated role reaches the organizer, in the
+  // table summary and again in the drawer's full roster line.
+  check("T3 the abstracts table names the co-speaker's role instead of counting them",
+    afterConvert.text.includes("+1 co-speaker: Co-presenter"),
+    "expected the role-bearing co-speaker summary");
+  const roleDrawer = await req(
+    "GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin,
+  );
+  check("T3 the admin drawer's roster line carries the role beside the primary marker",
+    roleDrawer.status === 200
+    && roleDrawer.text.includes("Smoke Speaker (primary), Smoke Co — Co-presenter"),
+    "expected 'Smoke Speaker (primary), Smoke Co — Co-presenter' in the drawer");
 
   // --- F1: the admin drawer must actually carry the speaker's custom answers ---
   // The drawer is client-rendered on click, so the assertion is that the answer
@@ -1153,11 +1220,74 @@ try {
   check("declined-but-scheduled abstract is flagged 'Still on the programme'",
     afterReverse.text.includes("Still on the programme"));
 
+  // T3: the flag is the admin's safeguard; the publication column is the
+  // public one. A declined talk keeps its slot and stops being announced.
+  check("T3 declining a confirmed talk unpublishes it",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "DRAFT");
+  const embedAfterReverse = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the declined talk is gone from the public schedule embed",
+    embedAfterReverse.status === 200 && !embedAfterReverse.text.includes(`session-${convertedSessionId}`),
+    `expected no session-${convertedSessionId} anchor`);
+  const apiAfterReverse = await req("GET", `/api/agenda/public?event=${EVENT_ID}`, null, null);
+  check("T3 the JSON agenda twin drops it too",
+    apiAfterReverse.status === 200
+    && !apiAfterReverse.data?.data?.sessions?.some((s) => s.sessionId === convertedSessionId));
+  check("T3 unpublishing removed no data: the slot and its speakers survive",
+    !!(await prisma.scheduleSlot.findUnique({ where: { sessionId: convertedSessionId } }))
+    && (await prisma.sessionSpeaker.count({ where: { sessionId: convertedSessionId } })) > 0);
+  const agendaWhileUnpublished = await req("GET", "/admin/agenda", null, admin);
+  check("T3 the agenda builder says how many talks are held back, and where to publish them",
+    agendaWhileUnpublished.text.includes("unpublished and does not appear on the public agenda")
+    && agendaWhileUnpublished.text.includes("List view"),
+    "expected the unpublished-count notice on /admin/agenda");
+
   // Restore ACCEPTED so later checks see the pipeline in its expected state.
   const restore = await req("POST", "/api/evaluations/decisions", {
     abstractId: convertedAbstractId, decision: "ACCEPTED",
   }, admin);
   check("decision can be changed back → 200", restore.status === 200, `got ${restore.status}`);
+  check("T3 re-accepting puts the talk back on the public programme",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "PUBLISHED");
+  const embedAfterRestore = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the restored talk is announced again from the same slot",
+    embedAfterRestore.text.includes(`session-${convertedSessionId}`));
+
+  // The organizer control itself: an admin may hold a talk back without any
+  // decision changing, and put it back.
+  const unpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "DRAFT",
+  }, admin);
+  check("T3 an admin can unpublish a talk directly → 200",
+    unpublish.status === 200 && unpublish.data?.data?.contentStatus === "DRAFT",
+    `${unpublish.status} ${JSON.stringify(unpublish.data?.error ?? "")}`);
+  const embedAfterManualUnpublish = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the manually unpublished talk leaves the public schedule",
+    !embedAfterManualUnpublish.text.includes(`session-${convertedSessionId}`));
+  // The embed's own "Add all to calendar" affordance must not hand out what the
+  // page just stopped showing.
+  const icsAfterManualUnpublish = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${convertedSessionId}`, null, null,
+  );
+  check("T3 the calendar export refuses the unpublished talk",
+    icsAfterManualUnpublish.status === 404, icsAfterManualUnpublish.status);
+  const speakersAfterManualUnpublish = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  check("T3 an unpublished talk is not announced on the public speaker gallery",
+    speakersAfterManualUnpublish.status === 200
+    && !speakersAfterManualUnpublish.text.includes("Smoke submitted proposal"),
+    "expected the unpublished talk's title off the speaker cards");
+  const speakerUnpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, speaker);
+  check("T3 a speaker cannot publish a talk", speakerUnpublish.status === 403, speakerUnpublish.status);
+  const republish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, admin);
+  check("T3 publishing again restores it → 200",
+    republish.status === 200 && republish.data?.data?.contentStatus === "PUBLISHED", republish.status);
   await req("DELETE", `/api/agenda/slots?sessionId=${convertedSessionId}`, null, admin);
 
   // --- mutation 4: score submission ---
@@ -2124,6 +2254,13 @@ try {
     && landingText.includes("/embed/speakers"));
   check("landing page names the event and its real programme size",
     landingText.includes("Scratch Frontend") && landingText.includes("Scheduled sessions"));
+  // S20: this event is far inside the cap, so the metrics must be exact numbers
+  // with no "+" floor and no partial-programme notice. Guards the flag against
+  // being inverted, which would qualify every count on every real event.
+  check("T3 a small programme's landing metrics are stated exactly, with no floor qualifier",
+    !/<strong>\d+\+<\/strong>/.test(landingHtml)
+    && !landingText.includes("larger than this page counts at once"),
+    "expected exact landing metrics for an event inside the cap");
   check("landing page carries the same open-CFP chooser",
     landingHtml.includes(`href="${canonicalCfpPath}"`)
     && landingHtml.includes(`href="${c16LegacyPath}"`)
@@ -2216,6 +2353,13 @@ try {
   check("embed renders a format chip", chipText("format").includes("Talk"), chipText("format"));
   check("embed renders a track chip", chipText("track").includes("Mainstage"), chipText("track"));
   check("embed renders a room chip", chipText("room").includes("Hall A"), chipText("room"));
+  check("T3 embed renders the session's topic as its own chip",
+    chipText("topic").includes(fx.category.name), chipText("topic"));
+  check("T3 the topic chip is announced as a topic, never as a track",
+    chipText("topic").startsWith("Topic:") && !chipText("topic").includes("Track"),
+    chipText("topic"));
+  check("T3 the expanded detail names the topic separately from the track",
+    enriched.text.includes("<dt>Topic</dt>") && enriched.text.includes("<dt>Track</dt>"));
 
   // Day tabs come from Event.startsAt..endsAt, unioned with any day that holds
   // a placed session outside that range.
@@ -2715,6 +2859,312 @@ try {
   check("a speaker cannot reach the decline path even with a forged role claim",
     declareAsSpeaker.status === 401 || declareAsSpeaker.status === 403,
     `got ${declareAsSpeaker.status}`);
+
+  // --- SPK-01 / SPK-02: the speaker roster and the add/edit form ------------
+  // The roster is the union of "on a confirmed session" and "named a speaker
+  // on this event". Priya is only ever the second, so every check that finds
+  // her proves the widened read rather than the old SessionSpeaker one.
+  // React's SSR separates adjacent text nodes with `<!-- -->`, so any assertion
+  // spanning an interpolation has to read the stripped markup.
+  const flat = (html) => html.replace(/<!-- -->/g, "");
+  const confirmedCountOf = (html) => {
+    const metric = flat(html).match(/Confirmed speakers<\/span><strong>(\d+)<\/strong>/);
+    return metric ? Number(metric[1]) : null;
+  };
+  const awaitingCountOf = (html) => {
+    const metric = flat(html).match(/Not on a session yet<\/span><strong>(\d+)<\/strong>/);
+    return metric ? Number(metric[1]) : null;
+  };
+
+  const roster = await req("GET", "/admin/speakers", null, admin);
+  check("speaker roster → 200", roster.status === 200, `got ${roster.status}`);
+  check("roster lists a named speaker who is on no session yet",
+    roster.text.includes(ROSTER_MEMBER_NAME) && roster.text.includes(ROSTER_MEMBER_EMAIL),
+    `name ${roster.text.includes(ROSTER_MEMBER_NAME)}, email ${roster.text.includes(ROSTER_MEMBER_EMAIL)}`);
+  check("a session-less speaker is named as awaiting a session, not as an unscheduled one",
+    roster.text.includes("Not on a session yet") && roster.text.includes("Awaiting session"));
+  check("roster renders a stored headshot as a real image with alt text naming the speaker",
+    roster.text.includes(ROSTER_MEMBER_HEADSHOT) && roster.text.includes(`alt="Headshot of ${ROSTER_MEMBER_NAME}"`),
+    `src ${roster.text.includes(ROSTER_MEMBER_HEADSHOT)}, alt ${roster.text.includes(`alt="Headshot of ${ROSTER_MEMBER_NAME}"`)}`);
+  check("roster renders the stored bio verbatim", roster.text.includes(ROSTER_MEMBER_BIO));
+  // The honest-absence half: a speaker with no profile row is told so rather
+  // than shown filler, and gets no <img> at all.
+  // Theo is asserted present here on purpose: the search checks below prove
+  // themselves by his disappearing, which is worthless if he was never listed.
+  check("a speaker with no stored bio is listed, told so, and given no image",
+    roster.text.includes(EMBED_NOPROFILE_NAME)
+    && roster.text.includes("No bio stored yet")
+    && !roster.text.includes(`alt="Headshot of ${EMBED_NOPROFILE_NAME}"`),
+    `listed ${roster.text.includes(EMBED_NOPROFILE_NAME)}, told ${roster.text.includes("No bio stored yet")}`);
+
+  // PR #72 regression guard: widening the roster must not restate the
+  // confirmed-speaker metric, nor the number the checklist fans out to (C33).
+  const confirmedBefore = confirmedCountOf(roster.text);
+  const awaitingBefore = awaitingCountOf(roster.text);
+  const fanOutBefore = flat(roster.text).match(/assigned to all\s*(\d+) confirmed speaker/);
+  check("the roster still reports a confirmed-speaker count and an awaiting count",
+    typeof confirmedBefore === "number" && typeof awaitingBefore === "number" && awaitingBefore >= 1,
+    `confirmed ${confirmedBefore}, awaiting ${awaitingBefore}`);
+  check("the onboarding checklist still fans out to the confirmed cohort, not the whole roster",
+    fanOutBefore !== null && Number(fanOutBefore[1]) === confirmedBefore,
+    `checklist ${fanOutBefore?.[1] ?? "none"} vs confirmed ${confirmedBefore}`);
+  check("due-date columns and task metrics from the task manager still render",
+    roster.text.includes("Onboarding checklist") && roster.text.includes("Next required due"));
+
+  // Search is a real server-rendered GET form, so it must narrow the server's
+  // own HTML — not merely hide rows in the browser.
+  const searchByName = await req("GET", "/admin/speakers?q=Priya", null, admin);
+  check("search narrows the roster to the matching speaker",
+    searchByName.status === 200
+    && searchByName.text.includes(ROSTER_MEMBER_NAME)
+    && !searchByName.text.includes(EMBED_NOPROFILE_NAME),
+    `${searchByName.status}, priya ${searchByName.text.includes(ROSTER_MEMBER_NAME)}, theo ${searchByName.text.includes(EMBED_NOPROFILE_NAME)}`);
+  const searchByCompany = await req("GET", "/admin/speakers?q=Lumen", null, admin);
+  check("search matches a stored company, not only a name",
+    searchByCompany.text.includes(ROSTER_MEMBER_NAME) && !searchByCompany.text.includes(EMBED_NOPROFILE_NAME));
+  const rosterSearchMiss = await req("GET", "/admin/speakers?q=zzzznobody", null, admin);
+  check("a search that matches nobody says so instead of showing an empty filter",
+    rosterSearchMiss.text.includes("No speakers match this search") && !rosterSearchMiss.text.includes(ROSTER_MEMBER_NAME));
+  check("the search box is a real GET form the page reads server-side",
+    roster.text.includes('method="get"') && roster.text.includes('action="/admin/speakers"') && roster.text.includes('name="q"'));
+  const searchWithFilter = await req("GET", "/admin/speakers?filter=unscheduled&q=Priya", null, admin);
+  check("submitting a search keeps the active filter instead of dropping it",
+    searchWithFilter.text.includes('type="hidden" name="filter" value="unscheduled"'));
+  check("a filter link carries the active search instead of discarding it",
+    searchByName.text.includes('href="/admin/speakers?filter=unscheduled&amp;q=Priya"'));
+
+  // SPK-02: provisioning. Nothing below seeds a row directly.
+  const addSpeaker = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_NEW_EMAIL, name: ROSTER_NEW_NAME,
+    jobTitle: "Programme Lead", company: "Beacon Works",
+  }, admin);
+  check("adding a speaker creates the account and the membership → 201",
+    addSpeaker.status === 201
+    && addSpeaker.data?.data?.userCreated === true
+    && addSpeaker.data?.data?.membershipCreated === true,
+    `${addSpeaker.status} ${JSON.stringify(addSpeaker.data?.data ?? addSpeaker.data?.error ?? "none")}`);
+  check("a brand-new speaker belongs to this event alone, so their profile is stored",
+    addSpeaker.data?.data?.profileRequested === true
+    && addSpeaker.data?.data?.profileApplied === true
+    && addSpeaker.data?.data?.sharedAcrossEvents === false,
+    JSON.stringify(addSpeaker.data?.data ?? "none"));
+  const afterAdd = await req("GET", "/admin/speakers", null, admin);
+  check("the added speaker appears on the roster immediately",
+    afterAdd.text.includes(ROSTER_NEW_NAME) && afterAdd.text.includes(ROSTER_NEW_EMAIL));
+  check("adding a session-less speaker moves the awaiting count, never the confirmed one",
+    confirmedCountOf(afterAdd.text) === confirmedBefore && awaitingCountOf(afterAdd.text) === awaitingBefore + 1,
+    `confirmed ${confirmedCountOf(afterAdd.text)} (was ${confirmedBefore}), awaiting ${awaitingCountOf(afterAdd.text)} (was ${awaitingBefore})`);
+
+  // C17: the same email again is a reuse, not a duplicate, and the typed name
+  // must not overwrite the name the account already carries.
+  const addAgain = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_NEW_EMAIL, name: "Marcus B. Bell-Renamed",
+  }, admin);
+  check("re-adding the same speaker is idempotent → 200, nothing created",
+    addAgain.status === 200
+    && addAgain.data?.data?.userCreated === false
+    && addAgain.data?.data?.membershipCreated === false,
+    `${addAgain.status} ${JSON.stringify(addAgain.data?.data ?? addAgain.data?.error ?? "none")}`);
+  check("the reused account keeps its own global name in the response",
+    addAgain.data?.data?.speaker?.name === ROSTER_NEW_NAME,
+    `got ${addAgain.data?.data?.speaker?.name ?? "none"}`);
+  const storedUser = await prisma.user.findUnique({ where: { email: ROSTER_NEW_EMAIL }, select: { id: true, name: true } });
+  check("the stored global name was never overwritten by the second add",
+    storedUser?.name === ROSTER_NEW_NAME, `stored ${storedUser?.name ?? "none"}`);
+  const membershipCount = await prisma.eventMember.count({ where: { eventId: EVENT_ID, userId: storedUser?.id ?? "none" } });
+  check("re-adding did not duplicate the event membership", membershipCount === 1, `got ${membershipCount}`);
+
+  const addAdmin = await req("POST", "/api/admin/speakers", {
+    email: "maya@greenroom.demo", name: "Maya Chen",
+  }, admin);
+  check("someone who already holds another role is refused, not silently demoted → 409",
+    addAdmin.status === 409 && addAdmin.data?.error?.code === "SPEAKER_ROLE_CONFLICT",
+    `${addAdmin.status} ${addAdmin.data?.error?.code ?? "none"}`);
+  const stillAdmin = await prisma.eventMember.findUnique({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: fx.users.admin } },
+    select: { role: true },
+  });
+  check("the refused add left the organizer's role untouched", stillAdmin?.role === "ADMIN", `got ${stillAdmin?.role ?? "none"}`);
+
+  const addBadEmail = await req("POST", "/api/admin/speakers", { email: "not-an-email", name: "X" }, admin);
+  check("an unusable email is a field-scoped validation refusal",
+    addBadEmail.status === 422 && Boolean(addBadEmail.data?.error?.fieldErrors?.email),
+    `${addBadEmail.status} ${JSON.stringify(addBadEmail.data?.error?.fieldErrors ?? "none")}`);
+
+  // SPK-02: editing, with the portal's own C13 null semantics.
+  const editProfile = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id,
+    bio: "Priya now leads the reliability guild and mentors on-call engineers.",
+    company: "Lumen Grid",
+    headshotUrl: "https://images.example.test/priya-raman-2.jpg",
+  }, admin);
+  check("editing a speaker profile round-trips the stored values → 200",
+    editProfile.status === 200
+    && editProfile.data?.data?.profile?.company === "Lumen Grid"
+    && editProfile.data?.data?.profile?.headshotUrl === "https://images.example.test/priya-raman-2.jpg"
+    && editProfile.data?.data?.profile?.bio?.startsWith("Priya now leads"),
+    `${editProfile.status} ${JSON.stringify(editProfile.data?.data?.profile ?? editProfile.data?.error ?? "none")}`);
+  check("the edit left the job title alone because the patch never mentioned it",
+    editProfile.data?.data?.profile?.jobTitle === "Director of Platform",
+    `got ${editProfile.data?.data?.profile?.jobTitle ?? "none"}`);
+  const afterEdit = await req("GET", "/admin/speakers", null, admin);
+  check("the roster shows the edited bio and headshot on the next load",
+    afterEdit.text.includes("Priya now leads the reliability guild")
+    && afterEdit.text.includes("https://images.example.test/priya-raman-2.jpg"));
+
+  const clearBio = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, bio: null }, admin);
+  check("an explicit null clears one field and leaves every omitted one stored (C13)",
+    clearBio.status === 200
+    && clearBio.data?.data?.profile?.bio === null
+    && clearBio.data?.data?.profile?.company === "Lumen Grid"
+    && clearBio.data?.data?.profile?.jobTitle === "Director of Platform",
+    `${clearBio.status} ${JSON.stringify(clearBio.data?.data?.profile ?? clearBio.data?.error ?? "none")}`);
+  const afterClear = await req("GET", "/admin/speakers", null, admin);
+  check("the cleared bio is reported as absent rather than left on screen",
+    !afterClear.text.includes("Priya now leads the reliability guild") && afterClear.text.includes("No bio stored yet"));
+
+  // T3 / SPK-04: where a speaker is in accepting their invitation.
+  const rosterBeforeStatus = await req("GET", "/admin/speakers", null, admin);
+  check("T3 an existing speaker is not silently marked unconfirmed by the new column",
+    !rosterBeforeStatus.text.includes(">Invited<") && !rosterBeforeStatus.text.includes(">Declined<"),
+    "expected no status chip before any status was set");
+  const setInvited = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "INVITED",
+  }, admin);
+  check("T3 a status-only edit is a real edit → 200",
+    setInvited.status === 200 && setInvited.data?.data?.profile?.status === "INVITED",
+    `${setInvited.status} ${JSON.stringify(setInvited.data?.data?.profile ?? setInvited.data?.error ?? "none")}`);
+  check("T3 setting a status left every stored prose field alone",
+    setInvited.data?.data?.profile?.company === "Lumen Grid"
+    && setInvited.data?.data?.profile?.jobTitle === "Director of Platform",
+    JSON.stringify(setInvited.data?.data?.profile ?? "none"));
+  const rosterInvited = await req("GET", "/admin/speakers", null, admin);
+  check("T3 the roster renders an Invited chip for that speaker",
+    rosterInvited.text.includes(">Invited<"), "expected an Invited status chip");
+  const setDeclined = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "DECLINED",
+  }, admin);
+  const rosterDeclined = await req("GET", "/admin/speakers", null, admin);
+  check("T3 a declined speaker is shown as declined",
+    setDeclined.status === 200 && rosterDeclined.text.includes(">Declined<"),
+    `${setDeclined.status}`);
+  const badStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "MAYBE",
+  }, admin);
+  check("T3 a status outside the three known ones is refused",
+    badStatus.status === 422, badStatus.status);
+  const restoreStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 the status can be set back to confirmed",
+    restoreStatus.status === 200 && restoreStatus.data?.data?.profile?.status === "CONFIRMED",
+    restoreStatus.status);
+
+  const renameAttempt = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, name: "Someone Else" }, admin);
+  check("an organizer cannot rename a speaker's account through the profile edit",
+    renameAttempt.status === 422, `got ${renameAttempt.status}`);
+  const reEmailAttempt = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, email: "hijack@scratch.test" }, admin);
+  check("an organizer cannot re-address a speaker's account through the profile edit",
+    reEmailAttempt.status === 422, `got ${reEmailAttempt.status}`);
+  const nameUnchanged = await prisma.user.findUnique({ where: { email: ROSTER_MEMBER_EMAIL }, select: { name: true } });
+  check("the refused identity edits changed nothing about the account",
+    nameUnchanged?.name === ROSTER_MEMBER_NAME, `got ${nameUnchanged?.name ?? "none"}`);
+
+  // One indistinguishable 404 for every id the caller has no business editing.
+  const foreignUser = await prisma.user.create({ data: { email: ROSTER_FOREIGN_EMAIL, name: "Foreign Speaker" } });
+  await prisma.eventMember.create({ data: { eventId: S20_OTHER_EVENT_ID, userId: foreignUser.id, role: "SPEAKER" } });
+  const editForeign = await req("PATCH", "/api/admin/speakers", { userId: foreignUser.id, bio: "should never land" }, admin);
+  const editUnknown = await req("PATCH", "/api/admin/speakers", { userId: "user-does-not-exist", bio: "x" }, admin);
+  const editReviewer = await req("PATCH", "/api/admin/speakers", { userId: fx.users.evaluator, bio: "x" }, admin);
+  check("another event's speaker, an unknown id, and a reviewer are one identical 404",
+    [editForeign, editUnknown, editReviewer].every((res) => res.status === 404 && res.data?.error?.code === "SPEAKER_NOT_FOUND"),
+    `${editForeign.status}/${editUnknown.status}/${editReviewer.status}`);
+  const foreignProfile = await prisma.speakerProfile.findUnique({ where: { userId: foreignUser.id }, select: { bio: true } });
+  check("the refused cross-event edit wrote no profile row at all", foreignProfile === null,
+    `got ${JSON.stringify(foreignProfile)}`);
+
+  // A SpeakerProfile is one global row per person, read by every public speaker
+  // surface. Dana is on this event's roster AND another event's, so writing her
+  // profile here would change how she appears on the other event's public page.
+  // This event's authority does not reach that far.
+  const sharedUser = await prisma.user.create({ data: { email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME } });
+  await prisma.eventMember.create({ data: { eventId: S20_OTHER_EVENT_ID, userId: sharedUser.id, role: "SPEAKER" } });
+  const addShared = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME,
+    jobTitle: "Head of Content", company: "Two Events Ltd", bio: "should never be stored by this event",
+  }, admin);
+  check("a speaker shared with another event still joins this one → 201",
+    addShared.status === 201 && addShared.data?.data?.membershipCreated === true,
+    `${addShared.status} ${JSON.stringify(addShared.data?.data ?? addShared.data?.error ?? "none")}`);
+  check("but the profile details typed for a shared speaker are withheld, and said to be",
+    addShared.data?.data?.profileRequested === true
+    && addShared.data?.data?.profileApplied === false
+    && addShared.data?.data?.sharedAcrossEvents === true,
+    JSON.stringify(addShared.data?.data ?? "none"));
+  const sharedAfterAdd = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
+  check("adding a shared speaker created no global profile row", sharedAfterAdd === null,
+    `got ${JSON.stringify(sharedAfterAdd)}`);
+
+  const editShared = await req("PATCH", "/api/admin/speakers", {
+    userId: sharedUser.id, bio: "should never be stored by this event either",
+  }, admin);
+  check("editing a shared speaker's global profile is refused → 409",
+    editShared.status === 409 && editShared.data?.error?.code === "SPEAKER_SHARED_ACROSS_EVENTS",
+    `${editShared.status} ${editShared.data?.error?.code ?? "none"}`);
+  check("the refusal explains why and names the speaker's own portal as the way forward",
+    typeof editShared.data?.error?.message === "string"
+    && editShared.data.error.message.includes("another event")
+    && editShared.data.error.message.includes("speaker portal"),
+    editShared.data?.error?.message ?? "none");
+  const sharedAfterEdit = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
+  check("the refused shared edit wrote no global profile row", sharedAfterEdit === null,
+    `got ${JSON.stringify(sharedAfterEdit)}`);
+  // T3 / SPK-04: status lives on that same global row, so it refuses identically
+  // rather than becoming a back door into a shared speaker's profile.
+  const statusShared = await req("PATCH", "/api/admin/speakers", {
+    userId: sharedUser.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 setting a shared speaker's status is refused with the identical 409",
+    statusShared.status === 409
+    && statusShared.data?.error?.code === "SPEAKER_SHARED_ACROSS_EVENTS"
+    && statusShared.data?.error?.message === editShared.data?.error?.message,
+    `${statusShared.status} ${statusShared.data?.error?.code ?? "none"}`);
+  check("T3 the refused status write created no global profile row either",
+    (await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id } })) === null);
+  const addSharedWithStatus = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME, status: "CONFIRMED",
+  }, admin);
+  check("T3 adding a shared speaker withholds their status alongside the rest",
+    addSharedWithStatus.status === 200
+    && addSharedWithStatus.data?.data?.profileRequested === true
+    && addSharedWithStatus.data?.data?.profileApplied === false,
+    JSON.stringify(addSharedWithStatus.data?.data ?? "none"));
+  // The refusal must be targeted, not a blanket lockout of the edit feature.
+  const editExclusive = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, company: "Lumen Grid Holdings",
+  }, admin);
+  check("a speaker who belongs to this event alone is still editable",
+    editExclusive.status === 200 && editExclusive.data?.data?.profile?.company === "Lumen Grid Holdings",
+    `${editExclusive.status} ${JSON.stringify(editExclusive.data?.data?.profile ?? editExclusive.data?.error ?? "none")}`);
+
+  // ADMIN-only, enforced from the persisted membership rather than the cookie.
+  const evaluatorAdd = await req("POST", "/api/admin/speakers", { email: "nope@scratch.test", name: "Nope" }, evaluator);
+  const evaluatorEdit = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, bio: "x" }, evaluator);
+  check("a reviewer can neither add nor edit a speaker → 403",
+    evaluatorAdd.status === 403 && evaluatorEdit.status === 403,
+    `add ${evaluatorAdd.status}, edit ${evaluatorEdit.status}`);
+  const forgedAdmin = { user: { id: "x", name: "Sofia Marques", email: "sofia@greenroom.demo" }, event: ev, role: "ADMIN" };
+  const forgedAdd = await req("POST", "/api/admin/speakers", { email: "nope2@scratch.test", name: "Nope" }, forgedAdmin);
+  check("a forged ADMIN claim in the cookie does not grant speaker administration",
+    forgedAdd.status === 401 || forgedAdd.status === 403, `got ${forgedAdd.status}`);
+  const anonAdd = await req("POST", "/api/admin/speakers", { email: "nope3@scratch.test", name: "Nope" });
+  check("an unauthenticated add is refused before any lock is taken → 401",
+    anonAdd.status === 401, `got ${anonAdd.status}`);
+  const speakerRoster = await reqManual("/admin/speakers", speaker);
+  check("a speaker is redirected away from the roster page → 307",
+    speakerRoster.status === 307, `got ${speakerRoster.status}`);
+  const noSpeakerAdded = await prisma.user.count({ where: { email: { in: ["nope@scratch.test", "nope2@scratch.test", "nope3@scratch.test"] } } });
+  check("no refused add created an account as a side effect", noSpeakerAdded === 0, `got ${noSpeakerAdded}`);
 
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data

@@ -1,13 +1,110 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Prisma } from "@prisma/client";
 import {
   assignOnboardingTasks,
   DEFAULT_SESSION_MINUTES,
+  newSessionData,
   planTaskAssignments,
+  provisionSessionForAbstract,
+  reconciledSessionTopic,
   resolveSessionDuration,
   TASK_ASSIGNMENT_PAGE_SIZE,
 } from "@/lib/services/session-provisioning";
+
+const proposal = {
+  id: "abstract-1",
+  eventId: "event-1",
+  title: "Scaling to 10M requests",
+  abstract: "How we grew the platform.",
+  format: "Keynote",
+  durationMinutes: 45,
+  categoryId: "category-devex",
+  speakers: [{ userId: "user-1", isPrimary: true }],
+  session: null,
+};
+
+test("an accepted proposal's topic is carried onto the talk it becomes", () => {
+  assert.equal(newSessionData(proposal).categoryId, "category-devex");
+});
+
+test("a proposal submitted without a topic creates a talk with none", () => {
+  assert.equal(newSessionData({ ...proposal, categoryId: null }).categoryId, null);
+});
+
+test("a topic that moved on the proposal is reconciled onto the talk", () => {
+  assert.deepEqual(
+    reconciledSessionTopic({ categoryId: "category-devex" }, { categoryId: "category-ai" }),
+    { categoryId: "category-devex" },
+  );
+  // Clearing the proposal's topic really does clear the talk's.
+  assert.deepEqual(
+    reconciledSessionTopic({ categoryId: null }, { categoryId: "category-ai" }),
+    { categoryId: null },
+  );
+  // ...and a talk that never had one picks the proposal's up.
+  assert.deepEqual(
+    reconciledSessionTopic({ categoryId: "category-ai" }, { categoryId: null }),
+    { categoryId: "category-ai" },
+  );
+});
+
+test("an unchanged topic produces no write at all", () => {
+  // Not an optimization: a re-run that writes nothing leaves `updatedAt` alone,
+  // so "reconvened this talk" and "changed this talk" stay distinguishable.
+  assert.equal(reconciledSessionTopic({ categoryId: "category-ai" }, { categoryId: "category-ai" }), null);
+  assert.equal(reconciledSessionTopic({ categoryId: null }, { categoryId: null }), null);
+});
+
+test("re-running provisioning reconciles the topic and touches nothing else", async () => {
+  const updates: { where: { id: string }; data: Record<string, unknown> }[] = [];
+  const tx = {
+    session: {
+      update: async (args: { where: { id: string }; data: Record<string, unknown> }) => {
+        updates.push(args);
+        return { id: args.where.id };
+      },
+      create: async () => { throw new Error("must not create a second session"); },
+    },
+  } as unknown as Prisma.TransactionClient;
+  const result = await provisionSessionForAbstract(
+    tx,
+    { ...proposal, categoryId: "category-devex", session: { id: "session-1", categoryId: "category-ai" } },
+  );
+  assert.deepEqual(result, { sessionId: "session-1", created: false, topicReconciled: true });
+  assert.deepEqual(updates, [{ where: { id: "session-1" }, data: { categoryId: "category-devex" } }]);
+  // Title, description, format and duration are the convert route's documented
+  // non-mutations; a reconciliation that quietly widened would break them.
+  for (const field of ["title", "description", "format", "durationMinutes"]) {
+    assert.ok(!(field in updates[0].data), `reconciliation must not write ${field}`);
+  }
+});
+
+test("re-running an already-aligned talk issues no session write", async () => {
+  const tx = {
+    session: {
+      update: async () => { throw new Error("must not write an unchanged session"); },
+      create: async () => { throw new Error("must not create a second session"); },
+    },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(
+    await provisionSessionForAbstract(tx, { ...proposal, session: { id: "session-1", categoryId: "category-devex" } }),
+    { sessionId: "session-1", created: false, topicReconciled: false },
+  );
+});
+
+test("the new talk copies exactly the proposal fields it is meant to", () => {
+  assert.deepEqual(newSessionData(proposal, 60), {
+    eventId: "event-1",
+    sourceAbstractId: "abstract-1",
+    title: "Scaling to 10M requests",
+    description: "How we grew the platform.",
+    format: "Keynote",
+    durationMinutes: 60,
+    categoryId: "category-devex",
+  });
+});
 
 test("an explicit duration wins over the proposal", () => {
   assert.equal(resolveSessionDuration(45, 60), 60);
@@ -93,4 +190,58 @@ test("task assignment pages through a large checklist without truncating it", as
   assert.equal(await assignOnboardingTasks(tx, "event-1", "session-1"), 202);
   assert.deepEqual(inserts.map((batch) => batch.length), [100, 100, 2]);
   assert.equal(new Set(inserts.flat().map(({ taskId, userId }) => `${taskId}:${userId}`)).size, 202);
+});
+
+/**
+ * Source-level contract for the reconciliation boundary (INV-EDIT-001).
+ *
+ * Which authority may move the public programme is not observable from a pure
+ * function: it is a property of *which routes call what*. A well-meaning
+ * refactor that "fixes the stale topic properly" by propagating from the
+ * speaker's edit would look like an improvement and would quietly let a speaker
+ * rewrite the published agenda.
+ */
+const routeSource = (path: string) =>
+  readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+
+test("only ADMIN-authorized routes reconcile a Session's topic", () => {
+  for (const path of ["app/api/evaluations/decisions/route.ts", "app/api/evaluations/convert/route.ts"]) {
+    const route = routeSource(path);
+    assert.match(route, /requireContext\(\["ADMIN"\]\)/, `${path} is ADMIN-only`);
+    // Both reach reconciliation through the shared provisioning helper rather
+    // than writing Session.categoryId themselves. `categoryId` may appear in a
+    // `select` — that read is what makes reconciliation possible — but never
+    // inside a `data:` payload.
+    assert.match(route, /provisionAcceptedAbstract\(tx, /, `${path} goes through provisioning`);
+    for (const payload of route.match(/data: \{[^}]*\}/g) ?? []) {
+      assert.doesNotMatch(payload, /categoryId/, `${path} writes no category directly`);
+    }
+  }
+});
+
+test("INV-EDIT-001: the speaker's edit never mutates its linked Session", () => {
+  const speakerEdit = routeSource("app/api/cfp/submissions/[abstractId]/route.ts");
+  // It is authorized as a speaker, not an organizer...
+  assert.match(speakerEdit, /isAbstractSpeaker\(/);
+  assert.doesNotMatch(speakerEdit, /requireContext\(\["ADMIN"\]\)/);
+  // ...so it may write the Abstract and must never write a Session.
+  assert.match(speakerEdit, /\.\.\.\(patch\.categoryId !== undefined \? \{ categoryId: patch\.categoryId \} : \{\}\)/);
+  assert.doesNotMatch(speakerEdit, /tx\.session\.(update|create|delete)/);
+  // Asserted on the imports rather than the whole file: the invariant comment
+  // below names `provisionSessionForAbstract` on purpose, so a bare text search
+  // would match the very documentation that explains the rule.
+  const imports = speakerEdit.slice(0, speakerEdit.indexOf("export const"));
+  assert.doesNotMatch(imports, /session-provisioning/);
+  // And the invariant is stated where the next reader will be tempted.
+  assert.match(speakerEdit, /INV-EDIT-001/);
+});
+
+test("the anonymous and import writers can never face a Session to reconcile", () => {
+  // A Session exists only after acceptance. Both of these refuse to touch an
+  // abstract that has got that far, which is why neither needs a handoff.
+  assert.match(routeSource("app/api/cfp/submissions/route.ts"), /status !== "DRAFT"/);
+  assert.match(
+    routeSource("app/api/integrations/import/route.ts"),
+    /\["DRAFT", "SUBMITTED"\]\.includes\(current\.status\)/,
+  );
 });

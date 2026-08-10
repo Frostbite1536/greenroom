@@ -62,6 +62,19 @@ enum ReviewerInviteDeliveryState {
   FAILED
 }
 
+/** Where a speaker is in accepting their invitation to take part. */
+enum SpeakerStatus {
+  INVITED
+  CONFIRMED
+  DECLINED
+}
+
+/** Whether a Session appears on the public programme. */
+enum SessionContentStatus {
+  DRAFT
+  PUBLISHED
+}
+
 model Event {
   id        String    @id @default(cuid())
   name      String
@@ -160,6 +173,11 @@ model ReviewerInvite {
 model SpeakerProfile {
   id           String   @id @default(cuid())
   userId       String   @unique
+  // Where this person is in accepting their invitation. CONFIRMED by default
+  // because every speaker on an existing programme is already live and taking
+  // part: any other default would mark a whole roster as unconfirmed the moment
+  // this column is applied.
+  status       SpeakerStatus @default(CONFIRMED)
   bio          String?
   company      String?
   jobTitle     String?
@@ -184,6 +202,7 @@ model Category {
 
   event     Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
   abstracts Abstract[]
+  sessions  Session[]
 
   @@unique([eventId, name])
   @@index([eventId, sortOrder])
@@ -274,6 +293,10 @@ model AbstractSpeaker {
   abstractId String
   userId     String
   isPrimary  Boolean @default(false)
+  // How this person contributes to this proposal ("Co-presenter", "Panellist").
+  // Per-proposal, not per-person: the same speaker can hold different roles on
+  // different talks, which is why it lives here and not on SpeakerProfile.
+  role       String?
 
   abstract Abstract @relation(fields: [abstractId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -382,15 +405,27 @@ model Session {
   description      String?
   format           String?
   durationMinutes  Int
+  // Whether this talk is part of the published programme. PUBLISHED is the
+  // default because every scheduled session is publicly visible today: any
+  // other default would hide a live programme the moment this column is
+  // applied. Unpublishing is therefore an explicit organizer act.
+  contentStatus    SessionContentStatus @default(PUBLISHED)
+  // The topic the proposal was submitted under, carried onto the talk when the
+  // abstract is accepted. Nullable because a Session may be authored directly
+  // (a keynote), and SetNull because deleting a Category must never delete a
+  // confirmed talk — it only takes its label away.
+  categoryId       String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   event          Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   sourceAbstract Abstract?        @relation(fields: [sourceAbstractId], references: [id], onDelete: SetNull)
+  category       Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   speakers       SessionSpeaker[]
   scheduleSlot   ScheduleSlot?
 
   @@index([eventId])
+  @@index([categoryId])
 }
 
 model SessionSpeaker {

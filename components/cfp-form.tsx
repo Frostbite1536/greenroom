@@ -27,7 +27,10 @@ import {
   type DraftRecoveryMetadata,
 } from "@/lib/cfp-draft-recovery";
 
-type Speaker = { name: string; email: string; isPrimary: boolean };
+type Speaker = { name: string; email: string; isPrimary: boolean; role?: string | null };
+
+/** Matches the server's bound on `AbstractSpeaker.role` (speakerRoleSchema). */
+const SPEAKER_ROLE_MAX_LENGTH = 80;
 type Step = 0 | 1 | 2 | 3;
 const STEP_LABELS = ["Welcome", "Submission", "Participants", "Review"];
 
@@ -344,6 +347,9 @@ export function CfpForm({ form }: { form: PublicFormView }) {
         email: s.email.trim().toLowerCase(),
         name: s.name.trim(),
         isPrimary: s.isPrimary,
+        // Sent even when blank: the server reads a submitted roster as the whole
+        // truth, so an emptied box has to arrive as an emptied box.
+        role: s.role?.trim() ?? "",
       })),
       answers: Object.fromEntries(visibleFields.map((f) => [f.key, answers[f.key] ?? null])),
       intent,
@@ -639,6 +645,16 @@ export function CfpForm({ form }: { form: PublicFormView }) {
                 <input className="text-input" type="email" value={sp.email} aria-invalid={!!errors[`sp_email_${i}`]} onChange={(e) => { setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, email: e.target.value } : x))); markEdited(); }} />
                 {errors[`sp_email_${i}`] ? <span className="field-error">{errors[`sp_email_${i}`]}</span> : null}
               </label>
+              <label className="stack">
+                <span className="field-label">Role <span className="muted">(optional)</span></span>
+                <input
+                  className="text-input"
+                  value={sp.role ?? ""}
+                  maxLength={SPEAKER_ROLE_MAX_LENGTH}
+                  placeholder={i === 0 ? "Presenter" : "Co-presenter"}
+                  onChange={(e) => { setSpeakers((s) => s.map((x, j) => (j === i ? { ...x, role: e.target.value } : x))); markEdited(); }}
+                />
+              </label>
               <button type="button" className="ghost-button danger-button" aria-label="Remove speaker" disabled={i === 0} onClick={() => { setSpeakers((s) => s.filter((_, j) => j !== i)); markEdited(); }}>
                 <Trash2 size={15} />
               </button>
@@ -673,7 +689,11 @@ export function CfpForm({ form }: { form: PublicFormView }) {
             ))}
             <div className="kv">
               <span>Speakers</span>
-              <span>{speakers.map((s) => `${s.name} (${s.email})`).join(", ")}</span>
+              <span>
+                {speakers
+                  .map((s) => `${s.name} (${s.email})${s.role?.trim() ? ` — ${s.role.trim()}` : ""}`)
+                  .join(", ")}
+              </span>
             </div>
           </div>
         </div>

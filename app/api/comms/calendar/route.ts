@@ -16,7 +16,8 @@ function fail(code: string, message: string, status: number) {
  * `?sessionId=` exports a single session; omitting it exports the event's whole
  * published schedule. This is intentionally **public and read-only** — golden
  * path step 7 has the public embed offering `.ics` export with a null session.
- * Only scheduled sessions are exposed, and everything is scoped to `eventId`.
+ * Only scheduled *and published* sessions are exposed, and everything is scoped
+ * to `eventId`.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -37,6 +38,12 @@ export async function GET(request: Request) {
       ...(sessionId ? { id: sessionId } : {}),
       // Only sessions that actually have a time and place can be exported.
       scheduleSlot: { isNot: null },
+      // ...and only ones the event is actually announcing. This endpoint is
+      // anonymous and returns a downloadable file, so without this an
+      // unpublished talk stays fetchable — and a calendar file, once
+      // downloaded, keeps speaking long after the page stopped showing it.
+      // Same predicate as `getPublicAgenda` and `GET /api/agenda/public`.
+      contentStatus: "PUBLISHED",
     },
     select: {
       id: true,
@@ -48,7 +55,13 @@ export async function GET(request: Request) {
   });
 
   if (sessions.length === 0) {
-    return fail("NOT_FOUND", sessionId ? "That session is not scheduled." : "No scheduled sessions to export.", 404);
+    // One refusal for "never scheduled" and "not published": distinguishing
+    // them would let an anonymous caller detect that a held-back talk exists.
+    return fail(
+      "NOT_FOUND",
+      sessionId ? "That session is not on the published schedule." : "No published sessions to export.",
+      404,
+    );
   }
 
   const appUrl = process.env.APP_URL?.replace(/\/$/, "");

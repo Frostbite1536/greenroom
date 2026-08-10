@@ -26,3 +26,25 @@ export function decisionTimestamp(decision: AbstractDecision, now: Date): Date |
 export function decisionProvisionsSession(decision: AbstractDecision): boolean {
   return decision === "ACCEPTED";
 }
+
+/**
+ * What a final decision means for the linked Session's place on the public
+ * programme, or `null` when the decision does not speak to publication.
+ *
+ * This closes a real leak rather than restating the decision: rejecting an
+ * abstract that was already accepted left its Session scheduled and publicly
+ * visible, because nothing is ever deleted (INV-DOMAIN-001, W2). Reversing the
+ * decision now unpublishes the talk — the row, its slot, its speakers and their
+ * tasks all survive untouched, so re-accepting restores it and the admin can
+ * still unschedule deliberately.
+ *
+ * MAYBE returns null: it cannot coexist with a Session at all, and a review
+ * state is not a publication instruction.
+ */
+export function sessionPublicationForDecision(
+  decision: AbstractDecision,
+): "PUBLISHED" | "DRAFT" | null {
+  if (decision === "ACCEPTED") return "PUBLISHED";
+  if (decision === "REJECTED") return "DRAFT";
+  return null;
+}

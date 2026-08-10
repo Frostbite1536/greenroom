@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { handle, ok } from "@/lib/api/http";
+import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -18,21 +19,28 @@ export const GET = handle(async () => {
     prisma.session.findMany({
       where: { eventId: ctx.eventId },
       include: {
+        category: { select: { id: true, name: true } },
         speakers: { include: { user: { select: { id: true, name: true } } } },
         scheduleSlot: true,
       },
-      orderBy: { createdAt: "asc" },
+      // Same bound and stable order as `getAgendaData`, so the API twin and the
+      // server-rendered builder cannot disagree about which sessions they hold.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.agendaSessions + 1,
     }),
   ]);
 
   return ok({
     rooms,
     tracks,
-    sessions: sessions.map((s) => ({
+    truncated: sessions.length > OPERATOR_QUERY_LIMITS.agendaSessions,
+    sessions: sessions.slice(0, OPERATOR_QUERY_LIMITS.agendaSessions).map((s) => ({
       id: s.id,
       title: s.title,
       format: s.format,
       durationMinutes: s.durationMinutes,
+      // Additive: the proposal's topic, carried onto the talk at acceptance.
+      category: s.category,
       speakers: s.speakers.map((sp) => ({
         userId: sp.userId,
         name: sp.user.name,
