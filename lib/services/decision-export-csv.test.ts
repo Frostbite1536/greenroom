@@ -145,9 +145,20 @@ test("a truncated export states its own bound in a final comment row", () => {
   const csv = buildDecisionExportCsv({ ...baseInput, total: 250, hasMore: true });
   const all = lines(csv);
   assert.equal(all.length, 4);
-  const last = all[all.length - 1];
-  assert.ok(last.startsWith("# Truncated:"), last);
-  assert.ok(last.includes("newest 2 of 250 proposals"), last);
+  assert.equal(
+    all[all.length - 1],
+    "# Truncated: this export contains the newest 2 of 250 recorded proposals; older proposals are not included in this export.",
+  );
+});
+
+test("the truncation notice recommends no next step this route cannot honour", () => {
+  // The endpoint takes `planId` and nothing else. Telling an operator to narrow
+  // by status or form would send them looking for a control the export does not
+  // have, so the notice names the limit instead of inventing a workflow.
+  const last = lines(buildDecisionExportCsv({ ...baseInput, total: 250, hasMore: true })).at(-1) ?? "";
+  assert.ok(!/\bfilter\b/i.test(last), last);
+  assert.ok(!/export again|try again|narrow/i.test(last), last);
+  assert.ok(last.includes("not included in this export"), last);
 });
 
 test("an untruncated export adds no comment row", () => {

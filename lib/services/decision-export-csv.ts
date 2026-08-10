@@ -108,6 +108,12 @@ function roundLabel(plan: AdminDecisionPlan | null): string {
  * the first column, so the honesty survives being opened in a spreadsheet — a
  * silently short export is the failure mode that actually misleads an organizer
  * (S20: bounded reads report their bound rather than hiding it).
+ *
+ * The notice states what the file contains and stops there. It deliberately
+ * recommends no next step: this route takes only `planId`, so telling an
+ * operator to narrow by status or form would send them looking for a control
+ * the export does not have. An unreachable older proposal is a real limit of
+ * this slice and is named as one rather than dressed up as a workflow.
  */
 export function buildDecisionExportCsv(input: DecisionExportInput): string {
   const lines: string[] = [csvRow(DECISION_EXPORT_HEADER)];
@@ -137,7 +143,7 @@ export function buildDecisionExportCsv(input: DecisionExportInput): string {
   if (input.hasMore) {
     lines.push(
       csvRow([
-        `# Truncated: this export carries the newest ${input.rows.length} of ${input.total} proposals. Filter by status or form on the abstracts page and export again to reach the rest.`,
+        `# Truncated: this export contains the newest ${input.rows.length} of ${input.total} recorded proposals; older proposals are not included in this export.`,
       ]),
     );
   }
