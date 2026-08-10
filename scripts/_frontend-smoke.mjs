@@ -66,6 +66,17 @@ const EMBED_SPEAKER_HEADSHOT = "https://images.example.test/nadia-okonkwo.jpg";
 const SESSION_A_DESCRIPTION = "This session walks through the production incident that took our "
   + "scheduling pipeline down for six hours, the three false root causes we chased first, and the "
   + "instrumentation change that would have caught it in minutes. Bring questions about on-call.";
+// §5-4: a talk carrying the internal provenance note the seed writes. It exists
+// so the guard is exercised against the real string rather than a paraphrase —
+// this text must never appear in a public byte, and its card must show the
+// honest fallback instead.
+const PROVENANCE_SESSION_TITLE = "Scratch Session P (provenance description)";
+const PROVENANCE_DESCRIPTION = "Confirmed session converted from an accepted abstract.";
+const PUBLIC_SUMMARY_FALLBACK = "A summary for this session has not been published yet.";
+// The attendee-facing summary the converted talk must carry onto the public
+// programme. Distinctive so a match cannot be an accident of other fixture copy.
+const CONVERTED_ABSTRACT_SUMMARY = "Three field-tested tactics for shrinking a release train, "
+  + "with the rollback story that taught us the second one.";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -364,6 +375,22 @@ async function resetScratch() {
     data: {
       eventId: EVENT_ID, sessionId: sessionA.id, roomId: roomA.id, trackId: track.id,
       startsAt: new Date(`${dayKey}T17:00:00.000Z`), endsAt: new Date(`${dayKey}T17:30:00.000Z`),
+    },
+  });
+  // §5-4 fixture: published, scheduled, and holding the internal provenance
+  // note in `description`. Placed on the same day as sessionA so the default
+  // (unfiltered) embed render always contains it.
+  const sessionP = await prisma.session.create({
+    data: {
+      eventId: EVENT_ID, title: PROVENANCE_SESSION_TITLE, durationMinutes: 30, format: "Talk",
+      description: PROVENANCE_DESCRIPTION,
+      speakers: { create: [{ userId: users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.scheduleSlot.create({
+    data: {
+      eventId: EVENT_ID, sessionId: sessionP.id, roomId: roomB.id, trackId: track.id,
+      startsAt: new Date(`${dayKey}T18:00:00.000Z`), endsAt: new Date(`${dayKey}T18:30:00.000Z`),
     },
   });
   const sessionB = await prisma.session.create({
@@ -1158,7 +1185,9 @@ try {
   const submit = await req("POST", "/api/cfp/submissions", {
     formConfigId: fx.form.id,
     title: "Smoke submitted proposal",
-    abstract: "Full body",
+    // §5-4: this is the attendee-facing summary that must survive acceptance
+    // and land on the public programme, so it is distinctive rather than filler.
+    abstract: CONVERTED_ABSTRACT_SUMMARY,
     format: "Talk",
     durationMinutes: 30,
     categoryId: fx.category.id,
@@ -1260,6 +1289,52 @@ try {
   }, admin);
   check("converted session schedules cleanly → 200", placeConverted.status === 200,
     `${placeConverted.status} ${JSON.stringify(placeConverted.data?.error ?? "")}`);
+
+  // --- §5-4: the accepted proposal's own summary IS the public description ---
+  // The whole point of the fix: what the speaker wrote for attendees reaches
+  // the programme, instead of an operational note about the row's origin.
+  check("§5-4 acceptance carries the proposal's summary onto the confirmed talk",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { description: true },
+    }))?.description === CONVERTED_ABSTRACT_SUMMARY,
+    "expected Session.description to equal the abstract's summary");
+  const convertedCard = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("§5-4 the converted talk's public card shows that summary",
+    convertedCard.status === 200
+    && convertedCard.text.includes(`session-${convertedSessionId}`)
+    && convertedCard.text.includes(CONVERTED_ABSTRACT_SUMMARY.slice(0, 60)),
+    "expected the abstract summary on the converted session card");
+  const convertedIcs = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${convertedSessionId}`, null, null,
+  );
+  check("§5-4 the converted talk's .ics DESCRIPTION carries that summary, not provenance",
+    convertedIcs.status === 200
+    && convertedIcs.text.includes("DESCRIPTION:Three field-tested tactics")
+    && !convertedIcs.text.includes(PROVENANCE_DESCRIPTION)
+    && !convertedIcs.text.includes(PUBLIC_SUMMARY_FALLBACK),
+    "expected the real summary in the single-session calendar file");
+  // A re-run must reconcile a talk whose description was never carried across,
+  // and must not blank one an organizer wrote by hand.
+  await prisma.session.update({
+    where: { id: convertedSessionId }, data: { description: null },
+  });
+  const reconvert = await req("POST", "/api/evaluations/convert", {
+    abstractId: convertedAbstractId, durationMinutes: 30,
+  }, admin);
+  check("§5-4 an admin re-run repairs a talk that never got its summary",
+    reconvert.status === 200
+    && reconvert.data?.data?.summaryReconciled === true
+    && (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { description: true },
+    }))?.description === CONVERTED_ABSTRACT_SUMMARY,
+    `${reconvert.status} ${JSON.stringify(reconvert.data?.data ?? {})}`);
+  const reconvertAgain = await req("POST", "/api/evaluations/convert", {
+    abstractId: convertedAbstractId, durationMinutes: 30,
+  }, admin);
+  check("§5-4 a second re-run reconciles nothing and writes nothing",
+    reconvertAgain.data?.data?.summaryReconciled === false
+    && reconvertAgain.data?.data?.topicReconciled === false,
+    JSON.stringify(reconvertAgain.data?.data ?? {}));
 
   const afterSchedule = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts table shows a scheduled talk as 'On the programme'",
@@ -2683,6 +2758,38 @@ try {
     enriched.text.includes(SESSION_A_DESCRIPTION.slice(0, 60)));
   check("embed ships the full description in the collapsed markup",
     enriched.text.includes(SESSION_A_DESCRIPTION.slice(-50)));
+
+  // --- §5-4: internal provenance text never reaches a public byte -----------
+  // The judged defect: every public session card and every .ics DESCRIPTION
+  // printed an operational note about where the row came from. The scratch
+  // fixture holds one session whose description IS that exact note.
+  check("§5-4 the provenance-described talk is still on the public schedule",
+    enriched.text.includes(PROVENANCE_SESSION_TITLE), "expected the fixture card to render");
+  check("§5-4 the internal provenance note appears nowhere in the schedule embed",
+    !enriched.text.includes(PROVENANCE_DESCRIPTION),
+    "provenance text reached a public byte");
+  check("§5-4 a talk with no publishable summary says so honestly instead",
+    enriched.text.includes(PUBLIC_SUMMARY_FALLBACK),
+    "expected the honest fallback copy on the provenance card");
+  // The JSON twin is the same projection and must agree.
+  const publicAgendaJson = await req("GET", `/api/agenda/public?event=${EVENT_ID}`, null, null);
+  const provenanceRow = (publicAgendaJson.data?.data?.sessions ?? [])
+    .find((s) => s.title === PROVENANCE_SESSION_TITLE);
+  check("§5-4 the JSON agenda twin nulls the provenance note rather than publishing it",
+    publicAgendaJson.status === 200 && !!provenanceRow && provenanceRow.description === null,
+    JSON.stringify(provenanceRow?.description ?? "row missing"));
+  check("§5-4 no provenance sentence survives anywhere in the JSON agenda",
+    !publicAgendaJson.text.includes(PROVENANCE_DESCRIPTION)
+    && !publicAgendaJson.text.includes("Invited keynote (guaranteed session, no source abstract)."));
+  // ...and so must the calendar file, which keeps speaking after download.
+  const provenanceIcs = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}`, null, null,
+  );
+  check("§5-4 the .ics export carries the honest fallback, never the provenance note",
+    provenanceIcs.status === 200
+    && !provenanceIcs.text.includes(PROVENANCE_DESCRIPTION)
+    && provenanceIcs.text.includes(`DESCRIPTION:${PUBLIC_SUMMARY_FALLBACK.replace(/,/g, "\\,")}`),
+    "expected the fallback DESCRIPTION and no provenance text in the calendar file");
   check("embed offers a Show more affordance",
     enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
   check("session detail expands with native details, not a JS-only modal",

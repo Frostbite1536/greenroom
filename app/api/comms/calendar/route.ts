@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
+import { publicSessionSummary } from "@/lib/public-session-copy";
 import type { ApiResponse } from "@/types/api";
 
 export const runtime = "nodejs";
@@ -69,7 +70,11 @@ export async function GET(request: Request) {
   const events: IcsEvent[] = sessions.map((s) => ({
     uid: `${s.id}@greenroom`,
     title: s.title,
-    description: s.description,
+    // A downloaded .ics keeps speaking long after the page is closed, so it
+    // gets the same treatment as the programme page: the speaker's real
+    // summary when there is one, the honest fallback when there is not, and an
+    // internal provenance note never (§5-4).
+    description: publicSessionSummary(s.description),
     location: s.scheduleSlot!.room.name,
     startsAt: s.scheduleSlot!.startsAt,
     endsAt: s.scheduleSlot!.endsAt,

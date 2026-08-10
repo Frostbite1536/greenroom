@@ -11,6 +11,7 @@ import Link from "next/link";
 import { CalendarDays, CalendarPlus, Download, MapPin, Search, User } from "lucide-react";
 import type { PublicAgenda } from "@/lib/data/reads";
 import { calendarExportUrl } from "@/lib/ics-embed";
+import { PUBLIC_SESSION_SUMMARY_FALLBACK } from "@/lib/public-session-copy";
 import { formatDayLabel, formatEventDateRange, formatTime, zonedParts } from "@/lib/tz";
 import {
   ALL,
@@ -81,7 +82,13 @@ function SessionCard({
             </span>
           </summary>
           <div className="embed-session-full">
-            {session.description ? <p className="embed-session-desc">{session.description}</p> : null}
+            {/* An honest sentence about the absence, never the operational note
+                that used to sit in this column (§5-4). `session.description` is
+                already sanitized by the read, so `null` here means "genuinely
+                unpublished", not "internal text suppressed". */}
+            <p className="embed-session-desc">
+              {session.description ?? PUBLIC_SESSION_SUMMARY_FALLBACK}
+            </p>
             <dl className="embed-session-facts">
               <div>
                 <dt>When</dt>

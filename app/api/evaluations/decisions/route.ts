@@ -68,9 +68,10 @@ export const POST = handle(async (req) => {
       include: {
         speakers: { select: { userId: true, isPrimary: true } },
         // `categoryId` so re-accepting can reconcile a topic that moved on the
-        // proposal after the talk was created. Read under the same abstract
-        // lock as the write that follows it.
-        session: { select: { id: true, categoryId: true } },
+        // proposal after the talk was created, and `description` so it can
+        // reconcile the attendee-facing summary the public programme prints.
+        // Both read under the same abstract lock as the write that follows.
+        session: { select: { id: true, categoryId: true, description: true } },
       },
     });
 
@@ -81,7 +82,13 @@ export const POST = handle(async (req) => {
     const provisioned =
       decisionProvisionsSession(input.decision)
         ? await provisionAcceptedAbstract(tx, decided)
-        : { sessionId: decided.session?.id ?? null, created: false, topicReconciled: false, tasksAssigned: 0 };
+        : {
+            sessionId: decided.session?.id ?? null,
+            created: false,
+            topicReconciled: false,
+            summaryReconciled: false,
+            tasksAssigned: 0,
+          };
 
     // Nothing is deleted, but a reversed decision must stop speaking publicly.
     // Scoped to this abstract's own Session by its unique `sourceAbstractId`,
