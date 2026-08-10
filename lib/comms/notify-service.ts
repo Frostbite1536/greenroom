@@ -7,6 +7,7 @@ import {
 } from "@/lib/comms/notifications";
 import { renderEmailTemplate } from "@/lib/comms/reminders";
 import { submissionReceiptVariables } from "@/lib/comms/template-truth";
+import { storedTemplateDefects } from "@/lib/comms/template-edit";
 
 /**
  * Submission notifications (requirements delta #2, answer 6 / audit1#10).
@@ -86,23 +87,37 @@ export async function notifyAbstractSubmitted(
 
     // C21: the stored `cfp-submitted` template genuinely drives this send, so
     // the operator console's claim that editing it changes the receipt is true.
-    // A dedicated row with empty wording (legacy or hand-made) still falls back
-    // rather than mailing a blank receipt.
-    const usesStoredTemplate = Boolean(
-      dedicated &&
-        typeof dedicated.subject === "string" && dedicated.subject.trim() &&
-        typeof dedicated.htmlBody === "string" && dedicated.htmlBody.trim(),
-    );
+    //
+    // But a stored row is only trustworthy if it passed the edit contract, and
+    // a row edited before this template became load-bearing never did — nothing
+    // validated it, because nothing rendered it. Re-check it here against the
+    // very same predicate `PATCH /api/comms/templates/:id` applies, so a legacy
+    // row cannot mail a receipt full of blank substitutions or literal braces.
+    // Validation is not a fork of the edit rules; it is those rules.
+    const receiptVariables = submissionReceiptVariables({
+      eventName: abstract.event.name,
+      speakerName: abstract.submitter.name,
+      title: abstract.title,
+    });
+    const storedDefects = dedicated
+      ? storedTemplateDefects({
+          key: CFP_SUBMITTED_TEMPLATE_KEY,
+          subject: dedicated.subject ?? "",
+          htmlBody: dedicated.htmlBody ?? "",
+          suppliedVariables: Object.keys(receiptVariables),
+        })
+      : [];
+    const usesStoredTemplate = Boolean(dedicated) && storedDefects.length === 0;
     const content = usesStoredTemplate && dedicated
-      ? renderEmailTemplate(
-          { subject: dedicated.subject, htmlBody: dedicated.htmlBody },
-          submissionReceiptVariables({
-            eventName: abstract.event.name,
-            speakerName: abstract.submitter.name,
-            title: abstract.title,
-          }),
-        )
+      ? renderEmailTemplate({ subject: dedicated.subject, htmlBody: dedicated.htmlBody }, receiptVariables)
       : buildSubmissionReceipt({ eventName: abstract.event.name, speaker: abstract.submitter, title: abstract.title });
+    // Never claim the template drove a send it did not. The audit row carries
+    // why the fixed builder produced these bytes, using the closed defect codes.
+    const fallbackReason = usesStoredTemplate
+      ? null
+      : dedicated
+        ? storedDefects.join(",")
+        : "no_receipt_template";
 
     const messages = [{ ...content, to: abstract.submitter.email }];
 
@@ -117,6 +132,7 @@ export async function notifyAbstractSubmitted(
           abstractId: abstract.id,
           kind: "submission",
           source: usesStoredTemplate ? "template" : "fixed",
+          ...(fallbackReason ? { fallbackReason } : {}),
         },
         fetcher: options.fetcher,
       });

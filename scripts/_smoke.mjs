@@ -2446,6 +2446,37 @@ try {
     c21ReadOnlyEdit.data?.error?.code,
   );
 
+  // A `cfp-submitted` row edited BEFORE this template became load-bearing never
+  // passed the required-variable contract, because nothing rendered it then.
+  // Writing straight to the database reproduces that history exactly: it is the
+  // one way to get a row the PATCH route would now refuse. The send path must
+  // re-check it, fall back to the fixed builder, and say so on the audit row
+  // rather than claim a template drove a send it did not.
+  await prisma.emailTemplate.update({
+    where: { id: c21Template.id },
+    data: {
+      subject: "We got your proposal",
+      htmlBody: "<p>Hi {{speakerName}}, thanks. {{portalLink}}</p>",
+    },
+  });
+  const c21LegacySubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "C21 legacy row proof", abstract: "Legacy receipt wiring",
+    speakers: [{ email: "c21-legacy@scratch.test", name: "C21 Legacy Speaker", isPrimary: true }],
+    answers: { title_note: "hi", consent: true }, intent: "submit",
+  });
+  const c21LegacyDispatch = await prisma.emailDispatch.findFirst({
+    where: { templateId: c21Template.id, recipient: "c21-legacy@scratch.test" },
+    select: { status: true, variables: true },
+  });
+  check(
+    "C21 a legacy receipt row that never passed the edit contract falls back and records why",
+    c21LegacySubmit.status === 201 &&
+      c21LegacyDispatch?.variables?.source === "fixed" &&
+      c21LegacyDispatch.variables?.fallbackReason === "missing_required,unfilled_placeholder" &&
+      c21LegacyDispatch.status === "mocked",
+    JSON.stringify(c21LegacyDispatch?.variables ?? null),
+  );
+
   // Restore the pre-C21 template set so every later submit in this file logs
   // against `commsTemplate` as it did before. Dispatches cascade with the row.
   await prisma.emailTemplate.delete({ where: { id: c21Template.id } });

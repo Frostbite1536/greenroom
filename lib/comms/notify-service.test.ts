@@ -91,6 +91,49 @@ test("the stored cfp-submitted template is what the receipt is rendered from", a
 
   assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
   assert.equal(variables[0]?.source, "template");
+  // Nothing to explain: the template really did produce the bytes.
+  assert.equal(variables[0]?.fallbackReason, undefined);
+});
+
+/**
+ * A `cfp-submitted` row edited BEFORE this template became load-bearing never
+ * passed the required-variable contract, because nothing rendered it then. The
+ * send path re-checks it and refuses to mail a broken receipt.
+ */
+test("a legacy receipt row missing a required variable falls back and records why", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: {
+      id: "template-submitted",
+      subject: "We got your proposal",
+      htmlBody: "<p>Hi {{speakerName}}, thanks.</p>",
+    },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "missing_required");
+});
+
+test("a legacy receipt row whose placeholders nothing fills never renders them blank", async () => {
+  const { db, variables } = receiptDb({
+    dedicated: {
+      id: "template-submitted",
+      // `portalLink` has no supplier, and the malformed name is left untouched
+      // by the renderer — both would reach the speaker if this row were trusted.
+      subject: "We got {{talkTitle}}",
+      htmlBody: "<p>Hi {{speakerName}} — {{portalLink}} {{ not-a-name }}</p>",
+    },
+    fallback: null,
+  });
+
+  const summary = await notifyAbstractSubmitted("abstract-1", { db });
+
+  assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
+  assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "malformed_placeholder,unfilled_placeholder");
 });
 
 test("a legacy event without the dedicated key keeps fixed receipt copy, never another template's words", async () => {
@@ -109,6 +152,8 @@ test("a legacy event without the dedicated key keeps fixed receipt copy, never a
 
   assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
   assert.equal(variables[0]?.source, "fixed");
+  // There was no receipt template at all — a different truth from a bad one.
+  assert.equal(variables[0]?.fallbackReason, "no_receipt_template");
 });
 
 test("a dedicated receipt row with empty wording falls back rather than mailing a blank receipt", async () => {
@@ -121,4 +166,5 @@ test("a dedicated receipt row with empty wording falls back rather than mailing 
 
   assert.deepEqual(summary, { attempted: 1, sent: 0, mocked: 1, failed: 0 });
   assert.equal(variables[0]?.source, "fixed");
+  assert.equal(variables[0]?.fallbackReason, "empty_body,empty_subject,missing_required");
 });

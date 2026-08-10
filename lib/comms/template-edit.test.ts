@@ -9,8 +9,11 @@ import {
   unknownTemplateVariables,
   KNOWN_TEMPLATE_VARIABLES,
   missingRequiredTemplateVariables,
+  storedTemplateDefects,
 } from "./template-edit";
 import { renderEmailTemplate } from "./reminders";
+import { buildSubmissionReceipt } from "./notifications";
+import { DEMO_EMAIL_TEMPLATES } from "@/lib/demo/seed";
 
 test("placeholders are found the same way the renderer finds them", () => {
   assert.deepEqual(
@@ -114,6 +117,82 @@ test("the submission receipt may not lose the proposal title it exists to confir
     missingRequiredTemplateVariables("cfp-submitted", "Forward 2026", "<p>Thanks for {{talkTitle}}</p>"),
     [],
   );
+});
+
+/**
+ * A stored row is only trustworthy if it passed the edit contract. A row edited
+ * before its template became load-bearing never did, so the send path re-checks
+ * with this predicate rather than trusting the database.
+ */
+const RECEIPT_VARIABLES = ["speakerName", "eventName", "talkTitle"];
+
+function receiptDefects(subject: string, htmlBody: string) {
+  return storedTemplateDefects({
+    key: "cfp-submitted",
+    subject,
+    htmlBody,
+    suppliedVariables: RECEIPT_VARIABLES,
+  });
+}
+
+test("the seeded submission receipt satisfies the contract its send path re-checks", () => {
+  // Regression guard: if this ever fails, every receipt silently falls back to
+  // fixed copy and the console's "editing this works" claim goes false again.
+  const seeded = DEMO_EMAIL_TEMPLATES.find((template) => template.key === "cfp-submitted");
+  assert.ok(seeded);
+  assert.deepEqual(receiptDefects(seeded.subject, seeded.htmlBody), []);
+});
+
+test("a legacy stored row that never passed the edit contract is reported, not rendered", () => {
+  // Written before `cfp-submitted` required the title — valid then, lossy now.
+  assert.deepEqual(
+    receiptDefects("We got your proposal", "<p>Hi {{speakerName}}, thanks.</p>"),
+    ["missing_required"],
+  );
+  // Nothing supplies `portalLink`, so it would render as a silent blank.
+  assert.deepEqual(
+    receiptDefects("We got {{talkTitle}}", "<p>Hi {{speakerName}} — {{portalLink}}</p>"),
+    ["unfilled_placeholder"],
+  );
+  // The renderer's pattern does not match this, so the braces reach the speaker.
+  assert.deepEqual(
+    receiptDefects("We got {{talkTitle}}", "<p>Hi {{ speaker-name }}</p>"),
+    ["malformed_placeholder"],
+  );
+  assert.deepEqual(receiptDefects("   ", "<p>{{talkTitle}}</p>"), ["empty_subject"]);
+  // A body that is nothing but disallowed markup is empty once sanitized.
+  assert.deepEqual(
+    receiptDefects("We got {{talkTitle}}", "<script>alert(1)</script>").includes("empty_body"),
+    true,
+  );
+  // Defects are reported together rather than one per round trip.
+  assert.deepEqual(
+    receiptDefects("We got it", "<p>Hi {{speakerName}} — {{portalLink}}</p>"),
+    ["missing_required", "unfilled_placeholder"],
+  );
+});
+
+test("the contract judges the sanitized body, so stripped markup is not counted against it", () => {
+  // The renderer sanitizes before substituting; the check must see the same text.
+  assert.deepEqual(
+    receiptDefects("We got {{talkTitle}}", "<p onclick=\"steal()\">Hi {{speakerName}}</p><script>alert(1)</script>"),
+    [],
+  );
+});
+
+test("a rejected legacy row falls back to copy that carries no placeholder braces at all", () => {
+  // The whole point of falling back: the speaker never sees `{{...}}` or a gap
+  // where a value should have been.
+  const defects = receiptDefects("We got it", "<p>Hi {{speakerName}} — {{portalLink}}</p>");
+  assert.ok(defects.length > 0);
+  const fallback = buildSubmissionReceipt({
+    eventName: "Forward 2026",
+    speaker: { name: "Sofia Marques", email: "speaker@example.test" },
+    title: "Scaling Vector Search",
+  });
+  assert.ok(!fallback.html.includes("{{"));
+  assert.ok(!fallback.subject.includes("{{"));
+  assert.match(fallback.html, /Scaling Vector Search/);
 });
 
 test("template subjects are normalized before persistence or preview", () => {
