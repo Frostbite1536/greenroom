@@ -25,6 +25,13 @@ const C17_REVIEWER_EMAIL = "c17-reviewer@scratch.test";
 // the eval run flagged. This identity is created and deleted with the scratch
 // event.
 const EMBED_SPEAKER_EMAIL = "embed-speaker@scratch.test";
+// A second scratch co-speaker deliberately left WITHOUT a SpeakerProfile, to
+// exercise the derived fallback line. It cannot be one of the demo speakers:
+// lib/demo/seed.ts:245-258 upserts a global SpeakerProfile (jobTitle "Staff
+// Engineer", company "Acme Labs") for every demo speaker user, and that row is
+// keyed by userId, so it survives this script's event-scoped wipe entirely.
+const EMBED_NOPROFILE_EMAIL = "embed-noprofile@scratch.test";
+const EMBED_NOPROFILE_NAME = "Theo Lindqvist";
 const EMBED_SPEAKER_NAME = "Nadia Okonkwo";
 const EMBED_SPEAKER_BIO = "Nadia leads platform reliability at Northwind and has spent a decade "
   + "keeping large event systems online under load. She writes about incident review culture.";
@@ -114,7 +121,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -267,6 +274,19 @@ async function resetScratch() {
     },
   });
 
+  const noProfileSpeaker = await prisma.user.upsert({
+    where: { email: EMBED_NOPROFILE_EMAIL },
+    update: { name: EMBED_NOPROFILE_NAME },
+    create: { email: EMBED_NOPROFILE_EMAIL, name: EMBED_NOPROFILE_NAME },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: EVENT_ID, userId: noProfileSpeaker.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: EVENT_ID, userId: noProfileSpeaker.id, role: "SPEAKER" },
+  });
+  // No speakerProfile row on purpose — this is the derived-fallback fixture.
+  await prisma.speakerProfile.deleteMany({ where: { userId: noProfileSpeaker.id } });
+
   const sessionA = await prisma.session.create({
     data: {
       eventId: EVENT_ID, title: "Scratch Session A", durationMinutes: 30, format: "Talk",
@@ -275,6 +295,7 @@ async function resetScratch() {
         create: [
           { userId: users.speaker, isPrimary: true },
           { userId: embedSpeaker.id, isPrimary: false },
+          { userId: noProfileSpeaker.id, isPrimary: false },
         ],
       },
     },
@@ -306,7 +327,7 @@ async function resetScratch() {
 
   return {
     event, form, abstract, maybeSetupAbstract, acceptedAbstract, plan, sessionA, sessionB,
-    roomA, roomB, track, category, users, dayKey, embedSpeaker,
+    roomA, roomB, track, category, users, dayKey, embedSpeaker, noProfileSpeaker,
   };
 }
 
@@ -349,7 +370,7 @@ function cleanup() {
   cleanupPromise ??= (async () => {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -2152,29 +2173,60 @@ try {
   check("embed renders a track chip", chipText("track").includes("Mainstage"), chipText("track"));
   check("embed renders a room chip", chipText("room").includes("Hall A"), chipText("room"));
 
-  // Day tabs come from Event.startsAt..endsAt. The scratch event spans three
-  // calendar days with exactly one placed session, so two tabs must be empty
-  // and still selectable — the defect was those days being unreachable.
-  const eventDayKeyOf = (value) => new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit",
+  // Day tabs come from Event.startsAt..endsAt, unioned with any day that holds
+  // a placed session outside that range.
+  //
+  // Read the event LIVE rather than from `fx`: this script's own settings tests
+  // above PATCH the scratch event's dates to 2032-05-12..14 and its timezone to
+  // America/Denver, so the creation-time values are stale by the time these
+  // checks run. The whole point of the feature is that the tabs track the
+  // event's real range, so the assertion has to read that range the same way.
+  const liveEvent = await prisma.event.findUniqueOrThrow({
+    where: { id: EVENT_ID },
+    select: { startsAt: true, endsAt: true, timezone: true },
+  });
+  const liveTz = liveEvent.timezone;
+  const dayKeyIn = (value) => new Intl.DateTimeFormat("en-CA", {
+    timeZone: liveTz, year: "numeric", month: "2-digit", day: "2-digit",
   }).format(new Date(value));
-  const expectedDays = [];
-  for (let cursor = new Date(fx.event.startsAt); expectedDays.length < 31; cursor = new Date(cursor.getTime() + 86400000)) {
-    const key = eventDayKeyOf(cursor);
-    if (!expectedDays.includes(key)) expectedDays.push(key);
-    if (key >= eventDayKeyOf(fx.event.endsAt)) break;
+  // Calendar arithmetic on the key itself (noon UTC), so a DST transition
+  // inside the range cannot duplicate or skip a day.
+  const addDayKey = (key, days) => {
+    const date = new Date(`${key}T12:00:00.000Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+  };
+  const rangeDays = [];
+  if (liveEvent.startsAt) {
+    const endKey = dayKeyIn(liveEvent.endsAt ?? liveEvent.startsAt);
+    let cursor = dayKeyIn(liveEvent.startsAt);
+    for (let i = 0; i < 31 && cursor <= endKey; i += 1) {
+      rangeDays.push(cursor);
+      cursor = addDayKey(cursor, 1);
+    }
   }
+  const placedSlots = await prisma.scheduleSlot.findMany({
+    where: { eventId: EVENT_ID }, select: { startsAt: true },
+  });
+  const sessionDays = [...new Set(placedSlots.map((slot) => dayKeyIn(slot.startsAt)))];
+  const expectedDays = [...new Set([...rangeDays, ...sessionDays])].sort();
   const renderedDays = [...new Set(
     [...enriched.text.matchAll(/href="\/embed\/schedule\?[^"]*day=(\d{4}-\d{2}-\d{2})/g)].map((m) => m[1]),
-  )];
-  check("day tabs cover every day of the event date range",
+  )].sort();
+  check("day tabs cover the event date range unioned with any out-of-range session day",
     renderedDays.length === expectedDays.length && expectedDays.every((day) => renderedDays.includes(day)),
     `expected ${expectedDays.join(",")} got ${renderedDays.join(",")}`);
   check("the schedule exposes a day filter landmark", enriched.text.includes('aria-label="Filter by day"'));
+
+  // The property under test needs an event day that holds nothing. Assert the
+  // premise rather than assuming it, so this cannot pass vacuously if a future
+  // fixture change places a session on every day of the range.
+  const emptyDay = rangeDays.find((day) => !sessionDays.includes(day));
+  check("the fixture leaves at least one event day empty",
+    Boolean(emptyDay), `range ${rangeDays.join(",")} sessions ${sessionDays.join(",")}`);
   check("an event day with no sessions still renders a tab with a zero count",
     enriched.text.includes('<span class="embed-tab-count">(0)</span>'));
 
-  const emptyDay = expectedDays.find((day) => day !== fx.dayKey);
   const emptyDayPage = await req("GET", embedScheduleUrl(`&day=${emptyDay}`), null, null);
   check("selecting an empty event day is reachable and explains itself",
     emptyDayPage.status === 200 && (renderedText(emptyDayPage.text) ?? "").includes("Nothing scheduled on"),
@@ -2183,11 +2235,12 @@ try {
   // Header date summary: the judged defect was "18 sessions · May 12, 2026" for
   // a multi-day listing. Intl separates a range with THIN SPACE (U+2009).
   const expectedRange = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles", month: "short", day: "numeric", year: "numeric",
-  }).formatRange(new Date(fx.event.startsAt), new Date(fx.event.endsAt));
+    timeZone: liveTz, month: "short", day: "numeric", year: "numeric",
+  }).formatRange(new Date(liveEvent.startsAt), new Date(liveEvent.endsAt ?? liveEvent.startsAt));
+  const enrichedText = renderedText(enriched.text) ?? "";
   check("embed header shows the real event date range, not just the first day",
-    (renderedText(enriched.text) ?? "").includes(expectedRange) && expectedRange.includes("–"),
-    expectedRange);
+    enrichedText.includes(expectedRange) && expectedRange.includes("–"),
+    `expected ${expectedRange}`);
 
   // Search: a GET form, so the query lives in the URL and needs no hydration.
   check("embed search is a GET form",
@@ -2228,16 +2281,40 @@ try {
     speakersEmbed.text.includes('<details class="speaker-detail">')
     && speakersEmbed.text.includes("Full profile")
     && !speakersEmbed.text.includes('role="dialog"'));
-  // Sofia has no stored profile, so her card must derive an honest line from her
-  // own programme rather than print filler identical to every other card.
+  // The derived-fallback case needs a speaker with genuinely no SpeakerProfile.
+  // That cannot be one of the demo users: lib/demo/seed.ts:245-258 upserts a
+  // global profile ("Staff Engineer at Acme Labs") for every demo speaker, and
+  // the row is keyed by userId so the event-scoped wipe never touches it.
+  // Confirm the premise against the DB, then assert the rendered line.
+  const noProfileRow = await prisma.speakerProfile.findUnique({
+    where: { userId: fx.noProfileSpeaker.id }, select: { userId: true },
+  });
+  check("the derived-fallback fixture speaker really has no stored profile",
+    noProfileRow === null, noProfileRow ? "a SpeakerProfile exists" : "none");
+
+  const liveTrackName = (await prisma.scheduleSlot.findFirstOrThrow({
+    where: { eventId: EVENT_ID, sessionId: fx.sessionA.id }, select: { track: { select: { name: true } } },
+  })).track?.name ?? "";
+  const speakersText = renderedText(speakersEmbed.text) ?? "";
+  const expectedDerived = `1 session · ${liveTrackName}`;
+  const renderedNoProfileLine = speakersEmbed.text
+    .match(/<p class="speaker-metadata">([\s\S]*?)<\/p>/g)
+    ?.map((block) => renderedText(block))
+    .join(" | ") ?? "none";
   check("a speaker with no stored profile gets a derived line, not filler",
-    (renderedText(speakersEmbed.text) ?? "").includes("1 session · Mainstage"));
+    speakersText.includes(expectedDerived),
+    `expected "${expectedDerived}"; metadata lines rendered: ${renderedNoProfileLine}`);
+  // The complementary half: a stored profile must still win over the fallback.
+  check("a speaker with a stored profile shows it instead of the derived line",
+    speakersText.includes("Head of Reliability at Northwind"),
+    renderedNoProfileLine);
 
   // --- no admin-only data on any public embed --------------------------------
   // Scanned over the whole document, flight payload included: the speaker
   // gallery is a client island, so its props are serialized into the response.
   const embedLeaks = [
-    "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo", EMBED_SPEAKER_EMAIL,
+    "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo",
+    EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL,
     "UNDER_REVIEW", "Scratch: Agents in Production", "Scratch: Maybe historical coverage",
     "Scratch Session B", "team-ai", "Applied AI",
   ];
