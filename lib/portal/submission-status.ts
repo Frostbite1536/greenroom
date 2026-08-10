@@ -145,6 +145,10 @@ export function submissionErrorMessage(code: string, serverMessage?: string): st
       return "We couldn't find this proposal. It may have been removed.";
     case "ABSTRACT_LOCKED":
       return "This proposal can no longer be edited. Contact the program team if something needs to change.";
+    case "EDIT_WINDOW_CLOSED":
+      // The proposal is still live and can still be withdrawn — only editing
+      // stopped — so this must not read like a rejection.
+      return "The call for proposals has closed, so this proposal can no longer be edited. Contact the program team if something still needs to change.";
     case "WITHDRAW_NOT_ALLOWED":
       return "This talk is already on the programme, so it can't be withdrawn here. Contact the program team to remove it.";
     case "SPEAKERS_LOCKED":

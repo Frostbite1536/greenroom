@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, CalendarPlus, FileStack, Search, X } from "lucide-react";
+import { AlertTriangle, CalendarPlus, Download, FileStack, Search, X } from "lucide-react";
 import type { AbstractRow, AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/data/reads";
 import { formatDecisionScore } from "@/lib/decision-summary-display";
 import { formatAnswer } from "@/lib/answer-display";
@@ -172,6 +172,7 @@ export function AbstractsTable({
           />
         </span>
         <span className="hint">{rows.length} of {abstracts.length} {loadedLabel}</span>
+        <ExportResultsLink selectedPlan={decisionSummary.selectedPlan} />
       </div>
 
       {abstracts.length === 0 ? (
@@ -270,6 +271,36 @@ export function AbstractsTable({
 
 function planLabel(plan: AdminDecisionSummary["plans"][number]) {
   return `Round ${plan.ordinal} — ${plan.name}`;
+}
+
+/**
+ * ABS-13 — download the review results for the round currently on screen.
+ *
+ * A plain anchor, not a fetch: the browser handles the `Content-Disposition`
+ * download and the server stays the only place that decides what a CSV may
+ * contain. The route is bounded and carries the same newest-first page as this
+ * table, and says so in the file when it truncates, so the hint here does not
+ * have to promise a complete export.
+ */
+function ExportResultsLink({ selectedPlan }: { selectedPlan: AdminDecisionSummary["selectedPlan"] }) {
+  const href = selectedPlan
+    ? `/api/admin/abstracts/export?planId=${encodeURIComponent(selectedPlan.id)}`
+    : "/api/admin/abstracts/export";
+  return (
+    <a
+      className="ghost-button"
+      href={href}
+      // The server names the file; this only asks the browser to save it.
+      download
+      title={
+        selectedPlan
+          ? `Download the loaded proposals and their ${planLabel(selectedPlan)} decision scores as CSV`
+          : "Download the loaded proposals as CSV"
+      }
+    >
+      <Download size={15} aria-hidden="true" /> Export CSV
+    </a>
+  );
 }
 
 function DecisionRoundControl({
