@@ -55,6 +55,13 @@ enum ImportStatus {
 }
 
 /** Last audited provider result for one reviewer-invite token version. */
+enum ReviewerInviteDeliveryState {
+  PENDING
+  SENT
+  MOCKED
+  FAILED
+}
+
 /** Where a speaker is in accepting their invitation to take part. */
 enum SpeakerStatus {
   INVITED
@@ -66,13 +73,6 @@ enum SpeakerStatus {
 enum SessionContentStatus {
   DRAFT
   PUBLISHED
-}
-
-enum ReviewerInviteDeliveryState {
-  PENDING
-  SENT
-  MOCKED
-  FAILED
 }
 
 model Event {
