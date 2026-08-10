@@ -161,6 +161,57 @@ export const roomUpdateSchema = z
     message: "Provide at least one room field to update.",
   });
 
+/**
+ * Onboarding-task templates (CNT-01/SPK-05).
+ *
+ * A deadline is authored as an event-local calendar day (`dueOn`) and stored as
+ * the instant that day ends in the event's own timezone. That is the convention
+ * the seeded checklist already uses, so a due date never moves a day because of
+ * the server's zone or the operator's browser zone (C12).
+ *
+ * `formConfigId` links the task to a form the speaker fills in to complete it.
+ * `null` clears the link; omitting the key leaves the stored link alone.
+ */
+const onboardingTaskTitleSchema = z.string().trim().min(1).max(160);
+const onboardingTaskDescriptionSchema = z.string().trim().max(2000);
+const onboardingTaskSortOrderSchema = z.number().int().nonnegative().max(100_000);
+
+export const onboardingTaskCreateSchema = z
+  .object({
+    title: onboardingTaskTitleSchema,
+    description: onboardingTaskDescriptionSchema.nullable().optional(),
+    dueOn: eventDateKeySchema.nullable().optional(),
+    required: z.boolean().optional(),
+    formConfigId: idSchema.nullable().optional(),
+    sortOrder: onboardingTaskSortOrderSchema.optional(),
+  })
+  .strict();
+
+export const onboardingTaskUpdateSchema = z
+  .object({
+    id: idSchema,
+    title: onboardingTaskTitleSchema.optional(),
+    description: onboardingTaskDescriptionSchema.nullable().optional(),
+    dueOn: eventDateKeySchema.nullable().optional(),
+    required: z.boolean().optional(),
+    formConfigId: idSchema.nullable().optional(),
+    sortOrder: onboardingTaskSortOrderSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.title !== undefined ||
+      value.description !== undefined ||
+      value.dueOn !== undefined ||
+      value.required !== undefined ||
+      value.formConfigId !== undefined ||
+      value.sortOrder !== undefined,
+    { message: "Provide at least one task field to update." },
+  );
+
+/** Bulk fan-out takes no arguments: the event and the cohort are server-derived. */
+export const onboardingTaskAssignSchema = z.object({}).strict();
+
 export const abstractUpsertSchema = z.object({
   formConfigId: idSchema,
   abstractId: idSchema.optional(),
@@ -436,6 +487,8 @@ export type GuaranteedSessionInput = z.infer<typeof guaranteedSessionInputSchema
 export type ScheduleSlotInput = z.infer<typeof scheduleSlotInputSchema>;
 export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;
 export type SpeakerProfileUpdate = z.infer<typeof speakerProfileUpdateSchema>;
+export type OnboardingTaskCreate = z.infer<typeof onboardingTaskCreateSchema>;
+export type OnboardingTaskUpdate = z.infer<typeof onboardingTaskUpdateSchema>;
 export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
 

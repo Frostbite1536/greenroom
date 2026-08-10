@@ -17,6 +17,8 @@ export const OPERATOR_QUERY_LIMITS = {
   importCategories: 1_000,
   importFieldsPerForm: 250,
   settingsRooms: 500,
+  // Onboarding-task templates are authored by hand, one checklist per event.
+  onboardingTasks: 250,
   settingsTracks: 250,
   settingsCategories: 1_000,
   adminAbstracts: 100,
