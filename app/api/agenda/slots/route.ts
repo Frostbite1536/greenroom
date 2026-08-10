@@ -3,6 +3,7 @@ import { scheduleSlotInputSchema } from "@/types/api";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { detectConflicts, type SlotInterval } from "@/lib/services/schedule";
+import { lockScheduleWrite } from "@/lib/services/schedule-lock";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,13 @@ export const POST = handle(async (req) => {
   assertEventScope(ctx, input.eventId);
 
   const result = await prisma.$transaction(async (tx) => {
+    // S3 / LOCK-ORDER-v1: the event-wide schedule predicate key, taken first and
+    // shared with bulk auto-placement. `FOR UPDATE` cannot lock a row that does
+    // not exist yet, so without this key a concurrent placement could insert the
+    // very slot that invalidates the conflict check below. Nothing else about
+    // this route's behaviour, responses, or lock classes changes.
+    await lockScheduleWrite(tx, ctx.eventId);
+
     const session = await tx.session.findUnique({
       where: { id: input.sessionId },
       include: { speakers: { select: { userId: true } } },

@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, Wand2, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
 import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
+import { applyRefusalCopy, fillOpenSlotsSummary } from "@/lib/agenda-autoplace-view";
 import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
@@ -28,6 +29,21 @@ const SNAP_MINUTES = 5;
 
 /** Local echo of a slot move while the server round-trip is in flight. */
 type SlotOverride = { roomId: string; startsAt: string; endsAt: string };
+
+/** What `POST /api/agenda/autoplace/preview` returns. Advisory, never authority. */
+type PlacementPreview = {
+  fingerprint: string;
+  consideredSessions: number;
+  placements: {
+    sessionId: string;
+    title: string;
+    roomId: string;
+    dayKey: string;
+    startsAt: string;
+    endsAt: string;
+  }[];
+  unplaceable: { sessionId: string; title: string; reason: string; message: string }[];
+};
 
 /**
  * Map placed sessions onto the event-local minute intervals the grids lay out.
@@ -55,6 +71,9 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<PlacementPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const tz = data.timezone;
   const roomName = (id: string) => data.rooms.find((r) => r.id === id)?.name ?? id;
@@ -105,6 +124,51 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
       setPublishError(res.error.message);
       return;
     }
+    startTransition(() => router.refresh());
+  }
+
+  /**
+   * Ask the server what it would place. This writes nothing — the plan comes
+   * back for review and is applied, or discarded, by a second explicit action.
+   */
+  async function requestPlacementPreview() {
+    setPreviewBusy(true);
+    setPreviewError(null);
+    const res = await apiPost<PlacementPreview>("/api/agenda/autoplace/preview", { eventId: data.eventId });
+    setPreviewBusy(false);
+    if (!res.ok) {
+      setPreviewError(res.error.message);
+      return;
+    }
+    setPreview(res.data);
+  }
+
+  /**
+   * Apply the reviewed plan. The server re-reads and revalidates everything
+   * under the schedule locks and can refuse the whole plan — a refusal writes
+   * nothing, so the panel closes back to a clean grid and says why.
+   */
+  async function applyPlacementPreview(plan: PlacementPreview) {
+    setPreviewBusy(true);
+    setPreviewError(null);
+    const res = await apiPost("/api/agenda/autoplace/apply", {
+      eventId: data.eventId,
+      fingerprint: plan.fingerprint,
+      placements: plan.placements.map((p) => ({
+        sessionId: p.sessionId,
+        roomId: p.roomId,
+        startsAt: p.startsAt,
+        endsAt: p.endsAt,
+      })),
+    });
+    setPreviewBusy(false);
+    if (!res.ok) {
+      // The stale plan is dead: it can only be re-derived, never retried.
+      setPreview(null);
+      setPreviewError(applyRefusalCopy(res.error.code, res.error.message));
+      return;
+    }
+    setPreview(null);
     startTransition(() => router.refresh());
   }
 
@@ -171,6 +235,17 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           label={`Conflicts${conflicts.length ? ` (${boundedCount(conflicts.length, data.truncated)})` : ""}`}
         />
         <span className="spacer" />
+        {/* Assistive, not primary: drag-and-drop remains the schedule editor,
+            and this only ever proposes. Nothing is written until the plan it
+            returns is reviewed and explicitly applied. */}
+        <button
+          className="ghost-button"
+          disabled={previewBusy || pending}
+          onClick={requestPlacementPreview}
+          aria-label="Fill open slots — propose placements for the unscheduled backlog"
+        >
+          <Wand2 size={15} /> {previewBusy && !preview ? "Checking…" : "Fill open slots"}
+        </button>
         {days.length > 1 && (view === "day" || view === "rooms") && (
           <div className="seg" role="group" aria-label="Event day">
             {days.map((d) => (
@@ -201,6 +276,18 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
             <div>
               <strong>Publication change refused.</strong> {publishError}{" "}
               <button className="link-button" onClick={() => setPublishError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {previewError && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>Nothing was placed.</strong> {previewError}{" "}
+              <button className="link-button" onClick={() => setPreviewError(null)}>Dismiss</button>
             </div>
           </div>
         </div>
@@ -311,6 +398,17 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           onSelect={setScheduling}
         />
       )}
+
+      {preview ? (
+        <FillOpenSlotsDialog
+          preview={preview}
+          tz={tz}
+          roomName={roomName}
+          busy={previewBusy}
+          onApply={() => applyPlacementPreview(preview)}
+          onDiscard={() => setPreview(null)}
+        />
+      ) : null}
 
       {scheduling ? (
         <ScheduleDialog
@@ -711,6 +809,111 @@ function ConflictsView({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * The proposed plan, shown before anything is written (AIA-08, addendum §4.1).
+ *
+ * Every talk the server considered appears here exactly once — placed, with the
+ * room and time it would take, or listed with the reason it could not be. There
+ * is no path from this panel to a write except the Apply button, and the server
+ * revalidates the whole plan again when that is pressed.
+ */
+function FillOpenSlotsDialog({
+  preview,
+  tz,
+  roomName,
+  busy,
+  onApply,
+  onDiscard,
+}: {
+  preview: PlacementPreview;
+  tz: string;
+  roomName: (id: string) => string;
+  busy: boolean;
+  onApply: () => void;
+  onDiscard: () => void;
+}) {
+  const summary = fillOpenSlotsSummary(preview);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Fill open slots"
+      style={{ position: "fixed", inset: 0, background: "rgba(20,28,30,0.35)", display: "grid", placeItems: "center", zIndex: 50, padding: 16 }}
+      onClick={onDiscard}
+    >
+      <div
+        className="card"
+        style={{ width: "min(640px, 100%)", maxHeight: "85vh", overflowY: "auto", padding: 24 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <p className="eyebrow">Fill open slots — nothing saved yet</p>
+          <button className="ghost-button" onClick={onDiscard} aria-label="Close"><X size={16} /></button>
+        </div>
+        <h2 style={{ margin: "0 0 4px" }}>{summary.title}</h2>
+        {summary.detail ? <p className="hint">{summary.detail}</p> : null}
+
+        {preview.placements.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p className="field-label" style={{ marginBottom: 8 }}>Proposed placements</p>
+            <div>
+              {preview.placements.map((p) => (
+                <div className="agenda-list-item" key={p.sessionId}>
+                  <span className="time">
+                    {formatTime(p.startsAt, tz)}–{formatTime(p.endsAt, tz)}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="cell-title">{p.title}</div>
+                    <div className="cell-sub">
+                      {formatDayLabel(p.dayKey, tz)} · {roomName(p.roomId)}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Reported, never dropped: a talk the scheduler skipped in silence is
+            a talk an organizer will discover on the day. */}
+        {preview.unplaceable.length > 0 && (
+          <div style={{ marginTop: 16 }}>
+            <p className="field-label" style={{ marginBottom: 8 }}>
+              Could not be placed ({preview.unplaceable.length})
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {preview.unplaceable.map((u) => (
+                <div key={u.sessionId} className="conflict-banner" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+                  <strong>{u.title}</strong>
+                  <span className="hint" style={{ color: "#8a2f22" }}>{u.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <p className="hint" style={{ marginTop: 16 }}>
+          Applying places these talks in one step and changes nothing that is already scheduled. It does not
+          publish anything — an unpublished talk stays off the public agenda until you publish it. If another
+          organizer changes the schedule first, the whole plan is refused and you can generate a new one.
+        </p>
+
+        <div className="row wrap" style={{ marginTop: 18, gap: 8 }}>
+          {summary.canApply ? (
+            <button className="primary-button" disabled={busy} onClick={onApply}>
+              {busy ? "Placing…" : `Apply ${preview.placements.length === 1 ? "placement" : "placements"}`}
+            </button>
+          ) : null}
+          <span className="spacer" />
+          <button className="ghost-button" disabled={busy} onClick={onDiscard}>
+            {summary.canApply ? "Discard" : "Close"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
