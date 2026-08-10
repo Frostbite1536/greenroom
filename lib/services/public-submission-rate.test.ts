@@ -69,7 +69,9 @@ test("rate locks have exact IP, event, primary-email, then submit-event order an
   const source = readFileSync(new URL("./public-submission-rate.ts", import.meta.url), "utf8");
   assert.match(source, /INSERT INTO "PublicSubmissionRateBucket"[\s\S]*ON CONFLICT[\s\S]*"count" = "PublicSubmissionRateBucket"\."count" \+ 1[\s\S]*RETURNING "count"/);
   assert.match(source, /new ApiError\(429, "PUBLIC_SUBMISSION_RATE_LIMITED"/);
-  assert.match(source, /if \(count > plan\.limit\) throw publicSubmissionRateLimitError\(plan, now\)/);
+  // The advertised wait is measured from the refusal moment, not the request's
+  // pre-transaction timestamp (Greptile PR #66).
+  assert.match(source, /if \(count > plan\.limit\) throw publicSubmissionRateLimitError\(plan, new Date\(\)\)/);
 });
 
 test("the named public rate ceilings are the ratified values", () => {
