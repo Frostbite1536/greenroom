@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  buildSpeakerRosterRows,
   buildSpeakerStatusRows,
   completeUserBoundary,
   filterSpeakerStatusRows,
@@ -8,6 +9,7 @@ import {
   profileCompletion,
   summarizeSpeakerStatus,
   type SpeakerAssignment,
+  type SpeakerRosterMember,
   type SpeakerTaskAssignment,
 } from "./status";
 
@@ -212,4 +214,90 @@ test("completeUserBoundary takes the smallest truncated boundary", () => {
     ]),
     "user-c",
   );
+});
+
+// ---- SPK-01: the roster is a union, not just the confirmed programme --------
+
+function rosterMember(overrides: Partial<SpeakerRosterMember> = {}): SpeakerRosterMember {
+  return {
+    userId: "user-2",
+    name: "Theo Lindqvist",
+    email: "theo@example.test",
+    profile: null,
+    ...overrides,
+  };
+}
+
+test("a named speaker with no session yet still gets a roster row", () => {
+  const rows = buildSpeakerRosterRows([rosterMember()], [], []);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].userId, "user-2");
+  assert.equal(rows[0].sessionCount, 0);
+  assert.deepEqual(rows[0].sessionTitles, []);
+  // Zero sessions is not an unscheduled session: nothing is waiting on a room.
+  assert.equal(rows[0].scheduledCount, 0);
+  assert.deepEqual(filterSpeakerStatusRows(rows, "unscheduled"), []);
+  assert.equal(summarizeSpeakerStatus(rows).unscheduledSessions, 0);
+});
+
+test("a speaker who is both a member and on a session appears exactly once", () => {
+  const rows = buildSpeakerRosterRows(
+    [rosterMember({ userId: "user-1", name: "Ada Lovelace", email: "ada@example.test", profile: fullProfile })],
+    [assignment(), assignment({ sessionId: "session-2", sessionTitle: "Difference Engines", scheduled: false })],
+    [],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].sessionCount, 2);
+  assert.equal(rows[0].scheduledCount, 1);
+  assert.deepEqual(rows[0].sessionTitles, ["Analytical Engines", "Difference Engines"]);
+});
+
+test("the roster carries the stored profile prose the page renders, absences as null", () => {
+  const [filled] = buildSpeakerRosterRows(
+    [rosterMember({ userId: "user-1", profile: fullProfile })],
+    [],
+    [],
+  );
+  assert.equal(filled.bio, "Builds things");
+  assert.equal(filled.jobTitle, "Staff Engineer");
+  assert.equal(filled.headshotUrl, "https://x.test/a.png");
+  assert.equal(filled.company, "Acme");
+
+  // Whitespace is an absence, not a value: the page must not render a blank img.
+  const [blank] = buildSpeakerRosterRows(
+    [rosterMember({ profile: { bio: "  ", company: null, jobTitle: "", headshotUrl: "   " } })],
+    [],
+    [],
+  );
+  assert.equal(blank.bio, null);
+  assert.equal(blank.jobTitle, null);
+  assert.equal(blank.headshotUrl, null);
+  assert.equal(blank.company, null);
+});
+
+test("a member-only speaker still carries their onboarding tasks and deadlines", () => {
+  const rows = buildSpeakerRosterRows(
+    [rosterMember()],
+    [],
+    [task({ userId: "user-2", taskId: "task-9", taskTitle: "Send your slides", status: "TODO", required: true, dueAt: "2026-01-01T00:00:00.000Z" })],
+    new Date("2026-02-01T00:00:00.000Z"),
+  );
+  assert.equal(rows[0].tasksTotal, 1);
+  assert.equal(rows[0].tasksDone, 0);
+  assert.deepEqual(rows[0].requiredOutstanding, ["Send your slides"]);
+  assert.equal(rows[0].overdueRequired, 1);
+  assert.equal(rows[0].onboardingComplete, false);
+});
+
+test("the confirmed-cohort builder is the roster builder with no membership seed", () => {
+  const assignments = [assignment()];
+  const tasks = [task()];
+  const now = new Date("2026-02-01T00:00:00.000Z");
+  assert.deepEqual(
+    buildSpeakerStatusRows(assignments, tasks, now),
+    buildSpeakerRosterRows([], assignments, tasks, now),
+  );
+  // And a membership seed is the only thing that adds a session-less row.
+  assert.equal(buildSpeakerStatusRows([], tasks, now).length, 0);
+  assert.equal(buildSpeakerRosterRows([rosterMember()], [], tasks, now).length, 1);
 });

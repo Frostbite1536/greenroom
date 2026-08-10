@@ -41,11 +41,27 @@ export type SpeakerTaskAssignment = {
   dueAt?: string | null;
 };
 
+/**
+ * A speaker the event knows about independently of the programme: an
+ * `EventMember(role=SPEAKER)` who may not be on a session yet. Structurally a
+ * subset of `SpeakerAssignment`, so one row constructor serves both.
+ */
+export type SpeakerRosterMember = {
+  userId: string;
+  name: string;
+  email: string;
+  profile: SpeakerProfileInput;
+};
+
 export type SpeakerStatusRow = {
   userId: string;
   name: string;
   email: string;
   company: string | null;
+  /** Stored profile prose, surfaced verbatim. Null when nothing is stored. */
+  jobTitle: string | null;
+  bio: string | null;
+  headshotUrl: string | null;
   sessionCount: number;
   scheduledCount: number;
   sessionTitles: string[];
@@ -99,8 +115,63 @@ export function profileCompletion(profile: SpeakerProfileInput): { percent: numb
   };
 }
 
+/** Trim a stored profile string down to a value or an honest absence. */
+function storedText(value: string | null | undefined): string | null {
+  return value?.trim() || null;
+}
+
 /**
- * Group per-session assignments and per-task rows into one row per speaker.
+ * One speaker's row before any session is folded into it. Shared by the
+ * membership seed and the assignment fold so a member-only speaker and a
+ * session speaker are described by exactly the same rules.
+ */
+function newSpeakerRow(
+  member: SpeakerRosterMember,
+  tasksByUser: ReadonlyMap<string, SpeakerTaskAssignment[]>,
+  now: Date,
+): SpeakerStatusRow {
+  const { percent, missing } = profileCompletion(member.profile);
+  const tasks = tasksByUser.get(member.userId) ?? [];
+  const settled = tasks.filter((task) => isTaskSettled(task.status));
+  const requiredOpen = tasks.filter((task) => task.required && !isTaskSettled(task.status));
+  const requiredOutstanding = requiredOpen.map((task) => task.taskTitle);
+  const openDeadlines = requiredOpen
+    .map((task) => task.dueAt)
+    .filter((dueAt): dueAt is string => typeof dueAt === "string" && dueAt !== "")
+    .filter((dueAt) => !Number.isNaN(new Date(dueAt).getTime()))
+    .sort();
+  return {
+    userId: member.userId,
+    name: member.name,
+    email: member.email,
+    company: storedText(member.profile?.company),
+    jobTitle: storedText(member.profile?.jobTitle),
+    bio: storedText(member.profile?.bio),
+    headshotUrl: storedText(member.profile?.headshotUrl),
+    sessionCount: 0,
+    scheduledCount: 0,
+    sessionTitles: [],
+    profilePercent: percent,
+    profileMissing: missing,
+    tasksDone: settled.length,
+    tasksTotal: tasks.length,
+    requiredOutstanding,
+    nextRequiredDueAt: openDeadlines[0] ?? null,
+    overdueRequired: openDeadlines.filter((dueAt) => new Date(dueAt).getTime() < now.getTime()).length,
+    onboardingComplete: requiredOutstanding.length === 0 && missing.length === 0,
+    needsAttention: false,
+  };
+}
+
+/**
+ * The full event roster: everyone the event has named a speaker, unioned with
+ * everyone actually on one of its sessions, deduplicated by user id.
+ *
+ * A speaker exists for this event the moment an organizer adds them, which is
+ * before any abstract is accepted — listing only session speakers hid exactly
+ * the people an operator still has to chase (SPK-01). A member with no session
+ * yet keeps `sessionCount: 0`, which is not the same thing as an unscheduled
+ * session and is never counted as one.
  *
  * Sorted most-urgent-first: speakers needing attention, then the least complete
  * onboarding, then alphabetically — an operator works the list top-down.
@@ -108,9 +179,10 @@ export function profileCompletion(profile: SpeakerProfileInput): { percent: numb
  * `now` is injected rather than read from the clock so the overdue count is a
  * pure function of its inputs and stays testable.
  */
-export function buildSpeakerStatusRows(
-  assignments: SpeakerAssignment[],
-  taskAssignments: SpeakerTaskAssignment[],
+export function buildSpeakerRosterRows(
+  members: readonly SpeakerRosterMember[],
+  assignments: readonly SpeakerAssignment[],
+  taskAssignments: readonly SpeakerTaskAssignment[],
   now: Date = new Date(),
 ): SpeakerStatusRow[] {
   const tasksByUser = new Map<string, SpeakerTaskAssignment[]>();
@@ -121,37 +193,15 @@ export function buildSpeakerStatusRows(
   }
 
   const rows = new Map<string, SpeakerStatusRow>();
+  // Membership seeds the roster first so a speaker with no session still has a
+  // row; the assignment fold below then finds it rather than creating a second.
+  for (const member of members) {
+    if (!rows.has(member.userId)) rows.set(member.userId, newSpeakerRow(member, tasksByUser, now));
+  }
   for (const assignment of assignments) {
     let row = rows.get(assignment.userId);
     if (!row) {
-      const { percent, missing } = profileCompletion(assignment.profile);
-      const tasks = tasksByUser.get(assignment.userId) ?? [];
-      const settled = tasks.filter((task) => isTaskSettled(task.status));
-      const requiredOpen = tasks.filter((task) => task.required && !isTaskSettled(task.status));
-      const requiredOutstanding = requiredOpen.map((task) => task.taskTitle);
-      const openDeadlines = requiredOpen
-        .map((task) => task.dueAt)
-        .filter((dueAt): dueAt is string => typeof dueAt === "string" && dueAt !== "")
-        .filter((dueAt) => !Number.isNaN(new Date(dueAt).getTime()))
-        .sort();
-      row = {
-        userId: assignment.userId,
-        name: assignment.name,
-        email: assignment.email,
-        company: assignment.profile?.company?.trim() || null,
-        sessionCount: 0,
-        scheduledCount: 0,
-        sessionTitles: [],
-        profilePercent: percent,
-        profileMissing: missing,
-        tasksDone: settled.length,
-        tasksTotal: tasks.length,
-        requiredOutstanding,
-        nextRequiredDueAt: openDeadlines[0] ?? null,
-        overdueRequired: openDeadlines.filter((dueAt) => new Date(dueAt).getTime() < now.getTime()).length,
-        onboardingComplete: requiredOutstanding.length === 0 && missing.length === 0,
-        needsAttention: false,
-      };
+      row = newSpeakerRow(assignment, tasksByUser, now);
       rows.set(assignment.userId, row);
     }
     row.sessionCount++;
@@ -170,6 +220,19 @@ export function buildSpeakerStatusRows(
     a.profilePercent - b.profilePercent ||
     a.name.localeCompare(b.name),
   );
+}
+
+/**
+ * The confirmed-session cohort only — the original onboarding view. Kept as the
+ * roster builder with an empty membership seed so the two can never disagree
+ * about how a row is derived.
+ */
+export function buildSpeakerStatusRows(
+  assignments: SpeakerAssignment[],
+  taskAssignments: SpeakerTaskAssignment[],
+  now: Date = new Date(),
+): SpeakerStatusRow[] {
+  return buildSpeakerRosterRows([], assignments, taskAssignments, now);
 }
 
 export function filterSpeakerStatusRows(rows: SpeakerStatusRow[], filter: SpeakerStatusFilter): SpeakerStatusRow[] {
