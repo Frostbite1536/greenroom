@@ -602,13 +602,12 @@ try {
   const unpublishedPublic = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
   check("unpublished new form is not public yet → 404", unpublishedPublic.status === 404, `got ${unpublishedPublic.status}`);
 
-  // --- C4 builder: the editor's controls must actually be clickable --------
+  // --- C4 builder: clickable controls, stable option values, built-in rule
+  //     sources, and inline server-error surfacing -------------------------
   //
-  // The failure was geometry — the sticky live preview painting over the editor
-  // column and swallowing the Add field and Required clicks — which no HTTP
-  // harness can measure directly. What it can do is read the stylesheet the
-  // running server actually serves and assert the contract that makes the
-  // geometry safe, rather than trusting the source file.
+  // The layout half of this is geometry no HTTP harness can measure, so what is
+  // asserted is the contract that makes the geometry safe, read back off the
+  // stylesheet the running server actually serves — not off the source file.
   const builderSheets = [
     // Next 16 emits page CSS under `static/chunks`, not `static/css`.
     ...new Set([...builderPage.text.matchAll(/href="(\/_next\/static\/[^"]+\.css)"/g)].map((m) => m[1])),
@@ -632,6 +631,88 @@ try {
     /max-width:1280px/.test(builderCss) && /\.field-editor-head\{[^}]*flex-wrap:wrap/.test(builderCss));
   check("builder markup wraps the rows that used to overflow the column",
     builderPage.text.includes('class="row wrap"'));
+
+  // A rule on a built-in submission question must survive the save and then
+  // decide what the renderer shows. The builder's live preview is server
+  // rendered on the fields step, so this is `resolveVisibleFields` running for
+  // real with the built-in answers folded in — the format picker starts on
+  // "Talk", so exactly one of these two questions may appear.
+  const builtInLogicPayload = {
+    ...createdPayload,
+    id: newFormId,
+    fields: [
+      { key: "audience_level", label: "Audience level", type: "SELECT", required: false, sortOrder: 0,
+        options: [{ label: "Beginner", value: "option_1" }, { label: "Advanced", value: "option_2" }] },
+      { key: "talk_extra", label: "Smoke shown for a Talk", type: "SHORT_TEXT", required: false, sortOrder: 1,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "Talk" }] } },
+      { key: "workshop_extra", label: "Smoke shown for a Workshop", type: "SHORT_TEXT", required: false, sortOrder: 2,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "Workshop" }] } },
+    ],
+  };
+  const builtInSave = await req("POST", "/api/cfp/forms", builtInLogicPayload, admin);
+  check("a built-in-source rule round-trips through Save → 200",
+    builtInSave.status === 200
+      && (builtInSave.data?.data?.fields ?? []).find((f) => f.key === "talk_extra")?.conditionalLogic?.rules?.[0]?.fieldKey === "format",
+    `${builtInSave.status} ${JSON.stringify(builtInSave.data?.error ?? "")}`);
+
+  const builderAfterLogic = await req("GET", `/admin/forms/${newFormId}`, null, admin);
+  check("the live preview shows the field the built-in rule matches",
+    builderAfterLogic.text.includes("Smoke shown for a Talk"));
+  check("the live preview hides the field the built-in rule does not match",
+    !builderAfterLogic.text.includes("Smoke shown for a Workshop"),
+    "a rule on Session format was ignored, so every conditional field rendered");
+
+  // Publish so the public renderer is reachable, and confirm the rule reaches it.
+  const publishForBuiltIn = await req("POST", "/api/cfp/forms", { ...builtInLogicPayload, published: true }, admin);
+  check("publishing the built-in-rule form → 200", publishForBuiltIn.status === 200,
+    `${publishForBuiltIn.status} ${JSON.stringify(publishForBuiltIn.data?.error ?? "")}`);
+  const publicWithBuiltIn = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
+  check("the public form is served the built-in-source rule it has to evaluate",
+    publicWithBuiltIn.status === 200 && publicWithBuiltIn.text.includes("format") && publicWithBuiltIn.text.includes("talk_extra"),
+    `got ${publicWithBuiltIn.status}`);
+
+  // Relabelling a choice must not move the value answers are stored by.
+  const relabelled = await req("POST", "/api/cfp/forms", {
+    ...builtInLogicPayload,
+    published: true,
+    fields: builtInLogicPayload.fields.map((field) =>
+      field.key === "audience_level"
+        ? { ...field, options: [{ label: "Newcomer", value: "option_1" }, { label: "Experienced", value: "option_2" }] }
+        : field,
+    ),
+  }, admin);
+  const relabelledOptions = (relabelled.data?.data?.fields ?? []).find((f) => f.key === "audience_level")?.options ?? [];
+  check("relabelling a choice leaves its stored value unchanged",
+    relabelled.status === 200
+      && relabelledOptions.map((o) => o.value).join(",") === "option_1,option_2"
+      && relabelledOptions.map((o) => o.label).join(",") === "Newcomer,Experienced",
+    `${relabelled.status} ${JSON.stringify(relabelledOptions)}`);
+
+  // A rule with no value must be refused loudly, scoped to the question that
+  // owns it, so the builder can put the message on that question instead of
+  // dropping the save on the floor.
+  const missingRuleValue = await req("POST", "/api/cfp/forms", {
+    ...builtInLogicPayload,
+    fields: builtInLogicPayload.fields.map((field) =>
+      field.key === "talk_extra"
+        ? { ...field, conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "equals", value: "" }] } }
+        : field,
+    ),
+  }, admin);
+  check("a rule with no value is refused with a field-scoped 400",
+    missingRuleValue.status === 400 && missingRuleValue.data?.error?.code === "FORM_LOGIC_VALUE_MISSING",
+    `${missingRuleValue.status} ${missingRuleValue.data?.error?.code ?? "?"}`);
+  check("the refusal names the offending question so the builder can render it inline",
+    Array.isArray(missingRuleValue.data?.error?.fieldErrors?.talk_extra)
+      && missingRuleValue.data.error.fieldErrors.talk_extra.length > 0,
+    JSON.stringify(missingRuleValue.data?.error?.fieldErrors ?? {}));
+
+  // Put the fixture back where the rest of this run expects it: this form was
+  // created unpublished and only published above to reach the public renderer.
+  const unpublishAgain = await req("POST", "/api/cfp/forms", { ...builtInLogicPayload, published: false }, admin);
+  check("the built-in-rule form is left unpublished for the rest of the run",
+    unpublishAgain.status === 200 && unpublishAgain.data?.data?.published === false,
+    `${unpublishAgain.status}`);
 
   // A duplicate slug must not silently create a second form.
   const duplicate = await req("POST", "/api/cfp/forms", createdPayload, admin);

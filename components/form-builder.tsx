@@ -17,10 +17,29 @@ import {
 } from "lucide-react";
 import type { BuilderForm, FieldView } from "@/lib/data/reads";
 import { FieldControl } from "@/components/field-renderer";
-import { resolveVisibleFields, type AnswerMap } from "@/lib/form-logic";
-import { apiPost, firstFieldErrors } from "@/lib/api-client";
+import { resolveVisibleFields, withBuiltInAnswers, type AnswerMap } from "@/lib/form-logic";
+import { apiPost } from "@/lib/api-client";
 import { zonedParts, zonedToUtcIso } from "@/lib/tz";
 import { Switch } from "@/components/ui";
+import { DEFAULT_SESSION_FORMAT, SESSION_FORMATS } from "@/lib/cfp-formats";
+import {
+  findFormShapeIssues,
+  formShapeFieldErrors,
+  type ShapeField,
+} from "@/lib/services/form-shape-validation";
+import {
+  OPERATOR_LABELS,
+  addOption,
+  defaultRule,
+  findRuleSource,
+  normalizeOptions,
+  operatorNeedsValue,
+  relabelOption,
+  removeOption,
+  retargetRule,
+  ruleSources,
+  type RuleSource,
+} from "@/lib/form-builder-logic";
 
 type Step = "welcome" | "fields" | "settings";
 type FieldType = FieldView["type"];
@@ -71,13 +90,42 @@ function toDraft(form: BuilderForm) {
       helpText: f.helpText,
       type: f.type,
       required: f.required,
-      options: f.options,
+      // Loaded values are never regenerated — only a stored option that somehow
+      // has no value at all is given one, because the server now refuses it.
+      options: f.options ? normalizeOptions(f.options) : null,
       conditionalLogic: f.conditionalLogic,
     })),
   };
 }
 
 type Draft = ReturnType<typeof toDraft>;
+
+/** Errors are per key and there can be several; the builder shows all of them. */
+type ErrorMap = Record<string, string[]>;
+
+const errorKey = (localId: string) => `field.${localId}`;
+
+function FieldErrors({ messages, id }: { messages?: string[]; id?: string }) {
+  if (!messages || messages.length === 0) return null;
+  return (
+    <span className="field-error" id={id} role="alert">
+      {messages.map((message, i) => (
+        <span key={i} style={{ display: "block" }}>{message}</span>
+      ))}
+    </span>
+  );
+}
+
+/** The payload slice the shared server validator reads, from the live draft. */
+function toShapeFields(draft: Draft): ShapeField[] {
+  return draft.fields.map((field) => ({
+    key: field.key,
+    label: field.label,
+    type: field.type,
+    options: field.options ?? undefined,
+    conditionalLogic: field.conditionalLogic ?? undefined,
+  }));
+}
 
 export function FormBuilder({
   form: initial,
@@ -98,7 +146,7 @@ export function FormBuilder({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<ErrorMap>({});
   const [copied, setCopied] = useState(false);
 
   function patch(p: Partial<Draft>) {
@@ -150,31 +198,70 @@ export function FormBuilder({
     setSaved(false);
   }
 
-  /** Client-side guards for the contract's regex rules, before the round trip. */
-  function localValidate(): boolean {
-    const errs: Record<string, string> = {};
-    if (!SLUG_RE.test(draft.slug)) errs.slug = "Lowercase letters, numbers and single dashes only.";
-    if (draft.name.trim().length === 0) errs.name = "Name is required.";
-    if (draft.minSpeakers > draft.maxSpeakers) errs.maxSpeakers = "Must be at least the minimum.";
+  /**
+   * Everything the save would be refused for, before the round trip.
+   *
+   * The shape rules are not restated here: `findFormShapeIssues` is the exact
+   * module the route runs, so a rule with no value, an orphan source, a blank or
+   * duplicated option value, a reserved key or a dependency cycle is reported in
+   * the same words the server would use. Only the regex/range rules the shared
+   * module does not cover are checked locally. This is guidance, never
+   * enforcement — the server runs the same check again and wins.
+   */
+  function localValidate(): ErrorMap {
+    const errs: ErrorMap = {};
+    const add = (key: string, message: string) => {
+      (errs[key] ??= []).push(message);
+    };
+    if (!SLUG_RE.test(draft.slug)) add("slug", "Lowercase letters, numbers and single dashes only.");
+    if (draft.name.trim().length === 0) add("name", "Name is required.");
+    if (draft.minSpeakers > draft.maxSpeakers) add("maxSpeakers", "Must be at least the minimum.");
     if (draft.opensAt && draft.closesAt && new Date(draft.opensAt) >= new Date(draft.closesAt)) {
-      errs.closesAt = "Must be after the open date.";
+      add("closesAt", "Must be after the open date.");
     }
     const seen = new Set<string>();
     for (const f of draft.fields) {
-      if (!KEY_RE.test(f.key)) errs[`field.${f.localId}`] = `Key "${f.key}" must be lowercase, starting with a letter.`;
-      if (seen.has(f.key)) errs[`field.${f.localId}`] = `Duplicate key "${f.key}".`;
+      if (!KEY_RE.test(f.key)) add(errorKey(f.localId), `Key "${f.key}" must be lowercase, starting with a letter.`);
+      if (seen.has(f.key)) add(errorKey(f.localId), `Duplicate key "${f.key}".`);
       seen.add(f.key);
       if (HAS_OPTIONS.includes(f.type) && (!f.options || f.options.length === 0)) {
-        errs[`field.${f.localId}`] = `"${f.label}" needs at least one option.`;
+        add(errorKey(f.localId), `"${f.label}" needs at least one option.`);
       }
     }
+    const shape = byLocalId(formShapeFieldErrors(findFormShapeIssues(toShapeFields(draft))));
+    for (const [key, messages] of Object.entries(shape)) {
+      for (const message of messages) add(key, message);
+    }
     setFieldErrors(errs);
-    return Object.keys(errs).length === 0;
+    return errs;
+  }
+
+  /**
+   * Field-scoped server errors arrive keyed by the payload's field *key*
+   * (`FORM_LOGIC_*`, `FORM_OPTION_*`, `FORM_FIELD_KEY_RESERVED`, and the
+   * answered-field refusals). The editor renders by `localId`, so without this
+   * translation those messages landed under a key nothing reads and the save
+   * failed with a banner and no indication of which question was wrong.
+   */
+  function byLocalId(fieldErrors: Record<string, string[]> | undefined): ErrorMap {
+    const byKey = new Map(draft.fields.map((f) => [f.key, f.localId]));
+    const mapped: ErrorMap = {};
+    for (const [key, messages] of Object.entries(fieldErrors ?? {})) {
+      const localId = byKey.get(key);
+      mapped[localId ? errorKey(localId) : key] = [...messages];
+    }
+    return mapped;
   }
 
   async function save() {
     setError(null);
-    if (!localValidate()) {
+    const problems = localValidate();
+    if (Object.keys(problems).length > 0) {
+      const offending = Object.keys(problems).find((key) => key.startsWith("field."));
+      if (offending) {
+        setStep("fields");
+        setOpenField(offending.slice("field.".length));
+      }
       setError("Fix the highlighted problems and try again.");
       return;
     }
@@ -209,8 +296,15 @@ export function FormBuilder({
     const res = await apiPost("/api/cfp/forms", payload);
     setSaving(false);
     if (!res.ok) {
-      setError(res.error.message);
-      setFieldErrors(firstFieldErrors(res.error.fieldErrors));
+      const inline = byLocalId(res.error.fieldErrors);
+      setFieldErrors(inline);
+      const offending = Object.keys(inline).find((key) => key.startsWith("field."));
+      if (offending) setOpenField(offending.slice("field.".length));
+      setError(
+        Object.keys(inline).length > 0
+          ? `${res.error.message} The affected questions are marked below.`
+          : res.error.message,
+      );
       return;
     }
     setSaved(true);
@@ -296,7 +390,7 @@ export function FormBuilder({
   );
 }
 
-function WelcomeStep({ draft, patch, errors }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: Record<string, string> }) {
+function WelcomeStep({ draft, patch, errors }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: ErrorMap }) {
   return (
     <div className="stack" style={{ gap: 18 }}>
       <div><h2>Welcome screen</h2><p className="hint">The first screen a submitter sees.</p></div>
@@ -304,12 +398,12 @@ function WelcomeStep({ draft, patch, errors }: { draft: Draft; patch: (p: Partia
         <label className="stack">
           <span className="field-label">Form name</span>
           <input className="text-input" value={draft.name} aria-invalid={!!errors.name} onChange={(e) => patch({ name: e.target.value })} />
-          {errors.name ? <span className="field-error">{errors.name}</span> : null}
+          <FieldErrors messages={errors.name} />
         </label>
         <label className="stack">
           <span className="field-label">Public URL slug</span>
           <input className="text-input" value={draft.slug} aria-invalid={!!errors.slug} onChange={(e) => patch({ slug: e.target.value })} />
-          {errors.slug ? <span className="field-error">{errors.slug}</span> : null}
+          <FieldErrors messages={errors.slug} />
         </label>
       </div>
       <label className="stack">
@@ -335,7 +429,7 @@ function FieldsStep({
   move,
 }: {
   draft: Draft;
-  errors: Record<string, string>;
+  errors: ErrorMap;
   openField: string | null;
   setOpenField: (id: string | null) => void;
   patchField: (localId: string, p: Partial<DraftField>) => void;
@@ -356,7 +450,7 @@ function FieldsStep({
 
       {draft.fields.map((field, i) => {
         const open = openField === field.localId;
-        const err = errors[`field.${field.localId}`];
+        const err = errors[errorKey(field.localId)];
         return (
           <div className="field-editor" key={field.localId} style={err ? { borderColor: "#d98b7c" } : undefined}>
             <div className="field-editor-head">
@@ -371,7 +465,7 @@ function FieldsStep({
                   {field.conditionalLogic ? " · Conditional" : ""}
                   {` · key: ${field.key}`}
                 </p>
-                {err ? <p className="field-error">{err}</p> : null}
+                <FieldErrors messages={err} id={`${field.localId}-errors`} />
               </div>
               <div className="row wrap" style={{ gap: 4 }}>
                 <button className="ghost-button" type="button" aria-label="Move up" disabled={i === 0} onClick={() => move(field.localId, -1)}>↑</button>
@@ -411,23 +505,7 @@ function FieldsStep({
                 </label>
 
                 {HAS_OPTIONS.includes(field.type) && (
-                  <label className="stack">
-                    <span className="field-label">Options (one per line)</span>
-                    <textarea
-                      className="text-input"
-                      rows={3}
-                      value={(field.options ?? []).map((o) => o.label).join("\n")}
-                      onChange={(e) =>
-                        patchField(field.localId, {
-                          options: e.target.value
-                            .split("\n")
-                            .map((s) => s.trim())
-                            .filter(Boolean)
-                            .map((label) => ({ label, value: label.toLowerCase().replace(/[^a-z0-9]+/g, "-") })),
-                        })
-                      }
-                    />
-                  </label>
+                  <OptionsEditor field={field} patchField={patchField} />
                 )}
 
                 <LogicEditor draft={draft} field={field} patchField={patchField} />
@@ -436,6 +514,59 @@ function FieldsStep({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * One choice per row, with its stored value shown and not editable.
+ *
+ * The old editor was a textarea of labels and rebuilt every value from its
+ * label on each keystroke, so fixing a typo silently rewrote the value that
+ * every stored answer and every rule pointed at. Values are generated once, on
+ * creation, and never move afterwards.
+ */
+function OptionsEditor({
+  field,
+  patchField,
+}: {
+  field: DraftField;
+  patchField: (localId: string, p: Partial<DraftField>) => void;
+}) {
+  const options = field.options ?? [];
+  const set = (next: { label: string; value: string }[]) =>
+    patchField(field.localId, { options: next });
+
+  return (
+    <div className="stack">
+      <span className="field-label">Choices</span>
+      <p className="hint">
+        Answers are stored by value, so a choice keeps its value when you reword it. Rules match the
+        value, not the wording.
+      </p>
+      {options.length === 0 ? <p className="hint">No choices yet.</p> : null}
+      {options.map((option, i) => (
+        <div className="row" key={option.value} style={{ gap: 8 }}>
+          <input
+            className="text-input"
+            aria-label={`Choice ${i + 1} wording`}
+            value={option.label}
+            onChange={(e) => set(relabelOption(options, i, e.target.value))}
+          />
+          <code className="hint" style={{ whiteSpace: "nowrap" }}>{option.value}</code>
+          <button
+            className="ghost-button danger-button"
+            type="button"
+            aria-label={`Remove choice ${i + 1}`}
+            onClick={() => set(removeOption(options, i))}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ))}
+      <button className="ghost-button" type="button" style={{ justifySelf: "start" }} onClick={() => set(addOption(options))}>
+        <Plus size={14} /> Add choice
+      </button>
     </div>
   );
 }
@@ -450,17 +581,29 @@ function LogicEditor({
   patchField: (localId: string, p: Partial<DraftField>) => void;
 }) {
   const logic = field.conditionalLogic;
-  const others = draft.fields.filter((f) => f.localId !== field.localId);
+  // Built-in submission questions come from the server's own inventory, so the
+  // builder cannot offer a source the shape validator would reject — and cannot
+  // omit one it accepts. `format` is why this exists: a rule on it used to be
+  // unwritable here even though every submission answers it.
+  const sources = useMemo(
+    () =>
+      ruleSources(
+        draft.fields.map((f) => ({ key: f.key, label: f.label, type: f.type, options: f.options })),
+        field.key,
+        { format: SESSION_FORMATS.map((entry) => ({ label: entry.label, value: entry.value })) },
+      ),
+    [draft.fields, field.key],
+  );
 
   if (!logic) {
     return (
       <button
         className="link-button"
         type="button"
-        disabled={others.length === 0}
         onClick={() =>
           patchField(field.localId, {
-            conditionalLogic: { match: "all", rules: [{ fieldKey: others[0]?.key ?? "", operator: "equals", value: "" }] },
+            // Seeded with a rule that is already valid — see `defaultRule`.
+            conditionalLogic: { match: "all", rules: [defaultRule(sources[0])] },
           })
         }
       >
@@ -469,59 +612,125 @@ function LogicEditor({
     );
   }
 
+  const patchRule = (index: number, next: { fieldKey: string; operator: string; value?: string | number | boolean }) => {
+    const rules = logic.rules.map((rule, i) => (i === index ? next : rule));
+    patchField(field.localId, { conditionalLogic: { ...logic, rules } });
+  };
+
   return (
     <div className="logic-box">
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="row wrap" style={{ justifyContent: "space-between" }}>
         <span className="field-label">Only show when…</span>
         <button className="link-button" type="button" onClick={() => patchField(field.localId, { conditionalLogic: null })}>Remove</button>
       </div>
-      {logic.rules.map((rule, ri) => (
-        <div className="grid-2" key={ri}>
-          <select
-            className="select-input"
-            value={rule.fieldKey}
-            onChange={(e) => {
-              const rules = logic.rules.map((r, i) => (i === ri ? { ...r, fieldKey: e.target.value } : r));
-              patchField(field.localId, { conditionalLogic: { ...logic, rules } });
-            }}
-          >
-            {others.map((o) => <option key={o.localId} value={o.key}>{o.label}</option>)}
-          </select>
-          <div className="row" style={{ gap: 8 }}>
-            <select
-              className="select-input"
-              value={rule.operator}
-              onChange={(e) => {
-                const rules = logic.rules.map((r, i) => (i === ri ? { ...r, operator: e.target.value } : r));
-                patchField(field.localId, { conditionalLogic: { ...logic, rules } });
-              }}
-            >
-              <option value="equals">equals</option>
-              <option value="notEquals">does not equal</option>
-              <option value="includes">includes</option>
-              <option value="isNotEmpty">is answered</option>
-              <option value="isEmpty">is empty</option>
-            </select>
-            {rule.operator !== "isEmpty" && rule.operator !== "isNotEmpty" && (
-              <input
-                className="text-input"
-                placeholder="value"
-                value={rule.value === undefined ? "" : String(rule.value)}
+      {logic.rules.map((rule, ri) => {
+        const source = findRuleSource(sources, rule.fieldKey);
+        const needsValue = operatorNeedsValue(rule.operator);
+        const rawValue = rule.value === undefined ? "" : String(rule.value);
+        const missingValue = needsValue && rawValue.trim().length === 0;
+        return (
+          <div className="stack" key={ri} style={{ gap: 6 }}>
+            <div className="grid-2">
+              <select
+                className="select-input"
+                aria-label="Question this rule watches"
+                value={rule.fieldKey}
                 onChange={(e) => {
-                  const rules = logic.rules.map((r, i) => (i === ri ? { ...r, value: e.target.value } : r));
-                  patchField(field.localId, { conditionalLogic: { ...logic, rules } });
+                  const next = findRuleSource(sources, e.target.value);
+                  if (next) patchRule(ri, retargetRule(rule, next));
                 }}
-              />
-            )}
+              >
+                {/* A source the payload names but this form no longer has still
+                    has to be shown, or changing it would be impossible. */}
+                {!source ? <option value={rule.fieldKey}>{rule.fieldKey} (missing)</option> : null}
+                <optgroup label="Built-in questions">
+                  {sources.filter((s) => s.builtIn).map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </optgroup>
+                <optgroup label="Questions on this form">
+                  {sources.filter((s) => !s.builtIn).map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                </optgroup>
+              </select>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <select
+                  className="select-input"
+                  aria-label="Condition"
+                  value={rule.operator}
+                  onChange={(e) => patchRule(ri, retargetRule({ ...rule, operator: e.target.value }, source ?? sources[0]))}
+                  style={{ flex: "1 1 130px", width: "auto" }}
+                >
+                  {(source?.operators ?? []).map((operator) => (
+                    <option key={operator} value={operator}>{OPERATOR_LABELS[operator]}</option>
+                  ))}
+                  {source && !(source.operators as readonly string[]).includes(rule.operator) ? (
+                    <option value={rule.operator}>{rule.operator} (unsupported)</option>
+                  ) : null}
+                </select>
+                {needsValue ? <RuleValueInput source={source} value={rawValue} onChange={(value) => patchRule(ri, { ...rule, value })} /> : null}
+              </div>
+            </div>
+            {/* Guidance, not enforcement: the same refusal is
+                `FORM_LOGIC_VALUE_MISSING` server-side, and Save blocks on it. */}
+            {missingValue ? (
+              <p className="field-error" role="alert">
+                Pick the answer this rule should look for, or change it to “{OPERATOR_LABELS.isNotEmpty}”.
+              </p>
+            ) : null}
           </div>
-        </div>
-      ))}
-      <p className="hint">Values match the option value, e.g. <code>advanced</code>.</p>
+        );
+      })}
+      <p className="hint">
+        A rule on a built-in question compares what the submitter chose on the submission itself.
+      </p>
     </div>
   );
 }
 
-function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: Record<string, string>; timezone: string }) {
+/** A picker when the source has a known value set, free text when it does not. */
+function RuleValueInput({
+  source,
+  value,
+  onChange,
+}: {
+  source: RuleSource | null;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const choices = source?.optionValues ?? null;
+  if (!choices) {
+    return (
+      <input
+        className="text-input"
+        aria-label="Value to match"
+        placeholder="value"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ flex: "1 1 130px", width: "auto" }}
+      />
+    );
+  }
+  return (
+    <select
+      className="select-input"
+      aria-label="Value to match"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      style={{ flex: "1 1 130px", width: "auto" }}
+    >
+      {/* Never silently valid: an empty selection is what the server refuses. */}
+      <option value="">Choose an answer…</option>
+      {choices.some((choice) => choice.value === value) || value.length === 0 ? null : (
+        <option value={value}>{value} (not a choice)</option>
+      )}
+      {choices.map((choice) => (
+        <option key={choice.value} value={choice.value}>
+          {choice.label.trim().length > 0 ? choice.label : choice.value}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch: (p: Partial<Draft>) => void; errors: ErrorMap; timezone: string }) {
   const toIso = (date: string, endOfDay: boolean) =>
     date ? zonedToUtcIso(date, endOfDay ? "23:59" : "00:00", timezone) : null;
   const dateKey = (iso: string | null) => (iso ? zonedParts(iso, timezone).dateKey : "");
@@ -537,7 +746,7 @@ function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch:
         <label className="stack">
           <span className="field-label">Closes at</span>
           <input type="date" className="text-input" value={dateKey(draft.closesAt)} aria-invalid={!!errors.closesAt} onChange={(e) => patch({ closesAt: toIso(e.target.value, true) })} />
-          {errors.closesAt ? <span className="field-error">{errors.closesAt}</span> : null}
+          <FieldErrors messages={errors.closesAt} />
         </label>
       </div>
       <div className="grid-2">
@@ -558,7 +767,7 @@ function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch:
         <label className="stack">
           <span className="field-label">Max speakers</span>
           <input type="number" min={1} max={20} className="text-input" value={draft.maxSpeakers} aria-invalid={!!errors.maxSpeakers} onChange={(e) => patch({ maxSpeakers: Number(e.target.value) })} />
-          {errors.maxSpeakers ? <span className="field-error">{errors.maxSpeakers}</span> : null}
+          <FieldErrors messages={errors.maxSpeakers} />
         </label>
       </div>
       <div className="card" style={{ padding: 16 }}>
@@ -573,6 +782,11 @@ function SettingsStep({ draft, patch, errors, timezone }: { draft: Draft; patch:
 
 function Preview({ draft }: { draft: Draft }) {
   const [answers, setAnswers] = useState<AnswerMap>({});
+  // The built-in questions are real inputs here, not a sentence about them: a
+  // rule on Session format is only previewable if the preview can answer it,
+  // and these start where the public form starts so the first paint agrees.
+  const [title, setTitle] = useState("");
+  const [format, setFormat] = useState(DEFAULT_SESSION_FORMAT);
   const asFields = useMemo(
     () =>
       draft.fields.map((f) => ({
@@ -587,7 +801,10 @@ function Preview({ draft }: { draft: Draft }) {
       })),
     [draft.fields],
   );
-  const visible = useMemo(() => resolveVisibleFields(asFields, answers), [asFields, answers]);
+  const visible = useMemo(
+    () => resolveVisibleFields(asFields, withBuiltInAnswers(answers, { title, format })),
+    [asFields, answers, title, format],
+  );
   const hiddenCount = asFields.length - visible.length;
 
   return (
@@ -599,6 +816,16 @@ function Preview({ draft }: { draft: Draft }) {
         </p>
       ) : null}
       <p className="hint" style={{ marginBottom: 14 }}>Title, abstract, format and category are always collected.</p>
+      <label className="stack" style={{ marginBottom: 12 }}>
+        <span className="field-label">Session title</span>
+        <input className="text-input" value={title} onChange={(e) => setTitle(e.target.value)} />
+      </label>
+      <label className="stack" style={{ marginBottom: 14 }}>
+        <span className="field-label">Session format</span>
+        <select className="select-input" value={format} onChange={(e) => setFormat(e.target.value)}>
+          {SESSION_FORMATS.map((entry) => <option key={entry.value} value={entry.value}>{entry.label}</option>)}
+        </select>
+      </label>
       {visible.map((field) => (
         <FieldControl
           key={field.id}

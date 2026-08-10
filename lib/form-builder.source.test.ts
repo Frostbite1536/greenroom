@@ -62,6 +62,55 @@ test("the preview column is dropped before the editor column is squeezed", () =>
   assert.doesNotMatch(collapse![1], /\.builder-nav \{[^}]*flex-direction:\s*row/);
 });
 
+test("the builder never derives an option value from its label", () => {
+  const builder = source("components/form-builder.tsx");
+  // The old editor rebuilt every value from its wording on each keystroke.
+  assert.doesNotMatch(builder, /value: label\.toLowerCase\(\)/);
+  assert.doesNotMatch(builder, /options: e\.target\.value\s*\n?\s*\.split\("\\n"\)/);
+  assert.match(builder, /relabelOption\(options, i, e\.target\.value\)/);
+  assert.match(builder, /addOption\(options\)/);
+  // A stored value is shown, not edited, so it cannot move under an answer.
+  assert.match(builder, /<code className="hint"[^>]*>\{option\.value\}<\/code>/);
+});
+
+test("the builder mirrors the server's shape refusals instead of restating them", () => {
+  const builder = source("components/form-builder.tsx");
+  assert.match(builder, /from "@\/lib\/services\/form-shape-validation"/);
+  assert.match(builder, /findFormShapeIssues\(toShapeFields\(draft\)\)/);
+  assert.match(builder, /formShapeFieldErrors\(/);
+  // Field-scoped server errors are translated onto the editor's own keys, or
+  // they land under a key nothing renders and the save fails silently.
+  assert.match(builder, /function byLocalId\(/);
+  assert.match(builder, /const inline = byLocalId\(res\.error\.fieldErrors\)/);
+  assert.match(builder, /setOpenField\(offending\.slice\("field\."\.length\)\)/);
+  assert.doesNotMatch(builder, /firstFieldErrors/);
+});
+
+test("the rule editor offers the server's built-in sources and seeds a valid rule", () => {
+  const builder = source("components/form-builder.tsx");
+  assert.match(builder, /ruleSources\(/);
+  assert.match(builder, /<optgroup label="Built-in questions">/);
+  assert.match(builder, /<optgroup label="Questions on this form">/);
+  // The old seed posted `value: ""`, which the server refuses with
+  // FORM_LOGIC_VALUE_MISSING on the author's very first Save.
+  assert.doesNotMatch(builder, /operator: "equals", value: ""/);
+  assert.match(builder, /rules: \[defaultRule\(sources\[0\]\)\]/);
+  assert.match(builder, /missingValue \? \(/);
+  // Adding logic no longer requires a second custom question to exist.
+  assert.doesNotMatch(builder, /disabled=\{others\.length === 0\}/);
+});
+
+test("the public form and the preview both answer the built-in sources", () => {
+  const cfp = source("components/cfp-form.tsx");
+  assert.match(cfp, /withBuiltInAnswers\(answers, \{ title, abstract, format, categoryId, speakers \}\)/);
+  const builder = source("components/form-builder.tsx");
+  assert.match(builder, /withBuiltInAnswers\(answers, \{ title, format \}\)/);
+  // Both start on the same format, so the preview is not lying about the first
+  // paint a submitter gets.
+  assert.match(cfp, /useState\(DEFAULT_SESSION_FORMAT\)/);
+  assert.match(builder, /useState\(DEFAULT_SESSION_FORMAT\)/);
+});
+
 test("the shared switch's decoration cannot intercept its own checkbox", () => {
   const css = source("components/feature.css");
   // Both spans are absolutely positioned after the input, so they are the hit
