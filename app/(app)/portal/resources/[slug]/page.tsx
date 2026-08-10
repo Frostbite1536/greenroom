@@ -3,6 +3,8 @@ import { notFound, redirect } from "next/navigation";
 import { getApiContext } from "@/lib/api/context";
 import { prisma } from "@/lib/prisma";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { getOpenCfpEntry } from "@/lib/data/open-cfp";
+import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 import styles from "../../portal.module.css";
 
 export const dynamic = "force-dynamic";
@@ -12,10 +14,14 @@ export default async function ResourcePage({ params }: { params: Promise<{ slug:
   if (!ctx) redirect("/login");
   const { slug } = await params;
 
-  const resource = await prisma.resourceWiki.findFirst({
-    where: { eventId: ctx.eventId, slug, published: true },
-    select: { title: true, summary: true, htmlContent: true, updatedAt: true },
-  });
+  const [resource, openCfp] = await Promise.all([
+    prisma.resourceWiki.findFirst({
+      where: { eventId: ctx.eventId, slug, published: true },
+      select: { title: true, summary: true, htmlContent: true, updatedAt: true },
+    }),
+    // Deduplicated with the workspace shell's own entry read.
+    getOpenCfpEntry(ctx.eventId),
+  ]);
 
   if (!resource) notFound();
 
@@ -41,6 +47,8 @@ export default async function ResourcePage({ params }: { params: Promise<{ slug:
           {resource.updatedAt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
         </p>
       </section>
+
+      <OpenCfpEntryPanel entry={openCfp} id="resource-open-cfp" compact />
     </section>
   );
 }

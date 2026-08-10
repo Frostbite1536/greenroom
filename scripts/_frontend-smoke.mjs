@@ -1691,6 +1691,161 @@ try {
     && s20NormalDrawer.text.includes("S20 normal answer value")
     && !s20NormalDrawer.text.includes("Its answers are unavailable rather than partially shown."));
 
+  // --- C16: "Submit a talk" discoverability (D-C5-3) -----------------------
+  // The scratch event has TWO open published forms by this point (the windowed
+  // "Scratch CFP" and the window-less "S2 Unique Legacy CFP"), plus one
+  // unpublished form. That is the `many` state: every open call must be listed,
+  // ordered closesAt-ascending with nulls last, and none may be silently chosen.
+  const c16LegacyPath = `/cfp/${EVENT_ID}/${s2UniqueLegacyForm.slug}`;
+  const c16UnpublishedPath = `/cfp/${EVENT_ID}/${s2UnpublishedForm.slug}`;
+  const c16Portal = await req("GET", "/portal", null, speaker);
+  const c16PortalText = renderedText(c16Portal.text) ?? "";
+  check("C16 speaker portal renders → 200", c16Portal.status === 200, `got ${c16Portal.status}`);
+  check("C16 nav offers a Submit a talk entry per open call",
+    c16Portal.text.includes("Submit a talk: Scratch CFP")
+    && c16Portal.text.includes(`Submit a talk: ${s2UniqueLegacyForm.name}`)
+    && c16Portal.text.includes(`href="${canonicalCfpPath}"`)
+    && c16Portal.text.includes(`href="${c16LegacyPath}"`));
+  check("C16 chooser lists every open call and never collapses to one",
+    c16PortalText.includes("Choose which call for proposals you want to submit to.")
+    && !c16PortalText.includes("There is no open call for proposals"));
+  check("C16 chooser order is closesAt ascending with nulls last",
+    c16Portal.text.indexOf(`href="${canonicalCfpPath}"`) < c16Portal.text.indexOf(`href="${c16LegacyPath}"`));
+  check("C16 never exposes an unpublished form",
+    !c16Portal.text.includes(c16UnpublishedPath) && !c16Portal.text.includes(s2UnpublishedForm.name));
+
+  const c16Resource = await prisma.resourceWiki.create({
+    data: {
+      eventId: EVENT_ID,
+      slug: "c16-speaker-handbook",
+      title: "C16 Speaker Handbook",
+      summary: "Logistics for confirmed speakers.",
+      htmlContent: "<p>Arrive thirty minutes early.</p>",
+      published: true,
+    },
+  });
+  const c16ResourcePage = await req("GET", `/portal/resources/${c16Resource.slug}`, null, speaker);
+  check("C16 resource page carries the same entry", c16ResourcePage.status === 200
+    && c16ResourcePage.text.includes(c16Resource.title)
+    && c16ResourcePage.text.includes(`href="${canonicalCfpPath}"`)
+    && c16ResourcePage.text.includes(`href="${c16LegacyPath}"`), `got ${c16ResourcePage.status}`);
+
+  // Zero open calls: the entry stays visible and honest instead of vanishing or
+  // linking nowhere. The fresh event has no forms at all.
+  const c16FreshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
+  const c16Zero = await req("GET", "/portal", null, c16FreshAdmin);
+  const c16ZeroText = renderedText(c16Zero.text) ?? "";
+  check("C16 zero open calls renders an honest visible state", c16Zero.status === 200
+    && c16ZeroText.includes("No open call for proposals")
+    && c16ZeroText.includes("There is no open call for proposals for Scratch Fresh right now."),
+    `got ${c16Zero.status}`);
+  check("C16 zero open calls offers no CFP link at all", !/href="\/cfp\//.test(c16Zero.text));
+
+  // Exactly one open call: a direct link, no chooser.
+  const c16OnlyForm = await prisma.formConfig.create({
+    data: {
+      eventId: FRESH_EVENT_ID,
+      name: "Fresh Only CFP",
+      slug: "fresh-only-cfp",
+      published: true,
+      minSpeakers: 1,
+      maxSpeakers: 1,
+      closesAt: new Date(Date.now() + 7 * 86400000),
+    },
+  });
+  const c16OnlyPath = `/cfp/${FRESH_EVENT_ID}/${c16OnlyForm.slug}`;
+  const c16One = await req("GET", "/portal", null, c16FreshAdmin);
+  const c16OneText = renderedText(c16One.text) ?? "";
+  check("C16 exactly one open call links straight to the canonical path",
+    c16One.status === 200
+    && c16One.text.includes(`href="${c16OnlyPath}"`)
+    && c16OneText.includes(`Submit to ${c16OnlyForm.name}`), `got ${c16One.status}`);
+  check("C16 a single open call shows no chooser and no empty state",
+    !c16OneText.includes("Choose which call for proposals you want to submit to.")
+    && !c16OneText.includes("No open call for proposals"));
+
+  // --- public landing page + embed aliases (eval P0 0.1) ------------------
+  // A logged-out visitor must reach the public schedule and speaker pages from
+  // `/` without signing in; the same D-C5-3 entry states apply here too.
+  const landing = await fetch(`${BASE}/?event=${encodeURIComponent(EVENT_ID)}`, { redirect: "manual" });
+  const landingHtml = await landing.text();
+  const landingText = renderedText(landingHtml) ?? "";
+  check("landing page serves logged-out visitors → 200", landing.status === 200, `got ${landing.status}`);
+  check("landing page links both embed surfaces prominently",
+    landingHtml.includes('href="/embed/schedule')
+    && landingHtml.includes('href="/embed/speakers')
+    && landingText.includes("View the schedule")
+    && landingText.includes("Meet the speakers")
+    && landingText.includes("/embed/schedule")
+    && landingText.includes("/embed/speakers"));
+  check("landing page names the event and its real programme size",
+    landingText.includes("Scratch Frontend") && landingText.includes("Scheduled sessions"));
+  check("landing page carries the same open-CFP chooser",
+    landingHtml.includes(`href="${canonicalCfpPath}"`)
+    && landingHtml.includes(`href="${c16LegacyPath}"`)
+    && landingText.includes("Choose which call for proposals you want to submit to."));
+
+  const landingOne = await fetch(`${BASE}/?event=${encodeURIComponent(FRESH_EVENT_ID)}`, { redirect: "manual" });
+  const landingOneHtml = await landingOne.text();
+  check("landing page shows the single open call for a one-call event",
+    landingOne.status === 200 && landingOneHtml.includes(`href="${c16OnlyPath}"`), `got ${landingOne.status}`);
+
+  const landingSignedIn = await fetch(`${BASE}/`, { headers: { cookie: cookie(admin) }, redirect: "manual" });
+  check("signed-in visitors keep their workspace redirect from /",
+    landingSignedIn.status === 307
+    && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
+    `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
+
+  for (const [alias, target] of [
+    ["/schedule", "/embed/schedule"],
+    ["/agenda", "/embed/schedule"],
+    ["/sessions", "/embed/schedule"],
+    ["/speakers", "/embed/speakers"],
+  ]) {
+    const aliasRes = await reqManual(alias, null);
+    check(`alias ${alias} → ${target}`,
+      aliasRes.status === 307 && aliasRes.location === target,
+      `${aliasRes.status} ${aliasRes.location || "none"}`);
+  }
+  const aliasWithEvent = await reqManual(`/schedule?event=${encodeURIComponent(EVENT_ID)}`, null);
+  check("an alias carries an explicit event through the redirect",
+    aliasWithEvent.status === 307 && aliasWithEvent.location === `/embed/schedule?event=${EVENT_ID}`,
+    `${aliasWithEvent.status} ${aliasWithEvent.location || "none"}`);
+
+  // An unknown ?event= must behave exactly like no ?event= at all. Comparing the
+  // rendered <main> of both responses is the strongest form of the assertion:
+  // if any single surface (agenda, metrics, CFP panel, embed links, heading)
+  // still spoke the unresolved slug, these two would differ. Everything below
+  // reads the default programme only.
+  const landingMain = (html) => {
+    const start = html.indexOf('<main class="landing"');
+    if (start === -1) return null;
+    const end = html.indexOf("</main>", start);
+    return end === -1 ? null : html.slice(start, end + "</main>".length);
+  };
+  const landingDefault = await fetch(`${BASE}/`, { redirect: "manual" });
+  const landingDefaultHtml = await landingDefault.text();
+  const landingUnknown = await fetch(`${BASE}/?event=no-such-event-slug`, { redirect: "manual" });
+  const landingUnknownHtml = await landingUnknown.text();
+  const defaultMain = landingMain(landingDefaultHtml);
+  const unknownMain = landingMain(landingUnknownHtml);
+  const defaultMainText = renderedText(defaultMain) ?? "";
+  check("landing page renders a default programme with no event parameter",
+    landingDefault.status === 200 && defaultMain !== null
+    && !defaultMainText.includes("No public programme is published yet."),
+    `${landingDefault.status} ${defaultMain === null ? "no <main>" : "ok"}`);
+  check("an unknown ?event= falls back to the default programme on every surface",
+    landingUnknown.status === 200 && unknownMain !== null && unknownMain === defaultMain,
+    `${landingUnknown.status} ${unknownMain === defaultMain ? "identical" : "diverged"}`);
+  // Scoped to the rendered <main>: Next's inline flight payload echoes the
+  // request's searchParams verbatim in the full document, so a whole-document
+  // scan would fail on framework request-echo even when no rendered surface
+  // speaks the unresolved slug. The byte-identity check above already proves
+  // the rendered content matches the no-parameter render exactly.
+  check("an unknown ?event= never pairs one event's links with another's CFP panel",
+    !(renderedText(unknownMain) ?? "").includes("no-such-event-slug")
+    && !(renderedText(unknownMain) ?? "").includes("No public programme is published yet."));
+
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
   // has its own unit tests, so re-using it here would only prove it agrees with

@@ -5,6 +5,8 @@ import { resolveSessionUser } from "@/lib/portal/user";
 import { profileFormValues } from "@/lib/portal/profile";
 import { profileCompletion } from "@/lib/speakers/status";
 import { submissionStatusView } from "@/lib/portal/submission-status";
+import { getOpenCfpEntry } from "@/lib/data/open-cfp";
+import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 import { ProfileForm } from "./profile-form";
 import { TaskChecklist, type PortalTask } from "./task-checklist";
 import styles from "./portal.module.css";
@@ -26,7 +28,7 @@ export default async function PortalPage() {
   const eventId = session.event.id;
 
   // One round trip per concern, issued in parallel to avoid a request waterfall.
-  const [profile, speakerTasks, sessionSpeakers, abstracts, resources, event] = await Promise.all([
+  const [profile, speakerTasks, sessionSpeakers, abstracts, resources, event, openCfp] = await Promise.all([
     prisma.speakerProfile.findUnique({
       where: { userId: user.id },
       select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true },
@@ -64,6 +66,8 @@ export default async function PortalPage() {
       orderBy: { title: "asc" },
     }),
     prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
+    // Deduplicated with the workspace shell's own entry read.
+    getOpenCfpEntry(eventId),
   ]);
   const timezone = event?.timezone ?? "UTC";
 
@@ -174,7 +178,9 @@ export default async function PortalPage() {
         </div>
 
         <div>
-          <section className={styles.card}>
+          <OpenCfpEntryPanel entry={openCfp} id="portal-open-cfp" />
+
+          <section className={styles.card} style={{ marginTop: 20 }}>
             <div className={styles.cardHead}>
               <div>
                 <h2>Your profile</h2>

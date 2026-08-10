@@ -4,7 +4,12 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
 import { Menu, X } from "lucide-react";
 
-type NavigationLink = { href: string; label: string };
+/**
+ * `href: null` renders a visible, non-interactive entry. The C16 no-open-CFP
+ * state (D-C5-3) must stay visible in the mobile menu without becoming a link
+ * to nowhere.
+ */
+type NavigationLink = { href: string | null; label: string };
 
 export function MobileNavigation({ links }: { links: NavigationLink[] }) {
   const [open, setOpen] = useState(false);
@@ -82,11 +87,17 @@ export function MobileNavigation({ links }: { links: NavigationLink[] }) {
               </button>
             </div>
             <nav>
-              {links.map((link) => (
-                <Link className="mobile-nav-link" href={link.href} key={link.href} onClick={closeMenu}>
-                  {link.label}
-                </Link>
-              ))}
+              {links.map((link, index) =>
+                link.href ? (
+                  <Link className="mobile-nav-link" href={link.href} key={link.href} onClick={closeMenu}>
+                    {link.label}
+                  </Link>
+                ) : (
+                  <p className="mobile-nav-link mobile-nav-static" key={`static-${index}`}>
+                    {link.label}
+                  </p>
+                ),
+              )}
             </nav>
           </aside>
         </div>
