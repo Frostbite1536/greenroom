@@ -667,8 +667,10 @@ try {
   // One step, not two: the creator's ADMIN membership must already exist. If
   // the transaction were split, this row could be missing and the event would
   // be unreachable with no delete path to clean it up.
+  // take 5: the assertion needs "exactly one" — a handful proves or disproves
+  // that without materializing whatever the database happens to contain.
   const creatorMembership = createdEventId
-    ? await prisma.eventMember.findMany({ where: { eventId: createdEventId }, select: { userId: true, role: true } })
+    ? await prisma.eventMember.findMany({ where: { eventId: createdEventId }, select: { userId: true, role: true }, orderBy: { userId: "asc" }, take: 5 })
     : [];
   const creatorUser = await prisma.user.findUnique({ where: { email: "maya@greenroom.demo" }, select: { id: true } });
   check("D-C5-9 the creator is an ADMIN member of the new event in the same step",
