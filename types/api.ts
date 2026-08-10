@@ -285,6 +285,21 @@ export const reviewAssignmentInputSchema = z.object({
   teamKey: z.string().trim().max(120).optional(),
 });
 
+/**
+ * Declaring a conflict of interest (ABS-12).
+ *
+ * Deliberately carries no evaluator id: the assignment is resolved from the
+ * caller's own session, so this body can only ever address the reviewer's own
+ * row. `.strict()` keeps a status value from being smuggled in — `DECLINED` is
+ * the only outcome this path can produce.
+ */
+export const reviewAssignmentDeclineSchema = z
+  .object({
+    planId: idSchema,
+    abstractId: idSchema,
+  })
+  .strict();
+
 /** Current-event ADMIN input for reviewer provisioning. No authority IDs are accepted. */
 export const reviewerInviteCreateSchema = z
   .object({
@@ -432,6 +447,7 @@ export type PublicAbstractUpsert = z.infer<typeof publicAbstractUpsertSchema>;
 export type PublicDraftResume = z.infer<typeof publicDraftResumeSchema>;
 export type EvaluationPlanInput = z.infer<typeof evaluationPlanInputSchema>;
 export type ReviewScoreInput = z.infer<typeof reviewScoreInputSchema>;
+export type ReviewAssignmentDeclineInput = z.infer<typeof reviewAssignmentDeclineSchema>;
 export type GuaranteedSessionInput = z.infer<typeof guaranteedSessionInputSchema>;
 export type ScheduleSlotInput = z.infer<typeof scheduleSlotInputSchema>;
 export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;

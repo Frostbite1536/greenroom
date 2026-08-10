@@ -61,3 +61,46 @@ test("C6 withdrawal serializes on Abstract before declining only open review wor
   assert.ok(withdrawal.indexOf("tx.abstract.update") < withdrawal.indexOf("reviewAssignment.updateMany"));
   assert.doesNotMatch(withdrawal, /reviewScore\.(?:delete|deleteMany|update|updateMany)/);
 });
+
+test("ABS-12 score writes re-read the assignment under the locks and refuse a declared conflict", () => {
+  const scores = source("app/api/evaluations/scores/route.ts");
+  const transaction = scores.slice(scores.indexOf("await prisma.$transaction"));
+
+  // The stale pre-transaction read is not trusted: the fresh read must come
+  // from the assignment row itself, after both locks, and carry its abstract.
+  assert.match(transaction, /await lockAbstractForWrite\(tx, input\.abstractId\)/);
+  assert.match(
+    transaction,
+    /const fresh = await tx\.reviewAssignment\.findUnique\(\{[\s\S]*?where: \{ id: assignment\.id \},[\s\S]*?select: \{ status: true, abstract: \{ select: \{ status: true \} \} \}/,
+  );
+  assert.match(transaction, /const freshDeclined = scoreWriteRefusal\(fresh\.status\)/);
+  assert.ok(transaction.indexOf("lockAbstractForWrite") < transaction.indexOf("const fresh ="));
+  assert.ok(transaction.indexOf("const fresh =") < transaction.indexOf("freshDeclined"));
+  // The refusal must precede every write, or a declaration that committed while
+  // this request waited would be reversed by the status update below.
+  assert.ok(transaction.indexOf("freshDeclined") < transaction.indexOf("tx.reviewScore.upsert"));
+  assert.ok(transaction.indexOf("freshDeclined") < transaction.indexOf("tx.reviewAssignment.update"));
+
+  // And an honest fast refusal before the transaction is even opened.
+  const preflight = scores.slice(0, scores.indexOf("await prisma.$transaction"));
+  assert.match(preflight, /const declined = scoreWriteRefusal\(assignment\.status\)/);
+});
+
+test("ABS-12 admin re-assignment restores only a declined row, never a completed review", () => {
+  const assignments = source("app/api/evaluations/assignments/route.ts");
+  const restore = assignments.slice(assignments.indexOf("await tx.reviewAssignment.upsert"));
+
+  // Status-scoped: the whole point is that COMPLETED rows are excluded, so the
+  // decision aggregate never loses a review it already counts.
+  assert.match(
+    restore,
+    /tx\.reviewAssignment\.updateMany\(\{[\s\S]*?status: \{ in: \[\.\.\.RESTORABLE_ASSIGNMENT_STATUSES\] \},[\s\S]*?data: \{ status: "ASSIGNED", completedAt: null \}/,
+  );
+  // The upsert itself must stay teamKey-only: a plain re-assign of an active
+  // row must not rewrite anything else about it.
+  assert.match(assignments, /update: \{ teamKey \},/);
+  // Restoration never rewrites review history.
+  assert.doesNotMatch(restore, /reviewScore\.(?:delete|deleteMany|update|updateMany|upsert)/);
+  // It stays inside the transaction that already holds the assignment locks.
+  assert.ok(assignments.indexOf("lockReviewAssignmentWrite") < assignments.indexOf("RESTORABLE_ASSIGNMENT_STATUSES", assignments.indexOf("await tx.reviewAssignment.upsert")));
+});

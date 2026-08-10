@@ -4,6 +4,7 @@ import { requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { parseRubric, validateScores } from "@/lib/services/rubric";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
+import { scoreWriteRefusal } from "@/lib/review-conflict";
 import {
   resolveOverallReviewComment,
   reviewScoreCreateData,
@@ -49,6 +50,11 @@ export const POST = handle(async (req) => {
       "The speaker withdrew this proposal, so it no longer needs a review.",
     );
   }
+  // A reviewer who stepped back (ABS-12) no longer holds this proposal. Checked
+  // here for an honest fast refusal, and again under the locks below because
+  // this read can go stale against a concurrent declaration.
+  const declined = scoreWriteRefusal(assignment.status);
+  if (declined) throw new ApiError(declined.status, declined.code, declined.message);
 
   const rubric = parseRubric(plan.rubric);
   const validationError = validateScores(rubric, input.scores);
@@ -98,16 +104,28 @@ export const POST = handle(async (req) => {
     // withdrawal, so re-check under the lock before persisting scores. Keep
     // this after the plan lock to avoid a Plan -> Abstract inversion.
     await lockAbstractForWrite(tx, input.abstractId);
-    const fresh = await tx.abstract.findUniqueOrThrow({
-      where: { id: input.abstractId },
-      select: { status: true },
+    // Re-read the assignment together with its abstract: a conflict declaration
+    // takes these same two locks in this same order, so one that commits while
+    // this request waited is visible only now. Without this the write below
+    // would move a DECLINED row straight to COMPLETED and its scores would
+    // count towards the decision despite the evaluator having stepped back.
+    const fresh = await tx.reviewAssignment.findUnique({
+      where: { id: assignment.id },
+      select: { status: true, abstract: { select: { status: true } } },
     });
-    if (fresh.status === "WITHDRAWN") {
+    if (!fresh) {
+      throw new ApiError(403, "NOT_ASSIGNED", "You are not assigned to review this abstract.");
+    }
+    if (fresh.abstract.status === "WITHDRAWN") {
       throw new ApiError(
         409,
         "ABSTRACT_WITHDRAWN",
         "The speaker withdrew this proposal, so it no longer needs a review.",
       );
+    }
+    const freshDeclined = scoreWriteRefusal(fresh.status);
+    if (freshDeclined) {
+      throw new ApiError(freshDeclined.status, freshDeclined.code, freshDeclined.message);
     }
     if (overallComment) {
       // Normalize a deliberate replacement or clear across every stored

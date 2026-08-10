@@ -2,9 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ClipboardCheck, EyeOff, Inbox } from "lucide-react";
+import { Check, ClipboardCheck, EyeOff, Inbox, ShieldAlert } from "lucide-react";
 import type { EvaluationRoundOption, EvaluationView, QueueRow } from "@/lib/data/reads";
 import { apiPost } from "@/lib/api-client";
+import {
+  canDeclareConflict,
+  isActiveQueueAssignment,
+  isDeclaredConflict,
+} from "@/lib/review-conflict";
 import { EmptyState, Pill } from "@/components/ui";
 import {
   planReviewCommentUpdate,
@@ -28,10 +33,18 @@ const STATUS_LABEL: Record<string, string> = {
   DECLINED: "Declined",
 };
 
+/** Whether this row is still part of the reviewer's active workload. */
+function isActiveRow(row: QueueRow): boolean {
+  return isActiveQueueAssignment(row.status, row.abstractStatus === "WITHDRAWN");
+}
+
 /** The row the workspace should open on: first still-actionable, else first. */
 function preferredActiveAbstractId(queue: readonly QueueRow[]): string | null {
   return (
-    queue.find((q) => q.status !== "COMPLETED" && q.abstractStatus !== "WITHDRAWN")?.abstractId
+    // A row the reviewer declared a conflict on has left the queue, so it must
+    // not be the row the workspace lands on while real work is waiting.
+    queue.find((q) => q.status !== "COMPLETED" && isActiveRow(q))?.abstractId
+    ?? queue.find((q) => q.status !== "COMPLETED" && q.abstractStatus !== "WITHDRAWN")?.abstractId
     ?? queue.find((q) => q.status !== "COMPLETED")?.abstractId
     ?? queue[0]?.abstractId
     ?? null
@@ -50,6 +63,9 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Stepping back from a proposal is irreversible from here, so the button
+  // arms an explicit in-page confirmation rather than posting on first click.
+  const [confirmingConflict, setConfirmingConflict] = useState(false);
 
   // NOTE: every hook must run before the early returns below. `weightedTotal`
   // used to sit after them, so a queue going from empty to non-empty without a
@@ -68,6 +84,7 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     commentDraftsRef.current = {};
     setError(null);
     setNotice(null);
+    setConfirmingConflict(false);
   }
 
   // Explicitly annotated: without `noUncheckedIndexedAccess`, `queue[0]` types as
@@ -169,7 +186,9 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     );
   }
 
-  const reviewableQueue = view.queue.filter((q) => q.abstractStatus !== "WITHDRAWN");
+  // A proposal the reviewer declared a conflict on is out of their hands, so it
+  // must not sit in the denominator keeping their progress permanently short.
+  const reviewableQueue = view.queue.filter(isActiveRow);
   const completed = reviewableQueue.filter((q) => q.status === "COMPLETED").length;
   const progress = reviewableQueue.length === 0
     ? 100
@@ -178,6 +197,8 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
   // A speaker can withdraw mid-review (W1); scoring one is refused server-side
   // with 409 ABSTRACT_WITHDRAWN, so the form must not invite the attempt.
   const withdrawn = active.abstractStatus === "WITHDRAWN";
+  const conflictDeclared = isDeclaredConflict(active.status, withdrawn);
+  const conflictAvailable = canDeclareConflict(active.status, withdrawn);
   const allScored = plan.rubric.every((c) => scores[c.key] !== undefined);
 
   function setScore(key: string, value: number) {
@@ -193,6 +214,32 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
     setActiveId(row.abstractId);
     setError(null);
     setNotice(null);
+    setConfirmingConflict(false);
+  }
+
+  /**
+   * Step back from the open proposal by posting the existing DECLINED
+   * assignment status. The row stays selected on purpose: the refreshed panel
+   * showing the declared conflict is the honest completed state, rather than a
+   * toast that disappears and leaves the queue looking unchanged.
+   */
+  async function declareConflict() {
+    if (!plan || !active) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    const res = await apiPost("/api/evaluations/assignments/decline", {
+      planId: plan.id,
+      abstractId: active.abstractId,
+    });
+    setBusy(false);
+    setConfirmingConflict(false);
+    if (!res.ok) {
+      setError(res.error.message);
+      return;
+    }
+    setNotice("Conflict declared. This proposal has left your review queue.");
+    startTransition(() => router.refresh());
   }
 
   function setCommentDraft(value: string) {
@@ -287,7 +334,10 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
                   {item.abstractStatus === "WITHDRAWN" ? "Withdrawn" : (
                     <>
                       {item.status === "COMPLETED" ? <Check size={11} aria-hidden="true" /> : null}
-                      {STATUS_LABEL[item.status]}
+                      {/* A declined row on a proposal that still stands can only
+                          be this reviewer's own conflict declaration, so name it
+                          as one rather than as a bare "Declined". */}
+                      {isDeclaredConflict(item.status, false) ? "Conflict declared" : STATUS_LABEL[item.status]}
                     </>
                   )}
                 </Pill>
@@ -304,9 +354,15 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
       <div className="card" style={{ padding: 24 }}>
         <div className="row wrap" style={{ justifyContent: "space-between", marginBottom: 4 }}>
           <p className="eyebrow">
-            {withdrawn ? "Withdrawn proposal" : `Now scoring${active.teamKey ? ` · ${active.teamKey}` : ""}`}
+            {withdrawn
+              ? "Withdrawn proposal"
+              : conflictDeclared
+                ? "Conflict declared"
+                : `Now scoring${active.teamKey ? ` · ${active.teamKey}` : ""}`}
           </p>
-          {!withdrawn ? <span className="hint">Weighted score: <strong>{weightedTotal}</strong></span> : null}
+          {!withdrawn && !conflictDeclared
+            ? <span className="hint">Weighted score: <strong>{weightedTotal}</strong></span>
+            : null}
         </div>
         <h2 style={{ margin: "0 0 6px" }}>{active.title}</h2>
         <p className="hint">
@@ -333,7 +389,20 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
           </p>
         ) : null}
 
-        {!withdrawn ? (
+        {/* The honest completed state: what happened, what it means for the
+            decision, and who to ask if it was a mistake. */}
+        {conflictDeclared ? (
+          <p className="setup-note" role="status" style={{ marginTop: 16 }}>
+            You declared a conflict of interest on this proposal. It has left your review queue, and
+            no score of yours counts towards its decision. Ask an admin to reassign it, or to put it
+            back if this was a mistake.
+          </p>
+        ) : null}
+
+        {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
+        {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
+
+        {!withdrawn && !conflictDeclared ? (
           <>
             <div style={{ marginTop: 16 }}>
               {plan.rubric.map((c) => (
@@ -388,16 +457,68 @@ export function EvaluationWorkspace({ view }: { view: EvaluationView }) {
               ) : null}
             </div>
 
-            {error ? <p className="field-error" style={{ marginTop: 12 }} role="alert">{error}</p> : null}
-            {notice ? <p className="hint" style={{ marginTop: 12, color: "var(--brand-strong)" }} role="status">{notice}</p> : null}
-
             <div className="row wrap" style={{ marginTop: 16, gap: 10 }}>
               <button className="primary-button" type="button" disabled={!allScored || busy || pending} onClick={submitScores} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
                 <ClipboardCheck size={16} aria-hidden="true" />
                 {busy ? "Saving…" : active.status === "COMPLETED" ? "Update review" : "Submit review"}
               </button>
+              {conflictAvailable && !confirmingConflict ? (
+                <button
+                  className="ghost-button danger-button"
+                  type="button"
+                  disabled={busy || pending}
+                  onClick={() => { setConfirmingConflict(true); setError(null); setNotice(null); }}
+                  aria-describedby="declare-conflict-help"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+                >
+                  <ShieldAlert size={16} aria-hidden="true" />
+                  Declare a conflict
+                </button>
+              ) : null}
               {!allScored ? <span className="hint">Score every criterion to submit.</span> : null}
             </div>
+
+            {conflictAvailable && !confirmingConflict ? (
+              <p className="hint" id="declare-conflict-help" style={{ marginTop: 8 }}>
+                Step back from this proposal if you know a speaker, work with them, or have any
+                other interest in the outcome.
+              </p>
+            ) : null}
+
+            {/* Confirmation before the post: the reviewer cannot undo this from
+                here, and the panel says exactly that before they commit. */}
+            {conflictAvailable && confirmingConflict ? (
+              <div className="setup-note" role="group" aria-labelledby="declare-conflict-confirm" style={{ marginTop: 16 }}>
+                <p id="declare-conflict-confirm" style={{ margin: 0 }}>
+                  <strong>Declare a conflict of interest on &ldquo;{active.title}&rdquo;?</strong>
+                </p>
+                <p className="hint" style={{ marginTop: 6 }}>
+                  It leaves your review queue and you will not be able to score it. Only an admin
+                  can put it back.
+                </p>
+                <div className="row wrap" style={{ marginTop: 10, gap: 10 }}>
+                  {/* Plain primary: `.danger-button` only recolours text, which
+                      on the brand-filled primary would fail contrast. The
+                      warning is carried by the copy above it. */}
+                  <button
+                    className="primary-button"
+                    type="button"
+                    disabled={busy || pending}
+                    onClick={declareConflict}
+                  >
+                    {busy ? "Declaring…" : "Yes, declare a conflict"}
+                  </button>
+                  <button
+                    className="ghost-button"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setConfirmingConflict(false)}
+                  >
+                    Keep reviewing
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </>
         ) : null}
       </div>

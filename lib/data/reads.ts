@@ -1243,6 +1243,12 @@ export type SetupPlan = {
   name: string;
   ordinal: number;
   isBlind: boolean;
+  /**
+   * The round's optional review window, as stored instants. Rendered in the
+   * event's timezone by `formatRoundWindow`; nothing gates on it.
+   */
+  startsAt: string | null;
+  endsAt: string | null;
   rubric: RubricCriterionView[];
   assignmentCount: number;
   completedCount: number;
@@ -1285,6 +1291,8 @@ export type SetupAbstract = {
 
 export type EvaluationSetupView = {
   eventId: string;
+  /** Round windows are authored and rendered as event-local calendar dates. */
+  timezone: string;
   plans: SetupPlan[];
   evaluators: SetupEvaluator[];
   abstracts: SetupAbstract[];
@@ -1311,7 +1319,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     orderBy: { user: { name: "asc" } },
     take: OPERATOR_QUERY_LIMITS.reviewerSetupMembers + 1,
   });
-  const [plans, members, abstracts, categories, byAbstract, byEvaluator] = await Promise.all([
+  const [plans, members, abstracts, categories, byAbstract, byEvaluator, event] = await Promise.all([
     prisma.evaluationPlan.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { ordinal: "asc" },
@@ -1349,6 +1357,9 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       where: { plan: { eventId: ctx.eventId }, abstract: { status: { not: "WITHDRAWN" } } },
       _count: { _all: true },
     }),
+    // Round windows are event-local calendar dates, so the panel must render
+    // them in the event's timezone rather than the operator's browser zone.
+    prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
   ]);
   assertEventQueryBound(members, OPERATOR_QUERY_LIMITS.reviewerSetupMembers, "reviewer setup members");
 
@@ -1407,6 +1418,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
 
   return {
     eventId: ctx.eventId,
+    timezone: event?.timezone ?? "UTC",
     plans: plans.map((p) => {
       const totals = planTotals.get(p.id) ?? { assigned: 0, completed: 0 };
       return {
@@ -1414,6 +1426,8 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
         name: p.name,
         ordinal: p.ordinal,
         isBlind: p.isBlind,
+        startsAt: p.startsAt?.toISOString() ?? null,
+        endsAt: p.endsAt?.toISOString() ?? null,
         rubric: Array.isArray(p.rubric) ? (p.rubric as unknown as RubricCriterionView[]) : [],
         assignmentCount: totals.assigned,
         completedCount: totals.completed,
