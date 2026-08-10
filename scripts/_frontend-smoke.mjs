@@ -1495,6 +1495,38 @@ try {
   check("admin sees the round list", setupPage.text.includes("Review rounds"));
   check("admin sees the assignment panel", setupPage.text.includes("Assign proposals to reviewers"));
   check("admin sees review coverage", setupPage.text.includes("Review coverage"));
+
+  // --- D-C5-8 §3.1: review-coverage sort headers --------------------------
+  // The sorted ORDER is client state and cannot be exercised over HTTP; the
+  // comparators and their round trips live in lib/review-coverage-sort.test.ts.
+  // What the served markup does prove is the accessibility contract and the
+  // default: a real button in every sortable <th>, and no aria-sort at all
+  // before the organizer has chosen a column.
+  const coverageHead = (() => {
+    const marker = setupPage.text.indexOf("Review coverage");
+    if (marker === -1) return "";
+    const start = setupPage.text.indexOf("<thead", marker);
+    const end = setupPage.text.indexOf("</thead>", marker);
+    return start === -1 || end === -1 ? "" : setupPage.text.slice(start, end + "</thead>".length);
+  })();
+  const coverageHeaderButtons = (coverageHead.match(/<button[^>]*class="sort-header"/g) ?? []).length;
+  check("§3.1 all five coverage columns are sortable through a real header button",
+    coverageHeaderButtons === 5, `got ${coverageHeaderButtons}`);
+  check("§3.1 the coverage headers still name their columns",
+    ["Proposal", "Category", "Status", "Reviewers", "Reviews done"]
+      .every((label) => coverageHead.includes(label)));
+  check("§3.1 an unsorted coverage table claims no aria-sort on any header",
+    !coverageHead.includes("aria-sort"), coverageHead.slice(0, 200));
+  check("§3.1 every sortable header carries a direction affordance, not colour alone",
+    (coverageHead.match(/sort-indicator/g) ?? []).length === 5,
+    `${(coverageHead.match(/sort-indicator/g) ?? []).length} indicators`);
+  // The sort must not have become a server round trip: the coverage rows are
+  // still the server's own order on first paint.
+  const coverageBodyTitles = [fx.abstract.title, fx.maybeSetupAbstract.title]
+    .map((title) => setupPage.text.indexOf(title))
+    .filter((index) => index !== -1);
+  check("§3.1 the coverage table renders its rows server-side before any sort",
+    coverageBodyTitles.length === 2, `found ${coverageBodyTitles.length} of 2`);
   check("reviewer picker lists a real event evaluator", setupPage.text.includes("Ravi Patel"));
   check("admin-only reviewer setup includes the contact data needed for resends",
     setupPage.text.includes("ravi@greenroom.demo"));

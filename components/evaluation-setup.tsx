@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ClipboardCheck,
   EyeOff,
   Plus,
@@ -28,6 +31,13 @@ import {
   rubricWeightError,
   rubricWeightShareLine,
 } from "@/lib/rubric-weight";
+import {
+  coverageAriaSort,
+  nextCoverageSort,
+  sortCoverageRows,
+  type CoverageSortColumn,
+  type CoverageSortState,
+} from "@/lib/review-coverage-sort";
 import { reviewerInviteLifecycleText } from "@/lib/reviewer-invite-ui";
 import { ReviewerInviteForm, ReviewerInviteResend } from "@/components/reviewer-invite-controls";
 import { EmptyState, Pill, Switch } from "@/components/ui";
@@ -55,6 +65,48 @@ const STARTER_CRITERIA = [
  */
 type DraftCriterion = { label: string; description: string; min: number; max: number; weight: string };
 
+/** The five sortable coverage columns, in the order they are rendered. */
+const COVERAGE_COLUMNS: { column: CoverageSortColumn; label: string }[] = [
+  { column: "proposal", label: "Proposal" },
+  { column: "category", label: "Category" },
+  { column: "status", label: "Status" },
+  { column: "reviewers", label: "Reviewers" },
+  { column: "reviewsDone", label: "Reviews done" },
+];
+
+function coverageSortDirection(
+  state: CoverageSortState,
+  column: CoverageSortColumn,
+): "asc" | "desc" | null {
+  return state?.column === column ? state.direction : null;
+}
+
+/**
+ * The visible sort state of one header.
+ *
+ * Direction is carried by the arrow's **shape**, never by colour alone, and the
+ * screen-reader sentence spells it out in words beside the `aria-sort` the `th`
+ * already exposes. An unsorted column still shows a (muted) double arrow, so
+ * "this column can be sorted" is discoverable without hovering.
+ */
+function SortIndicator({ direction }: { direction: "asc" | "desc" | null }) {
+  if (direction === null) {
+    return <ArrowUpDown size={13} className="sort-indicator" aria-hidden="true" />;
+  }
+  return (
+    <>
+      {direction === "asc" ? (
+        <ArrowUp size={13} className="sort-indicator active" aria-hidden="true" />
+      ) : (
+        <ArrowDown size={13} className="sort-indicator active" aria-hidden="true" />
+      )}
+      <span className="sr-only">
+        {direction === "asc" ? ", sorted ascending" : ", sorted descending"}
+      </span>
+    </>
+  );
+}
+
 export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -72,6 +124,9 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Null until the organizer picks a column, so the table opens in the order
+  // the server returned. This state belongs to the coverage table alone.
+  const [coverageSort, setCoverageSort] = useState<CoverageSortState>(null);
 
   const assignableAbstracts = useMemo(
     () => view.abstracts.filter((abstract) => abstract.assignable),
@@ -89,6 +144,25 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
   const unassignedCount = plan
     ? assignableAbstracts.filter((a) => (a.assignedByPlan[plan.id] ?? 0) === 0).length
     : assignableAbstracts.length;
+
+  /**
+   * The coverage rows, flattened against the selected round so the comparators
+   * see the same numbers the cells print. Sorting is local to these already
+   * loaded rows — no query is re-issued and no server aggregate changes.
+   */
+  const coverageRows = useMemo(() => {
+    if (!plan) return [];
+    const rows = view.abstracts.map((a) => ({
+      id: a.id,
+      title: a.title,
+      categoryName: a.categoryName,
+      status: a.status,
+      assignable: a.assignable,
+      assigned: a.assignedByPlan[plan.id] ?? 0,
+      completed: a.completedByPlan[plan.id] ?? 0,
+    }));
+    return sortCoverageRows(rows, coverageSort);
+  }, [view.abstracts, plan, coverageSort]);
 
   function selectPlan(nextPlanId: string) {
     setPlanId(nextPlanId);
@@ -435,17 +509,24 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>Proposal</th>
-                  <th>Category</th>
-                  <th>Status</th>
-                  <th>Reviewers</th>
-                  <th>Reviews done</th>
+                  {COVERAGE_COLUMNS.map(({ column, label }) => (
+                    <th key={column} scope="col" aria-sort={coverageAriaSort(coverageSort, column)}>
+                      <button
+                        type="button"
+                        className="sort-header"
+                        onClick={() => setCoverageSort((s) => nextCoverageSort(s, column))}
+                      >
+                        {label}
+                        <SortIndicator direction={coverageSortDirection(coverageSort, column)} />
+                      </button>
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {view.abstracts.map((a) => {
-                  const assigned = a.assignedByPlan[plan.id] ?? 0;
-                  const done = a.completedByPlan[plan.id] ?? 0;
+                {coverageRows.map((a) => {
+                  const assigned = a.assigned;
+                  const done = a.completed;
                   return (
                     <tr key={a.id}>
                       <td className="cell-title">{a.title}</td>

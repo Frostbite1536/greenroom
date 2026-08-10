@@ -67,6 +67,56 @@ test("the rubric total is never treated as a validity target", () => {
   assert.match(component, /do not need to add up to 100/);
 });
 
+test("every coverage column header is a real button inside its th", () => {
+  const component = setup();
+  // Five columns, one button each — not a click handler on the <th>, which
+  // would be unreachable by keyboard and expose no role.
+  assert.match(component, /COVERAGE_COLUMNS\.map\(\(\{ column, label \}\) => \(/);
+  assert.match(component, /<th key=\{column\} scope="col" aria-sort=\{coverageAriaSort\(coverageSort, column\)\}>/);
+  assert.match(component, /<button\s+type="button"\s+className="sort-header"/);
+  assert.match(component, /onClick=\{\(\) => setCoverageSort\(\(s\) => nextCoverageSort\(s, column\)\)\}/);
+  const columns = component.slice(
+    component.indexOf("const COVERAGE_COLUMNS"),
+    component.indexOf("function coverageSortDirection"),
+  );
+  for (const label of ["Proposal", "Category", "Status", "Reviewers", "Reviews done"]) {
+    assert.match(columns, new RegExp(`label: "${label}"`));
+  }
+  // No stray keydown shim: activation is the platform's, so Enter and Space
+  // both work without a handler that could drift from click.
+  assert.equal(/onKeyDown/.test(component), false);
+});
+
+test("sort direction is a shape and a sentence, never colour alone", () => {
+  const component = setup();
+  assert.match(component, /<ArrowUpDown size=\{13\} className="sort-indicator" aria-hidden="true" \/>/);
+  assert.match(component, /<ArrowUp size=\{13\} className="sort-indicator active" aria-hidden="true" \/>/);
+  assert.match(component, /<ArrowDown size=\{13\} className="sort-indicator active" aria-hidden="true" \/>/);
+  assert.match(component, /<span className="sr-only">/);
+  assert.match(component, /", sorted ascending" : ", sorted descending"/);
+
+  // The interactive target is at least 32px, and the indicator's colour change
+  // is explicitly secondary to the arrow shape.
+  const css = source("components/feature.css");
+  assert.match(css, /\.sort-header \{[^}]*min-height: 32px/);
+  assert.match(css, /\.sort-header:focus-visible \{[^}]*outline:/);
+});
+
+test("coverage sorting is local to the loaded rows and starts unsorted", () => {
+  const component = setup();
+  assert.match(component, /useState<CoverageSortState>\(null\)/);
+  assert.match(component, /return sortCoverageRows\(rows, coverageSort\)/);
+  // The table body reads the sorted rows, not the raw projection.
+  assert.match(component, /\{coverageRows\.map\(\(a\) => \{/);
+  // Sorting must not become a server round trip: no refresh, push or fetch is
+  // wired to the sort control.
+  const sortSection = component.slice(
+    component.indexOf("Review coverage — round"),
+    component.indexOf("</tbody>"),
+  );
+  assert.equal(/router\.(refresh|push)|apiPost|fetch\(/.test(sortSection), false);
+});
+
 test("the different-ranges warning is mounted and non-blocking", () => {
   const component = setup();
   assert.match(component, /rubricRangeWarning\(criteria\)/);
