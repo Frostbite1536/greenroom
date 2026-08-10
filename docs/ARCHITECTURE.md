@@ -60,10 +60,18 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
   `view === "day"`); Week is a read-only multi-day overview.
 - `/admin/speakers` — speaker onboarding status dashboard (read-only, filterable)
 - `/admin/embeds` — copy-paste `<iframe>`/link snippets for the public embeds
-- `/portal` and `/portal/resources/[slug]` — speaker workspace
+- `/admin/settings` — event identity/dates/timezone, rooms, categories, and the
+  create-event dialog
+- `/admin/emails` — the email dispatch history panel (truthful delivery status)
+- `/admin/operations` — reminders, CSV import, decision emails, external sync
+- `/portal`, `/portal/resources/[slug]`, and `/portal/tasks/[taskId]` — speaker
+  workspace, resources, and task forms
 
-Public routes (no shell, must render with a null session): `/cfp/[formId]`,
-`/embed/schedule`, `/embed/speakers`, `/login`.
+Public routes (no shell, must render with a null session): `/` (landing),
+`/cfp/[eventSlug]/[formSlug]` (canonical; the legacy one-segment `/cfp/[formId]`
+resolves exact published IDs and unambiguous slugs only), `/embed/schedule`,
+`/embed/speakers`, `/reviewer-invite`, `/login`, and the alias redirects
+`/schedule`, `/speakers`, `/agenda`, `/sessions`.
 
 Backend ownership routes:
 
