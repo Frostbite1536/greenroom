@@ -6,6 +6,12 @@ import { EmptyState, PageHeader, Pill } from "@/components/ui";
 import { getApiContext } from "@/lib/api/context";
 import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { prisma } from "@/lib/prisma";
+import { formatEventDateTime } from "@/lib/tz";
+import { OnboardingTaskManager } from "@/components/onboarding-task-manager";
+import {
+  compareOnboardingTasks,
+  serializeOnboardingTask,
+} from "@/lib/services/onboarding-task-view";
 import {
   SPEAKER_STATUS_FILTERS,
   buildSpeakerStatusRows,
@@ -24,6 +30,8 @@ export const dynamic = "force-dynamic";
 const LIMITS = {
   assignments: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
   taskAssignments: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers * 10,
+  templates: OPERATOR_QUERY_LIMITS.onboardingTasks,
+  forms: OPERATOR_QUERY_LIMITS.importForms,
 };
 
 export default async function AdminSpeakersPage({
@@ -42,7 +50,8 @@ export default async function AdminSpeakersPage({
   // Speakers on confirmed sessions only: a Session exists exactly when an
   // abstract was accepted or a talk was guaranteed, so this is the onboarding
   // cohort. Both reads are event-scoped and bounded.
-  const [sessionSpeakers, speakerTasks] = await Promise.all([
+  const [event, sessionSpeakers, speakerTasks, templates, forms, taskCounts, settledCounts] = await Promise.all([
+    prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
     prisma.sessionSpeaker.findMany({
       where: { session: { eventId } },
       select: {
@@ -64,12 +73,48 @@ export default async function AdminSpeakersPage({
       select: {
         userId: true,
         status: true,
-        task: { select: { id: true, title: true, required: true, sortOrder: true } },
+        task: { select: { id: true, title: true, required: true, sortOrder: true, dueAt: true } },
       },
       orderBy: [{ userId: "asc" }, { task: { sortOrder: "asc" } }],
       take: LIMITS.taskAssignments + 1,
     }),
+    // The authoring surface reads the templates themselves, independently of
+    // whether anyone has been assigned them yet.
+    prisma.onboardingTask.findMany({
+      where: { eventId },
+      orderBy: [{ sortOrder: "asc" }, { title: "asc" }, { id: "asc" }],
+      take: LIMITS.templates + 1,
+      select: { id: true, title: true, description: true, dueAt: true, required: true, formConfigId: true, sortOrder: true },
+    }),
+    prisma.formConfig.findMany({
+      where: { eventId },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      take: LIMITS.forms + 1,
+      select: { id: true, name: true },
+    }),
+    prisma.speakerTask.groupBy({ by: ["taskId"], where: { task: { eventId } }, _count: { _all: true } }),
+    prisma.speakerTask.groupBy({
+      by: ["taskId"],
+      where: { task: { eventId }, status: { in: ["COMPLETED", "WAIVED"] } },
+      _count: { _all: true },
+    }),
   ]);
+  if (!event) redirect("/login");
+
+  const assignedByTask = new Map(taskCounts.map((row) => [row.taskId, row._count._all]));
+  const settledByTask = new Map(settledCounts.map((row) => [row.taskId, row._count._all]));
+  // Same bounded-read discipline as the operator API routes: read one extra row
+  // and say so rather than silently authoring against a partial checklist.
+  const templatesTruncated = templates.length > LIMITS.templates || forms.length > LIMITS.forms;
+  const taskTemplates = templates
+    .slice(0, LIMITS.templates)
+    .map((template) =>
+      serializeOnboardingTask(template, event.timezone, {
+        assigned: assignedByTask.get(template.id) ?? 0,
+        settled: settledByTask.get(template.id) ?? 0,
+      }),
+    )
+    .sort(compareOnboardingTasks);
 
   const truncated = sessionSpeakers.length > LIMITS.assignments || speakerTasks.length > LIMITS.taskAssignments;
 
@@ -100,6 +145,7 @@ export default async function AdminSpeakersPage({
     taskTitle: row.task.title,
     status: row.status,
     required: row.task.required,
+    dueAt: row.task.dueAt ? row.task.dueAt.toISOString() : null,
   }));
 
   const rows = buildSpeakerStatusRows(assignments, taskAssignments);
@@ -118,8 +164,23 @@ export default async function AdminSpeakersPage({
         <div className="metric"><span>Speakers</span><strong>{summary.speakers}</strong></div>
         <div className="metric"><span>Fully onboarded</span><strong>{summary.onboardingComplete} / {summary.speakers}</strong></div>
         <div className="metric"><span>Required tasks open</span><strong>{summary.requiredOutstanding}</strong></div>
+        <div className="metric"><span>Speakers overdue</span><strong>{summary.speakersOverdue}</strong></div>
         <div className="metric"><span>Sessions unscheduled</span><strong>{summary.unscheduledSessions}</strong></div>
       </div>
+
+      {templatesTruncated ? (
+        <p className="hint" role="status">
+          This event has more onboarding tasks or forms than this page loads at once. The checklist below is
+          incomplete — reduce the event data before editing it.
+        </p>
+      ) : null}
+
+      <OnboardingTaskManager
+        tasks={taskTemplates}
+        forms={forms.slice(0, LIMITS.forms)}
+        timezone={event.timezone}
+        confirmedSpeakers={summary.speakers}
+      />
 
       {truncated ? (
         <p className="hint" role="status">
@@ -170,6 +231,7 @@ export default async function AdminSpeakersPage({
                   <th scope="col">Sessions</th>
                   <th scope="col">Profile</th>
                   <th scope="col">Onboarding tasks</th>
+                  <th scope="col">Next required due</th>
                   <th scope="col">Status</th>
                 </tr>
               </thead>
@@ -202,6 +264,20 @@ export default async function AdminSpeakersPage({
                           {row.tasksDone} / {row.tasksTotal} done
                           {row.requiredOutstanding.length > 0 ? ` · required open: ${row.requiredOutstanding.join(", ")}` : ""}
                         </div>
+                      </td>
+                      <td>
+                        {/* The deadline the operator is actually chasing: the
+                            earliest one still owed, rendered in the event's own
+                            zone so it matches what the speaker sees in the
+                            portal (C12). */}
+                        {row.nextRequiredDueAt
+                          ? formatEventDateTime(row.nextRequiredDueAt, event.timezone)
+                          : <span className="muted">{row.requiredOutstanding.length > 0 ? "No deadline" : "Nothing owed"}</span>}
+                        {row.overdueRequired > 0 ? (
+                          <div className="cell-sub">
+                            <Pill tone="bad">{row.overdueRequired} overdue</Pill>
+                          </div>
+                        ) : null}
                       </td>
                       <td>
                         {row.onboardingComplete ? (
