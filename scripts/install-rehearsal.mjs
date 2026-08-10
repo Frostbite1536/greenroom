@@ -116,9 +116,9 @@ function cookie(user, role) {
   const payload = Buffer.from(JSON.stringify({ user, event: EVENT, role, iat, exp: iat + 604800 }), "utf8").toString("base64url");
   return `sb_session=${payload}.${createHmac("sha256", SECRET).update(payload).digest("base64url")}`;
 }
-const admin = cookie({ id: "demo-admin", name: "Maya Chen", email: "maya@greenroom.demo" }, "ADMIN");
-const evaluator = cookie({ id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom.demo" }, "EVALUATOR");
-const speaker = cookie({ id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom.demo" }, "SPEAKER");
+const admin = cookie({ id: "demo-admin", name: "Maya Chen", email: "maya@greenroom-hq.com" }, "ADMIN");
+const evaluator = cookie({ id: "demo-evaluator", name: "Ravi Patel", email: "ravi@greenroom-hq.com" }, "EVALUATOR");
+const speaker = cookie({ id: "demo-speaker", name: "Sofia Marques", email: "sofia@greenroom-hq.com" }, "SPEAKER");
 
 const results = [];
 function check(name, pass, detail = "") {
