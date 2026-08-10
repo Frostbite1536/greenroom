@@ -40,6 +40,15 @@ import {
   type AdminDecisionSummary,
 } from "@/lib/services/admin-decision-summary";
 export type { AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/services/admin-decision-summary";
+import {
+  EMAIL_HISTORY_TAKE,
+  emailHistoryOrderBy,
+  emailHistorySelect,
+  emailHistoryWhere,
+  toEmailHistory,
+  type EmailHistory,
+} from "@/lib/comms/email-history";
+export type { EmailHistoryEntry } from "@/lib/comms/email-history";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
 import {
   canonicalPublicFormPath,
@@ -1047,6 +1056,44 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
 
   return buildPublicSpeakers(event, speakers);
 });
+
+// ---- Email history --------------------------------------------------------
+
+export type EmailHistoryView = EmailHistory & {
+  /** Every timestamp on the panel is rendered in the event's own timezone. */
+  timezone: string;
+};
+
+/**
+ * Admin-only read behind `/admin/emails`.
+ *
+ * `EmailDispatch` rows have existed since the audited send path landed but had
+ * no reader, so an operator had no way to confirm a reminder, decision mail, or
+ * reviewer invite actually left — and a bulk send reporting failures named
+ * neither the recipients nor the reasons. This is a bounded newest-first page
+ * over that log; the projection and the delivery wording live in
+ * `lib/comms/email-history.ts`.
+ *
+ * Unlike the fail-closed operator reads, an oversize log is expected here: the
+ * table only grows, so the page reports its truncation instead of refusing.
+ */
+export async function getEmailHistory(): Promise<EmailHistoryView> {
+  const ctx = await pageContext(["ADMIN"]);
+  const where = emailHistoryWhere(ctx.eventId);
+  const [event, rows, total] = await Promise.all([
+    prisma.event.findUniqueOrThrow({ where: { id: ctx.eventId }, select: { timezone: true } }),
+    prisma.emailDispatch.findMany({
+      where,
+      select: emailHistorySelect,
+      orderBy: emailHistoryOrderBy,
+      take: EMAIL_HISTORY_TAKE,
+    }),
+    // Counted through the same event-scoped filter so the "of N" line cannot
+    // quietly describe a different set than the rows above it.
+    prisma.emailDispatch.count({ where }),
+  ]);
+  return { ...toEmailHistory(rows, total), timezone: event.timezone };
+}
 
 // ---- Embeds ---------------------------------------------------------------
 
