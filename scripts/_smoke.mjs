@@ -3009,6 +3009,16 @@ try {
   }, admin);
   check("W1 setup: assignment moves it to UNDER_REVIEW", wAssign.status === 201, wAssign.status);
 
+  const wCompletedScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId: wId, scores: [{ rubricKey: "relevance", score: 4 }], complete: true,
+  }, evalr);
+  const wOpenAssignment = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [wId], evaluatorIds: [adminUserId],
+  }, admin);
+  check("C6 setup: one completed and one open review exist before withdrawal",
+    wCompletedScore.status === 200 && wOpenAssignment.status === 201,
+    `${wCompletedScore.status}/${wOpenAssignment.status}`);
+
   const wBundled = await j("PATCH", `/api/cfp/submissions/${wId}`, {
     status: "WITHDRAWN", title: "Sneaky rename on the way out",
   }, speaker);
@@ -3025,17 +3035,36 @@ try {
   check("W1 withdrawing does not stamp a programme decision",
     wDraw.data?.data?.submission?.decidedAt === null && wDraw.data?.data?.submission?.canEdit === false);
 
+  const wAssignmentHistory = await prisma.reviewAssignment.findMany({
+    where: { planId, abstractId: wId },
+    select: { evaluatorId: true, status: true, completedAt: true },
+  });
+  const wCompletedHistory = wAssignmentHistory.find((assignment) => assignment.evaluatorId === evaluatorId);
+  const wOpenHistory = wAssignmentHistory.find((assignment) => assignment.evaluatorId === adminUserId);
+  const wHistoricalScoreCount = await prisma.reviewScore.count({
+    where: { planId, abstractId: wId, evaluatorId },
+  });
+  check("C6 withdrawal declines open work and preserves completed review history",
+    wCompletedHistory?.status === "COMPLETED" && !!wCompletedHistory.completedAt &&
+      wOpenHistory?.status === "DECLINED" && wOpenHistory.completedAt === null &&
+      wHistoricalScoreCount === 1,
+    `${wCompletedHistory?.status}/${wOpenHistory?.status}/${wHistoricalScoreCount}`);
+
   const assignWithdrawn = await j("POST", "/api/evaluations/assignments", {
     planId, abstractIds: [wId], evaluatorIds: [adminUserId],
   }, admin);
   check("S5 withdrawn proposal cannot gain a new assignment",
     assignWithdrawn.status === 409 && assignWithdrawn.data?.error?.code === "ABSTRACT_NOT_REVIEWABLE",
     assignWithdrawn.data?.error?.code);
-  check("S5 withdrawn status and assignments survive the refused write",
+  check("S5 withdrawn status and C6-declined assignment survive the refused write",
     (await prisma.abstract.findUnique({ where: { id: wId }, select: { status: true } }))?.status === "WITHDRAWN" &&
       await prisma.reviewAssignment.count({
         where: { planId, abstractId: wId, evaluatorId: adminUserId },
-      }) === 0);
+      }) === 1 &&
+      (await prisma.reviewAssignment.findUnique({
+        where: { planId_abstractId_evaluatorId: { planId, abstractId: wId, evaluatorId: adminUserId } },
+        select: { status: true },
+      }))?.status === "DECLINED");
 
   const wReEdit = await j("PATCH", `/api/cfp/submissions/${wId}`, { title: "Back from the dead" }, speaker);
   check("W1 a withdrawn proposal is locked for further edits",
@@ -3054,12 +3083,129 @@ try {
   const wQueue = await j("GET", `/api/evaluations/assignments?planId=${planId}`, null, evalr);
   const wQueueRow = wQueue.data?.data?.find((a) => a.abstractId === wId);
   check("W1 the evaluator queue reports the withdrawn status",
-    wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN", wQueueRow?.abstract?.status);
+    wQueue.status === 200 && wQueueRow?.abstract?.status === "WITHDRAWN" && wQueueRow?.status === "COMPLETED",
+    `${wQueueRow?.abstract?.status}/${wQueueRow?.status}`);
+  const wActiveLoad = await prisma.reviewAssignment.count({
+    where: { planId, abstractId: wId, abstract: { status: { not: "WITHDRAWN" } } },
+  });
+  check("C6 withdrawn work remains excluded from active progress and reviewer load", wActiveLoad === 0, wActiveLoad);
 
   const wAccepted = await j("PATCH", `/api/cfp/submissions/${r1Id}`, { status: "WITHDRAWN" }, speaker);
   check("M6 accepted/converted talk refusal is an actionable 409",
     wAccepted.status === 409 && wAccepted.data?.error?.code === "WITHDRAW_NOT_ALLOWED" &&
     /contact the program team/i.test(wAccepted.data?.error?.message ?? ""), wAccepted.status);
+
+  // C6: score and withdrawal share the Abstract advisory class. Queue the
+  // scorer first behind a deliberately held lock, then queue withdrawal; when
+  // released, the score completes before withdrawal closes only the remaining
+  // open assignment. This exercises the fresh post-lock status check instead
+  // of relying on request timing.
+  //
+  // Earlier sections legitimately consume the 3/24h submit budget for this
+  // reused scratch primary email, so clear that one scratch-owned bucket first
+  // — otherwise this anonymous setup submit is correctly refused by S19 and
+  // the race never forms. Same scratch hygiene as the harness's teardown.
+  await prisma.publicSubmissionRateBucket.deleteMany({
+    where: {
+      eventId: SCRATCH_EVENT.id,
+      scope: "submit_primary_email_24h",
+      fingerprint: publicSubmissionRateFingerprint("primary-email", speaker.user.email.trim().toLowerCase()),
+    },
+  });
+  const c6RaceSubmit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "C6 score withdrawal serialization",
+    speakers: [{ email: speaker.user.email, name: speaker.user.name, isPrimary: true }],
+    answers: { title_note: "c6-race", consent: true }, intent: "submit",
+  });
+  const c6RaceId = c6RaceSubmit.data?.data?.id;
+  const c6RaceAssign = await j("POST", "/api/evaluations/assignments", {
+    planId, abstractIds: [c6RaceId], evaluatorIds: [evaluatorId, adminUserId],
+  }, admin);
+  check("C6 race setup: submitted proposal has two open assignments",
+    c6RaceSubmit.status === 201 && c6RaceAssign.status === 201 && !!c6RaceId,
+    c6RaceAssign.status);
+
+  let signalC6AbstractLock;
+  let releaseC6AbstractLock;
+  const c6AbstractLockHeld = new Promise((resolve) => { signalC6AbstractLock = resolve; });
+  const c6AbstractLockRelease = new Promise((resolve) => { releaseC6AbstractLock = resolve; });
+  const c6AbstractLockName = `abstract-write:${c6RaceId}`;
+  const c6AbstractHolder = prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${c6AbstractLockName}, 0))`;
+    signalC6AbstractLock();
+    await c6AbstractLockRelease;
+    // 60s, not the 15s default: the two advisory-waiter polls run up to 200
+    // sequential queries on a separate connection, and remote-database RTT
+    // accumulation must not expire the deliberately held holder mid-test.
+  }, { timeout: 60_000 });
+  await c6AbstractLockHeld;
+  const countWaitingAdvisoryLocks = async () => {
+    // Count only waiters for THIS abstract's advisory key: an unfiltered
+    // global count could be satisfied by unrelated waiters in the shared
+    // database, releasing the holder before the intended requests queue. For
+    // the one-argument bigint form, classid holds the key's high 32 bits and
+    // objid the low 32 (objsubid 1); the signed shift reproduces the exact
+    // hashtextextended bit pattern.
+    const rows = await prisma.$queryRaw`
+      SELECT count(*)::int AS "count"
+      FROM pg_locks
+      WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+        AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(${c6AbstractLockName}, 0)
+    `;
+    return rows[0]?.count ?? 0;
+  };
+  const waitForAdvisoryWaiters = async (minimum) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await countWaitingAdvisoryLocks() >= minimum) return true;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return false;
+  };
+  const c6RacingScore = j("POST", "/api/evaluations/scores", {
+    planId, abstractId: c6RaceId, scores: [{ rubricKey: "relevance", score: 5 }], complete: true,
+  }, evalr);
+  let c6ScoreQueued = false;
+  let c6WithdrawalQueued = false;
+  let c6RacingWithdrawal;
+  try {
+    c6ScoreQueued = await waitForAdvisoryWaiters(1);
+    c6RacingWithdrawal = j("PATCH", `/api/cfp/submissions/${c6RaceId}`, { status: "WITHDRAWN" }, speaker);
+    c6WithdrawalQueued = await waitForAdvisoryWaiters(2);
+  } finally {
+    releaseC6AbstractLock();
+    await c6AbstractHolder;
+  }
+  const [c6ScoreResult, c6WithdrawalResult] = await Promise.all([c6RacingScore, c6RacingWithdrawal]);
+  const c6RaceAssignments = await prisma.reviewAssignment.findMany({
+    where: { planId, abstractId: c6RaceId },
+    select: { evaluatorId: true, status: true, completedAt: true },
+    orderBy: { evaluatorId: "asc" },
+    take: 20,
+  });
+  const c6EvaluatorHistory = c6RaceAssignments.find((assignment) => assignment.evaluatorId === evaluatorId);
+  const c6AdminHistory = c6RaceAssignments.find((assignment) => assignment.evaluatorId === adminUserId);
+  const c6RaceScoreCount = await prisma.reviewScore.count({
+    where: { planId, abstractId: c6RaceId, evaluatorId },
+  });
+  check("C6 held Abstract ordering preserves the completed score and declines only remaining open work",
+    c6ScoreQueued && c6WithdrawalQueued && c6ScoreResult.status === 200 && c6WithdrawalResult.status === 200 &&
+      c6EvaluatorHistory?.status === "COMPLETED" && !!c6EvaluatorHistory.completedAt &&
+      c6AdminHistory?.status === "DECLINED" && c6AdminHistory.completedAt === null && c6RaceScoreCount === 1,
+    `${c6ScoreQueued}/${c6WithdrawalQueued}/${c6ScoreResult.status}/${c6WithdrawalResult.status}/${c6EvaluatorHistory?.status}/${c6AdminHistory?.status}`);
+  const c6StaleScore = await j("POST", "/api/evaluations/scores", {
+    planId, abstractId: c6RaceId, scores: [{ rubricKey: "relevance", score: 1 }], complete: false,
+  }, evalr);
+  const c6AfterStaleScore = await prisma.reviewAssignment.findMany({
+    where: { planId, abstractId: c6RaceId },
+    select: { evaluatorId: true, status: true, completedAt: true },
+    orderBy: { evaluatorId: "asc" },
+    take: 20,
+  });
+  check("C6 stale score after withdrawal is refused without reopening completed or declined work",
+    c6StaleScore.status === 409 && c6StaleScore.data?.error?.code === "ABSTRACT_WITHDRAWN" &&
+      c6AfterStaleScore.find((assignment) => assignment.evaluatorId === evaluatorId)?.status === "COMPLETED" &&
+      c6AfterStaleScore.find((assignment) => assignment.evaluatorId === adminUserId)?.status === "DECLINED",
+    `${c6StaleScore.status}/${c6StaleScore.data?.error?.code}`);
 
   // 23. W2 — a decision reports the session it leaves behind, so the admin UI
   // can prompt to unschedule (no auto-deletion: INV-DOMAIN-001).

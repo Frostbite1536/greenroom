@@ -9,6 +9,7 @@ import {
   mergeAnswers,
   rosterChanged,
   speakerSubmissionPatchSchema,
+  WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES,
   withdrawRefusal,
 } from "@/lib/services/speaker-edit";
 import {
@@ -226,6 +227,10 @@ test("a speaker may withdraw before a decision is made", () => {
   for (const status of WITHDRAWABLE_STATUSES) {
     assert.equal(withdrawRefusal(status, false), null, status);
   }
+});
+
+test("withdrawal declines only still-open review assignments", () => {
+  assert.deepEqual(WITHDRAWAL_OPEN_ASSIGNMENT_STATUSES, ["ASSIGNED", "IN_PROGRESS"]);
 });
 
 test("an accepted talk cannot be self-withdrawn - it is the programme team's to remove", () => {
