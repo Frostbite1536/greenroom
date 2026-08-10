@@ -1837,8 +1837,13 @@ try {
   check("an unknown ?event= falls back to the default programme on every surface",
     landingUnknown.status === 200 && unknownMain !== null && unknownMain === defaultMain,
     `${landingUnknown.status} ${unknownMain === defaultMain ? "identical" : "diverged"}`);
+  // Scoped to the rendered <main>: Next's inline flight payload echoes the
+  // request's searchParams verbatim in the full document, so a whole-document
+  // scan would fail on framework request-echo even when no rendered surface
+  // speaks the unresolved slug. The byte-identity check above already proves
+  // the rendered content matches the no-parameter render exactly.
   check("an unknown ?event= never pairs one event's links with another's CFP panel",
-    !landingUnknownHtml.includes("no-such-event-slug")
+    !(renderedText(unknownMain) ?? "").includes("no-such-event-slug")
     && !(renderedText(unknownMain) ?? "").includes("No public programme is published yet."));
 
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
