@@ -3454,6 +3454,286 @@ try {
   const unschedule = await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
   check("unschedule session", unschedule.status === 200 && unschedule.data?.data?.unscheduled === true, unschedule.status);
 
+  // ---------------------------------------------------------------------------
+  // 20b. AIA-08 — "Fill open slots": preview → transactional apply (addendum §4).
+  // Scratch-only: every write below targets `scratch-backend`. The refusal cases
+  // run first, so each one is checked against a schedule that must not have
+  // moved; the successful apply is last.
+  // ---------------------------------------------------------------------------
+  const readSlots = async () => prisma.scheduleSlot.findMany({
+    where: { eventId: SCRATCH_EVENT.id },
+    select: { id: true, sessionId: true, roomId: true, startsAt: true, endsAt: true },
+    orderBy: { id: "asc" },
+  });
+  const slotsFingerprint = (slots) => JSON.stringify(slots.map((s) => [
+    s.id, s.sessionId, s.roomId, s.startsAt.toISOString(), s.endsAt.toISOString(),
+  ]));
+  const autoplaceBaseline = await readSlots();
+  const autoplaceDraftCountBefore = await prisma.session.count({
+    where: { eventId: SCRATCH_EVENT.id, contentStatus: "DRAFT" },
+  });
+
+  const preview1 = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, admin);
+  const preview2 = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, admin);
+  const plan1 = preview1.data?.data ?? {};
+  const proposals = plan1.placements ?? [];
+  const unplaceable = plan1.unplaceable ?? [];
+
+  // §4.4: deterministic output for the same snapshot.
+  check(
+    "AIA-08 two previews of the same snapshot agree exactly",
+    preview1.status === 200 && preview2.status === 200 &&
+      plan1.fingerprint === preview2.data?.data?.fingerprint &&
+      JSON.stringify(proposals) === JSON.stringify(preview2.data?.data?.placements) &&
+      JSON.stringify(unplaceable) === JSON.stringify(preview2.data?.data?.unplaceable),
+    preview1.status,
+  );
+  check("AIA-08 the preview actually has something to propose", proposals.length > 0, proposals.length);
+
+  // §4.4: preview performs no schedule writes.
+  check(
+    "AIA-08 preview writes nothing to the schedule",
+    slotsFingerprint(await readSlots()) === slotsFingerprint(autoplaceBaseline),
+  );
+
+  // §4.4: existing slots remain unchanged — nothing already placed is proposed.
+  check(
+    "AIA-08 preview never proposes a session that already holds a slot",
+    proposals.every((p) => !autoplaceBaseline.some((s) => s.sessionId === p.sessionId)),
+    JSON.stringify(proposals.map((p) => p.sessionId)),
+  );
+
+  // §4.4: unplaceable sessions are reported rather than silently dropped.
+  check(
+    "AIA-08 every considered session is either placed or explained",
+    plan1.consideredSessions === proposals.length + unplaceable.length &&
+      unplaceable.every((u) => !!u.reason && !!u.message && !!u.title),
+    `${plan1.consideredSessions} considered / ${proposals.length} placed / ${unplaceable.length} explained`,
+  );
+
+  // §4.4: room and shared-speaker conflicts avoided, against existing + proposed.
+  const autoplaceSpeakers = new Map();
+  for (const row of await prisma.sessionSpeaker.findMany({ select: { sessionId: true, userId: true } })) {
+    autoplaceSpeakers.set(row.sessionId, [...(autoplaceSpeakers.get(row.sessionId) ?? []), row.userId]);
+  }
+  const overlaps = (a, b) => a.start < b.end && b.start < a.end;
+  const asInterval = (sessionId, roomId, startsAt, endsAt) => ({
+    sessionId, roomId,
+    start: new Date(startsAt).getTime(),
+    end: new Date(endsAt).getTime(),
+    speakers: autoplaceSpeakers.get(sessionId) ?? [],
+  });
+  const clashes = (intervals) => intervals.some((a, i) => intervals.slice(i + 1).some((b) =>
+    overlaps(a, b) && (a.roomId === b.roomId || a.speakers.some((s) => b.speakers.includes(s)))));
+  check(
+    "AIA-08 the proposed plan double-books no room and no speaker",
+    !clashes([
+      ...autoplaceBaseline.map((s) => asInterval(s.sessionId, s.roomId, s.startsAt, s.endsAt)),
+      ...proposals.map((p) => asInterval(p.sessionId, p.roomId, p.startsAt, p.endsAt)),
+    ]),
+  );
+
+  // Admin-only, event-scoped.
+  const previewAsSpeaker = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, speaker);
+  const previewAnon = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, null);
+  const previewOtherEvent = await j("POST", "/api/agenda/autoplace/preview", { eventId: OTHER_SCRATCH_EVENT.id }, admin);
+  const applyAsSpeaker = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id, fingerprint: plan1.fingerprint, placements: proposals.slice(0, 1),
+  }, speaker);
+  check(
+    "AIA-08 preview and apply are admin-only and event-scoped",
+    previewAsSpeaker.status === 403 && previewAnon.status === 401 &&
+      previewOtherEvent.status === 403 && applyAsSpeaker.status === 403,
+    `${previewAsSpeaker.status}/${previewAnon.status}/${previewOtherEvent.status}/${applyAsSpeaker.status}`,
+  );
+
+  // §4.4: duplicate session proposals refused, before any lock is taken.
+  const duplicateApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: plan1.fingerprint,
+    placements: [proposals[0], { ...proposals[0], roomId: roomB }],
+  }, admin);
+  check(
+    "AIA-08 a plan naming the same session twice is refused",
+    duplicateApply.status === 422 && duplicateApply.data?.error?.code === "VALIDATION_ERROR",
+    duplicateApply.data?.error?.code,
+  );
+
+  // §4.4: cross-event IDs refused without disclosure. A session that belongs to
+  // the other scratch event and an ID that never existed must be indistinguishable.
+  const crossEventSession = await prisma.session.create({
+    data: {
+      eventId: OTHER_SCRATCH_EVENT.id,
+      title: "Other event talk",
+      durationMinutes: proposals[0] ? Math.round(
+        (new Date(proposals[0].endsAt) - new Date(proposals[0].startsAt)) / 60000,
+      ) : 45,
+    },
+    select: { id: true },
+  });
+  const crossEventApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: plan1.fingerprint,
+    placements: [{ ...proposals[0], sessionId: crossEventSession.id }],
+  }, admin);
+  const unknownApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: plan1.fingerprint,
+    placements: [{ ...proposals[0], sessionId: "no-such-session-id" }],
+  }, admin);
+  check(
+    "AIA-08 a cross-event session is refused exactly like an unknown one",
+    crossEventApply.status === 409 && unknownApply.status === 409 &&
+      JSON.stringify(crossEventApply.data) === JSON.stringify(unknownApply.data) &&
+      crossEventApply.data?.error?.message ===
+        "The agenda changed after this preview was created. Generate a new preview before applying it.",
+    crossEventApply.data?.error?.code,
+  );
+  const crossEventRoomApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: plan1.fingerprint,
+    placements: [{ ...proposals[0], roomId: otherRoom.id }],
+  }, admin);
+  check(
+    "AIA-08 a room from another event is refused with the same stale message",
+    crossEventRoomApply.status === 409 &&
+      crossEventRoomApply.data?.error?.code === "STALE_PREVIEW",
+    crossEventRoomApply.data?.error?.code,
+  );
+
+  // Out-of-window targets are refused even though the snapshot is unchanged:
+  // shifting a proposal six hours earlier lands before the programme window.
+  const shifted = {
+    ...proposals[0],
+    startsAt: new Date(new Date(proposals[0].startsAt).getTime() - 6 * 3600000).toISOString(),
+    endsAt: new Date(new Date(proposals[0].endsAt).getTime() - 6 * 3600000).toISOString(),
+  };
+  const outOfWindowApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id, fingerprint: plan1.fingerprint, placements: [shifted],
+  }, admin);
+  check(
+    "AIA-08 an out-of-window target is refused",
+    outOfWindowApply.status === 409 && outOfWindowApply.data?.error?.code === "STALE_PREVIEW",
+    outOfWindowApply.data?.error?.code,
+  );
+
+  // §4.4: no partial writes when one proposed placement is invalid, and the
+  // transaction rolls back — a valid first placement must not survive.
+  const partialApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id,
+    fingerprint: plan1.fingerprint,
+    placements: [proposals[0], { ...(proposals[1] ?? proposals[0]), sessionId: "no-such-session-id" }],
+  }, admin);
+  check(
+    "AIA-08 one invalid placement rolls the whole plan back",
+    partialApply.status === 409 &&
+      slotsFingerprint(await readSlots()) === slotsFingerprint(autoplaceBaseline),
+    partialApply.data?.error?.code,
+  );
+
+  // §4.4: stale preview refusal after an intervening schedule change. Placing
+  // one of the proposed sessions by hand is exactly the race §4.2 describes.
+  const interveningPlace = await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id,
+    sessionId: proposals[0].sessionId,
+    roomId: proposals[0].roomId,
+    startsAt: proposals[0].startsAt,
+    endsAt: proposals[0].endsAt,
+  }, admin);
+  const staleApply = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id, fingerprint: plan1.fingerprint, placements: proposals,
+  }, admin);
+  const afterStale = await readSlots();
+  check(
+    "AIA-08 a preview overtaken by a manual placement is refused verbatim",
+    interveningPlace.status === 200 && staleApply.status === 409 &&
+      staleApply.data?.error?.code === "STALE_PREVIEW" &&
+      staleApply.data?.error?.message ===
+        "The agenda changed after this preview was created. Generate a new preview before applying it." &&
+      afterStale.length === autoplaceBaseline.length + 1,
+    staleApply.data?.error?.code,
+  );
+  await j("DELETE", `/api/agenda/slots?sessionId=${proposals[0].sessionId}`, null, admin);
+
+  // The happy path, against a preview taken after all of the above.
+  const preview3 = await j("POST", "/api/agenda/autoplace/preview", { eventId: SCRATCH_EVENT.id }, admin);
+  const plan3 = preview3.data?.data ?? {};
+  const proposals3 = plan3.placements ?? [];
+  const beforeApply = await readSlots();
+  const applyOk = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id, fingerprint: plan3.fingerprint, placements: proposals3,
+  }, admin);
+  const afterApply = await readSlots();
+  const appliedBySession = new Map(afterApply.map((s) => [s.sessionId, s]));
+  check(
+    "AIA-08 apply commits the reviewed plan exactly, and only that plan",
+    applyOk.status === 200 &&
+      applyOk.data?.data?.applied === proposals3.length &&
+      afterApply.length === beforeApply.length + proposals3.length &&
+      proposals3.every((p) => {
+        const row = appliedBySession.get(p.sessionId);
+        return row && row.roomId === p.roomId &&
+          row.startsAt.toISOString() === p.startsAt &&
+          row.endsAt.toISOString() === p.endsAt;
+      }),
+    applyOk.status,
+  );
+  // §4.4: existing slots remain unchanged.
+  check(
+    "AIA-08 apply leaves every pre-existing slot byte-identical",
+    slotsFingerprint(beforeApply) ===
+      slotsFingerprint(afterApply.filter((s) => beforeApply.some((b) => b.id === s.id))),
+  );
+  // §4.4: room and shared-speaker conflicts avoided, now in committed data.
+  check(
+    "AIA-08 the committed schedule double-books no room and no speaker",
+    !clashes(afterApply.map((s) => asInterval(s.sessionId, s.roomId, s.startsAt, s.endsAt))),
+  );
+  // Placement is not publication (#77): apply never touches contentStatus.
+  const draftAfterApply = await prisma.session.count({
+    where: { eventId: SCRATCH_EVENT.id, contentStatus: "DRAFT" },
+  });
+  check("AIA-08 apply publishes nothing", draftAfterApply === autoplaceDraftCountBefore, draftAfterApply);
+  // Re-applying the same plan is refused rather than duplicating it.
+  const replay = await j("POST", "/api/agenda/autoplace/apply", {
+    eventId: SCRATCH_EVENT.id, fingerprint: plan3.fingerprint, placements: proposals3,
+  }, admin);
+  check(
+    "AIA-08 replaying an applied plan is refused and writes nothing",
+    replay.status === 409 && (await readSlots()).length === afterApply.length,
+    replay.data?.error?.code,
+  );
+
+  // §4.4: manual schedule behaviour unchanged — the same conflict refusal and
+  // the same successful move as sections 14–17, after auto-placement ran.
+  const autoplaceDuration =
+    new Date(proposals3[0].endsAt).getTime() - new Date(proposals3[0].startsAt).getTime();
+  const freeStart = Math.max(...afterApply.map((s) => s.endsAt.getTime())) + 3600000;
+  const manualMoved = await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id,
+    sessionId: proposals3[0].sessionId,
+    roomId: proposals3[0].roomId,
+    startsAt: new Date(freeStart).toISOString(),
+    endsAt: new Date(freeStart + autoplaceDuration).toISOString(),
+  }, admin);
+  // Auto-placement did not weaken the manual conflict refusal either: dropping
+  // this session back onto another auto-placed slot is still refused.
+  const occupied = afterApply.find((s) => s.sessionId !== proposals3[0].sessionId);
+  const manualConflict = occupied ? await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id,
+    sessionId: proposals3[0].sessionId,
+    roomId: occupied.roomId,
+    startsAt: occupied.startsAt.toISOString(),
+    endsAt: occupied.endsAt.toISOString(),
+  }, admin) : { status: 409, data: { error: { code: "SCHEDULE_CONFLICT" } } };
+  check(
+    "AIA-08 manual placement still moves and still refuses a conflict after apply",
+    manualMoved.status === 200 && manualConflict.status === 409 &&
+      manualConflict.data?.error?.code === "SCHEDULE_CONFLICT",
+    `${manualMoved.status}/${manualConflict.status}`,
+  );
+  await prisma.session.delete({ where: { id: crossEventSession.id } });
+
   // 21. R1 — an authorized speaker edits their own submission after acceptance
   // (requirements delta 2026-08-08). The scratch SPEAKER identity is used as the
   // primary speaker because the portal requires a persisted event membership.
