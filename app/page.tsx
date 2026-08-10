@@ -1,7 +1,152 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
+import { ArrowRight, CalendarDays, Mic2, Users } from "lucide-react";
 import { getResolvedSession, homeForRole } from "@/lib/auth";
+import { getPublicAgenda } from "@/lib/data/reads";
+import { DEFAULT_PUBLIC_EVENT, getOpenCfpEntry } from "@/lib/data/open-cfp";
+import { embedAliasTarget } from "@/lib/embed-alias";
+import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 
-export default async function HomePage() {
+export const dynamic = "force-dynamic";
+
+type SearchParams = Promise<{ event?: string }>;
+
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }) {
+  const { event } = await searchParams;
+  const agenda = await getPublicAgenda(event);
+  return {
+    title: agenda ? agenda.event.name : "Conference programme",
+    description: agenda
+      ? `Schedule, speakers, and the call for proposals for ${agenda.event.name}.`
+      : "Schedule, speakers, and the call for proposals.",
+  };
+}
+
+/** Event dates in the event's own timezone, pinned to en-US like the embeds. */
+function formatEventDates(
+  startsAt: string | null,
+  endsAt: string | null,
+  timeZone: string,
+): string | null {
+  if (!startsAt) return null;
+  const format = (iso: string) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(iso));
+  const start = format(startsAt);
+  if (!endsAt) return start;
+  const end = format(endsAt);
+  return start === end ? start : `${start} – ${end}`;
+}
+
+/**
+ * Public landing page.
+ *
+ * A logged-out visitor used to be bounced straight to `/login`, which hid the
+ * whole public programme behind a sign-in wall. `/` is now the front door: it
+ * presents the event and links the public schedule, the public speaker
+ * directory, and the open call for proposals. Signed-in users keep their
+ * existing behaviour and go straight to their workspace.
+ */
+export default async function HomePage({ searchParams }: { searchParams: SearchParams }) {
   const session = await getResolvedSession();
-  redirect(session ? homeForRole(session.role) : "/login");
+  if (session) redirect(homeForRole(session.role));
+
+  const { event } = await searchParams;
+  const [agenda, openCfp] = await Promise.all([
+    getPublicAgenda(event),
+    getOpenCfpEntry(event ?? DEFAULT_PUBLIC_EVENT),
+  ]);
+
+  const timezone = agenda?.event.timezone ?? "UTC";
+  const eventName = agenda?.event.name ?? openCfp.event?.name ?? null;
+  const dates = agenda ? formatEventDates(agenda.event.startsAt, agenda.event.endsAt, timezone) : null;
+  const sessionCount = agenda?.sessions.length ?? 0;
+  const speakerCount = agenda ? new Set(agenda.sessions.flatMap((s) => s.speakers)).size : 0;
+  const trackCount = agenda?.tracks.length ?? 0;
+
+  // Only carry the event through when it actually resolved: an unknown
+  // `?event=` must fall back to the default programme, not to a 404 embed.
+  const eventParam = agenda ? event : undefined;
+  const schedulePath = embedAliasTarget("/embed/schedule", eventParam);
+  const speakersPath = embedAliasTarget("/embed/speakers", eventParam);
+
+  return (
+    <main className="landing">
+      <div className="landing-shell">
+        <header className="landing-head">
+          <p className="landing-brand">
+            <span className="brand-mark" aria-hidden="true"><Mic2 size={18} /></span>
+            <span>Greenroom</span>
+          </p>
+          <Link className="landing-signin" href="/login">Organizer sign in</Link>
+        </header>
+
+        <section className="landing-hero">
+          {dates ? <p className="eyebrow">{dates}</p> : null}
+          <h1>{eventName ?? "Conference programme"}</h1>
+          <p className="landing-lede">
+            {eventName
+              ? `Browse the full ${eventName} schedule, meet the speakers, and submit a talk.`
+              : "Browse the schedule, meet the speakers, and submit a talk."}
+          </p>
+          <div className="landing-actions">
+            <Link className="landing-cta" href={schedulePath}>
+              <CalendarDays size={17} aria-hidden="true" />
+              <span>View the schedule</span>
+              <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+            <Link className="landing-cta landing-cta-secondary" href={speakersPath}>
+              <Users size={17} aria-hidden="true" />
+              <span>Meet the speakers</span>
+              <ArrowRight size={15} aria-hidden="true" />
+            </Link>
+          </div>
+        </section>
+
+        {agenda ? (
+          <div className="metric-grid landing-metrics">
+            <div className="metric"><span>Scheduled sessions</span><strong>{sessionCount}</strong></div>
+            <div className="metric"><span>Speakers</span><strong>{speakerCount}</strong></div>
+            <div className="metric"><span>Tracks</span><strong>{trackCount}</strong></div>
+          </div>
+        ) : (
+          <p className="landing-notice">
+            This programme is not published yet. The links above show the current public
+            schedule and speaker directory.
+          </p>
+        )}
+
+        <div className="landing-grid">
+          <OpenCfpEntryPanel entry={openCfp} id="landing-open-cfp" />
+
+          <section className="landing-panel" aria-labelledby="landing-public-pages">
+            <h2 className="landing-panel-heading" id="landing-public-pages">Public pages</h2>
+            <p className="landing-panel-lede">
+              These pages are embeddable in any conference website and need no sign-in.
+            </p>
+            <ul className="landing-links">
+              <li>
+                <Link href="/embed/schedule">/embed/schedule</Link>
+                <span>Every scheduled session, by day, room, and track.</span>
+              </li>
+              <li>
+                <Link href="/embed/speakers">/embed/speakers</Link>
+                <span>The confirmed speaker directory with their sessions.</span>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        <footer className="landing-foot">
+          <p>
+            {eventName ? `${eventName} · ` : ""}Programme operations run on Greenroom.
+          </p>
+        </footer>
+      </div>
+    </main>
+  );
 }

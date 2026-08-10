@@ -1764,6 +1764,54 @@ try {
     !c16OneText.includes("Choose which call for proposals you want to submit to.")
     && !c16OneText.includes("No open call for proposals"));
 
+  // --- public landing page + embed aliases (eval P0 0.1) ------------------
+  // A logged-out visitor must reach the public schedule and speaker pages from
+  // `/` without signing in; the same D-C5-3 entry states apply here too.
+  const landing = await fetch(`${BASE}/?event=${encodeURIComponent(EVENT_ID)}`, { redirect: "manual" });
+  const landingHtml = await landing.text();
+  const landingText = renderedText(landingHtml) ?? "";
+  check("landing page serves logged-out visitors → 200", landing.status === 200, `got ${landing.status}`);
+  check("landing page links both embed surfaces prominently",
+    landingHtml.includes('href="/embed/schedule')
+    && landingHtml.includes('href="/embed/speakers')
+    && landingText.includes("View the schedule")
+    && landingText.includes("Meet the speakers")
+    && landingText.includes("/embed/schedule")
+    && landingText.includes("/embed/speakers"));
+  check("landing page names the event and its real programme size",
+    landingText.includes("Scratch Frontend") && landingText.includes("Scheduled sessions"));
+  check("landing page carries the same open-CFP chooser",
+    landingHtml.includes(`href="${canonicalCfpPath}"`)
+    && landingHtml.includes(`href="${c16LegacyPath}"`)
+    && landingText.includes("Choose which call for proposals you want to submit to."));
+
+  const landingOne = await fetch(`${BASE}/?event=${encodeURIComponent(FRESH_EVENT_ID)}`, { redirect: "manual" });
+  const landingOneHtml = await landingOne.text();
+  check("landing page shows the single open call for a one-call event",
+    landingOne.status === 200 && landingOneHtml.includes(`href="${c16OnlyPath}"`), `got ${landingOne.status}`);
+
+  const landingSignedIn = await fetch(`${BASE}/`, { headers: { cookie: cookie(admin) }, redirect: "manual" });
+  check("signed-in visitors keep their workspace redirect from /",
+    landingSignedIn.status === 307
+    && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
+    `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
+
+  for (const [alias, target] of [
+    ["/schedule", "/embed/schedule"],
+    ["/agenda", "/embed/schedule"],
+    ["/sessions", "/embed/schedule"],
+    ["/speakers", "/embed/speakers"],
+  ]) {
+    const aliasRes = await reqManual(alias, null);
+    check(`alias ${alias} → ${target}`,
+      aliasRes.status === 307 && aliasRes.location === target,
+      `${aliasRes.status} ${aliasRes.location || "none"}`);
+  }
+  const aliasWithEvent = await reqManual(`/schedule?event=${encodeURIComponent(EVENT_ID)}`, null);
+  check("an alias carries an explicit event through the redirect",
+    aliasWithEvent.status === 307 && aliasWithEvent.location === `/embed/schedule?event=${EVENT_ID}`,
+    `${aliasWithEvent.status} ${aliasWithEvent.location || "none"}`);
+
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
   // has its own unit tests, so re-using it here would only prove it agrees with
