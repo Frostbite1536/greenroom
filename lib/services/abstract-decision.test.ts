@@ -8,6 +8,7 @@ import {
   decisionProvisionsSession,
   decisionTimestamp,
   maybeBlockedByConfirmedSession,
+  sessionPublicationForDecision,
 } from "@/lib/services/abstract-decision";
 
 test("the decision contract accepts approve, maybe, and deny only", () => {
@@ -45,4 +46,20 @@ test("MAYBE is refused after a Session becomes confirmed", () => {
   assert.equal(maybeBlockedByConfirmedSession("MAYBE", false), false);
   assert.equal(maybeBlockedByConfirmedSession("ACCEPTED", true), false);
   assert.equal(maybeBlockedByConfirmedSession("REJECTED", true), false);
+});
+
+test("rejecting an accepted proposal takes its talk off the public programme", () => {
+  // The leak: nothing is deleted on reversal, so before this the rejected
+  // talk's Session stayed scheduled and publicly announced.
+  assert.equal(sessionPublicationForDecision("REJECTED"), "DRAFT");
+});
+
+test("accepting puts the talk on the programme, so a reversal is reversible", () => {
+  assert.equal(sessionPublicationForDecision("ACCEPTED"), "PUBLISHED");
+});
+
+test("MAYBE says nothing about publication", () => {
+  // A review state is not a publication instruction, and MAYBE cannot coexist
+  // with a Session in the first place.
+  assert.equal(sessionPublicationForDecision("MAYBE"), null);
 });

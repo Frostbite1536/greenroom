@@ -3903,6 +3903,44 @@ try {
   check("W2 the reversed decision does not delete the confirmed session (INV-DOMAIN-001)",
     !!stillThere && !!stillThere.scheduleSlot);
 
+  // 23a. T3 — nothing is deleted, but a reversed decision must stop speaking
+  // publicly. This is the leak the contentStatus column exists to close.
+  check("T3 reversing a decision unpublishes the talk it leaves behind",
+    stillThere?.contentStatus === "DRAFT", stillThere?.contentStatus);
+  const pubAfterReversal = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
+  check("T3 the unpublished talk leaves the public agenda while its slot survives",
+    pubAfterReversal.status === 200 &&
+      Array.isArray(pubAfterReversal.data?.data?.sessions) &&
+      !pubAfterReversal.data.data.sessions.some((s) => s.sessionId === sessionId) &&
+      !!(await prisma.scheduleSlot.findUnique({ where: { sessionId } })),
+    JSON.stringify(pubAfterReversal.data?.data?.sessions?.map((s) => s.sessionId)));
+
+  const publishAnon = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" });
+  check("T3 anonymous callers cannot publish a talk", publishAnon.status === 401, publishAnon.status);
+  const publishEvaluator = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, evalr);
+  check("T3 an evaluator cannot publish a talk", publishEvaluator.status === 403, publishEvaluator.status);
+  const publishUnknown = await j("PATCH", "/api/agenda/sessions",
+    { sessionId: "session-does-not-exist", contentStatus: "PUBLISHED" }, admin);
+  check("T3 an unknown session id is an indistinguishable 404",
+    publishUnknown.status === 404 && publishUnknown.data?.error?.code === "SESSION_NOT_FOUND",
+    publishUnknown.data?.error?.code);
+  const publishWithEvent = await j("PATCH", "/api/agenda/sessions",
+    { sessionId, contentStatus: "PUBLISHED", eventId: SCRATCH_EVENT.id }, admin);
+  check("T3 the publication body may not name an event",
+    publishWithEvent.status === 400, publishWithEvent.status);
+
+  const republish = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "PUBLISHED" }, admin);
+  check("T3 an admin can publish a talk back onto the programme",
+    republish.status === 200 && republish.data?.data?.contentStatus === "PUBLISHED", republish.status);
+  const pubAfterRepublish = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
+  check("T3 publishing restores the same talk to the same slot",
+    pubAfterRepublish.data?.data?.sessions?.some((s) => s.sessionId === sessionId),
+    JSON.stringify(pubAfterRepublish.data?.data?.sessions?.map((s) => s.sessionId)));
+  const unpublishAgain = await j("PATCH", "/api/agenda/sessions", { sessionId, contentStatus: "DRAFT" }, admin);
+  check("T3 the rejected talk is left off the public programme",
+    unpublishAgain.status === 200 && unpublishAgain.data?.data?.contentStatus === "DRAFT",
+    unpublishAgain.status);
+
   // 23b. ABS-13 — ADMIN-only CSV export of review results. Runs last so the
   // event already holds real plans, completed reviews, scores, and decisions.
   const csvPath = "/api/admin/abstracts/export";

@@ -7,7 +7,8 @@ import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
-import { apiDelete, apiPost } from "@/lib/api-client";
+import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
+import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
   formatDayLabel,
@@ -52,6 +53,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [overrides, setOverrides] = useState<Record<string, SlotOverride>>({});
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   const tz = data.timezone;
   const roomName = (id: string) => data.rooms.find((r) => r.id === id)?.name ?? id;
@@ -81,6 +83,26 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   }, [placed, tz]);
   const [day, setDay] = useState<string | null>(null);
   const activeDay = day && days.includes(day) ? day : (days[0] ?? null);
+
+  /**
+   * Publish or unpublish one talk. The server is the only authority: this
+   * refreshes the RSC payload rather than patching a local list, so what the
+   * grid shows afterwards is what the public surfaces will actually read.
+   */
+  async function setPublication(session: AgendaSession) {
+    const control = publicationControl(session.contentStatus);
+    if (control.confirm && !window.confirm(control.confirm(session.title))) return;
+    setPublishError(null);
+    const res = await apiPatch("/api/agenda/sessions", {
+      sessionId: session.id,
+      contentStatus: control.next,
+    });
+    if (!res.ok) {
+      setPublishError(res.error.message);
+      return;
+    }
+    startTransition(() => router.refresh());
+  }
 
   async function unschedule(sessionId: string, title?: string) {
     if (!window.confirm(`Unschedule${title ? ` “${title}”` : " this session"}?`)) return false;
@@ -168,6 +190,26 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         </div>
       )}
 
+      {publishError && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>Publication change refused.</strong> {publishError}{" "}
+              <button className="link-button" onClick={() => setPublishError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Says nothing at all when the whole programme is published, rather than
+          reporting a reassuring zero. */}
+      {unpublishedNotice(sessions.map((s) => s.contentStatus)) ? (
+        <div style={{ padding: "12px 12px 0" }}>
+          <p className="hint" role="status">{unpublishedNotice(sessions.map((s) => s.contentStatus))}</p>
+        </div>
+      ) : null}
+
       {conflicts.length > 0 && view !== "conflicts" && (
         <div style={{ padding: 12 }}>
           <div className="conflict-banner">
@@ -207,6 +249,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           trackColor={trackColor}
           onReschedule={setScheduling}
           onUnschedule={unschedule}
+          onPublication={setPublication}
           busy={pending}
         />
       )}
@@ -280,6 +323,7 @@ function ListView({
   trackColor,
   onReschedule,
   onUnschedule,
+  onPublication,
   busy,
 }: {
   sessions: Placed[];
@@ -289,6 +333,7 @@ function ListView({
   trackColor: (id: string | null) => string;
   onReschedule: (s: AgendaSession) => void;
   onUnschedule: (id: string, title?: string) => void;
+  onPublication: (s: AgendaSession) => void;
   busy: boolean;
 }) {
   const sorted = [...sessions].sort((a, b) => a.slot.startsAt.localeCompare(b.slot.startsAt));
@@ -318,6 +363,18 @@ function ListView({
             </div>
           </div>
           {conflictIds.has(s.id) ? <Pill tone="bad"><AlertTriangle size={12} /> Conflict</Pill> : null}
+          {/* Stated in words, not by absence: an unpublished talk still sits in
+              this grid, so nothing else here would tell an organizer that the
+              public agenda has stopped showing it. */}
+          {s.contentStatus === "DRAFT" ? <Pill tone="neutral">Unpublished</Pill> : null}
+          <button
+            className="ghost-button"
+            disabled={busy}
+            onClick={() => onPublication(s)}
+            aria-label={publicationControl(s.contentStatus).actionLabel(s.title)}
+          >
+            {publicationControl(s.contentStatus).label}
+          </button>
           <button className="ghost-button" onClick={() => onReschedule(s)}>Move</button>
           <button className="ghost-button danger-button" disabled={busy} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
             <CalendarX size={15} />

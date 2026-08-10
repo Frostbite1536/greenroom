@@ -9,6 +9,7 @@ import {
   decisionProvisionsSession,
   decisionTimestamp,
   maybeBlockedByConfirmedSession,
+  sessionPublicationForDecision,
 } from "@/lib/services/abstract-decision";
 import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
@@ -75,6 +76,18 @@ export const POST = handle(async (req) => {
       decisionProvisionsSession(input.decision)
         ? await provisionAcceptedAbstract(tx, decided)
         : { sessionId: decided.session?.id ?? null, created: false, tasksAssigned: 0 };
+
+    // Nothing is deleted, but a reversed decision must stop speaking publicly.
+    // Scoped to this abstract's own Session by its unique `sourceAbstractId`,
+    // inside the same advisory lock as the status write, so the public
+    // programme can never disagree with the decision that produced it.
+    const publication = sessionPublicationForDecision(input.decision);
+    if (publication && provisioned.sessionId) {
+      await tx.session.update({
+        where: { id: provisioned.sessionId },
+        data: { contentStatus: publication },
+      });
+    }
 
     const full = await tx.abstract.findUniqueOrThrow({
       where: { id: input.abstractId },

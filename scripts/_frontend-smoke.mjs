@@ -1202,11 +1202,67 @@ try {
   check("declined-but-scheduled abstract is flagged 'Still on the programme'",
     afterReverse.text.includes("Still on the programme"));
 
+  // T3: the flag is the admin's safeguard; the publication column is the
+  // public one. A declined talk keeps its slot and stops being announced.
+  check("T3 declining a confirmed talk unpublishes it",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "DRAFT");
+  const embedAfterReverse = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the declined talk is gone from the public schedule embed",
+    embedAfterReverse.status === 200 && !embedAfterReverse.text.includes(`session-${convertedSessionId}`),
+    `expected no session-${convertedSessionId} anchor`);
+  const apiAfterReverse = await req("GET", `/api/agenda/public?event=${EVENT_ID}`, null, null);
+  check("T3 the JSON agenda twin drops it too",
+    apiAfterReverse.status === 200
+    && !apiAfterReverse.data?.data?.sessions?.some((s) => s.sessionId === convertedSessionId));
+  check("T3 unpublishing removed no data: the slot and its speakers survive",
+    !!(await prisma.scheduleSlot.findUnique({ where: { sessionId: convertedSessionId } }))
+    && (await prisma.sessionSpeaker.count({ where: { sessionId: convertedSessionId } })) > 0);
+  const agendaWhileUnpublished = await req("GET", "/admin/agenda", null, admin);
+  check("T3 the agenda builder says how many talks are held back, and where to publish them",
+    agendaWhileUnpublished.text.includes("unpublished and does not appear on the public agenda")
+    && agendaWhileUnpublished.text.includes("List view"),
+    "expected the unpublished-count notice on /admin/agenda");
+
   // Restore ACCEPTED so later checks see the pipeline in its expected state.
   const restore = await req("POST", "/api/evaluations/decisions", {
     abstractId: convertedAbstractId, decision: "ACCEPTED",
   }, admin);
   check("decision can be changed back → 200", restore.status === 200, `got ${restore.status}`);
+  check("T3 re-accepting puts the talk back on the public programme",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { contentStatus: true },
+    }))?.contentStatus === "PUBLISHED");
+  const embedAfterRestore = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the restored talk is announced again from the same slot",
+    embedAfterRestore.text.includes(`session-${convertedSessionId}`));
+
+  // The organizer control itself: an admin may hold a talk back without any
+  // decision changing, and put it back.
+  const unpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "DRAFT",
+  }, admin);
+  check("T3 an admin can unpublish a talk directly → 200",
+    unpublish.status === 200 && unpublish.data?.data?.contentStatus === "DRAFT",
+    `${unpublish.status} ${JSON.stringify(unpublish.data?.error ?? "")}`);
+  const embedAfterManualUnpublish = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("T3 the manually unpublished talk leaves the public schedule",
+    !embedAfterManualUnpublish.text.includes(`session-${convertedSessionId}`));
+  const speakersAfterManualUnpublish = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  check("T3 an unpublished talk is not announced on the public speaker gallery",
+    speakersAfterManualUnpublish.status === 200
+    && !speakersAfterManualUnpublish.text.includes("Smoke submitted proposal"),
+    "expected the unpublished talk's title off the speaker cards");
+  const speakerUnpublish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, speaker);
+  check("T3 a speaker cannot publish a talk", speakerUnpublish.status === 403, speakerUnpublish.status);
+  const republish = await req("PATCH", "/api/agenda/sessions", {
+    sessionId: convertedSessionId, contentStatus: "PUBLISHED",
+  }, admin);
+  check("T3 publishing again restores it → 200",
+    republish.status === 200 && republish.data?.data?.contentStatus === "PUBLISHED", republish.status);
   await req("DELETE", `/api/agenda/slots?sessionId=${convertedSessionId}`, null, admin);
 
   // --- mutation 4: score submission ---

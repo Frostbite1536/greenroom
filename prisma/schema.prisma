@@ -55,6 +55,12 @@ enum ImportStatus {
 }
 
 /** Last audited provider result for one reviewer-invite token version. */
+/** Whether a Session appears on the public programme. */
+enum SessionContentStatus {
+  DRAFT
+  PUBLISHED
+}
+
 enum ReviewerInviteDeliveryState {
   PENDING
   SENT
@@ -379,6 +385,11 @@ model Session {
   description      String?
   format           String?
   durationMinutes  Int
+  // Whether this talk is part of the published programme. PUBLISHED is the
+  // default because every scheduled session is publicly visible today: any
+  // other default would hide a live programme the moment this column is
+  // applied. Unpublishing is therefore an explicit organizer act.
+  contentStatus    SessionContentStatus @default(PUBLISHED)
   // The topic the proposal was submitted under, carried onto the talk when the
   // abstract is accepted. Nullable because a Session may be authored directly
   // (a keynote), and SetNull because deleting a Category must never delete a

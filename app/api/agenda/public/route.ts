@@ -21,7 +21,10 @@ export const GET = handle(async (req) => {
     prisma.room.findMany({ where: { eventId: event.id }, orderBy: { sortOrder: "asc" } }),
     prisma.track.findMany({ where: { eventId: event.id }, orderBy: { sortOrder: "asc" } }),
     prisma.scheduleSlot.findMany({
-      where: { eventId: event.id },
+      // Only the published programme. Same predicate as the server-rendered
+      // embed (`getPublicAgenda`), so the JSON twin cannot announce a talk the
+      // page has stopped showing.
+      where: { eventId: event.id, session: { contentStatus: "PUBLISHED" } },
       include: {
         room: { select: { id: true, name: true } },
         track: { select: { id: true, name: true, color: true } },

@@ -651,6 +651,8 @@ export type AgendaSession = {
   /** The proposal's topic, carried onto the talk at acceptance. Null for a
    *  directly authored session, or once its category is deleted. */
   category: { id: string; name: string } | null;
+  /** Whether this talk is announced on the public programme. */
+  contentStatus: "DRAFT" | "PUBLISHED";
   speakers: { userId: string; name: string }[];
   slot: {
     id: string;
@@ -692,6 +694,7 @@ export async function getAgendaData(): Promise<AgendaData> {
         format: true,
         durationMinutes: true,
         category: { select: { id: true, name: true } },
+        contentStatus: true,
         speakers: { select: { userId: true, user: { select: { name: true } } } },
         scheduleSlot: {
           select: { id: true, roomId: true, trackId: true, startsAt: true, endsAt: true },
@@ -711,6 +714,7 @@ export async function getAgendaData(): Promise<AgendaData> {
       format: s.format,
       durationMinutes: s.durationMinutes,
       category: s.category,
+      contentStatus: s.contentStatus,
       speakers: s.speakers.map((sp) => ({ userId: sp.userId, name: sp.user.name })),
       slot: s.scheduleSlot
         ? {
@@ -995,7 +999,10 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       select: { id: true, name: true, color: true },
     }),
     prisma.scheduleSlot.findMany({
-      where: { eventId: event.id },
+      // A talk reaches the public programme only while it is published. An
+      // unpublished session keeps its slot, its speakers and its place in the
+      // admin grid — it simply stops being announced (CNT-12, AIA-07).
+      where: { eventId: event.id, session: { contentStatus: "PUBLISHED" } },
       orderBy: { startsAt: "asc" },
       select: {
         id: true,
@@ -1053,6 +1060,9 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
     session: {
       eventId: event.id,
       scheduleSlot: { isNot: null },
+      // The same publication predicate the schedule uses: unpublishing a talk
+      // must not leave its speaker announced on the public gallery.
+      contentStatus: "PUBLISHED",
       OR: [
         { sourceAbstractId: null },
         { sourceAbstract: { is: { status: "ACCEPTED" } } },

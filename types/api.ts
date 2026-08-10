@@ -402,6 +402,18 @@ export const abstractToSessionSchema = z.object({
   durationMinutes: z.number().int().min(5).max(480),
 });
 
+/**
+ * Publish or unpublish one talk. Strict and deliberately two fields wide: the
+ * publication route may write nothing else, and no event id is accepted — the
+ * signed ADMIN context is the only event authority (INV-EVENT-001).
+ */
+export const sessionPublicationSchema = z
+  .object({
+    sessionId: idSchema,
+    contentStatus: z.enum(["DRAFT", "PUBLISHED"]),
+  })
+  .strict();
+
 export const guaranteedSessionInputSchema = z.object({
   eventId: idSchema,
   title: z.string().trim().min(3).max(180),
