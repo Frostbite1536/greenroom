@@ -345,7 +345,9 @@ function FieldsStep({
 }) {
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
+      {/* `wrap`: Add field must never be pushed sideways out of this column,
+          where the sticky preview would paint over it and eat the click. */}
+      <div className="row wrap" style={{ justifyContent: "space-between" }}>
         <div><h2>Form questions</h2><p className="hint">Custom questions asked in addition to title, abstract, format and category.</p></div>
         <button className="ghost-button" type="button" onClick={addField}><Plus size={15} /> Add field</button>
       </div>
@@ -371,7 +373,7 @@ function FieldsStep({
                 </p>
                 {err ? <p className="field-error">{err}</p> : null}
               </div>
-              <div className="row" style={{ gap: 4 }}>
+              <div className="row wrap" style={{ gap: 4 }}>
                 <button className="ghost-button" type="button" aria-label="Move up" disabled={i === 0} onClick={() => move(field.localId, -1)}>↑</button>
                 <button className="ghost-button" type="button" aria-label="Move down" disabled={i === draft.fields.length - 1} onClick={() => move(field.localId, 1)}>↓</button>
                 <span className="row" style={{ gap: 6 }}>

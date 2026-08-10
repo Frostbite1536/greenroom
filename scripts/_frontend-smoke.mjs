@@ -602,6 +602,37 @@ try {
   const unpublishedPublic = await req("GET", `/cfp/${EVENT_ID}/scratch-new-form`, null, null);
   check("unpublished new form is not public yet → 404", unpublishedPublic.status === 404, `got ${unpublishedPublic.status}`);
 
+  // --- C4 builder: the editor's controls must actually be clickable --------
+  //
+  // The failure was geometry — the sticky live preview painting over the editor
+  // column and swallowing the Add field and Required clicks — which no HTTP
+  // harness can measure directly. What it can do is read the stylesheet the
+  // running server actually serves and assert the contract that makes the
+  // geometry safe, rather than trusting the source file.
+  const builderSheets = [
+    // Next 16 emits page CSS under `static/chunks`, not `static/css`.
+    ...new Set([...builderPage.text.matchAll(/href="(\/_next\/static\/[^"]+\.css)"/g)].map((m) => m[1])),
+  ];
+  const builderCssRaw = (
+    await Promise.all(builderSheets.map(async (href) => (await req("GET", href, null, admin)).text))
+  ).join("\n");
+  // Normalized so the assertion survives whether the build minified or not.
+  const builderCss = builderCssRaw.replace(/\s*([{},:;])\s*/g, "$1");
+  check("builder page serves its stylesheet", builderSheets.length > 0 && builderCssRaw.length > 0,
+    `${builderSheets.length} sheet(s), ${builderCssRaw.length} bytes`);
+  check("served CSS keeps the editor column above the sticky preview",
+    /\.builder-panel\{[^}]*position:relative/.test(builderCss)
+      && /\.builder-panel\{[^}]*z-index:1/.test(builderCss)
+      && /\.builder-preview\{[^}]*z-index:0/.test(builderCss),
+    "Add field / Required would sit under the preview and lose their clicks");
+  check("served CSS lets the switch decoration pass its clicks through to the checkbox",
+    /\.switch \.track,\.switch \.thumb\{pointer-events:none\}/.test(builderCss),
+    "the Required and blind-review toggles stay mouse-dead otherwise");
+  check("served CSS drops the preview before the editor column is squeezed",
+    /max-width:1280px/.test(builderCss) && /\.field-editor-head\{[^}]*flex-wrap:wrap/.test(builderCss));
+  check("builder markup wraps the rows that used to overflow the column",
+    builderPage.text.includes('class="row wrap"'));
+
   // A duplicate slug must not silently create a second form.
   const duplicate = await req("POST", "/api/cfp/forms", createdPayload, admin);
   check("duplicate slug is rejected", duplicate.status >= 400,
