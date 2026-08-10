@@ -355,13 +355,17 @@ function findLogicCycles(
   const reported = new Set<string>();
   const issues: FormShapeIssue[] = [];
 
+  // Payload position per key, precomputed once: reporting a large cycle must
+  // not rescan the unbounded fields array per member inside the write
+  // transaction (Greptile PR #64).
+  const orderByKey = new Map(fields.map((field, index) => [field.key, index]));
   const report = (cycle: readonly string[]) => {
     // Rotate to the payload-earliest member so the same loop reports once,
     // whichever question the traversal happened to enter it from.
     let pivot = 0;
     for (let index = 1; index < cycle.length; index++) {
-      const current = fields.findIndex((field) => field.key === cycle[index]);
-      const best = fields.findIndex((field) => field.key === cycle[pivot]);
+      const current = orderByKey.get(cycle[index]) ?? -1;
+      const best = orderByKey.get(cycle[pivot]) ?? -1;
       if (current < best) pivot = index;
     }
     const rotated = [...cycle.slice(pivot), ...cycle.slice(0, pivot)];
