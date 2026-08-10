@@ -2427,12 +2427,19 @@ try {
     taskProgress.status === 200 && taskProgress.data?.data?.responses?.needs_hotel === "yes",
     taskProgress.status);
 
+  // The dependent rules must track the surviving option so the payload stays
+  // shape-valid under the C4 contract: a rule pinned to the removed "yes"
+  // would be refused earlier as FORM_LOGIC_VALUE_NOT_AN_OPTION and this probe
+  // would never reach the B5 answered-option protection it exists to prove.
   const destructiveTaskFormEdit = await j("POST", "/api/cfp/forms", {
     ...taskFormPayload,
     id: taskFormId,
     fields: [
       { ...taskFormPayload.fields[0], options: [{ label: "No", value: "no" }] },
-      ...taskFormPayload.fields.slice(1),
+      ...taskFormPayload.fields.slice(1).map((field) => ({
+        ...field,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "no" }] },
+      })),
     ],
   }, admin);
   check("O3 task responses participate in B5 option-removal protection",
