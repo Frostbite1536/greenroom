@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  closeDateEditRefusal,
+  EDIT_WINDOW_CLOSED,
   EDITABLE_STATUSES,
+  speakerEditRefusal,
   WITHDRAWABLE_STATUSES,
   isAbstractSpeaker,
   isEditableStatus,
@@ -39,6 +42,75 @@ test("rejected and withdrawn abstracts are locked with a plain-language reason",
 
 test("the editable set includes the non-final MAYBE review state", () => {
   assert.deepEqual([...EDITABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED"]);
+});
+
+// --- CFP-16 close-date edit lock -------------------------------------------
+
+const CLOSED_AT = new Date("2026-03-01T00:00:00.000Z");
+const BEFORE_CLOSE = new Date("2026-02-28T23:59:59.000Z");
+const AFTER_CLOSE = new Date("2026-03-01T00:00:01.000Z");
+
+test("after the close date, every non-accepted status is refused with one stable code", () => {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"] as const) {
+    const refusal = closeDateEditRefusal(status, CLOSED_AT, AFTER_CLOSE);
+    assert.ok(refusal, status);
+    assert.equal(refusal.code, EDIT_WINDOW_CLOSED, status);
+    assert.ok(!/[A-Z_]{4,}/.test(refusal.message), "refusal copy must not leak an error code");
+    assert.ok(refusal.message.length > 20, status);
+  }
+});
+
+test("an accepted speaker keeps editing after the close date (deliberate carve-out)", () => {
+  assert.equal(closeDateEditRefusal("ACCEPTED", CLOSED_AT, AFTER_CLOSE), null);
+  assert.equal(speakerEditRefusal("ACCEPTED", CLOSED_AT, AFTER_CLOSE), null);
+});
+
+test("the close date is inclusive at the boundary and open before it", () => {
+  assert.equal(closeDateEditRefusal("SUBMITTED", CLOSED_AT, BEFORE_CLOSE), null);
+  assert.equal(closeDateEditRefusal("SUBMITTED", CLOSED_AT, CLOSED_AT)?.code, EDIT_WINDOW_CLOSED);
+});
+
+test("a form with no close date never locks edits", () => {
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED"] as const) {
+    assert.equal(closeDateEditRefusal(status, null, AFTER_CLOSE), null, status);
+  }
+});
+
+test("the close-date lock matches the public window gate at the same instant", () => {
+  // Both paths must agree that `now >= closesAt` is closed, so a speaker and an
+  // anonymous submitter are never told different things about the same form.
+  const spec: FormSpec = {
+    published: true,
+    opensAt: null,
+    closesAt: CLOSED_AT,
+    minSpeakers: 1,
+    maxSpeakers: 4,
+    maxBioLength: 500,
+    fields: [],
+  };
+  assert.equal(validateSubmissionWindow(spec, BEFORE_CLOSE), null);
+  assert.equal(closeDateEditRefusal("SUBMITTED", CLOSED_AT, BEFORE_CLOSE), null);
+  assert.equal(validateSubmissionWindow(spec, AFTER_CLOSE)?.code, "FORM_CLOSED");
+  assert.equal(closeDateEditRefusal("SUBMITTED", CLOSED_AT, AFTER_CLOSE)?.code, EDIT_WINDOW_CLOSED);
+});
+
+test("a terminal status is still reported as the status lock, not the closed window", () => {
+  // Refusal order matters: a withdrawn proposal must keep saying it was
+  // withdrawn even when the form also happens to be closed.
+  for (const status of ["REJECTED", "WITHDRAWN"] as const) {
+    const refusal = speakerEditRefusal(status, CLOSED_AT, AFTER_CLOSE);
+    assert.equal(refusal?.code, "ABSTRACT_LOCKED", status);
+    assert.equal(refusal?.message, lockReasonFor(status), status);
+  }
+});
+
+test("withdrawal rules are untouched by the close date (a speaker is never trapped)", () => {
+  // `withdrawRefusal` takes no clock and no form: closing the CFP must not make
+  // a proposal impossible to pull.
+  for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"] as const) {
+    assert.equal(withdrawRefusal(status, false), null, status);
+  }
+  assert.equal(withdrawRefusal("ACCEPTED", false)?.code, "WITHDRAW_NOT_ALLOWED");
 });
 
 // --- authorization ----------------------------------------------------------

@@ -3139,7 +3139,30 @@ try {
   }, speaker);
   check("R1 resending the same roster (reordered/renamed) is allowed", rosterSame.status === 200, rosterSame.status);
 
-  // The CFP window must not gate edits: no edit-lock window (delta Q2).
+  // CFP-16 — the close date locks edits to a proposal the programme team has
+  // NOT accepted, while the accepted carve-out survives. This still-SUBMITTED
+  // proposal has to exist before the window shuts.
+  // A distinct primary email keeps this example out of the scratch speaker's
+  // 24h submit-rate bucket; the scratch speaker rides along as a co-speaker, so
+  // the authenticated PATCH path is still exercised by a real AbstractSpeaker.
+  const cfp16Submit = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Submitted before the deadline",
+    speakers: [
+      { email: "cfp16@scratch.test", name: "CFP16 Primary", isPrimary: true },
+      { email: speaker.user.email, name: speaker.user.name, isPrimary: false },
+    ],
+    answers: { title_note: "on time", consent: true }, intent: "submit",
+  });
+  const cfp16Id = cfp16Submit.data?.data?.id;
+  check("CFP-16 setup: a SUBMITTED proposal exists while the window is open",
+    cfp16Submit.status === 201 && !!cfp16Id, cfp16Submit.status);
+  const cfp16OpenEdit = await j("PATCH", `/api/cfp/submissions/${cfp16Id}`, {
+    title: "Edited before the deadline",
+  }, speaker);
+  check("CFP-16 the same edit succeeds while the window is still open",
+    cfp16OpenEdit.status === 200 && cfp16OpenEdit.data?.data?.submission?.title === "Edited before the deadline",
+    cfp16OpenEdit.status);
+
   const closeForm = await j("POST", "/api/cfp/forms", {
     ...formPayload, id: formId, closesAt: new Date(Date.now() - 86_400_000).toISOString(),
   }, admin);
@@ -3151,10 +3174,49 @@ try {
   });
   check("R1 public submission is still refused after the window closes",
     closedSubmit.status === 422 && closedSubmit.data?.error?.code === "FORM_CLOSED", closedSubmit.data?.error?.code);
+
+  const cfp16ClosedEdit = await j("PATCH", `/api/cfp/submissions/${cfp16Id}`, {
+    title: "Edited after the deadline",
+  }, speaker);
+  check("CFP-16 a SUBMITTED proposal is refused after the close date (409 EDIT_WINDOW_CLOSED)",
+    cfp16ClosedEdit.status === 409 && cfp16ClosedEdit.data?.error?.code === "EDIT_WINDOW_CLOSED",
+    `${cfp16ClosedEdit.status}/${cfp16ClosedEdit.data?.error?.code}`);
+  check("CFP-16 the refusal is plain language and leaks no error code",
+    typeof cfp16ClosedEdit.data?.error?.message === "string" &&
+      cfp16ClosedEdit.data.error.message.length > 20 &&
+      !/[A-Z_]{4,}/.test(cfp16ClosedEdit.data.error.message),
+    cfp16ClosedEdit.data?.error?.message);
+  check("CFP-16 the refused edit did not persist",
+    (await prisma.abstract.findUnique({ where: { id: cfp16Id }, select: { title: true } }))?.title ===
+      "Edited before the deadline");
+
+  const mineAfterClose = await j("GET", "/api/cfp/submissions/mine", null, speaker);
+  const cfp16Row = mineAfterClose.data?.data?.submissions?.find((s) => s.id === cfp16Id);
+  const acceptedRow = mineAfterClose.data?.data?.submissions?.find((s) => s.id === r1Id);
+  check("CFP-16 the portal read agrees with the server: locked row, editable accepted row",
+    cfp16Row?.canEdit === false && typeof cfp16Row?.lockReason === "string" &&
+      !/[A-Z_]{4,}/.test(cfp16Row.lockReason) &&
+      acceptedRow?.canEdit === true && acceptedRow?.lockReason === null,
+    `${cfp16Row?.canEdit}/${acceptedRow?.canEdit}`);
+
+  // The deliberate carve-out: an ACCEPTED speaker still edits after the close.
   const editAfterClose = await j("PATCH", `/api/cfp/submissions/${r1Id}`, {
     title: "Edited after the window closed",
   }, speaker);
-  check("R1 speaker can still edit after the CFP window closes", editAfterClose.status === 200, editAfterClose.status);
+  check("CFP-16 an ACCEPTED speaker can still edit after the CFP window closes",
+    editAfterClose.status === 200 && editAfterClose.data?.data?.submission?.title === "Edited after the window closed",
+    editAfterClose.status);
+
+  // Refusing a withdrawal because the window shut would trap the speaker in a
+  // talk they no longer want to give, so W1 is deliberately not close-gated.
+  const cfp16Withdraw = await j("PATCH", `/api/cfp/submissions/${cfp16Id}`, { status: "WITHDRAWN" }, speaker);
+  check("CFP-16 a speaker can still withdraw after the close date",
+    cfp16Withdraw.status === 200 && cfp16Withdraw.data?.data?.submission?.status === "WITHDRAWN",
+    `${cfp16Withdraw.status}/${cfp16Withdraw.data?.error?.code}`);
+  const cfp16AfterWithdraw = await j("PATCH", `/api/cfp/submissions/${cfp16Id}`, { title: "Still trying" }, speaker);
+  check("CFP-16 a withdrawn proposal still reports its own status lock, not the closed window",
+    cfp16AfterWithdraw.status === 409 && cfp16AfterWithdraw.data?.error?.code === "ABSTRACT_LOCKED",
+    cfp16AfterWithdraw.data?.error?.code);
 
   // Regression guard: capability/DRAFT authorization precedes window policy,
   // so a cap-less anonymous edit never learns whether this form is closed.

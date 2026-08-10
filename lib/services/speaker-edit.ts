@@ -93,6 +93,56 @@ export function lockReasonFor(status: AbstractStatus): string | null {
   return "This proposal was withdrawn, so it can no longer be edited. Contact the program team to reopen it.";
 }
 
+export type SpeakerEditRefusal = { code: string; message: string };
+
+/** Stable refusal code for an edit attempted after the call for proposals closed. */
+export const EDIT_WINDOW_CLOSED = "EDIT_WINDOW_CLOSED";
+
+/**
+ * CFP-16: once a form's `closesAt` has passed, a speaker may no longer change a
+ * proposal the programme team has not accepted. The deadline is the rule the
+ * whole review round is built on — an edit landing after reviewers started
+ * reading changes the thing being judged.
+ *
+ * `ACCEPTED` is a deliberate, product-level carve-out and must stay: an accepted
+ * speaker maintains their proposal record long after the CFP shut, which is the
+ * normal case (the confirmed `Session` is separate — INV-DOMAIN-001).
+ *
+ * Self-withdrawal is deliberately NOT gated here. It is a status-only transition
+ * with its own rules in `withdrawRefusal`, and refusing it after close would
+ * trap a speaker in a proposal they no longer want to give.
+ *
+ * A form with no close date never closes, matching `validateSubmissionWindow`.
+ */
+export function closeDateEditRefusal(
+  status: AbstractStatus,
+  closesAt: Date | null,
+  now: Date = new Date(),
+): SpeakerEditRefusal | null {
+  if (status === "ACCEPTED") return null;
+  if (!closesAt || now < closesAt) return null;
+  return {
+    code: EDIT_WINDOW_CLOSED,
+    message:
+      "The call for proposals has closed, so this proposal can no longer be edited. Contact the program team if something still needs to change.",
+  };
+}
+
+/**
+ * Every reason a speaker cannot edit right now, in refusal order: a terminal
+ * status first, then the closed call for proposals. One function so the API
+ * refusal and the portal's read-only affordance can never disagree.
+ */
+export function speakerEditRefusal(
+  status: AbstractStatus,
+  closesAt: Date | null,
+  now: Date = new Date(),
+): SpeakerEditRefusal | null {
+  const statusReason = lockReasonFor(status);
+  if (statusReason) return { code: "ABSTRACT_LOCKED", message: statusReason };
+  return closeDateEditRefusal(status, closesAt, now);
+}
+
 /**
  * Authorization (INV-EVENT-001): the caller must be listed as a speaker on the
  * abstract. Membership is resolved server-side from the signed session's

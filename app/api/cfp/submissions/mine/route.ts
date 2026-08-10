@@ -31,7 +31,9 @@ export const GET = handle(async () => {
       category: true,
       speakers: { include: { user: true } },
       answers: true,
-      formConfig: { select: { id: true, name: true, slug: true } },
+      // `closesAt` drives the CFP-16 edit affordance in the serializer; it is
+      // form window metadata, not another speaker's data.
+      formConfig: { select: { id: true, name: true, slug: true, closesAt: true } },
       session: { select: { id: true, scheduleSlot: { select: { id: true } } } },
       // Review assignments/scores are intentionally NOT included: a speaker
       // must not see their own review data.

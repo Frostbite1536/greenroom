@@ -15,6 +15,7 @@ import {
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
+  closeDateEditRefusal,
   isAbstractSpeaker,
   isEditableStatus,
   lockReasonFor,
@@ -103,8 +104,12 @@ export function GET(req: Request, ctx: Params) {
  *   confirmed record (INV-DOMAIN-001).
  * - `status`, `submittedAt`, and `decidedAt` are never changed by an edit.
  * - Content rules reuse the public submission validator verbatim
- *   (INV-FORM-001), minus the window gate — edit-lock windows are explicitly
- *   not used, and accepted speakers edit after the CFP has closed.
+ *   (INV-FORM-001), minus its window gate. The edit window is enforced
+ *   separately by `closeDateEditRefusal` (CFP-16): a non-accepted proposal is
+ *   refused once `closesAt` passes, while accepted speakers keep editing after
+ *   the CFP has closed. Publication and `opensAt` still gate new submissions
+ *   only — an existing proposal is not un-editable because its form was
+ *   unpublished.
  * - `{ "status": "WITHDRAWN" }` is the one status transition a speaker owns
  *   (W1). It must be sent on its own and is refused once the talk is accepted.
  */
@@ -204,6 +209,13 @@ export function PATCH(req: Request, ctx: Params) {
           lockReasonFor(fresh.status) ?? "This submission can no longer be edited.",
         );
       }
+      // CFP-16, on the fresh post-lock read rather than the pre-lock load: the
+      // close date lives on the `FormConfig` row this transaction already holds
+      // FOR SHARE, so an admin cannot move `closesAt` between check and write,
+      // and a status re-read cannot let a just-rejected proposal slip through.
+      // ACCEPTED speakers are exempt on purpose (see `closeDateEditRefusal`).
+      const closed = closeDateEditRefusal(fresh.status, locks.form.closesAt);
+      if (closed) throw new ApiError(409, closed.code, closed.message);
       const rosterEdit =
         patch.speakers !== undefined &&
         rosterChanged(
