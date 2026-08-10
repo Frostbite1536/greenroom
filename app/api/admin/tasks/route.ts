@@ -124,21 +124,35 @@ export const GET = handle(async () => {
  * Assignment progress per template, read as two grouped counts rather than one
  * row per assignment so a large event does not materialize its whole checklist
  * cross-product to render a progress column.
+ *
+ * Both aggregations are keyed on the **projected** template ids, not on the
+ * event. The projection above is capped at `OPERATOR_QUERY_LIMITS.onboardingTasks`,
+ * so grouping by event would have let an oversized event return unbounded
+ * groups behind an otherwise bounded read — the cap would hold on the rows the
+ * caller sees while the work behind them grew without limit. Keying on the ids
+ * ties the aggregation to the same bound, and a template outside the page is
+ * not counted because it is not shown.
  */
 async function withAssignmentCounts(
   tasks: { id: string; title: string; description: string | null; dueAt: Date | null; required: boolean; formConfigId: string | null; sortOrder: number }[],
   eventId: string,
   timeZone: string,
 ): Promise<OnboardingTaskView[]> {
-  const [assigned, settled] = await Promise.all([
+  const taskIds = tasks.map((task) => task.id);
+  // No templates means nothing to aggregate; skip both round trips rather than
+  // issuing a pair of queries whose answer is known to be empty.
+  const [assigned, settled] = taskIds.length === 0 ? [[], []] : await Promise.all([
     prisma.speakerTask.groupBy({
       by: ["taskId"],
-      where: { task: { eventId } },
+      // `eventId` is retained alongside the id bound as a scope belt: the ids
+      // already come from an event-scoped read, and this keeps that true even
+      // if the projection is ever sourced differently.
+      where: { taskId: { in: taskIds }, task: { eventId } },
       _count: { _all: true },
     }),
     prisma.speakerTask.groupBy({
       by: ["taskId"],
-      where: { task: { eventId }, status: { in: [...SETTLED_TASK_STATUSES] } },
+      where: { taskId: { in: taskIds }, task: { eventId }, status: { in: [...SETTLED_TASK_STATUSES] } },
       _count: { _all: true },
     }),
   ]);

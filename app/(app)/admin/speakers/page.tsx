@@ -50,7 +50,7 @@ export default async function AdminSpeakersPage({
   // Speakers on confirmed sessions only: a Session exists exactly when an
   // abstract was accepted or a talk was guaranteed, so this is the onboarding
   // cohort. Both reads are event-scoped and bounded.
-  const [event, sessionSpeakers, speakerTasks, templates, forms, taskCounts, settledCounts] = await Promise.all([
+  const [event, sessionSpeakers, speakerTasks, templates, forms] = await Promise.all([
     prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
     prisma.sessionSpeaker.findMany({
       where: { session: { eventId } },
@@ -92,22 +92,37 @@ export default async function AdminSpeakersPage({
       take: LIMITS.forms + 1,
       select: { id: true, name: true },
     }),
-    prisma.speakerTask.groupBy({ by: ["taskId"], where: { task: { eventId } }, _count: { _all: true } }),
-    prisma.speakerTask.groupBy({
-      by: ["taskId"],
-      where: { task: { eventId }, status: { in: ["COMPLETED", "WAIVED"] } },
-      _count: { _all: true },
-    }),
   ]);
   if (!event) redirect("/login");
 
-  const assignedByTask = new Map(taskCounts.map((row) => [row.taskId, row._count._all]));
-  const settledByTask = new Map(settledCounts.map((row) => [row.taskId, row._count._all]));
   // Same bounded-read discipline as the operator API routes: read one extra row
   // and say so rather than silently authoring against a partial checklist.
   const templatesTruncated = templates.length > LIMITS.templates || forms.length > LIMITS.forms;
-  const taskTemplates = templates
-    .slice(0, LIMITS.templates)
+  const pagedTemplates = templates.slice(0, LIMITS.templates);
+  const pagedTemplateIds = pagedTemplates.map((template) => template.id);
+
+  // Deliberately a second round trip rather than a seventh member of the batch
+  // above: these aggregations must be keyed on the ids this page actually
+  // renders, which are only known once the capped projection exists. Grouping
+  // by event instead would let an oversized event return unbounded groups
+  // behind a bounded list — the cap would hold on what is shown while the work
+  // behind it grew without limit.
+  const [taskCounts, settledCounts] = pagedTemplateIds.length === 0 ? [[], []] : await Promise.all([
+    prisma.speakerTask.groupBy({
+      by: ["taskId"],
+      where: { taskId: { in: pagedTemplateIds }, task: { eventId } },
+      _count: { _all: true },
+    }),
+    prisma.speakerTask.groupBy({
+      by: ["taskId"],
+      where: { taskId: { in: pagedTemplateIds }, task: { eventId }, status: { in: ["COMPLETED", "WAIVED"] } },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const assignedByTask = new Map(taskCounts.map((row) => [row.taskId, row._count._all]));
+  const settledByTask = new Map(settledCounts.map((row) => [row.taskId, row._count._all]));
+  const taskTemplates = pagedTemplates
     .map((template) =>
       serializeOnboardingTask(template, event.timezone, {
         assigned: assignedByTask.get(template.id) ?? 0,

@@ -85,6 +85,33 @@ test("C33 required onboarding templates fan out inside the write's own transacti
   assert.match(assign, /backfillConfirmedSpeakerTasks\(tx, ctx\.eventId\)/);
 });
 
+test("onboarding assignment aggregations are bounded by the projected page, not the event", () => {
+  // A bounded projection with an unbounded aggregation behind it is not a
+  // bounded read: the cap holds on the rows the caller sees while the work
+  // behind them grows with the event. Both surfaces must group on the ids they
+  // actually render.
+  for (const path of ["app/api/admin/tasks/route.ts", "app/(app)/admin/speakers/page.tsx"]) {
+    const text = source(path);
+    const groupBys = [...text.matchAll(/speakerTask\.groupBy\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
+    assert.equal(groupBys.length, 2, `${path} should aggregate exactly twice`);
+    for (const groupBy of groupBys) {
+      assert.match(groupBy, /taskId: \{ in: (taskIds|pagedTemplateIds) \}/, path);
+      // The event predicate stays as a scope belt; it must not be the only bound.
+      assert.match(groupBy, /task: \{ eventId \}/, path);
+    }
+  }
+
+  const route = source("app/api/admin/tasks/route.ts");
+  assert.match(route, /const taskIds = tasks\.map\(\(task\) => task\.id\)/);
+  assert.match(route, /taskIds\.length === 0 \? \[\[\], \[\]\]/);
+
+  const page = source("app/(app)/admin/speakers/page.tsx");
+  // The ids must come from the capped slice, never from the raw cap-plus-one read.
+  assert.match(page, /const pagedTemplates = templates\.slice\(0, LIMITS\.templates\)/);
+  assert.match(page, /const pagedTemplateIds = pagedTemplates\.map\(\(template\) => template\.id\)/);
+  assert.ok(page.indexOf("pagedTemplateIds") < page.indexOf("speakerTask.groupBy"));
+});
+
 test("onboarding template deletion locks FormConfig before the task and preserves speaker work", () => {
   const tasks = source("app/api/admin/tasks/route.ts");
   const del = tasks.slice(tasks.indexOf("export const DELETE"));
