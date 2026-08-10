@@ -31,6 +31,12 @@ export const KNOWN_TEMPLATE_VARIABLES: readonly string[] = TEMPLATE_VARIABLES.ma
 
 const REQUIRED_TEMPLATE_VARIABLES: Readonly<Record<string, readonly string[]>> = {
   "reviewer-invite": ["inviteUrl"],
+  // The submission receipt genuinely renders from this stored template (C21),
+  // so an edit that drops the proposal title produces a receipt that does not
+  // say which proposal was received — the one fact the email exists to carry.
+  // The event name is not required: hardcoding it in the wording is a
+  // legitimate editorial choice, unlike losing the title.
+  "cfp-submitted": ["talkTitle"],
 };
 
 /** `{{ name }}` with optional inner spacing — same pattern the renderer uses. */

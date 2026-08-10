@@ -98,6 +98,24 @@ test("reviewer-invite template edits retain the trusted invite URL placeholder",
   assert.deepEqual(missingRequiredTemplateVariables("task.reminder", "Invite", "<p>Open your workspace</p>"), []);
 });
 
+test("the submission receipt may not lose the proposal title it exists to confirm", () => {
+  // C21 made this template really drive the send, so the required-variable
+  // boundary now has to protect the one fact a receipt must carry.
+  assert.deepEqual(
+    missingRequiredTemplateVariables("cfp-submitted", "We received {{talkTitle}}", "<p>Hi {{speakerName}}</p>"),
+    [],
+  );
+  assert.deepEqual(
+    missingRequiredTemplateVariables("cfp-submitted", "We received your proposal", "<p>Hi {{speakerName}}</p>"),
+    ["talkTitle"],
+  );
+  // Hardcoding the event name stays a legitimate editorial choice.
+  assert.deepEqual(
+    missingRequiredTemplateVariables("cfp-submitted", "Forward 2026", "<p>Thanks for {{talkTitle}}</p>"),
+    [],
+  );
+});
+
 test("template subjects are normalized before persistence or preview", () => {
   const parsed = emailTemplateUpdateSchema.safeParse({
     subject: " Hello\r\nBcc:\u0000 nope@example.test ",
