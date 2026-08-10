@@ -96,6 +96,10 @@ model User {
   email     String   @unique
   name      String
   avatarUrl String?
+  /// Versioned scrypt credential (`lib/password-credential.ts`), or null for the
+  /// one-click demo personas and every provisioned user without a password.
+  /// Never projected by any serializer; never logged.
+  passwordHash String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
