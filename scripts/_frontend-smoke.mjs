@@ -2500,11 +2500,14 @@ try {
   // --- no admin-only data on any public embed --------------------------------
   // Scanned over the whole document, flight payload included: the speaker
   // gallery is a client island, so its props are serialized into the response.
+  // The category NAME ("Applied AI") left this list when Session.categoryId
+  // made topics deliberately public via the embed's topic chip; the category's
+  // admin-only defaultTeamKey ("team-ai") must still never appear.
   const embedLeaks = [
     "sofia@greenroom.demo", "maya@greenroom.demo", "ravi@greenroom.demo",
     EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL,
     "UNDER_REVIEW", "Scratch: Agents in Production", "Scratch: Maybe historical coverage",
-    "Scratch Session B", "team-ai", "Applied AI",
+    "Scratch Session B", "team-ai",
   ];
   for (const [label, html] of [["schedule", enriched.text], ["speakers", speakersEmbed.text]]) {
     const found = embedLeaks.filter((needle) => html.includes(needle));
