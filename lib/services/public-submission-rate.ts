@@ -189,7 +189,10 @@ export async function enforcePublicSubmissionRateLimit(input: {
     `;
     for (const plan of plans) {
       const count = await incrementRateBucket(tx, input.eventId, plan, now);
-      if (count > plan.limit) throw publicSubmissionRateLimitError(plan, now);
+      // Measure the advertised wait from the refusal moment, not the request's
+      // pre-transaction timestamp: a lock-delayed request would otherwise tell
+      // a compliant client to wait longer than the bucket's real remainder.
+      if (count > plan.limit) throw publicSubmissionRateLimitError(plan, new Date());
     }
   });
 }
