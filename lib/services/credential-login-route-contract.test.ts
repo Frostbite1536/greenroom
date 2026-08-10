@@ -11,6 +11,46 @@ const route = read("app/api/auth/login/route.ts");
 const page = read("app/login/page.tsx");
 const personaAction = read("app/login/actions.ts");
 
+test("a session is issued only for a positively confirmed same-origin post", () => {
+  const gate = route.indexOf("if (!isSameOriginRequest(originVerdict(req))) return refuseCrossOrigin(req, formEncoded);");
+  assert.ok(gate > 0, "the route must gate on the request's origin");
+  // Before the body is read, before the throttle, before any identity: a post
+  // that cannot prove it came from this site reaches none of them.
+  for (const later of ["await readAttempt(", "await enforceLoginRateLimit(", "await resolveCredentialSession("]) {
+    assert.ok(gate < route.indexOf(later), `the origin gate must precede ${later}`);
+  }
+  // Both modes. `formEncoded` only selects the refusal's shape, never whether
+  // the gate applies — a text/plain form can be crafted into a valid JSON body,
+  // so gating the form mode alone would leave a preflight-free bypass.
+  assert.doesNotMatch(route, /if \(formEncoded\)[^\n]*isSameOriginRequest/);
+  assert.equal(route.split("isSameOriginRequest(").length - 1, 1);
+
+  // The verdict is derived from headers a page cannot forge, plus the
+  // configured APP_URL.
+  for (const signal of ['get("origin")', 'get("referer")', 'get("host")', 'get("x-forwarded-host")', 'get("x-forwarded-proto")']) {
+    assert.ok(route.includes(signal), `the expected origin must consider ${signal}`);
+  }
+  // Policy is owned by the pure module, not re-implemented here.
+  assert.doesNotMatch(route, /=== *"same-origin"|verdict *===/);
+});
+
+test("the cross-origin refusal is a distinct 403 that leaks nothing about any account", () => {
+  assert.match(route, /const CROSS_ORIGIN_CODE = "CROSS_ORIGIN_REFUSED";/);
+  assert.equal(route.split("status: 403").length - 1, 1);
+  // It is decided before any identity is considered, so a distinct code cannot
+  // become an account oracle — and it names the fix instead of blaming the
+  // password.
+  assert.match(route, /Send an Origin header matching this deployment\./);
+  assert.doesNotMatch(route, /CROSS_ORIGIN_MESSAGE[\s\S]{0,120}(password|email) is incorrect/);
+  // The form mode gets its own error key, kept separate from the credential one.
+  assert.equal(route.split("/login?error=blocked").length - 1, 1);
+  assert.match(page, /error === "blocked"/);
+  assert.match(page, /did not come from this site/);
+  // No session is issued on that path.
+  const refusal = route.slice(route.indexOf("function refuseCrossOrigin"), route.indexOf("function refuseThrottled"));
+  assert.doesNotMatch(refusal, /cookies\.set|encodeSession/);
+});
+
 test("the throttle is charged before any User row is read", () => {
   const throttle = route.indexOf("await enforceLoginRateLimit(");
   const lookup = route.indexOf("await resolveCredentialSession(");
@@ -119,7 +159,9 @@ test("no self-registration or password-reset surface was added", () => {
     "app/api/auth/login/route.ts",
     "app/api/auth/reviewer-invites/accept/route.ts",
   ]);
-  for (const forbidden of [/register/i, /signup/i, /sign-up/i, /forgot/i, /password-reset/i, /resetPassword/i]) {
+  // Route-shaped names, not bare words: the point is that no such surface
+  // exists, and a prose comment that happens to contain "forgot" is not one.
+  for (const forbidden of [/register/i, /signup/i, /sign-up/i, /forgot[-_ ]?password/i, /password[-_]reset/i, /resetPassword/i]) {
     assert.doesNotMatch(route, forbidden);
   }
 });

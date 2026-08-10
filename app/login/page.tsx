@@ -44,6 +44,9 @@ function signInError(error: string | undefined, retryAfter: string | undefined):
     return "Too many sign-in attempts. Try again shortly.";
   }
   if (error === "unavailable") return "Sign-in is temporarily unavailable. Try again shortly.";
+  // The post did not come from this site. A real sign-in never lands here, so
+  // the copy points at the cause rather than blaming the credentials.
+  if (error === "blocked") return "That sign-in did not come from this site. Start again from this page.";
   return null;
 }
 

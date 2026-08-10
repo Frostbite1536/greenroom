@@ -6,6 +6,11 @@ import { parseBoundedText } from "@/lib/api/bounded-json";
 import { publicClientIp } from "@/lib/services/public-submission-rate";
 import { enforceLoginRateLimit } from "@/lib/services/login-rate";
 import {
+  classifyRequestOrigin,
+  expectedRequestOrigins,
+  isSameOriginRequest,
+} from "@/lib/services/request-origin";
+import {
   normalizeLoginEmail,
   normalizeLoginPassword,
   resolveCredentialSession,
@@ -20,6 +25,12 @@ import {
  * `/login`, everything else gets the locked `ApiResponse` shape.
  *
  * Invariants:
+ * - A session is issued only for a **positively confirmed same-origin** post.
+ *   `SameSite=Lax` bounds when a cookie is sent, not who may set one, so
+ *   without this a cross-origin form post could silently replace the victim's
+ *   session with the attacker's. Both modes are gated: a `text/plain` form can
+ *   be crafted into a valid JSON body, so gating only the form mode would leave
+ *   a preflight-free bypass.
  * - The throttle is charged **before** any `User` row is read, so an unknown
  *   address consumes exactly the same budget as a real one.
  * - Unknown email, wrong password, a user without a credential, and a
@@ -43,6 +54,21 @@ export const LOGIN_BODY_MAX_BYTES = 4 * 1024;
 
 const INVALID_CREDENTIALS_CODE = "INVALID_CREDENTIALS";
 const INVALID_CREDENTIALS_MESSAGE = "Email or password is incorrect.";
+
+/**
+ * Deliberately a **distinct 403, not the generic 401.**
+ *
+ * The indistinguishability rule exists to stop this route becoming an account
+ * oracle. This refusal happens before any identity is looked at or any body is
+ * trusted, so it is byte-identical whether the address exists, does not, or is
+ * absent — a separate code leaks nothing about any account. Folding it into the
+ * 401 would only cost: an API client missing a header would be told its
+ * password was wrong and would chase a credential bug instead of the real
+ * cause. The message names the fix for exactly that reason.
+ */
+const CROSS_ORIGIN_CODE = "CROSS_ORIGIN_REFUSED";
+const CROSS_ORIGIN_MESSAGE =
+  "Sign-in must be submitted from this site. Send an Origin header matching this deployment.";
 
 function noStore<T extends Response>(response: T): T {
   response.headers.set("Cache-Control", "no-store");
@@ -88,6 +114,14 @@ function refuse(req: Request, formEncoded: boolean): Response {
   return noStore(NextResponse.json(
     { ok: false, error: { code: INVALID_CREDENTIALS_CODE, message: INVALID_CREDENTIALS_MESSAGE } },
     { status: 401 },
+  ));
+}
+
+function refuseCrossOrigin(req: Request, formEncoded: boolean): Response {
+  if (formEncoded) return noStore(loginRedirect(req, "/login?error=blocked"));
+  return noStore(NextResponse.json(
+    { ok: false, error: { code: CROSS_ORIGIN_CODE, message: CROSS_ORIGIN_MESSAGE } },
+    { status: 403 },
   ));
 }
 
@@ -137,8 +171,31 @@ async function findCredentialUser(email: string) {
   });
 }
 
+/**
+ * Both modes are gated, and this runs before the body is read: a request that
+ * cannot prove it came from this site never reaches the throttle, the parser,
+ * or an identity. Missing and mismatched are treated alike — every modern
+ * browser sends `Origin` on a POST, so an absent one is not a browser, and
+ * being lenient there would reopen the hole for anything that omits it.
+ */
+function originVerdict(req: Request) {
+  return classifyRequestOrigin({
+    origin: req.headers.get("origin"),
+    referer: req.headers.get("referer"),
+    expected: expectedRequestOrigins({
+      requestUrl: req.url,
+      host: req.headers.get("host"),
+      forwardedHost: req.headers.get("x-forwarded-host"),
+      forwardedProto: req.headers.get("x-forwarded-proto"),
+      appUrl: process.env.APP_URL,
+    }),
+  });
+}
+
 export async function POST(req: Request): Promise<Response> {
   const formEncoded = isFormEncoded(req);
+  if (!isSameOriginRequest(originVerdict(req))) return refuseCrossOrigin(req, formEncoded);
+
   const attempt = await readAttempt(req, formEncoded);
 
   try {

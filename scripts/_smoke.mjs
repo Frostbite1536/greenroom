@@ -121,16 +121,20 @@ function scryptCredential(password) {
  * its own client address so one probe never spends another's per-IP budget.
  */
 let loginIpSequence = 1;
-async function postLogin(credentials, { form = false, ip } = {}) {
+async function postLogin(credentials, { form = false, ip, origin = BASE, omitOrigin = false } = {}) {
   const sequence = loginIpSequence++;
   const address = ip ?? `198.19.${Math.floor(sequence / 250)}.${(sequence % 250) + 1}`;
+  const headers = {
+    "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
+    "x-vercel-forwarded-for": address,
+  };
+  // The route refuses any post that cannot prove it came from this site, so
+  // every legitimate probe declares the origin a browser would have sent.
+  if (!omitOrigin) headers.origin = origin;
   const response = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     redirect: "manual",
-    headers: {
-      "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
-      "x-vercel-forwarded-for": address,
-    },
+    headers,
     body: form ? new URLSearchParams(credentials).toString() : JSON.stringify(credentials),
   });
   const text = await response.text();
@@ -4065,6 +4069,38 @@ try {
     `${throttleAttempts.map((r) => r.status).join(",")} retry-after=${throttled?.headers.get("retry-after")}`);
   check("C5-LOGIN a throttled attempt is a refusal, not a session",
     !!throttled && !sessionCookieFrom(throttled) && throttled.data?.ok === false);
+
+  // Greptile #76 issue 1: SameSite=Lax bounds when a cookie is SENT, not who
+  // may SET one. A cross-origin post must never mint a session, or an attacker's
+  // page could silently swap the victim's identity for its own. Correct
+  // credentials are used on purpose — the refusal must come from the origin,
+  // not from the password being wrong.
+  const crossOriginJson = await postLogin(
+    { email: speaker.user.email, password: loginPassword },
+    { origin: "https://attacker.example" },
+  );
+  const crossOriginForm = await postLogin(
+    { email: speaker.user.email, password: loginPassword },
+    { form: true, origin: "https://attacker.example" },
+  );
+  const opaqueOrigin = await postLogin({ email: speaker.user.email, password: loginPassword }, { origin: "null" });
+  const noOrigin = await postLogin({ email: speaker.user.email, password: loginPassword }, { omitOrigin: true });
+  check("C5-LOGIN a cross-origin post with correct credentials mints no session (login CSRF)",
+    crossOriginJson.status === 403 && crossOriginJson.data?.error?.code === "CROSS_ORIGIN_REFUSED" &&
+      !sessionCookieFrom(crossOriginJson) &&
+      crossOriginForm.status === 303 &&
+      (crossOriginForm.headers.get("location") || "").includes("/login?error=blocked") &&
+      !sessionCookieFrom(crossOriginForm),
+    `json=${crossOriginJson.status}/${crossOriginJson.data?.error?.code} form=${crossOriginForm.status}/${crossOriginForm.headers.get("location")}`);
+  check("C5-LOGIN an opaque or absent Origin is refused too, so the JSON mode is not a bypass",
+    opaqueOrigin.status === 403 && !sessionCookieFrom(opaqueOrigin) &&
+      noOrigin.status === 403 && !sessionCookieFrom(noOrigin),
+    `opaque=${opaqueOrigin.status} absent=${noOrigin.status}`);
+  check("C5-LOGIN the origin refusal is decided before any identity, so it is no account oracle",
+    crossOriginJson.data?.error?.code === "CROSS_ORIGIN_REFUSED" &&
+      JSON.stringify(crossOriginJson.data) === JSON.stringify(
+        (await postLogin({ email: `nobody-${Date.now().toString(36)}@scratch.test`, password: "x" }, { origin: "https://attacker.example" })).data,
+      ));
 
   const formLogin = await postLogin({ email: speaker.user.email, password: loginPassword }, { form: true });
   check("C5-LOGIN the browser form post redirects to the role home carrying the session",
