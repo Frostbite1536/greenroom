@@ -1479,11 +1479,18 @@ try {
   await prisma.reviewScore.create({
     data: { planId: fx.plan.id, abstractId: partialReview.id, evaluatorId: fx.users.evaluator, rubricKey: "relevance", score: 5 },
   });
+  // Several rounds used to render inert "Choose a round" placeholders in the
+  // reviews and score columns until an operator picked one. Round 2's single
+  // completed 1/1 review weights to 1.00; Round 1's 3.70 must not leak into it.
   const multiplePlanPage = await req("GET", "/admin/abstracts", null, admin);
-  check("multiple decision rounds require an explicit choice and show no numeric summary",
-    multiplePlanPage.text.includes("Choose a decision round")
-    && multiplePlanPage.text.includes("Choose a round")
-    && !multiplePlanPage.text.includes("3.70"));
+  const multiplePlanText = renderedText(multiplePlanPage.text) ?? "";
+  check("multiple decision rounds default to the newest round with no manual pick",
+    multiplePlanText.includes("the newest one is shown")
+    && multiplePlanText.includes("1.00")
+    && multiplePlanText.includes("1/1 completed reviews included")
+    && !multiplePlanText.includes("Choose a round")
+    && !multiplePlanText.includes("Choose a decision round")
+    && !multiplePlanText.includes("3.70"));
   const selectedRoundPage = await req("GET", `/admin/abstracts?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
   const selectedRoundText = renderedText(selectedRoundPage.text) ?? "";
   check("selected plan stays in the URL and excludes another plan's completed score",

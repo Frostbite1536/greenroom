@@ -226,14 +226,12 @@ export function AbstractsTable({
                       <DecisionReviewCount
                         summary={a.decisionSummary}
                         selectedPlan={decisionSummary.selectedPlan}
-                        selectionRequired={decisionSummary.selectionRequired}
                       />
                     </td>
                     <td>
                       <DecisionScoreCell
                         summary={a.decisionSummary}
                         selectedPlan={decisionSummary.selectedPlan}
-                        selectionRequired={decisionSummary.selectionRequired}
                       />
                     </td>
                     <td>
@@ -262,7 +260,6 @@ export function AbstractsTable({
           initialChanging={selectedId === initialSelectedId && initialChanging}
           decisionSummary={selected.decisionSummary}
           selectedPlan={decisionSummary.selectedPlan}
-          selectionRequired={decisionSummary.selectionRequired}
           onClose={() => setSelectedId(null)}
           onProgrammeWarning={setWarning}
         />
@@ -284,7 +281,7 @@ function DecisionRoundControl({
 }) {
   const headingId = "decision-round-heading";
   const helpId = "decision-round-help";
-  const { plans, selectedPlan, selectionRequired } = decisionSummary;
+  const { plans, selectedPlan } = decisionSummary;
 
   if (plans.length === 0) {
     return (
@@ -298,12 +295,10 @@ function DecisionRoundControl({
   return (
     <section className="table-toolbar" aria-labelledby={headingId} style={{ margin: "8px 0 12px" }}>
       <div>
-        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>
-          {selectionRequired ? "Choose a decision round" : "Decision round"}
-        </h2>
+        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>Decision round</h2>
         <p className="hint" id={helpId} style={{ margin: 0 }}>
-          {selectionRequired
-            ? "This event has multiple review rounds. Choose one before using review scores to inform a decision."
+          {plans.length > 1
+            ? "This event has several review rounds; the newest one is shown. Decision scores include only valid, completed reviews from the selected round."
             : "Decision scores include only valid, completed reviews from this round."}
         </p>
       </div>
@@ -316,7 +311,6 @@ function DecisionRoundControl({
           onChange={(event) => onChange(event.target.value)}
           aria-describedby={helpId}
         >
-          {selectionRequired ? <option value="">Choose a round</option> : null}
           {plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan)}</option>)}
         </select>
       </label>
@@ -327,15 +321,11 @@ function DecisionRoundControl({
 function DecisionScoreCell({
   summary,
   selectedPlan,
-  selectionRequired,
 }: {
   summary: AdminDecisionAbstractSummary | null;
   selectedPlan: AdminDecisionSummary["selectedPlan"];
-  selectionRequired: boolean;
 }) {
-  if (!selectedPlan) {
-    return <span className="muted">{selectionRequired ? "Choose a round" : "No review round"}</span>;
-  }
+  if (!selectedPlan) return <span className="muted">No review round</span>;
   const score = formatDecisionScore(summary?.weightedAverage ?? null);
   if (score === null) return <span className="muted">No included reviews</span>;
   return (
@@ -349,15 +339,11 @@ function DecisionScoreCell({
 function DecisionReviewCount({
   summary,
   selectedPlan,
-  selectionRequired,
 }: {
   summary: AdminDecisionAbstractSummary | null;
   selectedPlan: AdminDecisionSummary["selectedPlan"];
-  selectionRequired: boolean;
 }) {
-  if (!selectedPlan) {
-    return <span className="muted">{selectionRequired ? "Choose a round" : "No review round"}</span>;
-  }
+  if (!selectedPlan) return <span className="muted">No review round</span>;
   return <span>{summary?.includedReviews ?? 0}/{summary?.completedAssignments ?? 0} included</span>;
 }
 
@@ -366,7 +352,6 @@ function AbstractDrawer({
   initialChanging,
   decisionSummary,
   selectedPlan,
-  selectionRequired,
   onClose,
   onProgrammeWarning,
 }: {
@@ -374,7 +359,6 @@ function AbstractDrawer({
   initialChanging: boolean;
   decisionSummary: AdminDecisionAbstractSummary | null;
   selectedPlan: AdminDecisionSummary["selectedPlan"];
-  selectionRequired: boolean;
   onClose: () => void;
   onProgrammeWarning: (warning: ProgrammeWarning) => void;
 }) {
@@ -508,7 +492,6 @@ function AbstractDrawer({
         <DecisionSummaryDetails
           summary={decisionSummary}
           selectedPlan={selectedPlan}
-          selectionRequired={selectionRequired}
           abstractId={abstract.id}
         />
 
@@ -580,12 +563,10 @@ function AbstractDrawer({
 function DecisionSummaryDetails({
   summary,
   selectedPlan,
-  selectionRequired,
   abstractId,
 }: {
   summary: AdminDecisionAbstractSummary | null;
   selectedPlan: AdminDecisionSummary["selectedPlan"];
-  selectionRequired: boolean;
   abstractId: string;
 }) {
   const headingId = `decision-summary-heading-${abstractId}`;
@@ -596,9 +577,7 @@ function DecisionSummaryDetails({
       <h3 id={headingId} style={{ fontSize: 13, margin: "0 0 8px" }}>Decision summary</h3>
       {!selectedPlan ? (
         <p className="hint" style={{ margin: 0 }}>
-          {selectionRequired
-            ? "Choose a decision round to see completed review results for this proposal."
-            : "No review round is available for a decision score."}
+          No review round is available for a decision score.
         </p>
       ) : (
         <dl className="detail-drawer">
