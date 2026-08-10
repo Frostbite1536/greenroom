@@ -202,7 +202,11 @@ test("passwordHash is confined to the credential path and never projected", () =
   // The routes that fetch a whole User row hand it to serializers that project
   // an explicit field list, so a new column cannot ride out with them.
   const abstractSerializer = read("lib/api/abstract-serialize.ts");
-  assert.match(abstractSerializer, /speakers: \(abstract\.speakers \?\? \[\]\)\.map\(\(s\) => \(\{\s*userId: s\.userId,\s*email: s\.user\.email,\s*name: s\.user\.name,\s*isPrimary: s\.isPrimary,\s*\}\)\)/);
+  // The explicit projection now carries the ABS-11 per-proposal role label
+  // (with its comment lines) between isPrimary and the close. The point of
+  // this pin is the explicit field list itself, so it names every projected
+  // field and tolerates interleaved comments rather than freezing exact bytes.
+  assert.match(abstractSerializer, /speakers: \(abstract\.speakers \?\? \[\]\)\.map\(\(s\) => \(\{\s*userId: s\.userId,\s*email: s\.user\.email,\s*name: s\.user\.name,\s*isPrimary: s\.isPrimary,(\s|\/\/[^\r\n]*)*role: s\.role,\s*\}\)\)/);
   for (const serializer of ["lib/api/abstract-serialize.ts", "lib/api/v1-serialize.ts", "lib/api/form-serialize.ts", "lib/api/speaker-submission.ts"]) {
     assert.doesNotMatch(read(serializer), /\.\.\.\w*[uU]ser\b/, `${serializer} must not spread a User row`);
   }
