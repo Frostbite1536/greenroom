@@ -5,8 +5,10 @@ import {
   describeReviewerInviteResendWait,
   reviewerInviteFailureMessage,
   reviewerInviteLifecycleText,
+  reviewerInviteLifecycleKey,
   reviewerInvitePostNotice,
   reviewerInviteResendHint,
+  shouldApplyReviewerInviteReveal,
 } from "./reviewer-invite-ui";
 
 test("reviewer invite lifecycle copy is explicit about pending delivery and accepted access", () => {
@@ -57,6 +59,60 @@ test("cooldown copy names the real wait instead of a bare permanent refusal", ()
   assert.equal(reviewerInviteResendHint(null, now), null);
   assert.match(reviewerInviteResendHint("2030-01-01T12:07:30.000Z", null) ?? "", /^Checking when a resend is available/);
   assert.match(reviewerInviteResendHint("not-a-date", now) ?? "", /server will confirm/);
+});
+
+test("a stale reveal response is discarded instead of restoring a pre-rotation bearer", () => {
+  const pending = {
+    state: "pending" as const,
+    expiresAt: "2030-01-08T00:00:00.000Z",
+    resendAvailableAt: "2030-01-01T12:10:00.000Z",
+    delivery: "mocked" as const,
+  };
+  const beforeRotation = reviewerInviteLifecycleKey(pending);
+  // Every lifecycle move a resend or acceptance can make is a distinct key.
+  const rotated = reviewerInviteLifecycleKey({
+    ...pending, expiresAt: "2030-01-15T00:00:00.000Z", resendAvailableAt: "2030-01-01T12:30:00.000Z",
+  });
+  const accepted = reviewerInviteLifecycleKey({ ...pending, state: "accepted" });
+  const expired = reviewerInviteLifecycleKey({ ...pending, state: "expired" });
+  assert.equal(reviewerInviteLifecycleKey(null), "none");
+  assert.equal(new Set([beforeRotation, rotated, accepted, expired, "none"]).size, 5);
+
+  // The winning response applies.
+  assert.equal(
+    shouldApplyReviewerInviteReveal(
+      { requestId: 3, lifecycleKey: beforeRotation },
+      { requestId: 3, lifecycleKey: beforeRotation },
+    ),
+    true,
+  );
+  // Superseded by a newer reveal on the same invitation.
+  assert.equal(
+    shouldApplyReviewerInviteReveal(
+      { requestId: 3, lifecycleKey: beforeRotation },
+      { requestId: 4, lifecycleKey: beforeRotation },
+    ),
+    false,
+  );
+  // The regression itself: a reveal issued before a rotation resolves after
+  // it. Its bearer is dead and must never be put back on screen.
+  assert.equal(
+    shouldApplyReviewerInviteReveal(
+      { requestId: 3, lifecycleKey: beforeRotation },
+      { requestId: 3, lifecycleKey: rotated },
+    ),
+    false,
+  );
+  for (const key of [accepted, expired, "none"]) {
+    assert.equal(
+      shouldApplyReviewerInviteReveal(
+        { requestId: 3, lifecycleKey: beforeRotation },
+        { requestId: 3, lifecycleKey: key },
+      ),
+      false,
+      key,
+    );
+  }
 });
 
 test("invite result and error copy preserves the token-free server lifecycle", () => {

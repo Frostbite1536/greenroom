@@ -22,6 +22,37 @@ export type ReviewerInvitePostResult = {
 export type ReviewerInviteLinkResult = { inviteUrl: string; expiresAt: string | null };
 
 /**
+ * Identifies the exact invitation a revealed bearer belongs to. Any rotation,
+ * acceptance, or expiry changes this, which is what makes a reveal issued
+ * against the old invitation detectable when it finally resolves.
+ */
+export function reviewerInviteLifecycleKey(
+  invite: Pick<ReviewerInviteView, "state" | "expiresAt" | "resendAvailableAt"> | null,
+): string {
+  if (!invite) return "none";
+  return `${invite.state}|${invite.expiresAt}|${invite.resendAvailableAt ?? ""}`;
+}
+
+export type ReviewerInviteRevealStamp = { requestId: number; lifecycleKey: string };
+
+/**
+ * A reveal response may only be applied when it is still the newest request
+ * AND the invitation it was issued for has not changed under it.
+ *
+ * Without this, a reveal overlapping a resend resolves after the rotation has
+ * already cleared the field and puts a pre-rotation bearer back on screen —
+ * copyable, and dead the moment the reviewer clicks it. Both halves are
+ * needed: the request id catches a superseded reveal, and the lifecycle key
+ * catches a rotation that arrived while a single reveal was in flight.
+ */
+export function shouldApplyReviewerInviteReveal(
+  issued: ReviewerInviteRevealStamp,
+  current: ReviewerInviteRevealStamp,
+): boolean {
+  return issued.requestId === current.requestId && issued.lifecycleKey === current.lifecycleKey;
+}
+
+/**
  * The server remains authoritative; this only decides whether to enable the
  * control. An absent or unreadable timestamp is treated as available rather
  * than as a permanent refusal: no invitation has been sent yet (or the client

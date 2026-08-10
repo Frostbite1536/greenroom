@@ -8,8 +8,10 @@ import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import {
   canResendReviewerInvite,
   reviewerInviteFailureMessage,
+  reviewerInviteLifecycleKey,
   reviewerInvitePostNotice,
   reviewerInviteResendHint,
+  shouldApplyReviewerInviteReveal,
   type ReviewerInviteLinkResult,
   type ReviewerInvitePostResult,
 } from "@/lib/reviewer-invite-ui";
@@ -116,9 +118,17 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
   const [linkBusy, setLinkBusy] = useState(false);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "manual">("idle");
   const linkField = useRef<HTMLInputElement | null>(null);
+  // Monotonic per-row reveal id. Bumped by a new reveal and by any lifecycle
+  // change, so a response that lost either race is discarded on arrival.
+  const revealRequestRef = useRef(0);
   const invite = reviewer.invite;
   const resendAt = invite?.resendAvailableAt ?? null;
   const inviteExpiresAt = invite?.expiresAt ?? null;
+  const lifecycleKey = reviewerInviteLifecycleKey(invite);
+  // Both sides of the guard must be read through refs. A response resolving
+  // after a rotation still closes over the *old* render's `lifecycleKey`, so
+  // comparing the closure against itself would always pass.
+  const lifecycleKeyRef = useRef(lifecycleKey);
 
   useEffect(() => {
     const update = () => setNow(Date.now());
@@ -142,10 +152,15 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
 
   useEffect(() => {
     // A rotated, accepted, or expired invitation invalidates any bearer still
-    // on screen. Drop it rather than let a dead link be copied.
+    // on screen AND any reveal still in flight for the previous lifecycle.
+    // Bumping the id first is what stops that older response from putting a
+    // pre-rotation bearer back after this clear.
+    revealRequestRef.current += 1;
+    lifecycleKeyRef.current = lifecycleKey;
     setLink(null);
     setCopyState("idle");
-  }, [resendAt, inviteExpiresAt, invite?.state]);
+    setLinkBusy(false);
+  }, [lifecycleKey]);
 
   if (!invite || invite.state === "accepted") return null;
   const available = canResendReviewerInvite(resendAt, now ?? 0);
@@ -171,11 +186,17 @@ export function ReviewerInviteResend({ reviewer }: { reviewer: SetupEvaluator })
   }
 
   async function showLink() {
+    const issued = { requestId: revealRequestRef.current + 1, lifecycleKey };
+    revealRequestRef.current = issued.requestId;
     setLinkBusy(true);
     setError(null);
     setNotice(null);
     setCopyState("idle");
     const res = await revealReviewerInviteLink(reviewer.email);
+    // Superseded by a newer reveal, or the invitation rotated underneath this
+    // one: drop the response untouched. The winner owns the visible state.
+    const current = { requestId: revealRequestRef.current, lifecycleKey: lifecycleKeyRef.current };
+    if (!shouldApplyReviewerInviteReveal(issued, current)) return;
     setLinkBusy(false);
     if (!res.ok) {
       setLink(null);

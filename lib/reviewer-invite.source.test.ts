@@ -89,8 +89,22 @@ test("the admin invite controls copy a revealed bearer without storing, logging,
   );
   // No console call may pass the bearer-bearing value itself as an argument.
   assert.doesNotMatch(controls, /console\.[a-z]+\([^)]*\b(?:url|link|inviteUrl|token|res\.data)\b\s*[,)]/);
-  // A rotated, accepted, or expired invitation drops any link still on screen.
-  assert.match(controls, /setLink\(null\);\s*setCopyState\("idle"\);\s*\}, \[resendAt, inviteExpiresAt, invite\?\.state\]\)/);
+  // A rotated, accepted, or expired invitation drops any link still on screen
+  // and invalidates any reveal in flight for the previous lifecycle.
+  assert.match(
+    controls,
+    /revealRequestRef\.current \+= 1;\s*lifecycleKeyRef\.current = lifecycleKey;\s*setLink\(null\);[\s\S]*?\}, \[lifecycleKey\]\)/,
+  );
+  // The guard must read BOTH current values through refs: a response resolving
+  // after a rotation still closes over the old render's lifecycleKey, so
+  // comparing the closure against itself would silently always pass.
+  assert.match(
+    controls,
+    /const current = \{ requestId: revealRequestRef\.current, lifecycleKey: lifecycleKeyRef\.current \};\s*if \(!shouldApplyReviewerInviteReveal\(issued, current\)\) return;/,
+  );
+  assert.doesNotMatch(controls, /shouldApplyReviewerInviteReveal\(issued, \{[^}]*\blifecycleKey\s*[,}]/);
+  // The discarded branch must return before touching any visible state.
+  assert.match(controls, /if \(!shouldApplyReviewerInviteReveal\(issued, current\)\) return;\s*setLinkBusy\(false\);/);
 });
 
 test("only the reveal endpoint and the outgoing email ever materialize an invite URL", () => {
