@@ -1595,14 +1595,20 @@ try {
     ordinal: 90,
     rubric: [{ key: "relevance", label: "Relevance", min: 1, max: 5, weight, ...extra }],
   });
+  // 422, not 400: a body that parses as JSON but fails the Zod contract is a
+  // validation refusal, and `fromZod` (lib/api/http.ts) maps every one of those
+  // to 422 VALIDATION_ERROR. I asserted 400 without checking the repo's own
+  // refusal status — the product behaviour was right all along.
   const zeroWeight = await req("POST", "/api/evaluations/plans", weightPlan(0), admin);
   const negativeWeight = await req("POST", "/api/evaluations/plans", weightPlan(-2), admin);
   const overLimitWeight = await req("POST", "/api/evaluations/plans", weightPlan(100.5), admin);
-  check("§2.4 a zero or negative criterion weight is refused, never coerced to 1 → 400",
-    zeroWeight.status === 400 && negativeWeight.status === 400,
-    `zero ${zeroWeight.status}, negative ${negativeWeight.status}`);
-  check("§2.4 a weight above the 100 input-safety limit is refused → 400",
-    overLimitWeight.status === 400, `got ${overLimitWeight.status}`);
+  check("§2.4 a zero or negative criterion weight is refused, never coerced to 1 → 422",
+    zeroWeight.status === 422 && zeroWeight.data?.error?.code === "VALIDATION_ERROR"
+    && negativeWeight.status === 422 && negativeWeight.data?.error?.code === "VALIDATION_ERROR",
+    `zero ${zeroWeight.status} ${JSON.stringify(zeroWeight.data?.error?.code ?? "")}, negative ${negativeWeight.status} ${JSON.stringify(negativeWeight.data?.error?.code ?? "")}`);
+  check("§2.4 a weight above the 100 input-safety limit is refused → 422",
+    overLimitWeight.status === 422 && overLimitWeight.data?.error?.code === "VALIDATION_ERROR",
+    `${overLimitWeight.status} ${JSON.stringify(overLimitWeight.data?.error?.code ?? "")}`);
   const noProbePlan = await prisma.evaluationPlan.count({
     where: { eventId: EVENT_ID, name: "Scratch weight-bounds probe" },
   });
@@ -2044,9 +2050,22 @@ try {
     (scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length === 1
     && scoreSortHead.includes("Decision score"),
     `${(scoreSortHead.match(/<button[^>]*class="sort-header"/g) ?? []).length} sortable headers`);
+  // Bounded to the review-count <th> itself. The previous end anchor was the
+  // string "Decision score", which is the *next* header's button text, so the
+  // slice ran through `</th><th scope="col"><button class="sort-header">` and
+  // convicted this header of owning the score column's control. Same anchoring
+  // bug I had already fixed in lib/abstracts-table.source.test.ts and failed to
+  // carry across.
+  const reviewCountHeader = (() => {
+    const label = scoreSortHead.indexOf("Decision reviews");
+    if (label === -1) return "";
+    const start = scoreSortHead.lastIndexOf("<th", label);
+    const end = scoreSortHead.indexOf("</th>", label);
+    return start === -1 || end === -1 ? "" : scoreSortHead.slice(start, end + "</th>".length);
+  })();
   check("§3.2 the decision-review count is NOT sortable in this lane",
-    scoreSortHead.slice(scoreSortHead.indexOf("Decision reviews"), scoreSortHead.indexOf("Decision score"))
-      .includes("<button") === false);
+    reviewCountHeader.includes("Decision reviews") && !reviewCountHeader.includes("<button"),
+    reviewCountHeader || "review-count header not found");
   check("§3.2 the abstracts table opens unsorted, with no aria-sort claimed",
     !scoreSortHead.includes("aria-sort"), scoreSortHead.slice(0, 200));
   check("§3.2 sorting does not disturb the newest-round default or the included-review copy",
