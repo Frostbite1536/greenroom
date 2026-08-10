@@ -1812,6 +1812,35 @@ try {
     aliasWithEvent.status === 307 && aliasWithEvent.location === `/embed/schedule?event=${EVENT_ID}`,
     `${aliasWithEvent.status} ${aliasWithEvent.location || "none"}`);
 
+  // An unknown ?event= must behave exactly like no ?event= at all. Comparing the
+  // rendered <main> of both responses is the strongest form of the assertion:
+  // if any single surface (agenda, metrics, CFP panel, embed links, heading)
+  // still spoke the unresolved slug, these two would differ. Everything below
+  // reads the default programme only.
+  const landingMain = (html) => {
+    const start = html.indexOf('<main class="landing"');
+    if (start === -1) return null;
+    const end = html.indexOf("</main>", start);
+    return end === -1 ? null : html.slice(start, end + "</main>".length);
+  };
+  const landingDefault = await fetch(`${BASE}/`, { redirect: "manual" });
+  const landingDefaultHtml = await landingDefault.text();
+  const landingUnknown = await fetch(`${BASE}/?event=no-such-event-slug`, { redirect: "manual" });
+  const landingUnknownHtml = await landingUnknown.text();
+  const defaultMain = landingMain(landingDefaultHtml);
+  const unknownMain = landingMain(landingUnknownHtml);
+  const defaultMainText = renderedText(defaultMain) ?? "";
+  check("landing page renders a default programme with no event parameter",
+    landingDefault.status === 200 && defaultMain !== null
+    && !defaultMainText.includes("No public programme is published yet."),
+    `${landingDefault.status} ${defaultMain === null ? "no <main>" : "ok"}`);
+  check("an unknown ?event= falls back to the default programme on every surface",
+    landingUnknown.status === 200 && unknownMain !== null && unknownMain === defaultMain,
+    `${landingUnknown.status} ${unknownMain === defaultMain ? "identical" : "diverged"}`);
+  check("an unknown ?event= never pairs one event's links with another's CFP panel",
+    !landingUnknownHtml.includes("no-such-event-slug")
+    && !(renderedText(unknownMain) ?? "").includes("No public programme is published yet."));
+
   // --- accessibility regressions (plan B7 / ops-a11y-frontend-findings) ---
   // Deliberately an INDEPENDENT contrast implementation: lib/color-contrast.ts
   // has its own unit tests, so re-using it here would only prove it agrees with

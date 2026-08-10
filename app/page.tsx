@@ -5,15 +5,33 @@ import { getResolvedSession, homeForRole } from "@/lib/auth";
 import { getPublicAgenda } from "@/lib/data/reads";
 import { DEFAULT_PUBLIC_EVENT, getOpenCfpEntry } from "@/lib/data/open-cfp";
 import { embedAliasTarget } from "@/lib/embed-alias";
+import { normalizeLandingEventParam, resolveLandingEvent } from "@/lib/landing-event";
 import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 
 export const dynamic = "force-dynamic";
 
 type SearchParams = Promise<{ event?: string }>;
 
-export async function generateMetadata({ searchParams }: { searchParams: SearchParams }) {
+/**
+ * Resolve the programme ONCE, for the page and its metadata alike.
+ *
+ * An explicit `?event=` is honoured only when it resolves; a blank or unknown
+ * slug behaves exactly like no slug, so the agenda, the metrics, the open-CFP
+ * entry, the embed links, and the metadata all describe the same event. Reads
+ * are `cache()`-deduplicated, so calling this from both entry points costs one
+ * lookup per distinct event.
+ */
+async function loadLandingProgramme(searchParams: SearchParams) {
   const { event } = await searchParams;
-  const agenda = await getPublicAgenda(event);
+  const requested = normalizeLandingEventParam(event);
+  const requestedAgenda = requested ? await getPublicAgenda(requested) : null;
+  const resolution = resolveLandingEvent(requested, requestedAgenda !== null);
+  const agenda = requestedAgenda ?? (await getPublicAgenda(DEFAULT_PUBLIC_EVENT));
+  return { resolution, agenda };
+}
+
+export async function generateMetadata({ searchParams }: { searchParams: SearchParams }) {
+  const { agenda } = await loadLandingProgramme(searchParams);
   return {
     title: agenda ? agenda.event.name : "Conference programme",
     description: agenda
@@ -55,11 +73,10 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
   const session = await getResolvedSession();
   if (session) redirect(homeForRole(session.role));
 
-  const { event } = await searchParams;
-  const [agenda, openCfp] = await Promise.all([
-    getPublicAgenda(event),
-    getOpenCfpEntry(event ?? DEFAULT_PUBLIC_EVENT),
-  ]);
+  const { resolution, agenda } = await loadLandingProgramme(searchParams);
+  // Keyed off the RESOLVED programme, never off the requested slug: the CFP
+  // entry can only ever describe the event whose schedule this page is showing.
+  const openCfp = await getOpenCfpEntry(agenda?.event.slug ?? DEFAULT_PUBLIC_EVENT);
 
   const timezone = agenda?.event.timezone ?? "UTC";
   const eventName = agenda?.event.name ?? openCfp.event?.name ?? null;
@@ -68,11 +85,8 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
   const speakerCount = agenda ? new Set(agenda.sessions.flatMap((s) => s.speakers)).size : 0;
   const trackCount = agenda?.tracks.length ?? 0;
 
-  // Only carry the event through when it actually resolved: an unknown
-  // `?event=` must fall back to the default programme, not to a 404 embed.
-  const eventParam = agenda ? event : undefined;
-  const schedulePath = embedAliasTarget("/embed/schedule", eventParam);
-  const speakersPath = embedAliasTarget("/embed/speakers", eventParam);
+  const schedulePath = embedAliasTarget("/embed/schedule", resolution.eventParam);
+  const speakersPath = embedAliasTarget("/embed/speakers", resolution.eventParam);
 
   return (
     <main className="landing">
@@ -115,8 +129,8 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
           </div>
         ) : (
           <p className="landing-notice">
-            This programme is not published yet. The links above show the current public
-            schedule and speaker directory.
+            No public programme is published yet. The schedule and speaker directory
+            appear here once the programme is announced.
           </p>
         )}
 
