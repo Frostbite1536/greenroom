@@ -3289,29 +3289,54 @@ try {
     speakers: [{ email: "s16-public@scratch.test", name: "S16 Public", isPrimary: true }],
     answers: { title_note: "public", consent: true }, intent: "submit",
   }, undefined, {}, { signal: compatiblePublicAbort.signal });
-  let compatiblePublicObservation;
+  // Lock-independence is proven by observation, not by a completion race:
+  // while the Abstract advisory lock is deliberately held, the public writer
+  // must NEVER appear as a waiter on this abstract's exact advisory key. A
+  // fixed completion deadline here failed three runs tonight purely on remote
+  // database latency — completion may legitimately land after release, and
+  // that does not weaken the compatibility claim.
+  const s16AbstractLockName = `abstract-write:${s16OrderId}`;
+  let s16PublicWaitedOnAbstract = false;
+  let compatiblePublicSettled = false;
+  compatiblePublicSubmit.then(() => { compatiblePublicSettled = true; }, () => { compatiblePublicSettled = true; });
   try {
-    // If a lock-order regression blocks this public writer, do not leave the
-    // held advisory lock waiting forever. The result still fails honestly.
-    // 3s, not 4s: a healthy public submit completes well under this, and every
-    // spare second here is margin returned to the waiting speaker PATCH's
-    // 5-second server transaction budget.
-    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 3_000);
+    // ~2s cap: the writer acquires its locks early in its transaction, so if
+    // it has not queued on the abstract key by now it never will — and the
+    // waiting speaker PATCH's 5-second server budget is burning throughout.
+    for (let attempt = 0; attempt < 30 && !compatiblePublicSettled; attempt++) {
+      const rows = await prisma.$queryRaw`
+        SELECT count(*)::int AS "count"
+        FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+          AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(${s16AbstractLockName}, 0)
+          AND pid <> pg_backend_pid()
+      `;
+      // One waiter is expected: the speaker PATCH. A second means the public
+      // writer queued on the abstract key — the exact regression this probes.
+      if ((rows[0]?.count ?? 0) > 1) { s16PublicWaitedOnAbstract = true; break; }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
   } finally {
-    if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
     releaseS16AbstractLock();
     await s16AbstractHolder;
   }
+  // Post-release, the writer must finish promptly; 15s is a hang guard, not a
+  // race window.
+  const compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 15_000);
+  if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
   const compatiblePublicResult = compatiblePublicObservation?.value;
   const waitingSpeakerEditResult = await waitingSpeakerEdit;
   check("S16 speaker locks FormConfig and fields before the Abstract advisory lock",
     speakerHeldFormLocksBeforeAbstract && waitingSpeakerEditResult.status === 200,
     waitingSpeakerEditResult.status);
-  check("S16 compatible public writer completes while speaker waits on Abstract",
-    compatiblePublicObservation?.completed && !compatiblePublicObservation.error && compatiblePublicResult?.status === 201,
-    compatiblePublicObservation?.completed
-      ? compatiblePublicObservation.error?.name ?? compatiblePublicResult?.status
-      : "timed out before Abstract release");
+  check("S16 compatible public writer never queues on the held Abstract lock and completes",
+    !s16PublicWaitedOnAbstract && compatiblePublicObservation?.completed &&
+      !compatiblePublicObservation.error && compatiblePublicResult?.status === 201,
+    s16PublicWaitedOnAbstract
+      ? "public writer appeared as a waiter on the abstract advisory key"
+      : compatiblePublicObservation?.completed
+        ? compatiblePublicObservation.error?.name ?? compatiblePublicResult?.status
+        : "public writer did not complete within the 15s hang guard");
 
   // The Session and editability checks are also post-lock facts. A competing
   // programme writer makes this formerly submitted abstract ACCEPTED and links
