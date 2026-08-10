@@ -375,6 +375,52 @@ try {
   }, admin);
   check("duplicate field key refused (422)", dupKeys.status === 422 && !!dupKeys.data?.error?.fieldErrors?.fields, dupKeys.data?.error?.code);
 
+  // C4 (D-C5-2) — a form shape nobody could ever fill in is refused on the same
+  // create path, with a stable field-scoped 400. Composes with the duplicate-key
+  // guard above rather than replacing it.
+  const c4Shape = (suffix, fields, extra = {}) => ({
+    ...formPayload, name: `C4 ${suffix}`, slug: `${formPayload.slug}-${suffix}`, published: false, fields, ...extra,
+  });
+  const c4Cycle = await j("POST", "/api/cfp/forms", c4Shape("c4cycle", [
+    { key: "alpha", label: "Alpha", type: "SHORT_TEXT", required: false, sortOrder: 0,
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "beta", operator: "isNotEmpty" }] } },
+    { key: "beta", label: "Beta", type: "SHORT_TEXT", required: false, sortOrder: 1,
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "alpha", operator: "isNotEmpty" }] } },
+  ]), admin);
+  check("C4 a conditional loop is refused (400 FORM_LOGIC_CYCLE)",
+    c4Cycle.status === 400 && c4Cycle.data?.error?.code === "FORM_LOGIC_CYCLE" &&
+    !!c4Cycle.data?.error?.fieldErrors?.alpha, c4Cycle.data?.error?.code);
+  check("C4 the loop refusal explains itself in plain language",
+    !/[A-Z_]{4,}/.test(c4Cycle.data?.error?.fieldErrors?.alpha?.[0] ?? "CODE_LIKE"),
+    c4Cycle.data?.error?.fieldErrors?.alpha?.[0]);
+
+  const c4Unknown = await j("POST", "/api/cfp/forms", c4Shape("c4unknown", [
+    { key: "gate", label: "Gate", type: "SHORT_TEXT", required: false, sortOrder: 0,
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "not_a_question", operator: "equals", value: "x" }] } },
+  ]), admin);
+  check("C4 a rule on a source that is not on the form is refused (400 FORM_LOGIC_SOURCE_UNKNOWN)",
+    c4Unknown.status === 400 && c4Unknown.data?.error?.code === "FORM_LOGIC_SOURCE_UNKNOWN" &&
+    !!c4Unknown.data?.error?.fieldErrors?.gate, c4Unknown.data?.error?.code);
+
+  const c4Reserved = await j("POST", "/api/cfp/forms", c4Shape("c4reserved", [
+    { key: "format", label: "Preferred format", type: "SHORT_TEXT", required: false, sortOrder: 0 },
+  ]), admin);
+  check("C4 a question key that collides with a built-in source is refused",
+    c4Reserved.status === 400 && c4Reserved.data?.error?.code === "FORM_FIELD_KEY_RESERVED",
+    c4Reserved.data?.error?.code);
+
+  // The built-in submission sources are real: a rule on Session format saves.
+  const c4BuiltIn = await j("POST", "/api/cfp/forms", c4Shape("c4builtin", [
+    { key: "gate", label: "Gate", type: "SHORT_TEXT", required: false, sortOrder: 0,
+      conditionalLogic: { match: "all", rules: [{ fieldKey: "format", operator: "isNotEmpty" }] } },
+  ]), admin);
+  check("C4 a rule on the built-in Session format source is accepted",
+    c4BuiltIn.status === 201, c4BuiltIn.data?.error?.code ?? c4BuiltIn.status);
+  if (c4BuiltIn.data?.data?.id) {
+    const c4Cleanup = await j("DELETE", `/api/cfp/forms/${c4BuiltIn.data.data.id}`, null, admin);
+    check("C4 setup: the built-in-source scratch form is removed again", c4Cleanup.status === 200, c4Cleanup.status);
+  }
+
   const resaved = await j("POST", "/api/cfp/forms", { ...formPayload, id: formId, name: "Smoke CFP v2" }, admin);
   check("update keeps own slug and returns 200", resaved.status === 200 && resaved.data?.data?.name === "Smoke CFP v2", resaved.status);
 
@@ -862,6 +908,35 @@ try {
   }, admin);
   check("B5 removing an option someone chose is refused",
     b5DropUsedOption.status === 409 && !!b5DropUsedOption.data?.error?.fieldErrors?.audience, b5DropUsedOption.status);
+
+  // C4 + B5 together: answers are stored by an option's value, never by its
+  // wording. Rewording a chosen option is always free; changing its stored
+  // value is the same destructive edit B5 already refuses.
+  const c4Relabel = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "audience"
+      ? { ...f, options: [{ label: "New to the topic", value: "beginner" }, { label: "Deeply experienced", value: "advanced" }] } : f),
+  }, admin);
+  check("C4 rewording a chosen option without touching its value is allowed",
+    c4Relabel.status === 200, c4Relabel.data?.error?.code ?? c4Relabel.status);
+
+  const c4Revalue = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "audience"
+      ? { ...f, options: [{ label: "Beginner", value: "beginner_v2" }, { label: "Advanced", value: "advanced" }] } : f),
+  }, admin);
+  check("C4 changing the stored value of a chosen option is still refused (409 FIELD_IN_USE)",
+    c4Revalue.status === 409 && c4Revalue.data?.error?.code === "FIELD_IN_USE" &&
+    !!c4Revalue.data?.error?.fieldErrors?.audience, c4Revalue.data?.error?.code);
+
+  const c4BlankOption = await j("POST", "/api/cfp/forms", {
+    ...formPayload, id: formId,
+    fields: formPayload.fields.map((f) => f.key === "audience"
+      ? { ...f, options: [...f.options, { label: "Not sure", value: "  " }] } : f),
+  }, admin);
+  check("C4 an option with no stored value is refused (400 FORM_OPTION_VALUE_EMPTY)",
+    c4BlankOption.status === 400 && c4BlankOption.data?.error?.code === "FORM_OPTION_VALUE_EMPTY" &&
+    !!c4BlankOption.data?.error?.fieldErrors?.audience, c4BlankOption.data?.error?.code);
 
   // Adding an option is never destructive, and removing one nobody picked is fine.
   const withExtraOption = formPayload.fields.map((f) => f.key === "audience"
@@ -2352,12 +2427,19 @@ try {
     taskProgress.status === 200 && taskProgress.data?.data?.responses?.needs_hotel === "yes",
     taskProgress.status);
 
+  // The dependent rules must track the surviving option so the payload stays
+  // shape-valid under the C4 contract: a rule pinned to the removed "yes"
+  // would be refused earlier as FORM_LOGIC_VALUE_NOT_AN_OPTION and this probe
+  // would never reach the B5 answered-option protection it exists to prove.
   const destructiveTaskFormEdit = await j("POST", "/api/cfp/forms", {
     ...taskFormPayload,
     id: taskFormId,
     fields: [
       { ...taskFormPayload.fields[0], options: [{ label: "No", value: "no" }] },
-      ...taskFormPayload.fields.slice(1),
+      ...taskFormPayload.fields.slice(1).map((field) => ({
+        ...field,
+        conditionalLogic: { match: "all", rules: [{ fieldKey: "needs_hotel", operator: "equals", value: "no" }] },
+      })),
     ],
   }, admin);
   check("O3 task responses participate in B5 option-removal protection",
