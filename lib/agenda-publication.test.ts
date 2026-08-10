@@ -157,3 +157,27 @@ test("a reversed decision unpublishes under the same lock that wrote the status"
   // Scoped to the abstract's own session id, never a broader write.
   assert.match(route, /where: \{ id: provisioned\.sessionId \}/);
 });
+
+test("past the cap, the unpublished count is a floor and says the page is partial", () => {
+  const notice = unpublishedNotice(["DRAFT", "PUBLISHED", "DRAFT"], true) ?? "";
+  assert.match(notice, /At least 2 talks are unpublished/);
+  assert.match(notice, /does not hold the whole programme/);
+  assert.match(notice, /List view/);
+  // Singular still reads as English.
+  assert.match(unpublishedNotice(["DRAFT"], true) ?? "", /At least 1 talk is unpublished/);
+});
+
+test("a truncated page stays silent about finding none, rather than clearing the event", () => {
+  // Zero held-back talks among the rows this page loaded is not a statement
+  // about the rows it did not. The truncation banner already explains why.
+  assert.equal(unpublishedNotice(["PUBLISHED", "PUBLISHED"], true), null);
+});
+
+test("the complete-read copy is unchanged by the truncated branch", () => {
+  assert.equal(
+    unpublishedNotice(["DRAFT", "PUBLISHED"], false),
+    "1 talk is unpublished and does not appear on the public agenda. Open the List view to publish it.",
+  );
+  // Omitting the flag entirely behaves exactly as before.
+  assert.equal(unpublishedNotice(["DRAFT", "PUBLISHED"]), unpublishedNotice(["DRAFT", "PUBLISHED"], false));
+});

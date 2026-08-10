@@ -55,12 +55,20 @@ export type ScheduleViewAgenda = {
  * What to tell a reader whose agenda was cut short, or null when it was not.
  * Never says "showing all 500 of 500" — a notice that reports no problem is a
  * notice that should not be rendered.
+ *
+ * It names the cut as chronological because that is what the read actually
+ * does: the query orders by `startsAt` and takes the first page, so the
+ * sessions missing are the *latest* ones. That single fact is what makes the
+ * day-tab counts interpretable — the early days are complete and only the last
+ * of the event is short — which is why the tabs are left as plain numbers
+ * instead of every one of them carrying a misleading "+".
  */
 export function agendaTruncationNotice(
   agenda: Pick<ScheduleViewAgenda, "sessions" | "truncated">,
 ): string | null {
   if (!agenda.truncated) return null;
-  return `This schedule is unusually large, so only the first ${agenda.sessions.length} sessions are shown here. `
+  return `This schedule is unusually large, so only the first ${agenda.sessions.length} sessions are shown, `
+    + "in start-time order — the latest sessions of the event are missing from this page. "
     + "Use the day tabs or search to narrow it, or open the event's own schedule page.";
 }
 
@@ -293,8 +301,22 @@ export function scheduleHref(
   return query ? `/embed/schedule?${query}` : "/embed/schedule";
 }
 
-/** One-line summary for the header: session count under the current filters. */
-export function resultSummary(total: number, shown: number, filtered: boolean): string {
+/**
+ * One-line summary for the header: session count under the current filters.
+ *
+ * `truncated` qualifies the *total* only. What is shown is always exactly what
+ * is shown, so that half is never suffixed — but the number it is measured
+ * against becomes a floor ("3 sessions of 500+"), because past the cap the page
+ * cannot know how many there really are.
+ */
+export function resultSummary(
+  total: number,
+  shown: number,
+  filtered: boolean,
+  truncated = false,
+): string {
   const label = (n: number) => `${n} ${n === 1 ? "session" : "sessions"}`;
-  return filtered ? `${label(shown)} of ${total}` : label(total);
+  const totalLabel = truncated ? `${total}+` : `${total}`;
+  if (filtered) return `${label(shown)} of ${totalLabel}`;
+  return truncated ? `${totalLabel} sessions` : label(total);
 }

@@ -51,9 +51,20 @@ export function publicationControl(status: SessionContentStatus): PublicationCon
  * notice that reports a problem an organizer cannot find the switch for is half
  * a feature.
  */
-export function unpublishedNotice(statuses: readonly SessionContentStatus[]): string | null {
+export function unpublishedNotice(
+  statuses: readonly SessionContentStatus[],
+  truncated = false,
+): string | null {
   const held = statuses.filter((status) => status === "DRAFT").length;
+  // Past the cap, "none held back" is a claim about rows this page never read.
+  // It stays silent rather than asserting a clean bill of health it cannot give
+  // — the builder's truncation banner is already telling the operator why.
   if (held === 0) return null;
+  if (truncated) {
+    return `At least ${held} ${held === 1 ? "talk is" : "talks are"} unpublished and ${held === 1 ? "does" : "do"} `
+      + "not appear on the public agenda; this page does not hold the whole programme. "
+      + `Open the List view to publish ${held === 1 ? "it" : "them"}.`;
+  }
   return held === 1
     ? "1 talk is unpublished and does not appear on the public agenda. Open the List view to publish it."
     : `${held} talks are unpublished and do not appear on the public agenda. Open the List view to publish them.`;

@@ -280,3 +280,24 @@ test("the header summary states how many of the total are showing", () => {
   assert.equal(resultSummary(18, 3, true), "3 sessions of 18");
   assert.equal(resultSummary(1, 1, false), "1 session");
 });
+
+test("a capped agenda reports its total as a floor, and what is shown exactly", () => {
+  // The shown half is never suffixed: the page knows exactly what it rendered.
+  assert.equal(resultSummary(500, 500, false, true), "500+ sessions");
+  assert.equal(resultSummary(500, 3, true, true), "3 sessions of 500+");
+  // A complete read is byte-identical to before, including the singular.
+  assert.equal(resultSummary(18, 18, false, false), "18 sessions");
+  assert.equal(resultSummary(1, 1, false, false), "1 session");
+  assert.equal(resultSummary(18, 3, true, false), "3 sessions of 18");
+  // Omitting the flag behaves exactly as the three-argument callers expect.
+  assert.equal(resultSummary(18, 18, false), "18 sessions");
+});
+
+test("the truncation notice names the cut as chronological, so day tabs stay readable", () => {
+  // The read orders by startsAt and takes the first page, so the missing
+  // sessions are the latest ones — early day tabs are complete. That is why the
+  // tabs themselves are plain numbers rather than each carrying a "+".
+  const notice = agendaTruncationNotice({ sessions: [session()], truncated: true }) ?? "";
+  assert.match(notice, /start-time order/);
+  assert.match(notice, /latest sessions of the event are missing/);
+});

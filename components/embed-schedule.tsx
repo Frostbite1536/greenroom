@@ -165,7 +165,7 @@ export function EmbedSchedule({
           <div>
             <h1>{agenda.event.name}</h1>
             <p className="hint">
-              {resultSummary(agenda.sessions.length, filtered.length, isFiltered)}
+              {resultSummary(agenda.sessions.length, filtered.length, isFiltered, agenda.truncated ?? false)}
               {dateRange ? ` · ${dateRange}` : ""}
             </p>
             {/* A reader whose programme was cut short is told, rather than

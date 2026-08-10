@@ -2254,6 +2254,13 @@ try {
     && landingText.includes("/embed/speakers"));
   check("landing page names the event and its real programme size",
     landingText.includes("Scratch Frontend") && landingText.includes("Scheduled sessions"));
+  // S20: this event is far inside the cap, so the metrics must be exact numbers
+  // with no "+" floor and no partial-programme notice. Guards the flag against
+  // being inverted, which would qualify every count on every real event.
+  check("T3 a small programme's landing metrics are stated exactly, with no floor qualifier",
+    !/<strong>\d+\+<\/strong>/.test(landingHtml)
+    && !landingText.includes("larger than this page counts at once"),
+    "expected exact landing metrics for an event inside the cap");
   check("landing page carries the same open-CFP chooser",
     landingHtml.includes(`href="${canonicalCfpPath}"`)
     && landingHtml.includes(`href="${c16LegacyPath}"`)

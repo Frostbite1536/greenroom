@@ -8,6 +8,7 @@ import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agend
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
 import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
+import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -75,6 +76,9 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const unscheduled = useMemo(() => sessions.filter((s) => s.slot === null), [sessions]);
   const conflicts = useMemo(() => findConflicts(sessions, roomName), [sessions]);
   const conflictIds = useMemo(() => conflictedSessionIds(conflicts), [conflicts]);
+  // Derived once so the notice and the condition that renders it can never
+  // describe different sets, and so the truncation flag is read in one place.
+  const publicationNotice = unpublishedNotice(sessions.map((s) => s.contentStatus), data.truncated);
 
   // Days that actually have content, so the grid follows the real event.
   const days = useMemo(() => {
@@ -164,7 +168,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           view={view}
           setView={setView}
           icon={<AlertTriangle size={15} />}
-          label={`Conflicts${conflicts.length ? ` (${conflicts.length})` : ""}`}
+          label={`Conflicts${conflicts.length ? ` (${boundedCount(conflicts.length, data.truncated)})` : ""}`}
         />
         <span className="spacer" />
         {days.length > 1 && (view === "day" || view === "rooms") && (
@@ -216,9 +220,9 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
 
       {/* Says nothing at all when the whole programme is published, rather than
           reporting a reassuring zero. */}
-      {unpublishedNotice(sessions.map((s) => s.contentStatus)) ? (
+      {publicationNotice ? (
         <div style={{ padding: "12px 12px 0" }}>
-          <p className="hint" role="status">{unpublishedNotice(sessions.map((s) => s.contentStatus))}</p>
+          <p className="hint" role="status">{publicationNotice}</p>
         </div>
       ) : null}
 
@@ -227,7 +231,11 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           <div className="conflict-banner">
             <AlertTriangle size={17} aria-hidden="true" />
             <div>
-              <strong>{conflicts.length} scheduling conflict{conflicts.length > 1 ? "s" : ""} detected.</strong>{" "}
+              {/* A floor past the cap: conflicts among sessions this read never
+                  loaded are conflicts nothing here could have detected. */}
+              <strong>
+                {boundedCountLabel(conflicts.length, data.truncated, "scheduling conflict")} detected.
+              </strong>{" "}
               <button className="link-button" onClick={() => setView("conflicts")}>Review conflicts</button>
             </div>
           </div>
@@ -237,7 +245,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
       {unscheduled.length > 0 && (
         <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)" }}>
           <p className="field-label" style={{ marginBottom: 8 }}>
-            Unscheduled backlog <span className="hint">({unscheduled.length})</span>
+            Unscheduled backlog <span className="hint">({boundedCount(unscheduled.length, data.truncated)})</span>
           </p>
           <div className="row wrap" style={{ gap: 8 }}>
             {unscheduled.map((s) => (
@@ -295,7 +303,13 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         />
       )}
       {view === "conflicts" && (
-        <ConflictsView conflicts={conflicts} sessions={sessions} tz={tz} onSelect={setScheduling} />
+        <ConflictsView
+          conflicts={conflicts}
+          sessions={sessions}
+          tz={tz}
+          truncated={data.truncated}
+          onSelect={setScheduling}
+        />
       )}
 
       {scheduling ? (
@@ -648,15 +662,25 @@ function ConflictsView({
   conflicts,
   sessions,
   tz,
+  truncated,
   onSelect,
 }: {
   conflicts: ReturnType<typeof findConflicts>;
   sessions: AgendaSession[];
   tz: string;
+  truncated: boolean;
   onSelect: (s: AgendaSession) => void;
 }) {
   if (conflicts.length === 0) {
-    return (
+    // "Every room and speaker has a clear schedule" is a claim about the whole
+    // programme. Past the cap this view has not seen the whole programme, so it
+    // reports what it actually checked instead of clearing the event.
+    return truncated ? (
+      <EmptyState icon={<AlertTriangle size={22} />} title="No conflicts in the sessions loaded here">
+        This event is larger than this page loads at once, so this is not a clear bill of health for the
+        whole schedule — reduce the event data to check every session.
+      </EmptyState>
+    ) : (
       <EmptyState icon={<AlertTriangle size={22} />} title="No conflicts">
         Every room and speaker has a clear schedule.
       </EmptyState>
