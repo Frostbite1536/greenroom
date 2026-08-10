@@ -105,7 +105,86 @@ test("filters isolate each chase list and the summary stays exact", () => {
     onboardingComplete: 0,
     requiredOutstanding: 1,
     unscheduledSessions: 1,
+    // No task in this fixture carries a deadline, so nothing can be overdue.
+    speakersOverdue: 0,
   });
+});
+
+const NOW = new Date("2026-05-10T12:00:00.000Z");
+
+test("the next deadline is the earliest one still owed, not the earliest assigned", () => {
+  const rows = buildSpeakerStatusRows(
+    [assignment()],
+    [
+      // Already done: its deadline must not be what the operator chases.
+      task({ taskId: "t-done", taskTitle: "Headshot", status: "COMPLETED", dueAt: "2026-05-01T06:59:00.000Z" }),
+      task({ taskId: "t-late", taskTitle: "Hotel", status: "TODO", dueAt: "2026-05-20T06:59:00.000Z" }),
+      task({ taskId: "t-soon", taskTitle: "Slides", status: "IN_PROGRESS", dueAt: "2026-05-14T06:59:00.000Z" }),
+    ],
+    NOW,
+  );
+  assert.equal(rows[0].nextRequiredDueAt, "2026-05-14T06:59:00.000Z");
+  assert.equal(rows[0].overdueRequired, 0);
+});
+
+test("an organizer-waived task stops counting as a deadline to chase", () => {
+  const rows = buildSpeakerStatusRows(
+    [assignment()],
+    [task({ taskId: "t-waived", status: "WAIVED", dueAt: "2026-05-01T06:59:00.000Z" })],
+    NOW,
+  );
+  assert.equal(rows[0].nextRequiredDueAt, null);
+  assert.equal(rows[0].overdueRequired, 0);
+});
+
+test("only past deadlines on open required tasks count as overdue", () => {
+  const rows = buildSpeakerStatusRows(
+    [assignment()],
+    [
+      task({ taskId: "t-1", status: "TODO", dueAt: "2026-05-01T06:59:00.000Z" }),
+      task({ taskId: "t-2", status: "TODO", dueAt: "2026-05-05T06:59:00.000Z" }),
+      task({ taskId: "t-3", status: "TODO", dueAt: "2026-05-30T06:59:00.000Z" }),
+      // Optional tasks never block a speaker, so they never read as overdue.
+      task({ taskId: "t-4", status: "TODO", required: false, dueAt: "2026-01-01T06:59:00.000Z" }),
+    ],
+    NOW,
+  );
+  assert.equal(rows[0].overdueRequired, 2);
+  assert.equal(rows[0].nextRequiredDueAt, "2026-05-01T06:59:00.000Z");
+  assert.equal(summarizeSpeakerStatus(rows).speakersOverdue, 1);
+});
+
+test("a task with no deadline is never reported as overdue", () => {
+  const rows = buildSpeakerStatusRows(
+    [assignment()],
+    [
+      task({ taskId: "t-none", status: "TODO" }),
+      task({ taskId: "t-null", status: "TODO", dueAt: null }),
+      // A malformed stored value must be ignored, not silently become epoch 0
+      // and mark a speaker fifty-six years late.
+      task({ taskId: "t-bad", status: "TODO", dueAt: "not-a-date" }),
+    ],
+    NOW,
+  );
+  assert.equal(rows[0].nextRequiredDueAt, null);
+  assert.equal(rows[0].overdueRequired, 0);
+  assert.equal(rows[0].requiredOutstanding.length, 3);
+});
+
+test("the overdue summary counts speakers to chase, not late tasks", () => {
+  const rows = buildSpeakerStatusRows(
+    [
+      assignment(),
+      assignment({ userId: "u-2", name: "Grace Hopper", email: "grace@example.test", sessionId: "s-2" }),
+    ],
+    [
+      task({ taskId: "t-1", status: "TODO", dueAt: "2026-05-01T06:59:00.000Z" }),
+      task({ taskId: "t-2", status: "TODO", dueAt: "2026-05-02T06:59:00.000Z" }),
+      task({ userId: "u-2", taskId: "t-3", status: "TODO", dueAt: "2026-05-30T06:59:00.000Z" }),
+    ],
+    NOW,
+  );
+  assert.equal(summarizeSpeakerStatus(rows).speakersOverdue, 1);
 });
 
 test("an unknown filter value falls back to the full list", () => {

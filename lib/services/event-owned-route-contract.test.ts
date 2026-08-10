@@ -48,6 +48,96 @@ test("S18 template PATCH preserves an omitted trigger and clears only explicit v
   assert.doesNotMatch(templates, /trigger: input\.trigger\?\.trim\(\) \? input\.trigger\.trim\(\) : null/);
 });
 
+test("C33 required onboarding templates fan out inside the write's own transaction", () => {
+  const tasks = source("app/api/admin/tasks/route.ts");
+
+  const post = tasks.slice(tasks.indexOf("export const POST"), tasks.indexOf("export const PATCH"));
+  assert.match(post, /requireContext\(\["ADMIN"\]\)/);
+  assert.match(post, /prisma\.\$transaction\(/);
+  // The create and the fan-out share one transaction: there must be no window
+  // in which a required task exists but no confirmed speaker holds it.
+  assert.match(post, /required\s*\?\s*await backfillConfirmedSpeakerTasks\(tx, ctx\.eventId\)/);
+  assert.ok(post.indexOf("tx.onboardingTask.create") < post.indexOf("backfillConfirmedSpeakerTasks"));
+  assert.ok(post.indexOf("lockEventTaskFanOut") < post.indexOf("lockFormConfigsForTaskWrite"));
+  // Event scope is the session's, never the body's.
+  assert.match(post, /eventId: ctx\.eventId/);
+
+  const patch = tasks.slice(tasks.indexOf("export const PATCH"), tasks.indexOf("export const DELETE"));
+  assert.match(patch, /requireContext\(\["ADMIN"\]\)/);
+  assert.match(patch, /requireEventOwnedRow\(locked, ctx\.eventId, "TASK_NOT_FOUND", "Task"\)/);
+  // Marking an existing optional template required is the case that would
+  // otherwise leave speakers falsely Ready, so the fan-out keys off the
+  // resulting state rather than off the request containing `required: true`.
+  assert.match(patch, /const required = input\.required \?\? owned\.required/);
+  assert.match(patch, /required\s*\?\s*await backfillConfirmedSpeakerTasks\(tx, ctx\.eventId\)/);
+  assert.ok(patch.indexOf("lockOnboardingTaskForWrite") < patch.indexOf("tx.onboardingTask.update"));
+  assert.ok(patch.indexOf("tx.onboardingTask.update") < patch.indexOf("backfillConfirmedSpeakerTasks"));
+
+  const backfill = source("lib/services/onboarding-task-backfill.ts");
+  // Reuse, do not fork: the accept/convert path and the template path must
+  // stay one implementation.
+  assert.match(backfill, /import \{ assignOnboardingTasks[\s\S]*?\} from "@\/lib\/services\/session-provisioning"/);
+  assert.doesNotMatch(backfill, /speakerTask\.createMany/);
+
+  const assign = source("app/api/admin/tasks/assign/route.ts");
+  assert.match(assign, /requireContext\(\["ADMIN"\]\)/);
+  assert.match(assign, /lockEventTaskFanOut\(tx, ctx\.eventId\)/);
+  assert.match(assign, /backfillConfirmedSpeakerTasks\(tx, ctx\.eventId\)/);
+});
+
+test("onboarding assignment aggregations are bounded by the projected page, not the event", () => {
+  // A bounded projection with an unbounded aggregation behind it is not a
+  // bounded read: the cap holds on the rows the caller sees while the work
+  // behind them grows with the event. Both surfaces must group on the ids they
+  // actually render.
+  for (const path of ["app/api/admin/tasks/route.ts", "app/(app)/admin/speakers/page.tsx"]) {
+    const text = source(path);
+    const groupBys = [...text.matchAll(/speakerTask\.groupBy\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
+    assert.equal(groupBys.length, 2, `${path} should aggregate exactly twice`);
+    for (const groupBy of groupBys) {
+      assert.match(groupBy, /taskId: \{ in: (taskIds|pagedTemplateIds) \}/, path);
+      // The event predicate stays as a scope belt; it must not be the only bound.
+      assert.match(groupBy, /task: \{ eventId \}/, path);
+    }
+  }
+
+  const route = source("app/api/admin/tasks/route.ts");
+  assert.match(route, /const taskIds = tasks\.map\(\(task\) => task\.id\)/);
+  assert.match(route, /taskIds\.length === 0 \? \[\[\], \[\]\]/);
+
+  const page = source("app/(app)/admin/speakers/page.tsx");
+  // The ids must come from the capped slice, never from the raw cap-plus-one read.
+  assert.match(page, /const pagedTemplates = templates\.slice\(0, LIMITS\.templates\)/);
+  assert.match(page, /const pagedTemplateIds = pagedTemplates\.map\(\(template\) => template\.id\)/);
+  assert.ok(page.indexOf("pagedTemplateIds") < page.indexOf("speakerTask.groupBy"));
+});
+
+test("onboarding template deletion locks FormConfig before the task and preserves speaker work", () => {
+  const tasks = source("app/api/admin/tasks/route.ts");
+  const del = tasks.slice(tasks.indexOf("export const DELETE"));
+
+  assert.match(del, /requireContext\(\["ADMIN"\]\)/);
+  assert.match(del, /prisma\.\$transaction\(/);
+  assert.match(del, /requireEventOwnedRow\(locked, ctx\.eventId, "TASK_NOT_FOUND", "Task"\)/);
+  assert.match(del, /startedTaskAssignmentWhere\(owned\.id\)/);
+  assert.match(del, /"TASK_HAS_RESPONSES"|decision\.code/);
+  // S15 class order: FormConfig before OnboardingTask. Reversing it deadlocks
+  // against whole-form deletion, which holds FormConfig FOR UPDATE first.
+  assert.ok(del.indexOf("lockFormConfigsForTaskWrite") < del.indexOf("lockOnboardingTaskForWrite"));
+  assert.ok(del.indexOf("lockOnboardingTaskForWrite") < del.indexOf("tx.speakerTask.count"));
+  assert.ok(del.indexOf("tx.speakerTask.count") < del.indexOf("tx.onboardingTask.delete"));
+  // The refusal must come from the shared decision, not an inline condition.
+  assert.match(del, /decideOnboardingTaskDeletion\(started\)/);
+
+  const lock = source("lib/services/onboarding-task-lock.ts");
+  assert.match(lock, /FROM "OnboardingTask" WHERE "id" = \$\{taskId\} FOR UPDATE/);
+  assert.match(lock, /FROM "FormConfig" WHERE "id" = \$\{id\} FOR SHARE/);
+  assert.match(lock, /pg_advisory_xact_lock/);
+  // Sorted acquisition inside the FormConfig class keeps two writers touching
+  // the same pair from deadlocking against each other.
+  assert.match(lock, /\.sort\(\)/);
+});
+
 test("C6 withdrawal serializes on Abstract before declining only open review work", () => {
   const submission = source("app/api/cfp/submissions/[abstractId]/route.ts");
   const withdrawal = submission.slice(submission.indexOf('if (patch.status === "WITHDRAWN")'), submission.indexOf("const saved"));

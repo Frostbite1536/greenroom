@@ -33,6 +33,12 @@ export type SpeakerTaskAssignment = {
   taskTitle: string;
   status: SpeakerTaskStatus;
   required: boolean;
+  /**
+   * The template's deadline as a stored instant, or null when it has none.
+   * Optional so a caller that does not care about deadlines still type-checks;
+   * a missing deadline is never treated as an overdue one.
+   */
+  dueAt?: string | null;
 };
 
 export type SpeakerStatusRow = {
@@ -49,6 +55,15 @@ export type SpeakerStatusRow = {
   tasksTotal: number;
   /** Required tasks still open — the only thing that blocks a speaker. */
   requiredOutstanding: string[];
+  /**
+   * Earliest deadline among the required tasks still open, as a stored instant.
+   * Null when nothing is outstanding or nothing outstanding carries a date —
+   * the operator column renders those two cases the same way, as no deadline
+   * to chase, which is honest in both.
+   */
+  nextRequiredDueAt: string | null;
+  /** How many of those open required tasks are already past their deadline. */
+  overdueRequired: number;
   onboardingComplete: boolean;
   needsAttention: boolean;
 };
@@ -89,10 +104,14 @@ export function profileCompletion(profile: SpeakerProfileInput): { percent: numb
  *
  * Sorted most-urgent-first: speakers needing attention, then the least complete
  * onboarding, then alphabetically — an operator works the list top-down.
+ *
+ * `now` is injected rather than read from the clock so the overdue count is a
+ * pure function of its inputs and stays testable.
  */
 export function buildSpeakerStatusRows(
   assignments: SpeakerAssignment[],
   taskAssignments: SpeakerTaskAssignment[],
+  now: Date = new Date(),
 ): SpeakerStatusRow[] {
   const tasksByUser = new Map<string, SpeakerTaskAssignment[]>();
   for (const task of taskAssignments) {
@@ -108,9 +127,13 @@ export function buildSpeakerStatusRows(
       const { percent, missing } = profileCompletion(assignment.profile);
       const tasks = tasksByUser.get(assignment.userId) ?? [];
       const settled = tasks.filter((task) => isTaskSettled(task.status));
-      const requiredOutstanding = tasks
-        .filter((task) => task.required && !isTaskSettled(task.status))
-        .map((task) => task.taskTitle);
+      const requiredOpen = tasks.filter((task) => task.required && !isTaskSettled(task.status));
+      const requiredOutstanding = requiredOpen.map((task) => task.taskTitle);
+      const openDeadlines = requiredOpen
+        .map((task) => task.dueAt)
+        .filter((dueAt): dueAt is string => typeof dueAt === "string" && dueAt !== "")
+        .filter((dueAt) => !Number.isNaN(new Date(dueAt).getTime()))
+        .sort();
       row = {
         userId: assignment.userId,
         name: assignment.name,
@@ -124,6 +147,8 @@ export function buildSpeakerStatusRows(
         tasksDone: settled.length,
         tasksTotal: tasks.length,
         requiredOutstanding,
+        nextRequiredDueAt: openDeadlines[0] ?? null,
+        overdueRequired: openDeadlines.filter((dueAt) => new Date(dueAt).getTime() < now.getTime()).length,
         onboardingComplete: requiredOutstanding.length === 0 && missing.length === 0,
         needsAttention: false,
       };
@@ -165,12 +190,17 @@ export function summarizeSpeakerStatus(rows: SpeakerStatusRow[]): {
   onboardingComplete: number;
   requiredOutstanding: number;
   unscheduledSessions: number;
+  /** Speakers with at least one required task past its deadline. */
+  speakersOverdue: number;
 } {
   return {
     speakers: rows.length,
     onboardingComplete: rows.filter((row) => row.onboardingComplete).length,
     requiredOutstanding: rows.reduce((total, row) => total + row.requiredOutstanding.length, 0),
     unscheduledSessions: rows.reduce((total, row) => total + (row.sessionCount - row.scheduledCount), 0),
+    // Counted per speaker, not per task: this is a chase list, and one speaker
+    // sitting on three late tasks is one conversation, not three.
+    speakersOverdue: rows.filter((row) => row.overdueRequired > 0).length,
   };
 }
 
