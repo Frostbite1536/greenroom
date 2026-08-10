@@ -1,4 +1,5 @@
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { diagnosticLabel } from "@/lib/diagnostic-label";
 
 /**
  * Password credentials for provisioned users (D-C5-6).
@@ -72,10 +73,19 @@ function isPowerOfTwo(value: number): boolean {
   return Number.isInteger(value) && value > 1 && (value & (value - 1)) === 0;
 }
 
-/** Strict positive integer field — rejects "", "+1", "1.0", "0x10", " 1". */
+/**
+ * Strict positive integer field — rejects "", "+1", "1.0", "0x10", " 1".
+ *
+ * The regex already bounds the value to ten digits, but the numeric guard is
+ * explicit rather than implied: a parameter that ever reached scrypt as
+ * `Infinity` or `NaN` would be a memory-allocation bug, and the reader of this
+ * function should not have to re-derive the regex's range to rule that out.
+ */
 function parseIntegerField(raw: string): number | null {
   if (!/^[1-9][0-9]{0,9}$/.test(raw)) return null;
-  return Number(raw);
+  const value = Number(raw);
+  if (!Number.isFinite(value) || !Number.isSafeInteger(value) || value <= 0) return null;
+  return value;
 }
 
 /** Base64url with no padding, decoding to exactly `expectedBytes`. */
@@ -213,7 +223,12 @@ export async function verifyPassword(password: unknown, stored: string | null | 
   let derived: Buffer;
   try {
     derived = await derive(candidate, parsed.salt, parsed.parameters);
-  } catch {
+  } catch (error) {
+    // A derivation failure is an operational signal (exhausted memory, a
+    // parameter set this build rejects) that would otherwise be silently
+    // indistinguishable from a wrong password. Label and class only — the
+    // password, the salt, and the stored value never reach a log.
+    console.warn("[password-credential] derivation failed", diagnosticLabel(error));
     return false;
   }
   if (derived.length !== parsed.hash.length) return false;

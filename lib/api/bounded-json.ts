@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api/http";
+import { diagnosticLabel } from "@/lib/diagnostic-label";
 
 /** Application-level limit, intentionally far below Vercel's 4.5 MB ceiling. */
 export const PUBLIC_JSON_MAX_BYTES = 128 * 1024;
@@ -45,6 +46,10 @@ export async function parseBoundedText(
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    // A stream abort and a truncated body are otherwise indistinguishable in
+    // the logs from a client that simply sent nothing. Label only — the body
+    // being read here is untrusted and may be a credential.
+    console.warn("[bounded-body] stream read failed", diagnosticLabel(error));
     throw new ApiError(400, code, message);
   } finally {
     reader.releaseLock();
@@ -58,7 +63,8 @@ export async function parseBoundedText(
   }
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
+  } catch (error) {
+    console.warn("[bounded-body] body was not valid UTF-8", diagnosticLabel(error));
     throw new ApiError(400, code, message);
   }
 }
@@ -71,7 +77,8 @@ export async function parseBoundedJson(req: Request, maxBytes = PUBLIC_JSON_MAX_
   const text = await parseBoundedText(req, maxBytes);
   try {
     return JSON.parse(text);
-  } catch {
+  } catch (error) {
+    console.warn("[bounded-body] body was not valid JSON", diagnosticLabel(error));
     throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON.");
   }
 }

@@ -79,15 +79,21 @@ test("there is exactly one refusal, and it names neither the address nor the rea
   }
 });
 
-test("nothing on the credential path logs a body, an address, or a secret", () => {
+test("every discarded failure leaves a bounded label, and no body, address, or secret", () => {
   const logs = route.match(/console\.\w+\([^\n]*/g) ?? [];
-  assert.ok(logs.length > 0, "the unavailable paths should still leave a server-side diagnostic");
+  // Greptile #76 issue 2: a swallowed category must still be recorded. The
+  // parse catch used to discard the class entirely.
+  assert.equal(logs.length, 3, "body-rejected, throttle-unavailable and attempt-failed each need a diagnostic");
+  assert.ok(logs.some((line) => line.includes("[login] request body rejected")));
   for (const line of logs) {
-    for (const forbidden of ["password", "attempt.email", "email:", "body", "text", "params"]) {
+    for (const forbidden of ["password", "attempt.email", "email:", "body,", "text", "params", ".message"]) {
       assert.ok(!line.includes(forbidden), `console call must not carry ${forbidden}: ${line}`);
     }
-    assert.match(line, /errorType/);
+    // Fixed label + exception class only, via the shared bounded helper.
+    assert.match(line, /^console\.(warn|error)\("\[login\] [a-z ]+", diagnosticLabel\(error\)\);$/);
   }
+  // No catch on this path discards its cause silently any more.
+  assert.doesNotMatch(route, /\} catch \{/);
 });
 
 test("session and cookie mechanics are imported, never reimplemented", () => {
@@ -121,8 +127,9 @@ test("scrypt needs the node runtime and a non-cached response", () => {
 test("the body is bounded and a parse failure is not its own observable outcome", () => {
   assert.match(route, /LOGIN_BODY_MAX_BYTES = 4 \* 1024/);
   assert.match(route, /parseBoundedText\(req, LOGIN_BODY_MAX_BYTES/);
-  // readAttempt swallows every parse error into empty fields.
-  assert.match(route, /catch \{\s*return \{ email: "", password: "" \};\s*\}/);
+  // readAttempt turns every parse error into empty fields — the outcome is
+  // unchanged, but the category is now labelled rather than discarded.
+  assert.match(route, /catch \(error\) \{[\s\S]{0,400}?return \{ email: "", password: "" \};\s*\}/);
 });
 
 test("the login page renders a labelled credential form beside the unchanged personas", () => {

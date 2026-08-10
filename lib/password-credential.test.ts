@@ -152,10 +152,36 @@ test("the production default is a real work factor, not a placeholder", () => {
   assert.ok(DEFAULT_SCRYPT_PARAMETERS.keyLength >= 32);
 });
 
-test("the credential module never logs and never returns the plaintext", () => {
+test("the credential module logs a bounded label only, never the plaintext", () => {
   const source = readFileSync(new URL("./password-credential.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /console\./);
   // The scrypt callback must not forward node's error object, which can carry
   // the arguments it was called with.
   assert.match(source, /reject\(new Error\("scrypt derivation failed"\)\)/);
+
+  // One diagnostic, and it carries a fixed label plus `diagnosticLabel` only —
+  // no password, no salt, no stored value, and never an exception message.
+  const logs = source.match(/console\.\w+\([^\r\n]*/g) ?? [];
+  assert.deepEqual(logs, ['console.warn("[password-credential] derivation failed", diagnosticLabel(error));']);
+  for (const line of logs) {
+    // Check the ARGUMENTS, not the whole line: the fixed label legitimately
+    // contains the word "password" (it names the module), and a naive substring
+    // scan over the label would be a test that only looks strict.
+    const args = line.slice(line.indexOf('",') + 2, line.lastIndexOf(")"));
+    assert.equal(args.trim(), "diagnosticLabel(error)");
+    for (const forbidden of ["password", "candidate", "stored", "parsed", "salt", "derived", ".message", "${"]) {
+      assert.ok(!args.includes(forbidden), `diagnostic must not carry ${forbidden}: ${args}`);
+    }
+  }
+});
+
+test("the parameter fields reject anything that is not a bounded positive integer", () => {
+  const salt = Buffer.alloc(16, 1).toString("base64url");
+  const hash = Buffer.alloc(32, 2).toString("base64url");
+  const withCost = (cost: string) => `scrypt$s1$${cost}$8$1$32$${salt}$${hash}`;
+  // Explicitly including the values that would reach scrypt as a non-finite or
+  // unsafe allocation request if the guard were ever loosened.
+  for (const cost of ["Infinity", "-Infinity", "NaN", "1e5", "0", "-1024", "1_024", "99999999999", "١٠٢٤"]) {
+    assert.equal(parsePasswordCredential(withCost(cost)), null, cost);
+  }
+  assert.ok(parsePasswordCredential(withCost("1024")));
 });

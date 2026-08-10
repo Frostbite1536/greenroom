@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { SESSION_COOKIE, SESSION_TTL_SECONDS, encodeSession, homeForRole, type DemoSession } from "@/lib/auth";
 import { ApiError } from "@/lib/api/http";
+import { diagnosticLabel } from "@/lib/diagnostic-label";
 import { parseBoundedText } from "@/lib/api/bounded-json";
 import { publicClientIp } from "@/lib/services/public-submission-rate";
 import { enforceLoginRateLimit } from "@/lib/services/login-rate";
@@ -97,7 +98,11 @@ async function readAttempt(req: Request, formEncoded: boolean): Promise<{ email:
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { email: "", password: "" };
     const body = parsed as Record<string, unknown>;
     return { email: normalizeLoginEmail(body.email), password: normalizeLoginPassword(body.password) };
-  } catch {
+  } catch (error) {
+    // Bounded label only: this body is a credential, so neither it nor the
+    // exception's message may reach a log. The outcome is unchanged — empty
+    // fields take the same generic refusal a bad guess takes.
+    console.warn("[login] request body rejected", diagnosticLabel(error));
     return { email: "", password: "" };
   }
 }
@@ -206,7 +211,7 @@ export async function POST(req: Request): Promise<Response> {
     if (error instanceof ApiError && error.status === 429) return refuseThrottled(req, formEncoded, error);
     if (error instanceof ApiError) return refuseUnavailable(req, formEncoded, error);
     // Never include the body, the address, or the password in a diagnostic.
-    console.error("[login] throttle unavailable", { errorType: error instanceof Error ? error.name : typeof error });
+    console.error("[login] throttle unavailable", diagnosticLabel(error));
     return refuseUnavailable(req, formEncoded, new ApiError(503, "LOGIN_UNAVAILABLE", "Sign-in is temporarily unavailable."));
   }
 
@@ -219,7 +224,7 @@ export async function POST(req: Request): Promise<Response> {
     if (!session) return refuse(req, formEncoded);
     return establish(req, formEncoded, session);
   } catch (error) {
-    console.error("[login] attempt could not be completed", { errorType: error instanceof Error ? error.name : typeof error });
+    console.error("[login] attempt could not be completed", diagnosticLabel(error));
     return refuseUnavailable(req, formEncoded, new ApiError(503, "LOGIN_UNAVAILABLE", "Sign-in is temporarily unavailable."));
   }
 }
