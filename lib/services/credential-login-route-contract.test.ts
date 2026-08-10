@@ -80,7 +80,9 @@ test("there is exactly one refusal, and it names neither the address nor the rea
 });
 
 test("every discarded failure leaves a bounded label, and no body, address, or secret", () => {
-  const logs = route.match(/console\.\w+\([^\n]*/g) ?? [];
+  // [^\r\n], not [^\n]: a CRLF checkout would otherwise smuggle the \r into
+  // the captured line and break every $-anchored assertion below.
+  const logs = route.match(/console\.\w+\([^\r\n]*/g) ?? [];
   // Greptile #76 issue 2: a swallowed category must still be recorded. The
   // parse catch used to discard the class entirely.
   assert.equal(logs.length, 3, "body-rejected, throttle-unavailable and attempt-failed each need a diagnostic");

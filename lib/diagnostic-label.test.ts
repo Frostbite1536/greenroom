@@ -55,7 +55,9 @@ test("the login and body-reading paths route their diagnostics through this help
   const files = ["app/api/auth/login/route.ts", "lib/api/bounded-json.ts", "lib/password-credential.ts"];
   for (const file of files) {
     const source = readFileSync(path.join(repoRoot, file), "utf8");
-    const logs = source.match(/console\.\w+\([^\n]*/g) ?? [];
+    // [^\r\n], not [^\n]: a CRLF checkout would otherwise smuggle the \r into
+    // the captured line and break the $-anchored assertion below.
+    const logs = source.match(/console\.\w+\([^\r\n]*/g) ?? [];
     assert.ok(logs.length > 0, `${file} should record its discarded categories`);
     for (const line of logs) {
       assert.match(line, /diagnosticLabel\(error\)\);$/, `${file}: ${line}`);
