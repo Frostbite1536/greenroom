@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/api/http";
+import { diagnosticLabel } from "@/lib/diagnostic-label";
 
 /** Application-level limit, intentionally far below Vercel's 4.5 MB ceiling. */
 export const PUBLIC_JSON_MAX_BYTES = 128 * 1024;
@@ -11,16 +12,22 @@ function declaredLengthExceeds(req: Request, maxBytes: number): boolean {
 }
 
 /**
- * Read a Web Request body with a hard byte cap before JSON parsing. Route
- * Handlers use Web Request streams, so this avoids allocating an attacker-sized
- * string while preserving the normal JSON error contract.
+ * Read a Web Request body as text with a hard byte cap. Route Handlers use Web
+ * Request streams, so this avoids allocating an attacker-sized string. `code`
+ * and `message` name the caller's own malformed-body contract — JSON routes
+ * keep `INVALID_JSON`, form-encoded routes supply their own.
  */
-export async function parseBoundedJson(req: Request, maxBytes = PUBLIC_JSON_MAX_BYTES): Promise<unknown> {
+export async function parseBoundedText(
+  req: Request,
+  maxBytes = PUBLIC_JSON_MAX_BYTES,
+  code = "INVALID_JSON",
+  message = "Request body must be valid JSON.",
+): Promise<string> {
   if (declaredLengthExceeds(req, maxBytes)) {
     throw new ApiError(413, "REQUEST_TOO_LARGE", `Request bodies are limited to ${maxBytes} bytes.`);
   }
   if (!req.body) {
-    throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON.");
+    throw new ApiError(400, code, message);
   }
 
   const reader = req.body.getReader();
@@ -39,7 +46,11 @@ export async function parseBoundedJson(req: Request, maxBytes = PUBLIC_JSON_MAX_
     }
   } catch (error) {
     if (error instanceof ApiError) throw error;
-    throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON.");
+    // A stream abort and a truncated body are otherwise indistinguishable in
+    // the logs from a client that simply sent nothing. Label only — the body
+    // being read here is untrusted and may be a credential.
+    console.warn("[bounded-body] stream read failed", diagnosticLabel(error));
+    throw new ApiError(400, code, message);
   } finally {
     reader.releaseLock();
   }
@@ -51,8 +62,23 @@ export async function parseBoundedJson(req: Request, maxBytes = PUBLIC_JSON_MAX_
     offset += chunk.byteLength;
   }
   try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-  } catch {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (error) {
+    console.warn("[bounded-body] body was not valid UTF-8", diagnosticLabel(error));
+    throw new ApiError(400, code, message);
+  }
+}
+
+/**
+ * Read a bounded body and parse it as JSON, preserving the original
+ * `INVALID_JSON` / `REQUEST_TOO_LARGE` contract exactly.
+ */
+export async function parseBoundedJson(req: Request, maxBytes = PUBLIC_JSON_MAX_BYTES): Promise<unknown> {
+  const text = await parseBoundedText(req, maxBytes);
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    console.warn("[bounded-body] body was not valid JSON", diagnosticLabel(error));
     throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON.");
   }
 }

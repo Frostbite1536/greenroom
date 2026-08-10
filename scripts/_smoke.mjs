@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHmac } from "node:crypto";
+import { createHmac, randomBytes, scryptSync } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 import { observeBeforeDeadline } from "./smoke-deadline.mjs";
@@ -98,6 +98,56 @@ function publicDraftCapabilityHash(capability) {
     .digest("hex");
 }
 
+/**
+ * Mirror of lib/password-credential.ts's stored format. The smoke writes the
+ * hash directly (it cannot import the TypeScript module), exactly as it already
+ * mirrors the HMAC formats above.
+ */
+const SMOKE_SCRYPT = { cost: 16_384, blockSize: 8, parallelization: 1, keyLength: 32 };
+function scryptCredential(password) {
+  const salt = randomBytes(16);
+  const hash = scryptSync(password, salt, SMOKE_SCRYPT.keyLength, {
+    N: SMOKE_SCRYPT.cost, r: SMOKE_SCRYPT.blockSize, p: SMOKE_SCRYPT.parallelization, maxmem: 256 * 1024 * 1024,
+  });
+  return [
+    "scrypt", "s1", SMOKE_SCRYPT.cost, SMOKE_SCRYPT.blockSize, SMOKE_SCRYPT.parallelization, SMOKE_SCRYPT.keyLength,
+    salt.toString("base64url"), hash.toString("base64url"),
+  ].join("$");
+}
+
+/**
+ * POST the credential path. `form: true` uses the browser's content type (the
+ * route answers with 303s); otherwise it is a JSON API call. Every call carries
+ * its own client address so one probe never spends another's per-IP budget.
+ */
+let loginIpSequence = 1;
+async function postLogin(credentials, { form = false, ip, origin = BASE, omitOrigin = false } = {}) {
+  const sequence = loginIpSequence++;
+  const address = ip ?? `198.19.${Math.floor(sequence / 250)}.${(sequence % 250) + 1}`;
+  const headers = {
+    "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
+    "x-vercel-forwarded-for": address,
+  };
+  // The route refuses any post that cannot prove it came from this site, so
+  // every legitimate probe declares the origin a browser would have sent.
+  if (!omitOrigin) headers.origin = origin;
+  const response = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    redirect: "manual",
+    headers,
+    body: form ? new URLSearchParams(credentials).toString() : JSON.stringify(credentials),
+  });
+  const text = await response.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  return { status: response.status, data, text, headers: response.headers };
+}
+
+function sessionCookieFrom(response) {
+  const raw = response.headers.getSetCookie?.() ?? [response.headers.get("set-cookie")].filter(Boolean);
+  const cookie = raw.find((value) => value.startsWith("sb_session="));
+  return cookie ? { raw: cookie, header: cookie.split(";")[0] } : null;
+}
+
 function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
   const exp = Math.floor(new Date(invite.expiresAt).getTime() / 1000);
   const message = `greenroom:reviewer-invite:v1:${invite.id}:${invite.tokenVersion}:${exp}:${nonce}`;
@@ -146,6 +196,10 @@ const server = spawn("npx", ["next", "start", "-p", PORT], {
     MOCK_EXTERNAL_APIS: "true",
     SESSION_SECRET: SMOKE_SESSION_SECRET,
     APP_URL: REVIEWER_INVITE_APP_URL,
+    // Credential-login throttle rows ride the event-partitioned
+    // PublicSubmissionRateBucket table. Anchor them to the scratch event so
+    // this run never writes a row against the judged demo event.
+    LOGIN_RATE_ANCHOR_EVENT_ID: SCRATCH_EVENT.id,
   },
 });
 console.log(`[smoke] server pid ${server.pid} on port ${PORT}`);
@@ -3942,7 +3996,164 @@ try {
     csvUnknownRound.status === 404 && csvUnknownRound.data?.error?.code === "PLAN_NOT_FOUND",
     `${csvUnknownRound.status}/${csvUnknownRound.data?.error?.code}`);
 
-  // 24. Guard: the run must not have touched the judged demo event.
+  // 24. D-C5-6 credential sign-in (email + password beside the demo personas).
+  //
+  // REQUIRES THE APPLIED SCHEMA: every check below reads or writes
+  // `User.passwordHash`, so this block only runs after the Architect's
+  // serialized window. Login throttle rows are anchored to the scratch event by
+  // LOGIN_RATE_ANCHOR_EVENT_ID, and `resetScratchEvent` drops the event (and
+  // therefore its buckets) at the start of every run, so a rerun is never
+  // pre-throttled by its predecessor.
+  const loginPassword = `SmokeCredential!2026-${Date.now().toString(36)}`;
+  await prisma.user.update({ where: { email: speaker.user.email }, data: { passwordHash: scryptCredential(loginPassword) } });
+  await prisma.user.update({ where: { email: admin.user.email }, data: { passwordHash: scryptCredential(loginPassword) } });
+  // The evaluator deliberately keeps no credential: a provisioned user without
+  // a password must be indistinguishable from an unknown address.
+  await prisma.user.update({ where: { email: evalr.user.email }, data: { passwordHash: null } });
+
+  const loginOk = await postLogin({ email: speaker.user.email.toUpperCase(), password: loginPassword });
+  const loginCookie = sessionCookieFrom(loginOk);
+  check("C5-LOGIN password sign-in issues a session for a seeded user, address case-insensitively",
+    loginOk.status === 200 && loginOk.data?.ok === true &&
+      loginOk.data?.data?.redirectTo === "/portal" && loginOk.data?.data?.role === "SPEAKER" && !!loginCookie,
+    `${loginOk.status}/${loginOk.data?.data?.redirectTo}`);
+  check("C5-LOGIN the credential cookie carries the persona flow's own hardening",
+    !!loginCookie && /HttpOnly/i.test(loginCookie.raw) && /SameSite=Lax/i.test(loginCookie.raw) && /Path=\//.test(loginCookie.raw),
+    // Attributes only: the session value itself is a bearer and is never logged.
+    loginCookie?.raw?.split(";").slice(1).join(";").trim());
+  check("C5-LOGIN the sign-in response is never cached",
+    (loginOk.headers.get("cache-control") || "").includes("no-store"), loginOk.headers.get("cache-control"));
+
+  const credentialHome = await fetch(`${BASE}/portal`, { headers: { cookie: loginCookie?.header ?? "" }, redirect: "manual" });
+  const credentialHomeHtml = await credentialHome.text();
+  check("C5-LOGIN the credential session reaches the role-correct home",
+    credentialHome.status === 200 && !credentialHomeHtml.includes('action="/api/auth/login"'),
+    credentialHome.status);
+
+  const adminLogin = await postLogin({ email: admin.user.email, password: loginPassword });
+  check("C5-LOGIN the role comes from the user's membership, never from the request",
+    adminLogin.status === 200 && adminLogin.data?.data?.redirectTo === "/admin/forms" && adminLogin.data?.data?.role === "ADMIN",
+    `${adminLogin.status}/${adminLogin.data?.data?.redirectTo}`);
+
+  const wrongPassword = await postLogin({ email: speaker.user.email, password: `${loginPassword}x` });
+  const unknownEmail = await postLogin({ email: `nobody-${Date.now().toString(36)}@scratch.test`, password: loginPassword });
+  const noCredential = await postLogin({ email: evalr.user.email, password: loginPassword });
+  const malformedBody = await postLogin("not-an-object");
+  const refusals = [wrongPassword, unknownEmail, noCredential, malformedBody];
+  const refusalBodies = new Set(refusals.map((r) => JSON.stringify(r.data)));
+  check("C5-LOGIN wrong password, unknown email, no credential and a malformed body are one indistinguishable 401",
+    refusals.every((r) => r.status === 401) && refusalBodies.size === 1 &&
+      wrongPassword.data?.error?.code === "INVALID_CREDENTIALS" &&
+      refusals.every((r) => !sessionCookieFrom(r)),
+    `${refusals.map((r) => r.status).join(",")} distinct-bodies=${refusalBodies.size}`);
+
+  // Per-email cap is 5 in 15 minutes; each attempt uses its own address so the
+  // per-IP cap of 10 is not the bucket that refuses. The loop runs past the cap
+  // rather than assuming attempt #6 refuses, so a window rollover mid-burst
+  // cannot make this flaky.
+  const throttleEmail = `throttle-${Date.now().toString(36)}@scratch.test`;
+  const throttleAttempts = [];
+  for (let i = 0; i < 8 && !throttleAttempts.some((r) => r.status === 429); i++) {
+    throttleAttempts.push(await postLogin({ email: throttleEmail, password: "definitely-not-the-password" }));
+  }
+  const throttledIndex = throttleAttempts.findIndex((r) => r.status === 429);
+  const throttled = throttledIndex >= 0 ? throttleAttempts[throttledIndex] : null;
+  const throttleRetryAfter = Number(throttled?.headers.get("retry-after"));
+  check("C5-LOGIN the per-email bucket 429s with an honest Retry-After once its cap is spent",
+    throttledIndex >= 5 &&
+      throttleAttempts.slice(0, throttledIndex).every((r) => r.status === 401) &&
+      throttled?.data?.error?.code === "LOGIN_RATE_LIMITED" &&
+      Number.isInteger(throttleRetryAfter) && throttleRetryAfter > 0 &&
+      throttled?.data?.error?.retryAfterSeconds === throttleRetryAfter &&
+      /Try again in (about \d+ (minutes?|hours?)|less than a minute)\./.test(throttled?.data?.error?.message ?? ""),
+    `${throttleAttempts.map((r) => r.status).join(",")} retry-after=${throttled?.headers.get("retry-after")}`);
+  check("C5-LOGIN a throttled attempt is a refusal, not a session",
+    !!throttled && !sessionCookieFrom(throttled) && throttled.data?.ok === false);
+
+  // Greptile #76 issue 1: SameSite=Lax bounds when a cookie is SENT, not who
+  // may SET one. A cross-origin post must never mint a session, or an attacker's
+  // page could silently swap the victim's identity for its own. Correct
+  // credentials are used on purpose — the refusal must come from the origin,
+  // not from the password being wrong.
+  const crossOriginJson = await postLogin(
+    { email: speaker.user.email, password: loginPassword },
+    { origin: "https://attacker.example" },
+  );
+  const crossOriginForm = await postLogin(
+    { email: speaker.user.email, password: loginPassword },
+    { form: true, origin: "https://attacker.example" },
+  );
+  const opaqueOrigin = await postLogin({ email: speaker.user.email, password: loginPassword }, { origin: "null" });
+  const noOrigin = await postLogin({ email: speaker.user.email, password: loginPassword }, { omitOrigin: true });
+  check("C5-LOGIN a cross-origin post with correct credentials mints no session (login CSRF)",
+    crossOriginJson.status === 403 && crossOriginJson.data?.error?.code === "CROSS_ORIGIN_REFUSED" &&
+      !sessionCookieFrom(crossOriginJson) &&
+      crossOriginForm.status === 303 &&
+      (crossOriginForm.headers.get("location") || "").includes("/login?error=blocked") &&
+      !sessionCookieFrom(crossOriginForm),
+    `json=${crossOriginJson.status}/${crossOriginJson.data?.error?.code} form=${crossOriginForm.status}/${crossOriginForm.headers.get("location")}`);
+  check("C5-LOGIN an opaque or absent Origin is refused too, so the JSON mode is not a bypass",
+    opaqueOrigin.status === 403 && !sessionCookieFrom(opaqueOrigin) &&
+      noOrigin.status === 403 && !sessionCookieFrom(noOrigin),
+    `opaque=${opaqueOrigin.status} absent=${noOrigin.status}`);
+  check("C5-LOGIN the origin refusal is decided before any identity, so it is no account oracle",
+    crossOriginJson.data?.error?.code === "CROSS_ORIGIN_REFUSED" &&
+      JSON.stringify(crossOriginJson.data) === JSON.stringify(
+        (await postLogin({ email: `nobody-${Date.now().toString(36)}@scratch.test`, password: "x" }, { origin: "https://attacker.example" })).data,
+      ));
+
+  const formLogin = await postLogin({ email: speaker.user.email, password: loginPassword }, { form: true });
+  check("C5-LOGIN the browser form post redirects to the role home carrying the session",
+    formLogin.status === 303 && (formLogin.headers.get("location") || "").endsWith("/portal") && !!sessionCookieFrom(formLogin),
+    `${formLogin.status}/${formLogin.headers.get("location")}`);
+  const formWrong = await postLogin({ email: speaker.user.email, password: "definitely-wrong" }, { form: true });
+  check("C5-LOGIN a failed form post returns to /login with one generic error and no session",
+    formWrong.status === 303 && (formWrong.headers.get("location") || "").includes("/login?error=invalid") &&
+      !sessionCookieFrom(formWrong),
+    `${formWrong.status}/${formWrong.headers.get("location")}`);
+
+  const loginPageResponse = await fetch(`${BASE}/login`);
+  const loginHtml = await loginPageResponse.text();
+  check("C5-LOGIN the login page offers the credential form beside three unchanged one-click personas",
+    loginPageResponse.status === 200 &&
+      loginHtml.includes('action="/api/auth/login"') &&
+      loginHtml.includes('name="email"') && loginHtml.includes('name="password"') &&
+      // Case-insensitive: the served markup preserves JSX camelCase
+      // (autoComplete=), which browsers parse identically — attribute names
+      // are ASCII case-insensitive in HTML.
+      /autocomplete="username"/i.test(loginHtml) && /autocomplete="current-password"/i.test(loginHtml) &&
+      (loginHtml.match(/name="persona"/g) || []).length === 3 &&
+      /No password required\./.test(loginHtml) &&
+      /Organizers provision accounts\./.test(loginHtml) &&
+      /no self-service sign-up/.test(loginHtml),
+    loginPageResponse.status);
+  const personaHome = await fetch(`${BASE}/portal`, { headers: { cookie: cookie(speaker) }, redirect: "manual" });
+  check("C5-LOGIN the one-click persona session still reaches its home unchanged",
+    personaHome.status === 200, personaHome.status);
+
+  // The new column must not ride out with any projection. Routes that fetch a
+  // whole User row hand it to serializers with explicit field lists; this is
+  // the runtime confirmation of that.
+  const projectionProbes = [
+    ["/api/cfp/submissions/mine", await j("GET", "/api/cfp/submissions/mine", null, speaker)],
+    ["/api/evaluations/evaluators", await j("GET", "/api/evaluations/evaluators", null, admin)],
+    ["/api/evaluations/assignments", await j("GET", `/api/evaluations/assignments?planId=${planId}`, null, admin)],
+    ["/api/agenda", await j("GET", "/api/agenda", null, admin)],
+    ["/api/portal/tasks", await j("GET", "/api/portal/tasks", null, speaker)],
+    ["/api/v1/speakers", await v1("/api/v1/speakers")],
+    ["/api/v1/submissions", await v1("/api/v1/submissions")],
+  ];
+  const leakedProjections = projectionProbes
+    .filter(([, response]) => /passwordHash|scrypt\$s1\$/.test(JSON.stringify(response.data ?? "")))
+    .map(([name]) => name);
+  const leakedPages = [["/portal", credentialHomeHtml], ["/login", loginHtml]]
+    .filter(([, html]) => /passwordHash|scrypt\$s1\$/.test(html))
+    .map(([name]) => name);
+  check("C5-LOGIN passwordHash appears in no API projection and no rendered page",
+    leakedProjections.length === 0 && leakedPages.length === 0,
+    [...leakedProjections, ...leakedPages].join(",") || "clean");
+
+  // 25. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
   });
