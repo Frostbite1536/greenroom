@@ -32,6 +32,10 @@ export const OPERATOR_QUERY_LIMITS = {
   adminDecisionScores: 25_000,
   adminReviewComments: 5_000,
   reviewerSetupMembers: 500,
+  // The email log only grows, so its panel is a newest-first page rather than a
+  // fail-closed read: exceeding the cap is normal and is reported honestly
+  // instead of refusing the whole page.
+  adminEmailDispatches: 100,
 } as const;
 
 export function assertEventQueryBound(
