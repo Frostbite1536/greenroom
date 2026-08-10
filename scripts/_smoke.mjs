@@ -1575,9 +1575,14 @@ try {
            "sendWindowStart", "sendWindowCount", "lastDeliveryState"
     FROM "ReviewerInvite" WHERE "id" = ${c17StoredInvite.id}
   `;
+  // Bounded and stably ordered: this reviewer accumulates a handful of
+  // dispatches across the C17 cases, and an unbounded read here would grow
+  // with the fixture rather than stay a fixed-cost assertion.
   const c17RevealDispatches = await prisma.emailDispatch.findMany({
     where: { recipient: c17Email },
     select: { id: true, recipient: true, variables: true, providerId: true, error: true, status: true },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 20,
   });
   // Shape-only persistence proof: no invite column and no dispatch record may
   // carry the revealed bearer, and the reveal must have written nothing at all.
@@ -3269,74 +3274,63 @@ try {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
     signalS16AbstractLock();
     await s16AbstractLockRelease;
-  // The 5-second observation below remains the regression boundary. This
-  // deliberately held fixture transaction needs only enough headroom to let
-  // its finally release/commit survive host scheduling jitter.
-  }, { timeout: 15_000 });
+  // This hold now spans the public writer's full completion (12s hang guard)
+  // and then the speaker form-lock observation, so its headroom must exceed
+  // both. Generous on purpose: a fixture P2028 here would mask the real
+  // failure rather than report it.
+  }, { timeout: 45_000 });
   await s16AbstractLockHeld;
-  const s16BaselineShares = await countSpeakerFormShareLocks();
-  const s16OrderLockBaseline = {
-    baselineFormConfigShares: s16BaselineShares.formConfig,
-    baselineFormFieldShares: s16BaselineShares.formField,
-  };
-  const waitingSpeakerEdit = j("PATCH", `/api/cfp/submissions/${s16OrderId}`, {
-    title: "S16 ordered edit",
-  }, speaker);
-  const speakerHeldFormLocksBeforeAbstract = await waitForSpeakerFormLocks(s16OrderLockBaseline);
+  // The public writer runs to completion FIRST, while the foreign Abstract
+  // advisory lock is held and before any speaker budget is burning. Its clean
+  // 201 under a held `abstract-write:${s16OrderId}` IS the compatibility
+  // proof, with no deadline to lose to remote-database latency: 12s here is a
+  // hang guard, not a race window.
+  //
+  // This deliberately no longer interleaves the public writer with the speaker
+  // PATCH's FormConfig/FormField share locks. That interleaving was proving
+  // FOR SHARE + FOR SHARE compatibility, which is Postgres semantics rather
+  // than a property of our code; the fragile regression class is the Abstract
+  // advisory lock, and holding it across this writer still proves that.
   const compatiblePublicAbort = new AbortController();
-  const compatiblePublicSubmit = j("POST", "/api/cfp/submissions", {
-    formConfigId: formId, title: "S16 concurrent public writer",
-    speakers: [{ email: "s16-public@scratch.test", name: "S16 Public", isPrimary: true }],
-    answers: { title_note: "public", consent: true }, intent: "submit",
-  }, undefined, {}, { signal: compatiblePublicAbort.signal });
-  // Lock-independence is proven by observation, not by a completion race:
-  // while the Abstract advisory lock is deliberately held, the public writer
-  // must NEVER appear as a waiter on this abstract's exact advisory key. A
-  // fixed completion deadline here failed three runs tonight purely on remote
-  // database latency — completion may legitimately land after release, and
-  // that does not weaken the compatibility claim.
-  const s16AbstractLockName = `abstract-write:${s16OrderId}`;
-  let s16PublicWaitedOnAbstract = false;
-  let compatiblePublicSettled = false;
-  compatiblePublicSubmit.then(() => { compatiblePublicSettled = true; }, () => { compatiblePublicSettled = true; });
+  let compatiblePublicObservation;
+  let waitingSpeakerEdit;
+  let speakerHeldFormLocksBeforeAbstract = false;
   try {
-    // ~2s cap: the writer acquires its locks early in its transaction, so if
-    // it has not queued on the abstract key by now it never will — and the
-    // waiting speaker PATCH's 5-second server budget is burning throughout.
-    for (let attempt = 0; attempt < 30 && !compatiblePublicSettled; attempt++) {
-      const rows = await prisma.$queryRaw`
-        SELECT count(*)::int AS "count"
-        FROM pg_locks
-        WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
-          AND ((classid::bigint << 32) | objid::bigint) = hashtextextended(${s16AbstractLockName}, 0)
-          AND pid <> pg_backend_pid()
-      `;
-      // One waiter is expected: the speaker PATCH. A second means the public
-      // writer queued on the abstract key — the exact regression this probes.
-      if ((rows[0]?.count ?? 0) > 1) { s16PublicWaitedOnAbstract = true; break; }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    const compatiblePublicSubmit = j("POST", "/api/cfp/submissions", {
+      formConfigId: formId, title: "S16 concurrent public writer",
+      speakers: [{ email: "s16-public@scratch.test", name: "S16 Public", isPrimary: true }],
+      answers: { title_note: "public", consent: true }, intent: "submit",
+    }, undefined, {}, { signal: compatiblePublicAbort.signal });
+    compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 12_000);
+    if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
+
+    // Only now does the speaker PATCH start, so its 5-second server
+    // transaction budget is spent solely on the form-lock observation below.
+    const s16BaselineShares = await countSpeakerFormShareLocks();
+    waitingSpeakerEdit = j("PATCH", `/api/cfp/submissions/${s16OrderId}`, {
+      title: "S16 ordered edit",
+    }, speaker);
+    speakerHeldFormLocksBeforeAbstract = await waitForSpeakerFormLocks({
+      baselineFormConfigShares: s16BaselineShares.formConfig,
+      baselineFormFieldShares: s16BaselineShares.formField,
+    });
   } finally {
+    // An unexpected throw above must not strand the held advisory lock behind
+    // the fixture transaction's timeout.
     releaseS16AbstractLock();
     await s16AbstractHolder;
   }
-  // Post-release, the writer must finish promptly; 15s is a hang guard, not a
-  // race window.
-  const compatiblePublicObservation = await observeBeforeDeadline(compatiblePublicSubmit, 15_000);
-  if (!compatiblePublicObservation?.completed) compatiblePublicAbort.abort();
   const compatiblePublicResult = compatiblePublicObservation?.value;
   const waitingSpeakerEditResult = await waitingSpeakerEdit;
+  check("S16 compatible public writer completes while a foreign Abstract lock is held",
+    compatiblePublicObservation?.completed && !compatiblePublicObservation.error &&
+      compatiblePublicResult?.status === 201,
+    compatiblePublicObservation?.completed
+      ? compatiblePublicObservation.error?.name ?? compatiblePublicResult?.status
+      : "public writer did not complete within the 12s hang guard");
   check("S16 speaker locks FormConfig and fields before the Abstract advisory lock",
     speakerHeldFormLocksBeforeAbstract && waitingSpeakerEditResult.status === 200,
     waitingSpeakerEditResult.status);
-  check("S16 compatible public writer never queues on the held Abstract lock and completes",
-    !s16PublicWaitedOnAbstract && compatiblePublicObservation?.completed &&
-      !compatiblePublicObservation.error && compatiblePublicResult?.status === 201,
-    s16PublicWaitedOnAbstract
-      ? "public writer appeared as a waiter on the abstract advisory key"
-      : compatiblePublicObservation?.completed
-        ? compatiblePublicObservation.error?.name ?? compatiblePublicResult?.status
-        : "public writer did not complete within the 15s hang guard");
 
   // The Session and editability checks are also post-lock facts. A competing
   // programme writer makes this formerly submitted abstract ACCEPTED and links
