@@ -1028,12 +1028,17 @@ try {
     categoryId: fx.category.id,
     speakers: [
       { email: "smoke.speaker@example.com", name: "Smoke Speaker", isPrimary: true },
-      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false },
+      // ABS-11: the harness's own fixture wording, left unstated on the primary.
+      { email: "smoke.cospeaker@example.com", name: "Smoke Co", isPrimary: false, role: "Co-presenter" },
     ],
     answers: { audience_level: "beginner", learning_objectives: "Three takeaways." },
     intent: "submit",
   }, null);
   check("CFP direct submit remains capability-free → 201", submit.status === 201, `${submit.status} ${JSON.stringify(submit.data?.error ?? "")}`);
+  check("T3 the submitted roster reports the stated role and the unstated null",
+    submit.data?.data?.speakers?.find((s) => s.email === "smoke.cospeaker@example.com")?.role === "Co-presenter"
+    && submit.data?.data?.speakers?.find((s) => s.email === "smoke.speaker@example.com")?.role === null,
+    JSON.stringify(submit.data?.data?.speakers));
   check("submitted abstract has SUBMITTED status", submit.data?.data?.status === "SUBMITTED");
   check("co-speaker upserted by email", (submit.data?.data?.speakers ?? []).length === 2);
 
@@ -1077,6 +1082,19 @@ try {
   const afterConvert = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts table shows an unscheduled talk as 'Talk created'",
     afterConvert.text.includes("Talk created"));
+
+  // T3 / ABS-11: the co-speaker's stated role reaches the organizer, in the
+  // table summary and again in the drawer's full roster line.
+  check("T3 the abstracts table names the co-speaker's role instead of counting them",
+    afterConvert.text.includes("+1 co-speaker: Co-presenter"),
+    "expected the role-bearing co-speaker summary");
+  const roleDrawer = await req(
+    "GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin,
+  );
+  check("T3 the admin drawer's roster line carries the role beside the primary marker",
+    roleDrawer.status === 200
+    && roleDrawer.text.includes("Smoke Speaker (primary), Smoke Co — Co-presenter"),
+    "expected 'Smoke Speaker (primary), Smoke Co — Co-presenter' in the drawer");
 
   // --- F1: the admin drawer must actually carry the speaker's custom answers ---
   // The drawer is client-rendered on click, so the assertion is that the answer

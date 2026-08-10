@@ -154,7 +154,10 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .answer-item dt { font-size: 12px; font-weight: 600; color: var(--muted); }
 .answer-item dd { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cfp-actions { display: flex; gap: 10px; margin-top: 8px; }
-.speaker-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; margin-bottom: 10px; }
+/* Name, email, role, remove. The role column is narrower than the two that
+   identify the person, and the whole row collapses to one column on narrow
+   viewports (see the media query below). */
+.speaker-row { display: grid; grid-template-columns: 1fr 1fr minmax(0, 0.7fr) auto; gap: 10px; align-items: end; margin-bottom: 10px; }
 .cfp-success { text-align: center; display: grid; gap: 10px; padding: 20px 0; }
 .cfp-success .check { width: 56px; height: 56px; border-radius: 50%; background: var(--soft); color: var(--brand); display: grid; place-items: center; margin: 0 auto; }
 

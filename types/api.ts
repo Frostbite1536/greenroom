@@ -82,12 +82,26 @@ export const formAnswerValueSchema = z.union([
   z.null(),
 ]);
 
+/**
+ * How a person contributes to one proposal — "Co-presenter", "Panellist".
+ * Free text because a programme team's vocabulary is its own, bounded because
+ * it renders on a public speaker list, and blank normalizes to an explicit
+ * absence so an empty box never becomes an empty label.
+ */
+export const speakerRoleSchema = z
+  .string()
+  .trim()
+  .max(80)
+  .optional()
+  .transform((value) => (value ? value : null));
+
 export const coSpeakerInputSchema = z
   .array(
     z.object({
       email: z.string().trim().toLowerCase().email(),
       name: z.string().trim().min(1).max(120),
       isPrimary: z.boolean().default(false),
+      role: speakerRoleSchema,
     }),
   )
   .min(1)
@@ -250,6 +264,7 @@ const publicSpeakerInputSchema = z
       email: z.string().trim().toLowerCase().max(254).email(),
       name: z.string().trim().min(1).max(120),
       isPrimary: z.boolean().default(false),
+      role: speakerRoleSchema,
     }).strict(),
   )
   .min(1)

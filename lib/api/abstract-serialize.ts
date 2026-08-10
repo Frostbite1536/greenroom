@@ -47,6 +47,10 @@ export function serializeAbstract(abstract: AbstractWithRelations) {
       email: s.user.email,
       name: s.user.name,
       isPrimary: s.isPrimary,
+      // Per-proposal contribution label ("Co-presenter"), null when unstated.
+      // Additive: existing clients that ignore it are unaffected, and the
+      // public draft response carries it so a resumed draft rehydrates it.
+      role: s.role,
     })),
     answers: Object.fromEntries(
       (abstract.answers ?? []).map((a) => [a.formFieldId, a.value]),

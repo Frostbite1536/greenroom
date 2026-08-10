@@ -1055,7 +1055,12 @@ try {
   const sub = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "My great talk", abstract: "About stuff",
     categoryId: aiCategory?.id,
-    speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true }, { email: "co@x.com", name: "Co Two", isPrimary: false }],
+    speakers: [
+      { email: "spk@x.com", name: "Spk One", isPrimary: true },
+      // ABS-11: the harness's own fixture wording. Blank on the primary proves
+      // an unstated role stays an honest null rather than an empty label.
+      { email: "co@x.com", name: "Co Two", isPrimary: false, role: "Co-presenter" },
+    ],
     answers: { title_note: "hello", bio: "a short bio", consent: true }, intent: "submit",
   });
   check(
@@ -1066,6 +1071,24 @@ try {
   );
   const abstractId = sub.data?.data?.id;
   check("co-speaker upserted by email", sub.data?.data?.speakers?.length === 2);
+  const subRoles = Object.fromEntries(
+    (sub.data?.data?.speakers ?? []).map((s) => [s.email, s.role]),
+  );
+  check("T3 a stated co-speaker role round-trips, and an unstated one stays null",
+    subRoles["co@x.com"] === "Co-presenter" && subRoles["spk@x.com"] === null,
+    JSON.stringify(subRoles));
+  check("T3 the role is stored on the proposal's own roster row",
+    (await prisma.abstractSpeaker.findFirst({
+      where: { abstractId, user: { email: "co@x.com" } },
+      select: { role: true },
+    }))?.role === "Co-presenter");
+  const roleTooLong = await j("POST", "/api/cfp/submissions", {
+    formConfigId: formId, title: "Role bound probe", abstract: "Bounded",
+    speakers: [{ email: "spk@x.com", name: "Spk One", isPrimary: true, role: "x".repeat(81) }],
+    answers: { title_note: "hi", consent: true }, intent: "saveDraft",
+  });
+  check("T3 an over-long role is refused rather than truncated",
+    roleTooLong.status === 422, roleTooLong.status);
   const submissionDispatches = await prisma.emailDispatch.findMany({
     where: { templateId: commsTemplate.id },
     select: { recipient: true, status: true, providerId: true },

@@ -287,10 +287,13 @@ export const POST = handle(async (req) => {
     for (let index = 0; index < input.speakers.length; index++) {
       const userId = speakerUsers[index].id;
       const isPrimary = input.speakers[index] === primary;
+      // The role is per-proposal and always written from the submitted roster,
+      // so clearing the box on a resubmitted draft really does clear the label.
+      const role = input.speakers[index].role;
       await tx.abstractSpeaker.upsert({
         where: { abstractId_userId: { abstractId: abstract.id, userId } },
-        update: { isPrimary },
-        create: { abstractId: abstract.id, userId, isPrimary },
+        update: { isPrimary, role },
+        create: { abstractId: abstract.id, userId, isPrimary, role },
       });
     }
 

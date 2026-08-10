@@ -304,10 +304,11 @@ export function PATCH(req: Request, ctx: Params) {
         });
         for (let i = 0; i < patch.speakers.length; i++) {
           const isPrimary = patch.speakers[i] === primary;
+          const role = patch.speakers[i].role;
           await tx.abstractSpeaker.upsert({
             where: { abstractId_userId: { abstractId: fresh.id, userId: speakerUsers[i].id } },
-            update: { isPrimary },
-            create: { abstractId: fresh.id, userId: speakerUsers[i].id, isPrimary },
+            update: { isPrimary, role },
+            create: { abstractId: fresh.id, userId: speakerUsers[i].id, isPrimary, role },
           });
         }
       }

@@ -277,6 +277,10 @@ model AbstractSpeaker {
   abstractId String
   userId     String
   isPrimary  Boolean @default(false)
+  // How this person contributes to this proposal ("Co-presenter", "Panellist").
+  // Per-proposal, not per-person: the same speaker can hold different roles on
+  // different talks, which is why it lives here and not on SpeakerProfile.
+  role       String?
 
   abstract Abstract @relation(fields: [abstractId], references: [id], onDelete: Cascade)
   user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)

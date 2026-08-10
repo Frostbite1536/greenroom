@@ -9,6 +9,7 @@ import { formatDecisionScore } from "@/lib/decision-summary-display";
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
+import { coSpeakerSummary, proposalRosterLine } from "@/lib/speakers/proposal-roster";
 import { EmptyState, Pill } from "@/components/ui";
 
 const STATUS_META: Record<string, { label: string; tone: string }> = {
@@ -221,7 +222,9 @@ export function AbstractsTable({
                     <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                     <td>
                       {a.speakers.find((s) => s.isPrimary)?.name ?? a.speakers[0]?.name ?? "—"}
-                      {a.speakers.length > 1 ? <div className="cell-sub">+{a.speakers.length - 1} co-speaker</div> : null}
+                      {coSpeakerSummary(a.speakers) ? (
+                        <div className="cell-sub">{coSpeakerSummary(a.speakers)}</div>
+                      ) : null}
                     </td>
                     <td>
                       <DecisionReviewCount
@@ -503,7 +506,7 @@ function AbstractDrawer({
           <div className="kv"><span>Duration</span><span>{abstract.durationMinutes ? `${abstract.durationMinutes} min` : "—"}</span></div>
           <div className="kv">
             <span>Speakers</span>
-            <span>{abstract.speakers.map((s) => `${s.name}${s.isPrimary ? " (primary)" : ""}`).join(", ") || "—"}</span>
+            <span>{proposalRosterLine(abstract.speakers)}</span>
           </div>
           <div className="kv"><span>Submitted</span><span>{abstract.submittedAt ? new Date(abstract.submittedAt).toLocaleString() : "—"}</span></div>
           <div className="kv">

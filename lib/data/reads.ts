@@ -406,7 +406,8 @@ export type AbstractRow = {
   durationMinutes: number | null;
   categoryName: string | null;
   formName: string;
-  speakers: { name: string; isPrimary: boolean }[];
+  /** `role` is the per-proposal contribution label ("Co-presenter"), or null. */
+  speakers: { name: string; isPrimary: boolean; role: string | null }[];
   submittedAt: string | null;
   /** Server-computed only for the explicitly selected decision round. */
   decisionSummary: AdminDecisionAbstractSummary | null;
@@ -472,7 +473,7 @@ const adminAbstractSelect = {
   speakers: {
     // Email is not needed for this organizer surface, so it never enters the
     // RSC payload.
-    select: { isPrimary: true, user: { select: { name: true } } },
+    select: { isPrimary: true, role: true, user: { select: { name: true } } },
   },
   // `scheduleSlot` tells the admin table whether the confirmed talk is
   // actually on the public programme, which is what makes a reversed
@@ -617,6 +618,7 @@ export async function getAdminAbstracts(
       speakers: a.speakers.map((s) => ({
         name: s.user.name,
         isPrimary: s.isPrimary,
+        role: s.role,
       })),
       submittedAt: a.submittedAt?.toISOString() ?? null,
       decisionSummary: decisionSummary.summariesByAbstractId[a.id] ?? null,

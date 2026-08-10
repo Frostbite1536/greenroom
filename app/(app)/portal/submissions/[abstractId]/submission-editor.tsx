@@ -27,7 +27,10 @@ import styles from "../../portal.module.css";
  * backend. `FieldControl` is the same control the public CFP renders, so a
  * speaker edits the questions in the shape they answered them.
  */
-type Speaker = { email: string; name: string; isPrimary: boolean };
+type Speaker = { email: string; name: string; isPrimary: boolean; role?: string | null };
+
+/** Matches the server's bound on `AbstractSpeaker.role` (speakerRoleSchema). */
+const SPEAKER_ROLE_MAX_LENGTH = 80;
 
 type Submission = {
   id: string;
@@ -343,6 +346,17 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
                     onChange={(e) => updateSpeaker(index, { email: e.target.value })}
                   />
                 </div>
+                <div className={styles.field}>
+                  <label className="field-label" htmlFor={`speaker-role-${index}`}>
+                    Role <span className="muted">(optional)</span>
+                  </label>
+                  <input
+                    className="text-input" id={`speaker-role-${index}`} value={speaker.role ?? ""}
+                    maxLength={SPEAKER_ROLE_MAX_LENGTH}
+                    placeholder={speaker.isPrimary ? "Presenter" : "Co-presenter"}
+                    onChange={(e) => updateSpeaker(index, { role: e.target.value })}
+                  />
+                </div>
                 <div className="row wrap">
                   <label className={styles.sessionMeta}>
                     <input
@@ -379,7 +393,11 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
             <ul className={styles.taskList}>
               {submission.speakers.map((speaker) => (
                 <li className={styles.sessionItem} key={speaker.email}>
-                  <div className={styles.sessionTitle}>{speaker.name}{speaker.isPrimary ? " · main contact" : ""}</div>
+                  <div className={styles.sessionTitle}>
+                    {speaker.name}
+                    {speaker.isPrimary ? " · main contact" : ""}
+                    {speaker.role?.trim() ? ` · ${speaker.role.trim()}` : ""}
+                  </div>
                   <p className={styles.sessionMeta}>{speaker.email}</p>
                 </li>
               ))}
