@@ -3009,6 +3009,43 @@ try {
   check("the cleared bio is reported as absent rather than left on screen",
     !afterClear.text.includes("Priya now leads the reliability guild") && afterClear.text.includes("No bio stored yet"));
 
+  // T3 / SPK-04: where a speaker is in accepting their invitation.
+  const rosterBeforeStatus = await req("GET", "/admin/speakers", null, admin);
+  check("T3 an existing speaker is not silently marked unconfirmed by the new column",
+    !rosterBeforeStatus.text.includes(">Invited<") && !rosterBeforeStatus.text.includes(">Declined<"),
+    "expected no status chip before any status was set");
+  const setInvited = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "INVITED",
+  }, admin);
+  check("T3 a status-only edit is a real edit → 200",
+    setInvited.status === 200 && setInvited.data?.data?.profile?.status === "INVITED",
+    `${setInvited.status} ${JSON.stringify(setInvited.data?.data?.profile ?? setInvited.data?.error ?? "none")}`);
+  check("T3 setting a status left every stored prose field alone",
+    setInvited.data?.data?.profile?.company === "Lumen Grid"
+    && setInvited.data?.data?.profile?.jobTitle === "Director of Platform",
+    JSON.stringify(setInvited.data?.data?.profile ?? "none"));
+  const rosterInvited = await req("GET", "/admin/speakers", null, admin);
+  check("T3 the roster renders an Invited chip for that speaker",
+    rosterInvited.text.includes(">Invited<"), "expected an Invited status chip");
+  const setDeclined = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "DECLINED",
+  }, admin);
+  const rosterDeclined = await req("GET", "/admin/speakers", null, admin);
+  check("T3 a declined speaker is shown as declined",
+    setDeclined.status === 200 && rosterDeclined.text.includes(">Declined<"),
+    `${setDeclined.status}`);
+  const badStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "MAYBE",
+  }, admin);
+  check("T3 a status outside the three known ones is refused",
+    badStatus.status === 422, badStatus.status);
+  const restoreStatus = await req("PATCH", "/api/admin/speakers", {
+    userId: fx.rosterMember.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 the status can be set back to confirmed",
+    restoreStatus.status === 200 && restoreStatus.data?.data?.profile?.status === "CONFIRMED",
+    restoreStatus.status);
+
   const renameAttempt = await req("PATCH", "/api/admin/speakers", { userId: fx.rosterMember.id, name: "Someone Else" }, admin);
   check("an organizer cannot rename a speaker's account through the profile edit",
     renameAttempt.status === 422, `got ${renameAttempt.status}`);
@@ -3068,6 +3105,26 @@ try {
   const sharedAfterEdit = await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id }, select: { bio: true } });
   check("the refused shared edit wrote no global profile row", sharedAfterEdit === null,
     `got ${JSON.stringify(sharedAfterEdit)}`);
+  // T3 / SPK-04: status lives on that same global row, so it refuses identically
+  // rather than becoming a back door into a shared speaker's profile.
+  const statusShared = await req("PATCH", "/api/admin/speakers", {
+    userId: sharedUser.id, status: "CONFIRMED",
+  }, admin);
+  check("T3 setting a shared speaker's status is refused with the identical 409",
+    statusShared.status === 409
+    && statusShared.data?.error?.code === "SPEAKER_SHARED_ACROSS_EVENTS"
+    && statusShared.data?.error?.message === editShared.data?.error?.message,
+    `${statusShared.status} ${statusShared.data?.error?.code ?? "none"}`);
+  check("T3 the refused status write created no global profile row either",
+    (await prisma.speakerProfile.findUnique({ where: { userId: sharedUser.id } })) === null);
+  const addSharedWithStatus = await req("POST", "/api/admin/speakers", {
+    email: ROSTER_SHARED_EMAIL, name: ROSTER_SHARED_NAME, status: "CONFIRMED",
+  }, admin);
+  check("T3 adding a shared speaker withholds their status alongside the rest",
+    addSharedWithStatus.status === 200
+    && addSharedWithStatus.data?.data?.profileRequested === true
+    && addSharedWithStatus.data?.data?.profileApplied === false,
+    JSON.stringify(addSharedWithStatus.data?.data ?? "none"));
   // The refusal must be targeted, not a blanket lockout of the edit feature.
   const editExclusive = await req("PATCH", "/api/admin/speakers", {
     userId: fx.rosterMember.id, company: "Lumen Grid Holdings",

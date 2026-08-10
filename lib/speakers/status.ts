@@ -12,7 +12,33 @@ export const SPEAKER_PROFILE_FIELDS = [
 ] as const;
 
 export type SpeakerProfileField = (typeof SPEAKER_PROFILE_FIELDS)[number]["key"];
-export type SpeakerProfileInput = Partial<Record<SpeakerProfileField, string | null>> | null;
+
+/** Where a speaker is in accepting their invitation (SPK-04). */
+export type SpeakerConfirmation = "INVITED" | "CONFIRMED" | "DECLINED";
+
+/**
+ * `status` is carried alongside the four prose fields but is deliberately not
+ * one of them: it always has a stored value, so counting it toward profile
+ * completeness would make every profile look 20% fuller than it is.
+ */
+export type SpeakerProfileInput =
+  | (Partial<Record<SpeakerProfileField, string | null>> & { status?: SpeakerConfirmation })
+  | null;
+
+export const SPEAKER_CONFIRMATION_LABELS: Record<SpeakerConfirmation, string> = {
+  INVITED: "Invited",
+  CONFIRMED: "Confirmed",
+  DECLINED: "Declined",
+};
+
+/**
+ * A speaker with no stored profile row has never been through any invitation
+ * flow, and the column's default says every existing speaker is confirmed —
+ * so an absent row reads as CONFIRMED rather than inventing a pending invite.
+ */
+export function speakerConfirmation(profile: SpeakerProfileInput): SpeakerConfirmation {
+  return profile?.status ?? "CONFIRMED";
+}
 
 export type SpeakerTaskStatus = "TODO" | "IN_PROGRESS" | "COMPLETED" | "WAIVED";
 
@@ -62,6 +88,8 @@ export type SpeakerStatusRow = {
   jobTitle: string | null;
   bio: string | null;
   headshotUrl: string | null;
+  /** Where this speaker is in accepting their invitation. */
+  status: SpeakerConfirmation;
   sessionCount: number;
   scheduledCount: number;
   sessionTitles: string[];
@@ -148,6 +176,7 @@ function newSpeakerRow(
     jobTitle: storedText(member.profile?.jobTitle),
     bio: storedText(member.profile?.bio),
     headshotUrl: storedText(member.profile?.headshotUrl),
+    status: speakerConfirmation(member.profile),
     sessionCount: 0,
     scheduledCount: 0,
     sessionTitles: [],
@@ -210,7 +239,11 @@ export function buildSpeakerRosterRows(
   }
 
   for (const row of rows.values()) {
-    row.needsAttention = !row.onboardingComplete || row.scheduledCount < row.sessionCount;
+    // A speaker who has not said yes — or has said no — is the most urgent
+    // conversation on this list, ahead of any half-finished checklist.
+    row.needsAttention = !row.onboardingComplete
+      || row.scheduledCount < row.sessionCount
+      || row.status !== "CONFIRMED";
   }
 
   const completionRatio = (row: SpeakerStatusRow) => (row.tasksTotal === 0 ? 1 : row.tasksDone / row.tasksTotal);

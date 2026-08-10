@@ -55,6 +55,13 @@ enum ImportStatus {
 }
 
 /** Last audited provider result for one reviewer-invite token version. */
+/** Where a speaker is in accepting their invitation to take part. */
+enum SpeakerStatus {
+  INVITED
+  CONFIRMED
+  DECLINED
+}
+
 /** Whether a Session appears on the public programme. */
 enum SessionContentStatus {
   DRAFT
@@ -162,6 +169,11 @@ model ReviewerInvite {
 model SpeakerProfile {
   id           String   @id @default(cuid())
   userId       String   @unique
+  // Where this person is in accepting their invitation. CONFIRMED by default
+  // because every speaker on an existing programme is already live and taking
+  // part: any other default would mark a whole roster as unconfirmed the moment
+  // this column is applied.
+  status       SpeakerStatus @default(CONFIRMED)
   bio          String?
   company      String?
   jobTitle     String?

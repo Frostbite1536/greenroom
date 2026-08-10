@@ -7,6 +7,7 @@ import {
   filterSpeakerStatusRows,
   parseSpeakerStatusFilter,
   profileCompletion,
+  speakerConfirmation,
   summarizeSpeakerStatus,
   type SpeakerAssignment,
   type SpeakerRosterMember,
@@ -300,4 +301,55 @@ test("the confirmed-cohort builder is the roster builder with no membership seed
   // And a membership seed is the only thing that adds a session-less row.
   assert.equal(buildSpeakerStatusRows([], tasks, now).length, 0);
   assert.equal(buildSpeakerRosterRows([rosterMember()], [], tasks, now).length, 1);
+});
+
+test("SPK-04: a speaker with no stored profile reads as confirmed, not as a pending invite", () => {
+  // The column defaults to CONFIRMED because every existing speaker is already
+  // taking part; an absent row must say the same thing rather than invent one.
+  assert.equal(speakerConfirmation(null), "CONFIRMED");
+  assert.equal(speakerConfirmation({ bio: "Builds things" }), "CONFIRMED");
+  assert.equal(speakerConfirmation({ status: "INVITED" }), "INVITED");
+  assert.equal(speakerConfirmation({ status: "DECLINED" }), "DECLINED");
+});
+
+test("SPK-04: a stored status reaches the roster row", () => {
+  const [row] = buildSpeakerRosterRows(
+    [{ userId: "u1", name: "Nadia Okonkwo", email: "nadia@northwind.test", profile: { status: "INVITED" } }],
+    [],
+    [],
+  );
+  assert.equal(row.status, "INVITED");
+});
+
+test("SPK-04: status is not profile completeness", () => {
+  // Every profile has a status, so counting it would make every roster look
+  // fuller than it is. A fully blank profile is still 0%.
+  const complete = { bio: "b", company: "c", jobTitle: "j", headshotUrl: "h", status: "DECLINED" as const };
+  assert.equal(profileCompletion(complete).percent, 100);
+  assert.equal(profileCompletion({ status: "CONFIRMED" }).percent, 0);
+  assert.deepEqual(profileCompletion({ status: "CONFIRMED" }).missing, ["Bio", "Company", "Job title", "Headshot"]);
+});
+
+test("SPK-04: a speaker who has not said yes is chased ahead of a tidy checklist", () => {
+  const rows = buildSpeakerRosterRows(
+    [
+      { userId: "u-ready", name: "Ana Ready", email: "ana@x.test", profile: { bio: "b", company: "c", jobTitle: "j", headshotUrl: "h" } },
+      { userId: "u-invited", name: "Bo Invited", email: "bo@x.test", profile: { bio: "b", company: "c", jobTitle: "j", headshotUrl: "h", status: "INVITED" } },
+    ],
+    [],
+    [],
+  );
+  assert.equal(rows[0].userId, "u-invited");
+  assert.equal(rows[0].needsAttention, true);
+  assert.equal(rows[1].needsAttention, false);
+});
+
+test("SPK-04: a declined speaker is flagged even with everything else finished", () => {
+  const [row] = buildSpeakerRosterRows(
+    [{ userId: "u1", name: "Cai Declined", email: "cai@x.test", profile: { bio: "b", company: "c", jobTitle: "j", headshotUrl: "h", status: "DECLINED" } }],
+    [],
+    [],
+  );
+  assert.equal(row.onboardingComplete, true);
+  assert.equal(row.needsAttention, true);
 });

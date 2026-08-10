@@ -15,6 +15,7 @@ import {
   serializeOnboardingTask,
 } from "@/lib/services/onboarding-task-view";
 import {
+  SPEAKER_CONFIRMATION_LABELS,
   SPEAKER_STATUS_FILTERS,
   buildSpeakerRosterRows,
   completeUserBoundary,
@@ -46,7 +47,9 @@ const LIMITS = {
   forms: OPERATOR_QUERY_LIMITS.importForms,
 };
 
-const profileSelect = { bio: true, company: true, jobTitle: true, headshotUrl: true } as const;
+const profileSelect = {
+  bio: true, company: true, jobTitle: true, headshotUrl: true, status: true,
+} as const;
 
 export default async function AdminSpeakersPage({
   searchParams,
@@ -414,6 +417,13 @@ export default async function AdminSpeakersPage({
                         ) : null}
                       </td>
                       <td>
+                        {/* Whether they have said yes comes first: no amount of
+                            finished onboarding makes a declined speaker ready. */}
+                        {row.status === "CONFIRMED" ? null : (
+                          <Pill tone={row.status === "DECLINED" ? "bad" : "warn"}>
+                            {SPEAKER_CONFIRMATION_LABELS[row.status]}
+                          </Pill>
+                        )}
                         {row.onboardingComplete ? (
                           <Pill tone="good">Ready</Pill>
                         ) : row.requiredOutstanding.length > 0 ? (
@@ -434,6 +444,7 @@ export default async function AdminSpeakersPage({
                             company: row.company,
                             bio: row.bio,
                             headshotUrl: row.headshotUrl,
+                            status: row.status,
                           }}
                         />
                       </td>
