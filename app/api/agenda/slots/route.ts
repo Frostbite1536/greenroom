@@ -4,6 +4,7 @@ import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { detectConflicts, type SlotInterval } from "@/lib/services/schedule";
 import { lockScheduleWrite } from "@/lib/services/schedule-lock";
+import { resolveCandidateSlotId, unscheduleSessionSlot } from "@/lib/services/schedule-slot-write";
 
 export const dynamic = "force-dynamic";
 
@@ -64,11 +65,14 @@ export const POST = handle(async (req) => {
     }));
 
     // A session has at most one slot (unique sessionId): treat that as the
-    // candidate identity so moving a session doesn't conflict with itself.
+    // candidate identity so moving a session doesn't conflict with itself. The
+    // server's own slot is the only admissible identity — a request naming any
+    // other one is refused rather than allowed to exclude that slot from the
+    // check below (see `resolveCandidateSlotId`).
     const ownSlot = existingSlots.find((s) => s.sessionId === input.sessionId);
     const conflicts = detectConflicts(
       {
-        slotId: input.id ?? ownSlot?.id,
+        slotId: resolveCandidateSlotId(input.id, ownSlot?.id),
         roomId: input.roomId,
         startsAt: startsAt.getTime(),
         endsAt: endsAt.getTime(),
@@ -120,19 +124,21 @@ export const POST = handle(async (req) => {
   });
 });
 
-/** DELETE /api/agenda/slots?sessionId= — unschedule a session (admin). */
+/**
+ * DELETE /api/agenda/slots?sessionId= — unschedule a session (admin).
+ *
+ * Removing a slot changes the same event-wide conflict predicate a placement is
+ * checked against, so it runs in one transaction and takes the S3 event lock
+ * first — the same key, in the same position, as POST above and bulk
+ * auto-placement apply. Responses are unchanged.
+ */
 export const DELETE = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const sessionId = new URL(req.url).searchParams.get("sessionId");
   if (!sessionId) throw new ApiError(400, "MISSING_SESSION", "sessionId is required.");
 
-  const slot = await prisma.scheduleSlot.findUnique({
-    where: { sessionId },
-    include: { session: { select: { eventId: true } } },
-  });
-  if (!slot || slot.session.eventId !== ctx.eventId) {
-    throw new ApiError(404, "SLOT_NOT_FOUND", "No schedule slot for this session.");
-  }
-  await prisma.scheduleSlot.delete({ where: { sessionId } });
-  return ok({ sessionId, unscheduled: true });
+  const result = await prisma.$transaction((tx) =>
+    unscheduleSessionSlot(tx, { eventId: ctx.eventId, sessionId }),
+  );
+  return ok(result);
 });
