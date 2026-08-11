@@ -1,3 +1,5 @@
+import { isStoredFilePath } from "@/lib/uploads/stored-file";
+
 export const PUBLIC_SPEAKER_LIMITS = {
   speakers: 200,
   sessionsPerSpeaker: 20,
@@ -89,6 +91,14 @@ function sessionProjection(source: PublicSpeakerSource["sessionSpeakers"][number
 
 export function safePublicImageUrl(value: string | null | undefined): string | null {
   if (!value) return null;
+
+  // An uploaded headshot is stored as this app's own `/api/files/<id>` path,
+  // which `new URL()` below cannot parse and would therefore have discarded —
+  // the gallery would silently show initials for every file a speaker actually
+  // uploaded. `isStoredFilePath` matches that exact shape and nothing else (no
+  // scheme, no host, no traversal), so this admits the app's own route without
+  // admitting relative paths in general.
+  if (isStoredFilePath(value)) return value;
 
   try {
     const url = new URL(value);
