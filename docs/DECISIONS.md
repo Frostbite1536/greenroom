@@ -84,3 +84,25 @@ Repository automation (GitHub workflows, issue templates, third-party Apps)
 requires the maintainer's approval. A developer CLI that created
 `.github/ISSUE_TEMPLATE/` as an install side effect was reverted under this
 rule.
+
+## Resource/wiki pages are authored in the product, sanitized at write
+The speaker portal always rendered `ResourceWiki` pages, but the only writer was
+the demo seed, so INV-HTML-001's "before storage" half had nothing to enforce
+and an organizer could not create a resource page at all. `/admin/resources` and
+`POST|PATCH|DELETE /api/admin/resources` are that writer: ADMIN-only,
+event-scoped from the session on create and from the row's own `FOR UPDATE` read
+on edit and delete, with `@@unique([eventId, slug])` surfaced as a named 409.
+
+Every authored body passes through the existing `lib/sanitize-html.ts` — the
+same sanitizer the reader uses — before it is stored, and the reader keeps
+sanitizing on render. That duplication is deliberate: rows still arrive from the
+seed and could arrive from a future importer, so neither end may assume the
+other cleaned the bytes. A body where nothing survives sanitizing is a 422
+rather than a silently blank published page, because an organizer who pasted an
+embed needs to be told, not left with an empty page.
+
+The published-only rule both portal surfaces read by lives in one helper
+(`portalResourceWhere`), so an unpublished draft cannot be listed on one surface
+and reachable on the other. No new dependency: the conservative in-repo
+sanitizer stands, and swapping in `sanitize-html`/DOMPurify remains the recorded
+follow-up rather than something this surface forced.
