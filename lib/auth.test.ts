@@ -42,7 +42,7 @@ test("production fails closed when its configured secret is missing or too short
 });
 
 test("persisted roles choose the same homes for login and root redirects", () => {
-  assert.equal(homeForRole("ADMIN"), "/admin/forms");
+  assert.equal(homeForRole("ADMIN"), "/admin");
   assert.equal(homeForRole("EVALUATOR"), "/admin/evaluations");
   assert.equal(homeForRole("SPEAKER"), "/portal");
 });

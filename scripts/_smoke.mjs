@@ -4847,7 +4847,7 @@ try {
 
   const adminLogin = await postLogin({ email: admin.user.email, password: loginPassword });
   check("C5-LOGIN the role comes from the user's membership, never from the request",
-    adminLogin.status === 200 && adminLogin.data?.data?.redirectTo === "/admin/forms" && adminLogin.data?.data?.role === "ADMIN",
+    adminLogin.status === 200 && adminLogin.data?.data?.redirectTo === "/admin" && adminLogin.data?.data?.role === "ADMIN",
     `${adminLogin.status}/${adminLogin.data?.data?.redirectTo}`);
 
   const wrongPassword = await postLogin({ email: speaker.user.email, password: `${loginPassword}x` });

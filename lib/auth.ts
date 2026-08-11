@@ -63,7 +63,8 @@ export type PersonaKey = keyof typeof DEMO_PERSONAS;
 
 const ROLES: UserRole[] = ["ADMIN", "EVALUATOR", "SPEAKER"];
 const HOME_BY_ROLE: Record<UserRole, string> = {
-  ADMIN: "/admin/forms",
+  // Organizers land on the dashboard (B7), the at-a-glance state of their event.
+  ADMIN: "/admin",
   EVALUATOR: "/admin/evaluations",
   SPEAKER: "/portal",
 };
