@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { FileUploadField } from "@/components/file-upload-field";
 import {
   profileFormValues,
   profilePatch,
@@ -102,6 +103,15 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
           inputMode="url"
         />
       </label>
+      {/* Either/or, never both: uploading fills the field above, and the field
+          is still what gets saved — so a pasted link keeps working unchanged
+          and clearing it still clears the profile. */}
+      <FileUploadField
+        kind="HEADSHOT"
+        label="…or upload a headshot"
+        hint="PNG, JPEG or WebP."
+        onUploaded={(url) => update("headshotUrl", url)}
+      />
       <label className={styles.field}>
         <span>Slide deck URL</span>
         <input
@@ -111,6 +121,12 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
           inputMode="url"
         />
       </label>
+      <FileUploadField
+        kind="SLIDE_DECK"
+        label="…or upload a slide deck"
+        hint="PDF. Only you and the organizers can open it."
+        onUploaded={(url) => update("slideDeckUrl", url)}
+      />
 
       <div className={styles.formActions}>
         <button className="primary-button" type="submit" disabled={saving || !dirty}>
