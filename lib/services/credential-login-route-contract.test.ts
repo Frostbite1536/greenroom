@@ -148,13 +148,18 @@ test("the login page renders a labelled credential form beside the unchanged per
   assert.match(page, /action=\{loginAsPersona\}/);
   assert.match(page, /one-click/i);
   assert.match(page, /No password required\./);
-  // Honest scope copy: provisioned only, no reset, and sign-up named as roadmap
-  // rather than merely absent (D-C5-9).
-  assert.match(page, /Self-service sign-up is on the roadmap\s*\n?\s*—\s*for now organizers provision accounts\./);
-  assert.match(page, /Password\s*\n?\s*reset is not available yet/i);
+  // D-C5-16 item 2 replaced D-C5-9's roadmap sentence: both doors now exist, and
+  // the page must point at them rather than apologise for their absence. The old
+  // copy is asserted GONE, not merely superseded — a stale "sign-up is on the
+  // roadmap" line beside a working /signup link is worse than either alone.
+  assert.match(page, /href="\/signup"/);
+  assert.match(page, /href="\/forgot"/);
+  assert.doesNotMatch(page, /on the roadmap/i);
+  assert.doesNotMatch(page, /reset is not available/i);
+  assert.doesNotMatch(page, /organizers provision accounts/i);
 });
 
-test("no self-registration or password-reset surface was added", () => {
+test("the auth surface is exactly these routes, and login itself gained nothing", () => {
   const authRoutes: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(path.join(repoRoot, dir))) {
@@ -164,22 +169,46 @@ test("no self-registration or password-reset surface was added", () => {
     }
   };
   walk("app/api/auth");
+  // D-C5-16 opened this set deliberately; it stays CLOSED, so an unreviewed
+  // public auth endpoint cannot appear without this failing. `switch-event`
+  // (D-C5-16 #1) is deliberately NOT a registration surface: it requires an
+  // already-authenticated session, creates no identity and no membership, and
+  // only ever re-issues a cookie for an `EventMember` row the caller holds.
+  // `signup`/`forgot`/`reset`/`continue` (D-C5-16 #2) are the reviewed
+  // self-service surfaces whose contracts live in
+  // `self-service-auth-route-contract.test.ts`.
   assert.deepEqual(authRoutes.sort(), [
+    "app/api/auth/continue/route.ts",
+    "app/api/auth/forgot/route.ts",
     "app/api/auth/login/route.ts",
+    "app/api/auth/reset/route.ts",
     "app/api/auth/reviewer-invites/accept/route.ts",
+    "app/api/auth/signup/route.ts",
+    "app/api/auth/switch-event/route.ts",
   ]);
-  // Route-shaped names, not bare words: the point is that no such surface
-  // exists, and a prose comment that happens to contain "forgot" is not one.
-  for (const forbidden of [/register/i, /signup/i, /sign-up/i, /forgot[-_ ]?password/i, /password[-_]reset/i, /resetPassword/i]) {
+  // The credential-login route is unchanged by that lane: signup, reset and the
+  // pending-identity exchange are their own files, and none of their concerns
+  // leaked into the one endpoint whose bytes the tests above pin.
+  for (const forbidden of [/register/i, /signup/i, /sign-up/i, /forgot/i, /password[-_]reset/i, /resetPassword/i, /pending/i]) {
     assert.doesNotMatch(route, forbidden);
   }
 });
 
 test("passwordHash is confined to the credential path and never projected", () => {
+  // The credential path, and nothing else. D-C5-16 item 2 added four entries —
+  // the two routes that WRITE a credential, the one that reads a hash to decide
+  // whether a reset link can be signed, and the two pure modules that derive the
+  // reset token's digest from it. The point of the list is unchanged: a stored
+  // credential must never reach a serializer, a page, or a component.
   const allowed = new Set([
     "app/api/auth/login/route.ts",
+    "app/api/auth/signup/route.ts",
+    "app/api/auth/reset/route.ts",
+    "app/api/auth/forgot/route.ts",
     "lib/password-credential.ts",
     "lib/services/credential-login.ts",
+    "lib/services/password-reset-redeem.ts",
+    "lib/services/password-reset-token.ts",
     "lib/demo/seed.ts",
   ]);
   const offenders: string[] = [];

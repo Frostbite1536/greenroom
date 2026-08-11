@@ -1,0 +1,155 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+/**
+ * Stateless password-reset tokens (D-C5-16 item 2 — "no schema change").
+ *
+ * The token is a signed claim, not a stored row. Its single interesting property
+ * is that it is **use-once by construction rather than by bookkeeping**:
+ *
+ *   signature = HMAC(secret, "...:<userId>:<exp>:<digest of the CURRENT hash>")
+ *
+ * The digest is never carried in the token. It is recomputed at verification
+ * time from whatever `User.passwordHash` says *right now*, so the moment the
+ * password changes, every token minted against the old hash stops verifying —
+ * including the one that just changed it. No `usedAt` column, no revocation
+ * table, no sweep job, and no window in which a replayed link works because a
+ * write failed to land.
+ *
+ * Consequences worth stating plainly, because they are deliberate:
+ * - Requesting a second reset does NOT invalidate the first. Both tokens are
+ *   signed over the same unchanged hash, so both work until one is spent. That
+ *   is the honest reading of "invalidated by the password changing", and it
+ *   avoids a denial-of-service where anyone who knows an address can keep
+ *   cancelling the real owner's link.
+ * - A user with no password has no digest to sign over and therefore cannot be
+ *   issued a token at all. `/forgot` still answers neutrally; it simply sends
+ *   nothing. Provisioned accounts without a credential go through their
+ *   organizer, exactly as before.
+ *
+ * The signing secret is `lib/server-signing.ts`'s, shared with the session
+ * cookie and the durable rate buckets, but every domain string here is distinct
+ * so a value from one context can never be replayed into another.
+ */
+
+export const PASSWORD_RESET_TOKEN_TTL_MS = 30 * 60 * 1_000;
+
+/** Bounds a hostile query string before any of it is parsed or hashed. */
+export const PASSWORD_RESET_TOKEN_MAX_LENGTH = 512;
+
+const TOKEN_VERSION = "v1";
+const SIGNATURE_RE = /^[A-Za-z0-9_-]{43}$/;
+const INTEGER_RE = /^[1-9]\d{0,9}$/;
+/** cuid/uuid shaped; deliberately narrower than anything a URL could smuggle. */
+const USER_ID_RE = /^[A-Za-z0-9_-]{1,191}$/;
+
+export type PasswordResetTokenParts = {
+  userId: string;
+  expiresAt: Date;
+  signature: string;
+};
+
+/**
+ * A stable fingerprint of the stored credential.
+ *
+ * HMAC rather than a bare hash of the hash: the digest travels nowhere, but
+ * keying it to the server secret means even a full read of this module's output
+ * would say nothing about the stored credential.
+ */
+export function passwordResetCredentialDigest(secret: string, passwordHash: string): string {
+  return createHmac("sha256", secret)
+    .update(`greenroom:password-reset:credential:v1\0${passwordHash}`)
+    .digest("base64url");
+}
+
+function tokenMessage(input: { userId: string; exp: number; credentialDigest: string }): string {
+  return `greenroom:password-reset:v1:${input.userId}:${input.exp}:${input.credentialDigest}`;
+}
+
+function tokenSignature(message: string, secret: string): string {
+  return createHmac("sha256", secret).update(message).digest("base64url");
+}
+
+export function passwordResetExpiry(now = new Date(), ttlMs = PASSWORD_RESET_TOKEN_TTL_MS): Date {
+  // Whole seconds, so the value that is signed is the value that round-trips.
+  return new Date((Math.floor(now.getTime() / 1_000) + Math.floor(ttlMs / 1_000)) * 1_000);
+}
+
+/**
+ * Mint a token for a user who currently has `passwordHash`.
+ *
+ * Throws rather than returning null: every caller here holds a real `User` row,
+ * so a malformed input is a programming error, not a request outcome.
+ */
+export function createPasswordResetToken(
+  input: { userId: string; passwordHash: string; expiresAt: Date },
+  secret: string,
+): string {
+  const exp = Math.floor(input.expiresAt.getTime() / 1_000);
+  if (!USER_ID_RE.test(input.userId) || !Number.isSafeInteger(exp) || exp < 1) {
+    throw new Error("Password reset token input is invalid.");
+  }
+  if (typeof input.passwordHash !== "string" || input.passwordHash.length === 0) {
+    throw new Error("Password reset token input is invalid.");
+  }
+  const message = tokenMessage({
+    userId: input.userId,
+    exp,
+    credentialDigest: passwordResetCredentialDigest(secret, input.passwordHash),
+  });
+  return `${TOKEN_VERSION}.${input.userId}.${exp}.${tokenSignature(message, secret)}`;
+}
+
+/**
+ * Structural parse and expiry check. No secret, no database, no signature.
+ *
+ * Split out from verification because the signature cannot be checked until the
+ * user's *current* hash has been read, and reading it needs a user id. Callers
+ * must treat a non-null result as "well-formed and unexpired", never as valid.
+ */
+export function parsePasswordResetToken(raw: unknown, now = new Date()): PasswordResetTokenParts | null {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > PASSWORD_RESET_TOKEN_MAX_LENGTH) return null;
+  const [prefix, userId, expRaw, signature, ...extra] = raw.split(".");
+  if (
+    prefix !== TOKEN_VERSION ||
+    !userId || !USER_ID_RE.test(userId) ||
+    !INTEGER_RE.test(expRaw ?? "") ||
+    !signature || !SIGNATURE_RE.test(signature) ||
+    extra.length > 0
+  ) return null;
+  const exp = Number(expRaw);
+  if (!Number.isSafeInteger(exp) || exp * 1_000 <= now.getTime()) return null;
+  return { userId, expiresAt: new Date(exp * 1_000), signature };
+}
+
+/**
+ * Re-derive the signature from the credential as it stands **now** and compare
+ * in constant time.
+ *
+ * A null or empty `passwordHash` can never verify: there is nothing to sign
+ * over, and returning false here is what makes "the credential was cleared"
+ * behave exactly like "the token was already spent".
+ */
+export function verifyPasswordResetToken(
+  parts: PasswordResetTokenParts,
+  passwordHash: string | null | undefined,
+  secret: string,
+): boolean {
+  if (typeof passwordHash !== "string" || passwordHash.length === 0) return false;
+  const expected = tokenSignature(
+    tokenMessage({
+      userId: parts.userId,
+      exp: Math.floor(parts.expiresAt.getTime() / 1_000),
+      credentialDigest: passwordResetCredentialDigest(secret, passwordHash),
+    }),
+    secret,
+  );
+  const supplied = Buffer.from(parts.signature, "base64url");
+  const expectedBytes = Buffer.from(expected, "base64url");
+  if (supplied.length !== expectedBytes.length) return false;
+  return timingSafeEqual(supplied, expectedBytes);
+}
+
+/** The reset link. The token rides the query string so the page can render the form. */
+export function passwordResetUrl(appUrl: string, token: string): string {
+  return `${appUrl}/reset?token=${encodeURIComponent(token)}`;
+}

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIanaTimeZone } from "@/lib/tz";
+import { isStoredFilePath } from "@/lib/uploads/stored-file";
 
 // NOTE: relaxed from z.string().cuid() by the backend worker to accept the
 // seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
@@ -477,6 +478,42 @@ export const reviewerInviteAcceptSchema = z
   .object({ token: z.unknown().optional() })
   .strict();
 
+/**
+ * Self-service auth input (D-C5-16 item 2).
+ *
+ * Shape only. The password **strength** floor lives in
+ * `lib/services/password-policy.ts` so one rule serves signup and reset and the
+ * message is written once; these schemas bound length and reject anything that
+ * is not a plausible address before a scrypt is ever paid for.
+ *
+ * `.strict()` on every one: an authority identifier — an event, a role, a user
+ * id — must never be accepted from an unauthenticated body, and the strict
+ * object is what makes that a refusal rather than a silently ignored field.
+ */
+const selfServiceEmailSchema = z.string().trim().toLowerCase().max(254).email();
+/** Bounded here; `checkNewPassword` owns whether it is good enough. */
+const selfServiceSecretSchema = z.string().max(512);
+
+export const signupSchema = z
+  .object({
+    email: selfServiceEmailSchema,
+    password: selfServiceSecretSchema,
+    confirmPassword: selfServiceSecretSchema,
+  })
+  .strict();
+
+export const forgotPasswordSchema = z
+  .object({ email: selfServiceEmailSchema })
+  .strict();
+
+export const passwordResetSchema = z
+  .object({
+    token: z.string().min(1).max(512),
+    password: selfServiceSecretSchema,
+    confirmPassword: selfServiceSecretSchema,
+  })
+  .strict();
+
 export const reviewScoreInputSchema = z.object({
   planId: idSchema,
   abstractId: idSchema,
@@ -553,9 +590,24 @@ const nullableProfileText = (maxLength: number) => z.preprocess(
   z.string().max(maxLength).nullable(),
 ).optional();
 
+/**
+ * A profile link: an absolute URL exactly as before, **or** one of this app's
+ * own upload URLs.
+ *
+ * The `.url()` branch is untouched, so GRA2-07's documented follow-up (that
+ * `.url()` still accepts non-HTTP schemes, re-filtered by the public image
+ * renderer) neither improves nor worsens here. The second branch is not a
+ * widening of what counts as a URL: `isStoredFilePath` accepts `/api/files/<id>`
+ * and literally nothing else — no scheme, no host, no traversal, no query — so
+ * an uploaded file can be stored in the same column as a pasted link without
+ * that column becoming able to hold a relative path in general.
+ */
 const nullableProfileUrl = z.preprocess(
   (value) => typeof value === "string" ? value.trim() || null : value,
-  z.string().url().nullable(),
+  z.union([
+    z.string().url(),
+    z.string().refine(isStoredFilePath, { message: "Invalid url" }),
+  ]).nullable(),
 ).optional();
 
 const nullableSocialLinks = z.record(z.string().trim().min(1), z.string().trim().url())
@@ -631,6 +683,9 @@ export type OnboardingTaskCreate = z.infer<typeof onboardingTaskCreateSchema>;
 export type OnboardingTaskUpdate = z.infer<typeof onboardingTaskUpdateSchema>;
 export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
+export type SignupInput = z.infer<typeof signupSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type PasswordResetInput = z.infer<typeof passwordResetSchema>;
 
 export type ApiSuccess<T> = { ok: true; data: T };
 // `retryAfterSeconds` is an additive extension: present only on refusals that

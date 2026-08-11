@@ -75,6 +75,16 @@ enum SessionContentStatus {
   PUBLISHED
 }
 
+/**
+ * What an uploaded file is for. The kind — not the request — decides the size
+ * cap, the accepted MIME set, and who may read the bytes back
+ * (`lib/uploads/stored-file.ts`).
+ */
+enum StoredFileKind {
+  HEADSHOT
+  SLIDE_DECK
+}
+
 model Event {
   id        String    @id @default(cuid())
   name      String
@@ -100,6 +110,7 @@ model Event {
   imports         ImportJob[]
   publicSubmissionRateBuckets PublicSubmissionRateBucket[]
   reviewerInvites             ReviewerInvite[]
+  storedFiles                 StoredFile[]
 
   @@index([startsAt])
 }
@@ -126,6 +137,7 @@ model User {
   taskAssignments    SpeakerTask[]
   sentEmails         EmailDispatch[]    @relation("EmailSender")
   reviewerInvites    ReviewerInvite[]
+  storedFiles        StoredFile[]
 }
 
 model EventMember {
@@ -576,6 +588,50 @@ model EmailDispatch {
   sender   User?         @relation("EmailSender", fields: [senderId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
+}
+
+/**
+ * A file the product actually holds, rather than a link it hopes stays up.
+ *
+ * The bytes live in Postgres on purpose: the alternative was a new external
+ * blob credential on deadline night, and a headshot or a slide deck is small,
+ * rarely read, and already inside the transactional backup of everything else
+ * it belongs to. `mime` is only ever a value this server itself derived from
+ * the magic bytes, never the string a client claimed — the serving route sets
+ * `Content-Type` from this column, so a client-chosen value here would be a
+ * stored-XSS primitive.
+ *
+ * `eventId` is the event the upload happened under. It is a scoping and
+ * cleanup fact, not an authorization one for headshots (they render on public
+ * speaker surfaces); for slide decks it is half of the organizer's read claim.
+ * SetNull because deleting an event must never delete a person's own headshot.
+ *
+ * `@@unique([uploaderUserId, kind, sha256])` is the dedupe key. For a public
+ * headshot, `sha256` is the raw content digest and re-uploading across events
+ * returns the same row. For a private slide deck it is a versioned,
+ * event-scoped SHA-256 fingerprint over the event id and raw content digest,
+ * so matching bytes cannot inherit another event's organizer authorization.
+ * Its leftmost column is the per-uploader index — a separate
+ * `@@index([uploaderUserId])` would be an exact prefix duplicate of it.
+ */
+model StoredFile {
+  id             String         @id @default(cuid())
+  uploaderUserId String
+  eventId        String?
+  kind           StoredFileKind
+  /// Server-derived content type. Never the client's claimed value.
+  mime           String
+  size           Int
+  /// Raw content SHA for headshots; event-scoped dedupe fingerprint for decks.
+  sha256         String
+  bytes          Bytes
+  createdAt      DateTime       @default(now())
+
+  uploader User   @relation(fields: [uploaderUserId], references: [id], onDelete: Cascade)
+  event    Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@unique([uploaderUserId, kind, sha256])
+  @@index([eventId])
 }
 
 model ImportJob {

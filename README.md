@@ -149,12 +149,14 @@ context, is in the [judging index](docs/judging/README.md#current-limitations).
 
 - **No self-service sign-up** and **no password reset** — organizers provision
   accounts. Public sign-up is roadmap, not shipped.
-- **No event switching.** An admin can create a new event from **Event
-  settings**, and it is created genuinely empty, but the workspace stays on the
-  event the session was issued for. Switching is on the roadmap, so a brand-new
-  event cannot yet be configured from the UI.
-- **No file upload** on proposals or speaker profiles — slide decks and
-  headshots are URLs. The only file input is the admin CSV proposal import.
+- **Event switching is bounded by your own memberships.** The sidebar switcher
+  lists every event you hold a membership on, and your role is re-resolved per
+  event. You cannot join an event you were not added to, and no screen shows
+  more than one event at a time.
+- **No file upload on proposals.** Speaker profiles do take real uploads —
+  headshots and slide decks are stored and served from `/api/files/<id>`, with
+  a URL field still offered as the alternative — but a proposal carries no
+  attachment.
 - **One topic per submission, by design.** A form can offer several topic
   options; each proposal stores exactly one, and that is what routes it to a
   review team. The agenda `Track` is a separate, later placement choice.

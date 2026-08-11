@@ -84,6 +84,9 @@ const FRESH_EVENT_ID = "scratch-frontend-fresh";
 // S20 also needs an event-scoping boundary target. It is created only by this
 // scratch fixture and deleted with the other disposable events.
 const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
+// D-C5-16 needs an event the switching admin has NO membership on, so a real
+// foreign event id can be proven indistinguishable from a forged one.
+const SWITCH_FOREIGN_EVENT_ID = "scratch-frontend-switch-foreign";
 // S2 creates a separate event with the same published form slug. It proves
 // canonical public URLs remain event-scoped and the legacy slug route fails
 // closed instead of choosing one candidate.
@@ -93,6 +96,27 @@ const S2_OTHER_EVENT_ID = "scratch-frontend-s2-other";
 // both the one that succeeds and the `${slug}-*` variants the refusal checks
 // attempt — so a failed run cannot leave an event behind to collide next time.
 const CREATED_EVENT_SLUG = "scratch-frontend-created";
+// D-C5-16 item 2 (self-service signup + password reset). These identities are
+// created only through the public endpoints — never seeded — so the checks below
+// exercise the real create path rather than a fixture that resembles it. All
+// three are deleted with the other scratch users at both ends of the run.
+const SIGNUP_EMAIL = "signup-newcomer@scratch.test";
+const RESET_EMAIL = "signup-resetter@scratch.test";
+// The refused-signup checks use their own address so they do not spend
+// SIGNUP_EMAIL's per-address hourly budget before the taken-address 409 — which
+// would turn that check into a 429 and quietly stop testing what it names.
+const SIGNUP_REJECT_EMAIL = "signup-rejected@scratch.test";
+// Deliberately never created: /forgot's neutral response is only meaningful if
+// one of the two addresses genuinely has no account.
+const FORGOT_MISSING_EMAIL = "signup-nobody@scratch.test";
+const SELF_SERVICE_EMAILS = [SIGNUP_EMAIL, RESET_EMAIL, SIGNUP_REJECT_EMAIL, FORGOT_MISSING_EMAIL];
+const SIGNUP_PASSWORD = "scratch-signup-passphrase";
+const RESET_OLD_PASSWORD = "scratch-reset-old-passphrase";
+const RESET_NEW_PASSWORD = "scratch-reset-new-passphrase";
+const RESET_RACE_PASSWORD = "scratch-reset-race-passphrase";
+// The floor is 10 code points (`lib/services/password-policy.ts`); this is nine.
+const TOO_SHORT_PASSWORD = "shortpwd1";
+const PASSWORD_RESET_TTL_MS = 30 * 60 * 1_000;
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 const REVIEWER_INVITE_APP_URL = "https://greenroom-hq.test";
@@ -179,9 +203,14 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
-  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
   await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL, ...SELF_SERVICE_EMAILS] } } });
+  // The reset dispatch row's parent template belongs to whichever event sorts
+  // first, which may be demo-event — so it does NOT cascade away with the
+  // scratch event and must be removed by recipient. demo-event is READ-ONLY
+  // for workers, and its email history is an operator-visible surface.
+  await prisma.emailDispatch.deleteMany({ where: { recipient: { in: SELF_SERVICE_EMAILS } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -445,7 +474,20 @@ const check = (name, pass, detail = "") => {
 
 const server = spawn("npx", ["next", "start", "-p", PORT], {
   cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET, APP_URL: REVIEWER_INVITE_APP_URL },
+  env: {
+    ...process.env,
+    SESSION_SECRET: SMOKE_SESSION_SECRET,
+    APP_URL: REVIEWER_INVITE_APP_URL,
+    // Durable rate buckets are partitioned by event, and the login/self-service
+    // throttles are not event-scoped — without this they default to the
+    // lexicographically-first event, which is `demo-event`, and this run would
+    // write throttle rows onto the judged programme (READ-ONLY for workers).
+    // Anchoring them to the scratch event also makes the run repeatable: the
+    // buckets cascade-delete with the event `resetScratch` rebuilds, so an
+    // hour-long window from a previous run cannot refuse this one's checks.
+    // `scripts/_smoke.mjs` sets the same variable for the same reasons.
+    LOGIN_RATE_ANCHOR_EVENT_ID: EVENT_ID,
+  },
 });
 console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 
@@ -473,9 +515,14 @@ let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
-      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
       await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL, ...SELF_SERVICE_EMAILS] } } });
+      // The reset dispatch row's parent template belongs to whichever event sorts
+      // first, which may be demo-event — so it does NOT cascade away with the
+      // scratch event and must be removed by recipient. demo-event is READ-ONLY
+      // for workers, and its email history is an operator-visible surface.
+      await prisma.emailDispatch.deleteMany({ where: { recipient: { in: SELF_SERVICE_EMAILS } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -507,6 +554,321 @@ async function waitReady() {
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
+}
+
+// ---- D-C5-16 item 2: self-service signup + password reset -------------------
+
+/**
+ * POST as a browser on this site would.
+ *
+ * Every self-service auth route refuses a post it cannot positively confirm is
+ * same-origin, so the `Origin` header is not optional decoration here — omit it
+ * and every check below would pass vacuously against a 403.
+ */
+async function authPost(path, body, headers = {}) {
+  const res = await fetch(BASE + path, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/json", origin: BASE, ...headers },
+    body: body === null ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data, text, headers: res.headers, setCookie: res.headers.get("set-cookie") ?? "" };
+}
+
+/** The `sb_session=...` pair out of a Set-Cookie header, ready to send back. */
+function sessionCookieFrom(setCookie) {
+  const match = /(^|[,;\s])(sb_session=[^;,\s]+)/.exec(setCookie ?? "");
+  return match ? match[2] : "";
+}
+
+async function getWith(path, cookie) {
+  const res = await fetch(BASE + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  return { status: res.status, text: await res.text(), location: res.headers.get("location") ?? "" };
+}
+
+/**
+ * Mint a reset token the way `lib/services/password-reset-token.ts` does.
+ *
+ * Deliberately re-derived here rather than read out of the sent email: the token
+ * is kept OUT of `EmailDispatch.variables` on purpose (it is durable storage),
+ * and the rendered HTML is not persisted, so there is nothing to scrape. This
+ * mirrors the existing `_signed-session.mjs` precedent — the smoke re-implements
+ * the signing, and the server verifies it independently, which is what makes a
+ * pass meaningful. The digest is taken from the account's CURRENT stored hash,
+ * so these are genuinely the bytes the product would have mailed.
+ */
+function mintResetToken(userId, passwordHash, expiresAtMs) {
+  const digest = createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:password-reset:credential:v1\0${passwordHash}`)
+    .digest("base64url");
+  const exp = Math.floor(expiresAtMs / 1_000);
+  const signature = createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:password-reset:v1:${userId}:${exp}:${digest}`)
+    .digest("base64url");
+  return `v1.${userId}.${exp}.${signature}`;
+}
+
+async function runSelfServiceAuthChecks() {
+  // --- the origin gate is what makes any of the rest safe -------------------
+  const foreign = await authPost(
+    "/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD },
+    { origin: "https://evil.test" },
+  );
+  check("D-C5-16 a cross-origin signup post is refused before anything is created",
+    foreign.status === 403 && foreign.data?.error?.code === "CROSS_ORIGIN_REFUSED" && !foreign.setCookie,
+    `${foreign.status} ${JSON.stringify(foreign.data?.error?.code ?? null)} cookie=${Boolean(foreign.setCookie)}`);
+  check("D-C5-16 the refused cross-origin post created no account",
+    (await prisma.user.count({ where: { email: SIGNUP_EMAIL } })) === 0);
+
+  // --- the strength floor is enforced server-side ---------------------------
+  const weak = await authPost("/api/auth/signup",
+    { email: SIGNUP_REJECT_EMAIL, password: TOO_SHORT_PASSWORD, confirmPassword: TOO_SHORT_PASSWORD });
+  check("D-C5-16 a password under the floor is a 422 with a field-scoped message",
+    weak.status === 422 && Array.isArray(weak.data?.error?.fieldErrors?.password),
+    `${weak.status} ${JSON.stringify(weak.data?.error?.code ?? null)}`);
+  const mismatch = await authPost("/api/auth/signup",
+    { email: SIGNUP_REJECT_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: `${SIGNUP_PASSWORD}x` });
+  check("D-C5-16 a mismatched confirmation is a 422 on the confirm field",
+    mismatch.status === 422 && Array.isArray(mismatch.data?.error?.fieldErrors?.confirmPassword),
+    `${mismatch.status}`);
+  check("D-C5-16 neither refused signup created an account",
+    (await prisma.user.count({ where: { email: { in: [SIGNUP_EMAIL, SIGNUP_REJECT_EMAIL] } } })) === 0);
+
+  // --- happy path: an account, a credential, and a session ------------------
+  const signup = await authPost("/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD });
+  const signupCookie = sessionCookieFrom(signup.setCookie);
+  check("D-C5-16 signup creates the account and issues a session cookie",
+    signup.status === 201 && signup.data?.data?.redirectTo === "/welcome" && signup.data?.data?.pending === true
+    && signupCookie.startsWith("sb_session="),
+    `${signup.status} ${JSON.stringify(signup.data?.data ?? signup.data?.error?.code ?? null)} cookie=${Boolean(signupCookie)}`);
+  const newcomer = await prisma.user.findUnique({
+    where: { email: SIGNUP_EMAIL },
+    select: { id: true, passwordHash: true, memberships: { select: { eventId: true, userId: true } } },
+  });
+  check("D-C5-16 the new account has a scrypt credential and belongs to nothing",
+    Boolean(newcomer) && typeof newcomer.passwordHash === "string"
+    && newcomer.passwordHash.startsWith("scrypt$s1$") && newcomer.memberships.length === 0,
+    `hash=${newcomer?.passwordHash?.slice(0, 10) ?? "none"} memberships=${newcomer?.memberships.length ?? "n/a"}`);
+
+  // The session is real enough to land on /welcome and carries ZERO authority
+  // anywhere else. This is the property the pending payload variant exists for.
+  const welcome = await getWith("/welcome", signupCookie);
+  check("D-C5-16 the membership-less session lands on a real welcome page",
+    welcome.status === 200 && welcome.text.includes(SIGNUP_EMAIL) && /Create your first event/.test(welcome.text),
+    `${welcome.status}`);
+  const pendingOnAdmin = await getWith("/admin", signupCookie);
+  check("D-C5-16 the pending session grants nothing on an admin surface",
+    pendingOnAdmin.status === 307 && pendingOnAdmin.location.includes("/login"),
+    `${pendingOnAdmin.status} ${pendingOnAdmin.location}`);
+  const pendingOnLogin = await getWith("/login", signupCookie);
+  check("D-C5-16 a pending visitor is sent to /welcome instead of the form they just used",
+    pendingOnLogin.status === 307 && pendingOnLogin.location.includes("/welcome"),
+    `${pendingOnLogin.status} ${pendingOnLogin.location}`);
+  const anonWelcome = await getWith("/welcome", "");
+  check("D-C5-16 /welcome is not a public page",
+    anonWelcome.status === 307 && anonWelcome.location.includes("/login"),
+    `${anonWelcome.status} ${anonWelcome.location}`);
+
+  // Credential login still refuses a membership-less identity — the pending
+  // cookie is the ONLY way this account is in, and the refusal is the generic one.
+  const loginNoMembership = await authPost("/api/auth/login", { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD });
+  check("D-C5-16 credential login still refuses an identity with no membership",
+    loginNoMembership.status === 401 && loginNoMembership.data?.error?.code === "INVALID_CREDENTIALS"
+    && !loginNoMembership.setCookie,
+    `${loginNoMembership.status} ${JSON.stringify(loginNoMembership.data?.error?.code ?? null)}`);
+
+  // --- the taken-address 409 (the deliberate enumeration tradeoff) ----------
+  const taken = await authPost("/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD });
+  check("D-C5-16 a taken address is a calm 409 pointing at sign-in and reset",
+    taken.status === 409 && taken.data?.error?.code === "EMAIL_TAKEN"
+    && /Sign in instead, or reset the password/.test(taken.data?.error?.message ?? "")
+    && !taken.setCookie,
+    `${taken.status} ${JSON.stringify(taken.data?.error?.code ?? null)}`);
+
+  // --- first event: the bootstrap upgrades the pending cookie in place ------
+  const bootstrapSlug = `${CREATED_EVENT_SLUG}-bootstrap`;
+  const bootstrap = await authPost("/api/admin/events",
+    { name: "Scratch Bootstrap Event", slug: bootstrapSlug, timezone: "UTC" },
+    { cookie: signupCookie });
+  const bootstrapCookie = sessionCookieFrom(bootstrap.setCookie);
+  check("D-C5-16 a membership-less identity can create its first event and is upgraded",
+    bootstrap.status === 201 && bootstrap.data?.data?.event?.slug === bootstrapSlug
+    && bootstrapCookie.startsWith("sb_session=") && bootstrapCookie !== signupCookie,
+    `${bootstrap.status} ${JSON.stringify(bootstrap.data?.data?.event?.slug ?? bootstrap.data?.error?.code ?? null)}`);
+  const bootstrapAdmin = await getWith("/admin", bootstrapCookie);
+  check("D-C5-16 the upgraded session opens the admin workspace",
+    bootstrapAdmin.status === 200 && bootstrapAdmin.text.includes("Scratch Bootstrap Event"),
+    `${bootstrapAdmin.status}`);
+  // The branch closes behind them: the same pending cookie is now an identity
+  // WITH a membership, so it can no longer bootstrap a second event.
+  const secondBootstrap = await authPost("/api/admin/events",
+    { name: "Scratch Bootstrap Twice", slug: `${bootstrapSlug}-twice`, timezone: "UTC" },
+    { cookie: signupCookie });
+  check("D-C5-16 the bootstrap branch closes once the identity belongs to something",
+    secondBootstrap.status === 401 && secondBootstrap.data?.error?.code === "UNAUTHENTICATED",
+    `${secondBootstrap.status} ${JSON.stringify(secondBootstrap.data?.error?.code ?? null)}`);
+  check("D-C5-16 the refused second bootstrap created no event",
+    (await prisma.event.count({ where: { slug: `${bootstrapSlug}-twice` } })) === 0);
+  // An anonymous caller is still refused exactly as before this route grew a
+  // second caller.
+  const anonCreate = await authPost("/api/admin/events",
+    { name: "Scratch Anon Event", slug: `${bootstrapSlug}-anon`, timezone: "UTC" });
+  check("D-C5-16 an anonymous event create is still 401",
+    anonCreate.status === 401 && anonCreate.data?.error?.code === "UNAUTHENTICATED",
+    `${anonCreate.status} ${JSON.stringify(anonCreate.data?.error?.code ?? null)}`);
+
+  // --- password reset ------------------------------------------------------
+  // The resetter is created through the public endpoint too, so the credential
+  // this flow changes is a real scrypt hash written by the product. It is then
+  // given a membership, because credential login refuses one without — which is
+  // exactly what lets the "old refused / new works" checks below use the real
+  // sign-in endpoint as the oracle.
+  const resetSignup = await authPost("/api/auth/signup",
+    { email: RESET_EMAIL, password: RESET_OLD_PASSWORD, confirmPassword: RESET_OLD_PASSWORD });
+  const resetter = await prisma.user.findUnique({
+    where: { email: RESET_EMAIL },
+    select: { id: true, passwordHash: true },
+  });
+  await prisma.eventMember.create({ data: { eventId: EVENT_ID, userId: resetter.id, role: "ADMIN" } });
+  check("D-C5-16 the reset fixture signed up and was given a membership",
+    resetSignup.status === 201 && Boolean(resetter?.passwordHash), `${resetSignup.status}`);
+
+  const loginOldBefore = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
+  check("D-C5-16 the old password works before the reset",
+    loginOldBefore.status === 200 && Boolean(sessionCookieFrom(loginOldBefore.setCookie)),
+    `${loginOldBefore.status}`);
+
+  // /forgot must answer the SAME BYTES for an address that exists and one that
+  // does not. Both are asserted, and so is the fact that the two paths really
+  // did differ internally — otherwise the parity would be vacuous.
+  const dispatchesBefore = await prisma.emailDispatch.count({ where: { recipient: RESET_EMAIL } });
+  const forgotKnown = await authPost("/api/auth/forgot", { email: RESET_EMAIL });
+  const forgotMissing = await authPost("/api/auth/forgot", { email: FORGOT_MISSING_EMAIL });
+  check("D-C5-16 /forgot is byte-identical for an existing and a missing address",
+    forgotKnown.status === 200 && forgotMissing.status === 200
+    && forgotKnown.text === forgotMissing.text
+    && !forgotKnown.setCookie && !forgotMissing.setCookie,
+    `${forgotKnown.status}/${forgotMissing.status} identical=${forgotKnown.text === forgotMissing.text}`);
+  check("D-C5-16 the neutral body names no account and promises nothing specific",
+    /If that email address has an account with a password/.test(forgotKnown.text)
+    && !forgotKnown.text.includes(RESET_EMAIL) && !forgotMissing.text.includes(FORGOT_MISSING_EMAIL),
+    forgotKnown.text.slice(0, 120));
+  const dispatchesAfter = await prisma.emailDispatch.findMany({
+    where: { recipient: { in: [RESET_EMAIL, FORGOT_MISSING_EMAIL] } },
+    select: { recipient: true, status: true, variables: true },
+  });
+  const knownDispatch = dispatchesAfter.find((d) => d.recipient === RESET_EMAIL);
+  check("D-C5-16 the identical answers hide a real difference: only the real address was mailed",
+    dispatchesAfter.length === dispatchesBefore + 1 && Boolean(knownDispatch)
+    && !dispatchesAfter.some((d) => d.recipient === FORGOT_MISSING_EMAIL),
+    `dispatches=${JSON.stringify(dispatchesAfter.map((d) => d.recipient))}`);
+  check("D-C5-16 the reset email was mocked, audited as fixed-source, and stored no token",
+    knownDispatch?.status === "mocked"
+    && knownDispatch?.variables?.kind === "password-reset"
+    && knownDispatch?.variables?.source === "fixed"
+    && !JSON.stringify(knownDispatch?.variables ?? {}).includes("v1."),
+    `${knownDispatch?.status} ${JSON.stringify(knownDispatch?.variables ?? null)}`);
+
+  // A garbage token and an expired one take the same calm refusal.
+  const garbage = await authPost("/api/auth/reset",
+    { token: "v1.nope.1900000000.notarealsignaturenotarealsignaturenotarea", password: RESET_NEW_PASSWORD, confirmPassword: RESET_NEW_PASSWORD });
+  const expired = await authPost("/api/auth/reset", {
+    token: mintResetToken(resetter.id, resetter.passwordHash, Date.now() - 60_000),
+    password: RESET_NEW_PASSWORD,
+    confirmPassword: RESET_NEW_PASSWORD,
+  });
+  check("D-C5-16 a garbage token and an expired one are one indistinguishable refusal",
+    garbage.status === 400 && expired.status === 400 && garbage.text === expired.text
+    && garbage.data?.error?.code === "RESET_TOKEN_INVALID"
+    && /no longer valid/.test(garbage.data?.error?.message ?? ""),
+    `${garbage.status}/${expired.status} identical=${garbage.text === expired.text}`);
+
+  // A real token, signed over the credential as it stands right now.
+  const liveToken = mintResetToken(resetter.id, resetter.passwordHash, Date.now() + PASSWORD_RESET_TTL_MS);
+  const shortReset = await authPost("/api/auth/reset",
+    { token: liveToken, password: TOO_SHORT_PASSWORD, confirmPassword: TOO_SHORT_PASSWORD });
+  check("D-C5-16 the strength floor applies to a reset too",
+    shortReset.status === 422 && Array.isArray(shortReset.data?.error?.fieldErrors?.password),
+    `${shortReset.status}`);
+
+  const resetPasswords = [RESET_NEW_PASSWORD, RESET_RACE_PASSWORD];
+  const resetAttempts = await Promise.all(resetPasswords.map((password) => authPost(
+    "/api/auth/reset",
+    { token: liveToken, password, confirmPassword: password },
+  )));
+  const successfulResets = resetAttempts.filter((attempt) => attempt.status === 200);
+  const refusedResets = resetAttempts.filter((attempt) => attempt.status === 400);
+  const winningPasswordIndex = resetAttempts.findIndex((attempt) => attempt.status === 200);
+  const resetOk = successfulResets[0];
+  check("D-C5-16 one reset token has exactly one concurrent winner",
+    successfulResets.length === 1 && refusedResets.length === 1
+    && resetOk?.data?.data?.redirectTo === "/admin"
+    && resetOk?.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk?.setCookie))
+    && refusedResets[0]?.data?.error?.code === "RESET_TOKEN_INVALID"
+    && refusedResets[0]?.text === garbage.text,
+    resetAttempts.map((attempt) => `${attempt.status}:${attempt.data?.error?.code ?? "ok"}`).join(","));
+  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk?.setCookie));
+  check("D-C5-16 the session the reset issued really opens the workspace",
+    resetSessionAdmin.status === 200, `${resetSessionAdmin.status}`);
+
+  // Single use, by construction: the same token was signed over the hash the
+  // reset just replaced, so it can no longer verify — and the refusal is the
+  // same one a garbage token gets.
+  const replay = await authPost("/api/auth/reset",
+    { token: liveToken, password: `${RESET_NEW_PASSWORD}-again`, confirmPassword: `${RESET_NEW_PASSWORD}-again` });
+  check("D-C5-16 the spent token no longer works, with the same calm refusal",
+    replay.status === 400 && replay.text === garbage.text,
+    `${replay.status} identical=${replay.text === garbage.text}`);
+
+  const loginOldAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
+  const loginAttempts = await Promise.all(resetPasswords.map((password) =>
+    authPost("/api/auth/login", { email: RESET_EMAIL, password })));
+  const successfulLogins = loginAttempts.filter((attempt) => attempt.status === 200);
+  const refusedLogins = loginAttempts.filter((attempt) => attempt.status === 401);
+  check("D-C5-16 the old and losing passwords are refused and only the winner works",
+    loginOldAfter.status === 401 && !loginOldAfter.setCookie
+    && successfulLogins.length === 1 && refusedLogins.length === 1
+    && loginAttempts[winningPasswordIndex]?.status === 200
+    && Boolean(sessionCookieFrom(loginAttempts[winningPasswordIndex]?.setCookie)),
+    `old ${loginOldAfter.status}, candidates ${loginAttempts.map((attempt) => attempt.status).join("/")}`);
+
+  // --- the durable rate bucket actually refuses -----------------------------
+  // The per-address /forgot bucket is 3 per hour. One request against the
+  // missing address has already been spent above, so the third more is the
+  // fourth overall and must be refused. The per-IP bucket (5/h) is deliberately
+  // not the one under test here: tripping the address bucket first proves the
+  // narrower rule fires, and proves the throttle is charged for an address that
+  // has no account at all.
+  let throttled = null;
+  for (let i = 0; i < 3; i++) {
+    const attempt = await authPost("/api/auth/forgot", { email: FORGOT_MISSING_EMAIL });
+    if (attempt.status === 429) { throttled = attempt; break; }
+  }
+  check("D-C5-16 /forgot refuses past its durable per-address bound, with an honest wait",
+    Boolean(throttled) && throttled.status === 429
+    && throttled.data?.error?.code === "SELF_SERVICE_AUTH_RATE_LIMITED"
+    && Number(throttled.data?.error?.retryAfterSeconds) > 0
+    && Number(throttled.headers.get("retry-after")) > 0,
+    throttled ? `${throttled.status} ${JSON.stringify(throttled.data?.error ?? null)}` : "never refused");
+  check("D-C5-16 the throttle is charged for an address with no account, so it is no oracle",
+    (await prisma.user.count({ where: { email: FORGOT_MISSING_EMAIL } })) === 0
+    && (await prisma.publicSubmissionRateBucket.count({
+      where: { eventId: EVENT_ID, scope: "forgot_email_1h" },
+    })) >= 2,
+    "expected buckets for both the known and the unknown address");
+
+  // No live provider call was possible: the harness never sets
+  // MOCK_EXTERNAL_APIS=false, and every dispatch above recorded `mocked`.
+  const liveSends = await prisma.emailDispatch.count({
+    where: { recipient: { in: SELF_SERVICE_EMAILS }, status: "sent" },
+  });
+  check("D-C5-16 no self-service email left this machine", liveSends === 0, `sent=${liveSends}`);
 }
 
 let fx;
@@ -698,6 +1060,11 @@ try {
     && settingsDateUpdate.data?.data?.event?.endsOn === "2032-05-14",
     `${settingsDateUpdate.status} ${JSON.stringify(settingsDateUpdate.data?.error ?? "")}`);
 
+  // The forged smoke sessions mirror the event identity the product just
+  // persisted, so subsequent shell assertions name the current event rather
+  // than the fixture's pre-update value.
+  ev.name = "Scratch Frontend Settings";
+
   const settingsRoom = await req("POST", "/api/admin/settings/rooms", {
     name: "Settings Studio", capacity: 85,
   }, admin);
@@ -849,12 +1216,196 @@ try {
   check("D-C5-9 the new event never appears on the public default surfaces",
     !landingAfter.text.includes("Scratch Created Event") && !embedAfter.text.includes("Scratch Created Event"));
 
+  // D-C5-16 item 2 reversed D-C5-9's roadmap-only ruling: both doors now exist,
+  // so the login page must LINK them rather than apologise for their absence.
+  // The retired sentence is asserted gone — a stale "on the roadmap" line beside
+  // a working /signup link is worse than either alone.
   const roadmapLogin = await req("GET", "/login", null, null);
-  check("D-C5-9 the login page names self-service sign-up as roadmap",
+  check("D-C5-16 the login page links self-service sign-up and password reset",
     roadmapLogin.status === 200
-    && /Self-service sign-up is on the roadmap/.test(roadmapLogin.text)
-    && /for now organizers provision accounts\./.test(roadmapLogin.text),
+    && /href="\/signup"/.test(roadmapLogin.text)
+    && /href="\/forgot"/.test(roadmapLogin.text)
+    && !/on the roadmap/i.test(roadmapLogin.text)
+    && !/reset is not available/i.test(roadmapLogin.text),
     `${roadmapLogin.status}`);
+
+  // ---- D-C5-16 item 1: the event switcher --------------------------------
+  //
+  // The second event here is the one the D-C5-9 block just created THROUGH THE
+  // PRODUCT, so this section proves the whole create-event → switch-into-it
+  // chain rather than a hand-planted fixture. The risk class is S1
+  // event-scoping: the assertions below are mostly negative — after a switch,
+  // none of the first event's data may appear on any surface.
+  //
+  // Note on the negative assertions: the switcher itself lists EVERY event the
+  // caller belongs to, so "Scratch Frontend" legitimately appears in the
+  // dropdown after switching away from it. Residue is therefore asserted
+  // against the shell's current-event line (`<strong>`) and against the first
+  // event's actual DATA, never against the bare event name.
+  // A real event this admin has no membership on, so "foreign" can be proven
+  // indistinguishable from "does not exist" rather than assumed.
+  await prisma.event.create({
+    data: { id: SWITCH_FOREIGN_EVENT_ID, name: "Scratch Frontend Switch Boundary", slug: SWITCH_FOREIGN_EVENT_ID, timezone: "UTC" },
+  });
+
+  async function switchEvent(eventId, { sess = admin, cookieValue = null, origin = BASE, form = true } = {}) {
+    const res = await fetch(`${BASE}/api/auth/switch-event`, {
+      method: "POST",
+      headers: {
+        "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
+        ...(origin === null ? {} : { origin }),
+        ...(cookieValue ? { cookie: cookieValue } : sess ? { cookie: cookie(sess) } : {}),
+      },
+      body: form ? new URLSearchParams({ eventId }).toString() : JSON.stringify({ eventId }),
+      redirect: "manual",
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    // `getSetCookie()` keeps multiple Set-Cookie headers apart; `.get()` would
+    // join them and make "was a session issued" unanswerable.
+    const setCookies = typeof res.headers.getSetCookie === "function"
+      ? res.headers.getSetCookie()
+      : [res.headers.get("set-cookie") ?? ""];
+    const issued = setCookies.map((value) => value.split(";")[0]).find((value) => value.startsWith("sb_session="));
+    return { status: res.status, location: res.headers.get("location") ?? "", data, issued: issued ?? null };
+  }
+
+  async function getAs(path, cookieValue) {
+    const res = await fetch(BASE + path, { headers: { cookie: cookieValue }, redirect: "manual" });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, location: res.headers.get("location") ?? "", text, data };
+  }
+
+  // The switcher is presentation over the caller's own memberships, so it only
+  // appears once there is a real choice to make.
+  const shellBeforeSwitch = await req("GET", "/admin/settings", null, admin);
+  check("D-C5-16 the shell offers a switcher listing the caller's own events",
+    /<select[^>]*name="eventId"/.test(shellBeforeSwitch.text)
+    && shellBeforeSwitch.text.includes(`value="${EVENT_ID}"`)
+    && Boolean(createdEventId) && shellBeforeSwitch.text.includes(`value="${createdEventId}"`)
+    // Someone else's event is never offered, however many exist.
+    && !shellBeforeSwitch.text.includes(`value="${SWITCH_FOREIGN_EVENT_ID}"`),
+    `${shellBeforeSwitch.status}`);
+
+  // Non-vacuous by construction: the membership count is asserted, so this
+  // cannot pass because the identity quietly gained or lost an event.
+  const soloMemberships = await prisma.eventMember.count({
+    where: { user: { email: SECOND_EVALUATOR_EMAIL } },
+  });
+  const soloShell = await req("GET", "/admin/evaluations", null, evaluatorTwo);
+  check("D-C5-16 a single-membership user gets no switcher at all",
+    soloMemberships === 1
+    && soloShell.status === 200
+    && !/name="eventId"/.test(soloShell.text)
+    && soloShell.text.includes("<strong>Scratch Frontend Settings</strong>"),
+    `memberships=${soloMemberships} status=${soloShell.status}`);
+
+  const switched = await switchEvent(createdEventId ?? "missing");
+  check("D-C5-16 switching to an event the caller belongs to re-issues the session",
+    switched.status === 303 && switched.location.endsWith("/admin") && Boolean(switched.issued),
+    `${switched.status} ${switched.location} cookie=${Boolean(switched.issued)}`);
+
+  const switchedCookie = switched.issued ?? "";
+  const dashboardAfter = await getAs("/admin", switchedCookie);
+  const agendaAfterSwitch = await getAs("/admin/agenda", switchedCookie);
+  const abstractsAfterSwitch = await getAs("/admin/abstracts", switchedCookie);
+  check("D-C5-16 every workspace surface re-resolves to the event just switched into",
+    dashboardAfter.status === 200
+    && dashboardAfter.text.includes("<strong>Scratch Created Event</strong>")
+    && dashboardAfter.text.includes("Where Scratch Created Event stands right now")
+    && agendaAfterSwitch.text.includes("<strong>Scratch Created Event</strong>")
+    && abstractsAfterSwitch.text.includes("<strong>Scratch Created Event</strong>"),
+    `${dashboardAfter.status}/${agendaAfterSwitch.status}/${abstractsAfterSwitch.status}`);
+
+  // The S1 assertion this whole section exists for.
+  check("D-C5-16 no first-event data survives the switch on any surface",
+    !dashboardAfter.text.includes("<strong>Scratch Frontend Settings</strong>")
+    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
+    && !agendaAfterSwitch.text.includes("Scratch Session A")
+    && !agendaAfterSwitch.text.includes("Scratch Session B")
+    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
+    && !abstractsAfterSwitch.text.includes("Scratch: Agents in Production")
+    && !abstractsAfterSwitch.text.includes("Scratch: Accepted Talk")
+    && !dashboardAfter.text.includes("Scratch Session A"));
+
+  // A REAL event the caller has no membership on, and an id that is nobody's,
+  // must be one refusal — same status, same code, and no cookie from either.
+  const foreignSwitch = await switchEvent(SWITCH_FOREIGN_EVENT_ID, { cookieValue: switchedCookie, form: false });
+  const forgedSwitch = await switchEvent("scratch-frontend-no-such-event", { cookieValue: switchedCookie, form: false });
+  check("D-C5-16 a foreign event id and a forged one are one indistinguishable refusal",
+    foreignSwitch.status === 404
+    && forgedSwitch.status === 404
+    && foreignSwitch.data?.error?.code === "EVENT_NOT_FOUND"
+    && forgedSwitch.data?.error?.code === "EVENT_NOT_FOUND"
+    && foreignSwitch.data?.error?.message === forgedSwitch.data?.error?.message
+    && !foreignSwitch.issued && !forgedSwitch.issued,
+    `${foreignSwitch.status}:${foreignSwitch.data?.error?.code} vs ${forgedSwitch.status}:${forgedSwitch.data?.error?.code}`);
+
+  // A refused switch must leave the caller exactly where they were.
+  const afterRefusal = await getAs("/admin", switchedCookie);
+  check("D-C5-16 a refused switch changes nothing about the current workspace",
+    afterRefusal.status === 200 && afterRefusal.text.includes("<strong>Scratch Created Event</strong>"),
+    `${afterRefusal.status}`);
+
+  const crossOriginSwitch = await switchEvent(EVENT_ID, { cookieValue: switchedCookie, origin: "https://evil.example", form: false });
+  const noOriginSwitch = await switchEvent(EVENT_ID, { cookieValue: switchedCookie, origin: null, form: false });
+  const anonSwitch = await switchEvent(EVENT_ID, { sess: null });
+  check("D-C5-16 a cross-origin, origin-less or unauthenticated switch is refused without a cookie",
+    crossOriginSwitch.status === 403 && crossOriginSwitch.data?.error?.code === "CROSS_ORIGIN_REFUSED"
+    && noOriginSwitch.status === 403
+    && anonSwitch.status === 303 && anonSwitch.location.endsWith("/login")
+    && !crossOriginSwitch.issued && !noOriginSwitch.issued && !anonSwitch.issued,
+    `${crossOriginSwitch.status}/${noOriginSwitch.status}/${anonSwitch.status}`);
+
+  // Role is per event, and the landing follows the role held THERE. Ravi is an
+  // EVALUATOR on the scratch event; on the created one he is a SPEAKER.
+  const raviUser = await prisma.user.findUnique({ where: { email: "ravi@greenroom-hq.com" }, select: { id: true } });
+  if (createdEventId && raviUser) {
+    await prisma.eventMember.create({ data: { eventId: createdEventId, userId: raviUser.id, role: "SPEAKER" } });
+  }
+  const raviSwitch = await switchEvent(createdEventId ?? "missing", { sess: evaluator });
+  const raviEvaluations = await getAs("/admin/evaluations", raviSwitch.issued ?? "");
+  check("D-C5-16 the role resolves per event: the switch lands on that event's role home",
+    raviSwitch.status === 303
+    && raviSwitch.location.endsWith("/portal")
+    && Boolean(raviSwitch.issued)
+    // And the authority really moved: the evaluator screen he could open a
+    // moment ago now bounces him, because on THIS event he is a speaker.
+    && [302, 303, 307].includes(raviEvaluations.status)
+    && raviEvaluations.location.includes("/login"),
+    `${raviSwitch.status} ${raviSwitch.location} → evaluations ${raviEvaluations.status} ${raviEvaluations.location}`);
+
+  const switchedBack = await switchEvent(EVENT_ID, { cookieValue: switchedCookie });
+  const agendaBack = await getAs("/admin/agenda", switchedBack.issued ?? "");
+  const agendaDataBack = await getAs("/api/agenda", switchedBack.issued ?? "");
+  const switchedBackPredicates = {
+    redirect: switchedBack.status === 303 && switchedBack.location.endsWith("/admin"),
+    issued: Boolean(switchedBack.issued),
+    page: agendaBack.status === 200,
+    currentEvent: agendaBack.text.includes("<strong>Scratch Frontend Settings</strong>"),
+    restoredSession: agendaDataBack.status === 200 && agendaDataBack.data?.data?.sessions?.some(
+      (session) => session.id === fx.sessionA.id && session.title === "Scratch Session A",
+    ),
+    createdEventAbsent: !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
+  };
+  check("D-C5-16 switching back restores the first event and its data",
+    Object.values(switchedBackPredicates).every(Boolean),
+    JSON.stringify(switchedBackPredicates));
+
+  // The obsoleted copy is gone from the surfaces a judge actually reads. (The
+  // create dialog's own switch offer renders only after a successful create, so
+  // it is pinned at source in lib/services/event-switch-route-contract.test.ts
+  // rather than here.)
+  const switcherLogin = await req("GET", "/login", null, null);
+  check("D-C5-16 the login page no longer frames the product as a single event",
+    switcherLogin.status === 200
+    && /switch between the events you belong to/i.test(switcherLogin.text)
+    && !/switching between events is on the roadmap/i.test(switcherLogin.text),
+    `${switcherLogin.status}`);
+  await runSelfServiceAuthChecks();
 
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
@@ -4391,6 +4942,276 @@ try {
     freshAbstracts === 0 || freshSessions === 0 || freshRounds === 0
       || freshNamedSpeakers + freshSessionSpeakers === 0,
     "the fresh scratch event is no longer empty in any dimension");
+
+  // --- D-C5-16 #4: the /admin/reports process report ------------------------
+  // Same discipline as the B7 block above: every figure is checked against a
+  // Prisma query written HERE, from a different angle than the page's own read
+  // (per-status counts, raw ScheduleSlot intervals, a membership scan), so a
+  // shared bug cannot make both sides agree. Nothing is hardcoded — the scratch
+  // fixture has been mutated by the whole run above.
+  const reportsPage = await req("GET", "/admin/reports", null, admin);
+  check("C5-REPORTS the reports page renders → 200", reportsPage.status === 200, `got ${reportsPage.status}`);
+  const reportsHtml = stripComments(reportsPage.text);
+  /** One panel's markup, so an assertion cannot match a neighbouring section. */
+  const reportSection = (id, next) => {
+    const start = reportsHtml.indexOf(`id="reports-${id}"`);
+    if (start === -1) return "";
+    const end = next ? reportsHtml.indexOf(`id="reports-${next}"`) : -1;
+    return reportsHtml.slice(start, end === -1 ? reportsHtml.length : end);
+  };
+  const reportMetric = (label) =>
+    collapse(reportsHtml.match(new RegExp(`<span>${label}</span>\\s*<strong>([^<]*)</strong>`))?.[1] ?? null);
+  const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  /** The numeric cells of one labelled table row, inner markup stripped. */
+  const reportRow = (section, label) => {
+    const match = section.match(new RegExp(`<th scope="row">${escapeRe(label)}</th>([\\s\\S]*?)</tr>`));
+    if (!match) return null;
+    return [...match[1].matchAll(/<td class="report-number">([\s\S]*?)<\/td>/g)]
+      .map((cell) => collapse(cell[1].replace(/<[^>]*>/g, "")));
+  };
+  // Mirrors of lib/tz and lib/reports/metrics formatting, the way this script
+  // already mirrors the HMAC and scrypt formats it cannot import.
+  const dayKeyOf = (date, timeZone) => {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(date);
+    const get = (type) => parts.find((part) => part.type === type).value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  };
+  const dayLabelOf = (key) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" })
+      .format(new Date(`${key}T12:00:00Z`));
+  const fmtMinutes = (minutes) => {
+    if (minutes <= 0) return "—";
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    if (hours === 0) return `${rest}m`;
+    return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+  };
+  const fmtRate = (rate) => (rate === null ? "—" : `${Math.round(rate * 100)}%`);
+
+  // 1. Acceptance — accepted over decided, where MAYBE is not a decision.
+  const [repAccepted, repRejected, repMaybe] = await Promise.all([
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "ACCEPTED" } }),
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "REJECTED" } }),
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "MAYBE" } }),
+  ]);
+  check("C5-REPORTS the acceptance metric is not vacuous",
+    repAccepted + repRejected > 0, `${repAccepted} accepted, ${repRejected} declined`);
+  check("C5-REPORTS acceptance is accepted over decided, counted independently",
+    reportMetric("Acceptance rate") === fmtRate(repAccepted / (repAccepted + repRejected)),
+    `page "${reportMetric("Acceptance rate")}" vs db ${repAccepted}/${repAccepted + repRejected}`);
+  // A maybe in the denominator would move the number; prove it is excluded.
+  check("C5-REPORTS a maybe is excluded from the acceptance denominator",
+    repMaybe === 0
+      || reportMetric("Acceptance rate") !== fmtRate(repAccepted / (repAccepted + repRejected + repMaybe)),
+    `${repMaybe} maybes did not change the rate`);
+
+  // 2. Review load — grouped per evaluator, withdrawn excluded, restricted to
+  //    the members the page can actually name.
+  const repMembers = await prisma.eventMember.findMany({
+    where: { eventId: EVENT_ID, role: { in: ["EVALUATOR", "ADMIN"] } },
+    select: { userId: true, user: { select: { name: true, email: true } } },
+  });
+  const repMemberIds = new Set(repMembers.map((member) => member.userId));
+  const repLoadGroups = await prisma.reviewAssignment.groupBy({
+    by: ["evaluatorId", "status"],
+    where: { plan: { eventId: EVENT_ID }, abstract: { status: { not: "WITHDRAWN" } } },
+    _count: { _all: true },
+  });
+  const repLoad = new Map();
+  for (const row of repLoadGroups) {
+    if (!repMemberIds.has(row.evaluatorId)) continue;
+    const totals = repLoad.get(row.evaluatorId) ?? { assigned: 0, completed: 0 };
+    totals.assigned += row._count._all;
+    if (row.status === "COMPLETED") totals.completed += row._count._all;
+    repLoad.set(row.evaluatorId, totals);
+  }
+  const repAssigned = [...repLoad.values()].reduce((sum, row) => sum + row.assigned, 0);
+  const repCompleted = [...repLoad.values()].reduce((sum, row) => sum + row.completed, 0);
+  check("C5-REPORTS the review load is not vacuous", repAssigned > 0, `${repAssigned} assignments`);
+  check("C5-REPORTS outstanding reviews match an independently grouped count",
+    reportMetric("Reviews outstanding") === String(repAssigned - repCompleted),
+    `page "${reportMetric("Reviews outstanding")}" vs db ${repAssigned - repCompleted}`);
+  const reviewSection = reportSection("review", "utilization");
+  const loadMismatch = repMembers
+    .map((member) => {
+      const totals = repLoad.get(member.userId) ?? { assigned: 0, completed: 0 };
+      const rendered = reportRow(reviewSection, member.user.name);
+      const expected = [
+        String(totals.assigned),
+        String(totals.completed),
+        String(Math.max(0, totals.assigned - totals.completed)),
+      ];
+      return rendered && rendered.slice(0, 3).join("/") === expected.join("/")
+        ? null
+        : `${member.user.name}: page ${rendered?.slice(0, 3).join("/") ?? "missing"} vs db ${expected.join("/")}`;
+    })
+    .filter(Boolean);
+  check("C5-REPORTS every reviewer's assigned/completed/outstanding matches the database",
+    loadMismatch.length === 0, loadMismatch.join("; "));
+  check("C5-REPORTS the review section names reviewers without exposing their address",
+    repMembers.every((member) => !reviewSection.includes(member.user.email)),
+    "a reviewer email reached the report");
+  check("C5-REPORTS the report carries no score, rubric or per-abstract review link",
+    !/rubric|weighted|reviewScore/i.test(reportsHtml)
+      && !reportsHtml.includes("/admin/abstracts?abstract="),
+    "review detail leaked onto the process report");
+
+  // 3. Per-category funnel — the fixture category against its own groupBy, in
+  //    the abstracts page's chip order.
+  const REPORT_FUNNEL_ORDER = ["SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED", "REJECTED", "DRAFT", "WITHDRAWN"];
+  const repCategoryGroups = await prisma.abstract.groupBy({
+    by: ["status"],
+    where: { eventId: EVENT_ID, categoryId: fx.category.id },
+    _count: { _all: true },
+  });
+  const repCategoryCounts = new Map(repCategoryGroups.map((row) => [row.status, row._count._all]));
+  const repCategoryDecided = (repCategoryCounts.get("ACCEPTED") ?? 0) + (repCategoryCounts.get("REJECTED") ?? 0);
+  const funnelSection = reportSection("funnel", "review");
+  const renderedCategory = reportRow(funnelSection, fx.category.name);
+  const expectedCategory = [
+    ...REPORT_FUNNEL_ORDER.map((status) => String(repCategoryCounts.get(status) ?? 0)),
+    String(repCategoryDecided),
+    fmtRate(repCategoryDecided === 0 ? null : (repCategoryCounts.get("ACCEPTED") ?? 0) / repCategoryDecided),
+  ];
+  check("C5-REPORTS the category funnel row is not vacuous",
+    [...repCategoryCounts.values()].reduce((sum, n) => sum + n, 0) > 0, "the fixture category holds no proposals");
+  check("C5-REPORTS the category row matches an independent per-status count",
+    renderedCategory !== null && renderedCategory.join("|") === expectedCategory.join("|"),
+    `page ${renderedCategory?.join("|") ?? "missing"} vs db ${expectedCategory.join("|")}`);
+  // The foot must equal the whole event, counted without any category join.
+  const repAllGroups = await prisma.abstract.groupBy({
+    by: ["status"], where: { eventId: EVENT_ID }, _count: { _all: true },
+  });
+  const repAllCounts = new Map(repAllGroups.map((row) => [row.status, row._count._all]));
+  const renderedTotals = reportRow(funnelSection, "All categories");
+  check("C5-REPORTS the totals row equals the event's own status counts",
+    renderedTotals !== null
+      && renderedTotals.slice(0, 7).join("|")
+        === REPORT_FUNNEL_ORDER.map((status) => String(repAllCounts.get(status) ?? 0)).join("|"),
+    `page ${renderedTotals?.slice(0, 7).join("|") ?? "missing"}`);
+
+  // 4. Room utilization — recomputed from raw ScheduleSlot intervals.
+  const repEvent = await prisma.event.findUnique({
+    where: { id: EVENT_ID }, select: { timezone: true },
+  });
+  const [repSlots, repRooms] = await Promise.all([
+    prisma.scheduleSlot.findMany({
+      where: { eventId: EVENT_ID }, select: { roomId: true, startsAt: true, endsAt: true },
+    }),
+    prisma.room.findMany({ where: { eventId: EVENT_ID }, select: { id: true, name: true } }),
+  ]);
+  const repRoomName = new Map(repRooms.map((room) => [room.id, room.name]));
+  const repBookedTotal = repSlots.reduce(
+    (sum, slot) => sum + Math.max(0, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / 60000)), 0);
+  check("C5-REPORTS the utilization section is not vacuous",
+    repSlots.length > 0 && repRooms.length > 0, `${repSlots.length} slots, ${repRooms.length} rooms`);
+  check("C5-REPORTS booked programme time is the sum of the placed slot intervals",
+    reportMetric("Programme time booked") === fmtMinutes(repBookedTotal),
+    `page "${reportMetric("Programme time booked")}" vs db ${fmtMinutes(repBookedTotal)}`);
+
+  const repPerRoomDay = new Map();
+  for (const slot of repSlots) {
+    const key = `${dayLabelOf(dayKeyOf(slot.startsAt, repEvent.timezone))}|${repRoomName.get(slot.roomId)}`;
+    const totals = repPerRoomDay.get(key) ?? { slots: 0, minutes: 0 };
+    totals.slots += 1;
+    totals.minutes += Math.max(0, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / 60000));
+    repPerRoomDay.set(key, totals);
+  }
+  const utilSection = reportSection("utilization", "readiness");
+  const utilTable = new Map();
+  let utilDay = null;
+  for (const match of utilSection.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+    const row = match[1];
+    const dayLabel = row.match(/<div class="cell-title">([^<]*)<\/div>/)?.[1];
+    if (dayLabel) utilDay = dayLabel;
+    const roomName = row.match(/<td>([^<]*)<\/td>/)?.[1];
+    const numbers = [...row.matchAll(/<td class="report-number">([\s\S]*?)<\/td>/g)]
+      .map((cell) => collapse(cell[1].replace(/<[^>]*>/g, "")));
+    if (roomName && numbers.length === 4) utilTable.set(`${utilDay}|${roomName}`, numbers);
+  }
+  const utilMismatch = [...repPerRoomDay.entries()]
+    .map(([key, totals]) => {
+      const rendered = utilTable.get(key);
+      return rendered && rendered[0] === String(totals.slots) && rendered[1] === fmtMinutes(totals.minutes)
+        ? null
+        : `${key}: page ${rendered?.slice(0, 2).join("/") ?? "missing"} vs db ${totals.slots}/${fmtMinutes(totals.minutes)}`;
+    })
+    .filter(Boolean);
+  check("C5-REPORTS every booked room-day matches an independently summed interval",
+    repPerRoomDay.size > 0 && utilMismatch.length === 0,
+    utilMismatch.join("; ") || `${repPerRoomDay.size} room-days`);
+  const idleRooms = repRooms.filter((room) => ![...repPerRoomDay.keys()].some((key) => key.endsWith(`|${room.name}`)));
+  check("C5-REPORTS an idle room is still listed, as a zero row rather than a gap",
+    idleRooms.length === 0
+      || idleRooms.every((room) => [...utilTable.keys()].some((key) => key.endsWith(`|${room.name}`))),
+    idleRooms.map((room) => room.name).join(", "));
+
+  // 5. Readiness — measured over the same cohort the roster page reports.
+  const repRosterHtml = stripComments((await req("GET", "/admin/speakers", null, admin)).text);
+  const repRosterConfirmed = repRosterHtml.match(/<span>Confirmed speakers<\/span><strong>(\d+)<\/strong>/)?.[1] ?? null;
+  const readinessSection = reportSection("readiness", null);
+  const readinessBuckets = [...readinessSection.matchAll(/<strong>(\d+) \/ (\d+)<\/strong>/g)]
+    .map((match) => [Number(match[1]), Number(match[2])]);
+  check("C5-REPORTS the readiness ladder renders all three buckets",
+    readinessBuckets.length === 3, `${readinessBuckets.length} buckets`);
+  check("C5-REPORTS readiness is measured over the roster page's own confirmed cohort",
+    repRosterConfirmed !== null && readinessBuckets.every(([, cohort]) => String(cohort) === repRosterConfirmed),
+    `report cohorts ${readinessBuckets.map(([, cohort]) => cohort).join(",")} vs roster ${repRosterConfirmed ?? "none"}`);
+  check("C5-REPORTS the readiness buckets partition the cohort exactly",
+    readinessBuckets.length === 3
+      && readinessBuckets.reduce((sum, [count]) => sum + count, 0) === Number(repRosterConfirmed),
+    `${readinessBuckets.map(([count]) => count).join("+")} vs ${repRosterConfirmed}`);
+
+  // 6. The exports are reachable from the page, including the ABS-13 one.
+  const reportExportLinks = [
+    "/api/admin/speakers/export",
+    "/api/admin/sessions/export",
+    "/api/admin/schedule/export",
+    "/api/admin/abstracts/export",
+  ].filter((href) => !reportsHtml.includes(`href="${href}"`));
+  check("C5-REPORTS all four CSV exports are offered beside their sections",
+    reportExportLinks.length === 0, reportExportLinks.join(", "));
+  check("C5-REPORTS the sidebar offers Reports to an admin",
+    reportsHtml.includes('href="/admin/reports"'), "no sidebar entry");
+
+  // 7. Authorization — identical to every sibling admin page.
+  const reportsSpeaker = await reqManual("/admin/reports", speaker);
+  check("C5-REPORTS a speaker is redirected away from the reports page → 307",
+    reportsSpeaker.status === 307, `got ${reportsSpeaker.status}`);
+  const reportsForged = await reqManual("/admin/reports", { ...speaker, role: "ADMIN" });
+  check("C5-REPORTS a forged ADMIN claim in the cookie does not open the reports page → 307",
+    reportsForged.status === 307, `got ${reportsForged.status}`);
+  const reportsEvaluator = await reqManual("/admin/reports", evaluator);
+  check("C5-REPORTS a reviewer is redirected away from the reports page → 307",
+    reportsEvaluator.status === 307, `got ${reportsEvaluator.status}`);
+  const reportsAnon = await reqManual("/admin/reports", null);
+  check("C5-REPORTS an unauthenticated reports request → 307 /login",
+    reportsAnon.status === 307 && reportsAnon.location.includes("/login"),
+    `${reportsAnon.status} ${reportsAnon.location || "no location"}`);
+  // A SPEAKER must not see the entry advertised either.
+  const speakerShell = await req("GET", "/portal", null, speaker);
+  check("C5-REPORTS the sidebar hides Reports from a speaker",
+    !speakerShell.text.includes('href="/admin/reports"'), "the entry was advertised to a speaker");
+
+  // 8. Zero-state honesty on the fresh event.
+  const freshReports = await req("GET", "/admin/reports", null,
+    { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } });
+  check("C5-REPORTS the reports page renders for a fresh event → 200",
+    freshReports.status === 200, `got ${freshReports.status}`);
+  const freshReportsHtml = stripComments(freshReports.text);
+  const [freshReportSlots, freshReportAssignments] = await Promise.all([
+    prisma.scheduleSlot.count({ where: { eventId: FRESH_EVENT_ID } }),
+    prisma.reviewAssignment.count({ where: { plan: { eventId: FRESH_EVENT_ID } } }),
+  ]);
+  check("C5-REPORTS an event with nothing placed says so and points at the builder",
+    freshReportSlots > 0
+      ? true
+      : freshReportsHtml.includes("Nothing is placed yet") && freshReportsHtml.includes('href="/admin/agenda"'),
+    `${freshReportSlots} slots`);
+  check("C5-REPORTS an unstarted acceptance rate reads as a dash, never as zero percent",
+    freshReportsHtml.includes("<strong>—</strong>") || freshReportAssignments > 0,
+    "a fresh event reported 0% acceptance");
 
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data

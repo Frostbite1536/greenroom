@@ -31,6 +31,8 @@ const admin = {
 };
 const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
 const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
+const SCRATCH_EVENT_IDS = [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id];
+const SCRATCH_IDENTITY_EMAILS = [admin.user.email, speaker.user.email, evalr.user.email];
 const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
@@ -211,6 +213,35 @@ server.stderr.on("data", (d) => process.stderr.write(d));
 let cleanupFailed = false;
 let cleanupPromise;
 let fatalError = false;
+
+function assertScratchCleanupTargets() {
+  if (
+    SCRATCH_EVENT_IDS.includes("demo-event") ||
+    SCRATCH_EVENT.slug === "forward-2026" ||
+    OTHER_SCRATCH_EVENT.slug === "forward-2026" ||
+    SCRATCH_IDENTITY_EMAILS.some((email) => !email.endsWith("@scratch.test"))
+  ) {
+    throw new Error("Refusing to clean files outside the smoke's fixed scratch identities and events.");
+  }
+}
+
+async function deleteScratchStoredFiles() {
+  assertScratchCleanupTargets();
+  const scratchUsers = await prisma.user.findMany({
+    where: { email: { in: SCRATCH_IDENTITY_EMAILS } },
+    select: { id: true },
+  });
+  const scratchUserIds = scratchUsers.map((user) => user.id);
+  const scratchFileWhere = {
+    OR: [
+      { eventId: { in: SCRATCH_EVENT_IDS } },
+      ...(scratchUserIds.length > 0 ? [{ uploaderUserId: { in: scratchUserIds } }] : []),
+    ],
+  };
+  await prisma.storedFile.deleteMany({ where: scratchFileWhere });
+  return prisma.storedFile.count({ where: scratchFileWhere });
+}
+
 function stopServer() {
   if (!server.pid || server.exitCode !== null) return true;
   if (process.platform === "win32") {
@@ -234,8 +265,14 @@ function stopServer() {
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
+      const remainingStoredFiles = await deleteScratchStoredFiles();
+      check(
+        "scratch-owned stored files are cleared at final teardown",
+        remainingStoredFiles === 0,
+        remainingStoredFiles,
+      );
       await prisma.publicSubmissionRateBucket.deleteMany({
-        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+        where: { eventId: { in: SCRATCH_EVENT_IDS } },
       });
       await prisma.$executeRaw`
         DELETE FROM "ReviewerInvite" WHERE "eventId" IN (${SCRATCH_EVENT.id}, ${OTHER_SCRATCH_EVENT.id})
@@ -259,7 +296,7 @@ function cleanup() {
       );
     } catch (error) {
       cleanupFailed = true;
-      console.error("[smoke] scratch rate-bucket cleanup failed", error);
+      console.error("[smoke] scratch cleanup failed", error);
     }
     await prisma.$disconnect().catch((error) => {
       cleanupFailed = true;
@@ -299,10 +336,14 @@ check(
  * memberships. Guarded so this can never target the judged demo event.
  */
 async function resetScratchEvent() {
-  if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
-    throw new Error("Refusing to run: smoke must never target the demo event.");
-  }
-  await prisma.event.deleteMany({ where: { id: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } } });
+  assertScratchCleanupTargets();
+  const remainingStoredFiles = await deleteScratchStoredFiles();
+  check(
+    "scratch-owned stored files are cleared before event reset",
+    remainingStoredFiles === 0,
+    remainingStoredFiles,
+  );
+  await prisma.event.deleteMany({ where: { id: { in: SCRATCH_EVENT_IDS } } });
   await prisma.event.create({
     data: {
       ...SCRATCH_EVENT,
@@ -3469,7 +3510,7 @@ try {
     emailHistoryAdmin.status);
   check("C5 email history leaks no provider credential, bearer, or dispatch variable bag",
     !/RESEND_API_KEY|Bearer\s|Idempotency-Key|"providerId"|mock:/i.test(emailHistoryHtml) &&
-      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || " no-resend-key-configured"),
+      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || "\0no-resend-key-configured"),
     "credential appeared in /admin/emails");
 
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
@@ -4968,9 +5009,9 @@ try {
       /autocomplete="username"/i.test(loginHtml) && /autocomplete="current-password"/i.test(loginHtml) &&
       (loginHtml.match(/name="persona"/g) || []).length === 3 &&
       /No password required\./.test(loginHtml) &&
-      // D-C5-9 roadmap copy: sign-up is named as roadmap, not merely absent.
-      /Self-service sign-up is on the roadmap/.test(loginHtml) &&
-      /for now organizers provision accounts\./.test(loginHtml),
+      // D-C5-16: the shipped self-service doors stay visible beside sign-in.
+      loginHtml.includes('href="/signup"') && /Create one/.test(loginHtml) &&
+      loginHtml.includes('href="/forgot"') && /Reset it/.test(loginHtml),
     loginPageResponse.status);
   const personaHome = await fetch(`${BASE}/portal`, { headers: { cookie: cookie(speaker) }, redirect: "manual" });
   check("C5-LOGIN the one-click persona session still reaches its home unchanged",
@@ -4998,7 +5039,286 @@ try {
     leakedProjections.length === 0 && leakedPages.length === 0,
     [...leakedProjections, ...leakedPages].join(",") || "clean");
 
-  // 25. Guard: the run must not have touched the judged demo event.
+  // 24b. D-C5-16 #4 — the three whole-dataset CSV exports.
+  //
+  // Every assertion here is about the served document, not about the module
+  // that built it: the header row byte-for-byte, the download headers, who is
+  // refused, that untrusted text is neutralized in the real response, and that
+  // nothing an export must not carry appears anywhere in it.
+  const csvExports = [
+    ["speakers", "/api/admin/speakers/export",
+      "name,email,company,job_title,confirmation_status,sessions_total,sessions_scheduled,session_titles,"
+      + "profile_percent,profile_missing,tasks_complete,tasks_total,required_tasks_open,next_required_due_at,"
+      + "overdue_required_tasks,onboarding_complete"],
+    ["sessions", "/api/admin/sessions/export",
+      "session_id,title,content_status,format,duration_minutes,category,track,room,starts_at,ends_at,scheduled,speakers"],
+    ["schedule", "/api/admin/schedule/export",
+      "day,starts_at_local,ends_at_local,room,track,session_title,speakers,duration_minutes,starts_at_utc,ends_at_utc"],
+  ];
+
+  // Untrusted text that would execute on open, planted in the two populations
+  // the exports read. Both ride the real reads, so a missing guard shows up in
+  // the served bytes rather than only in a unit test.
+  const formulaSpeaker = await prisma.user.upsert({
+    where: { email: "formula-export@scratch.test" },
+    update: { name: "=cmd|'/c calc'!A0" },
+    create: { email: "formula-export@scratch.test", name: "=cmd|'/c calc'!A0" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: formulaSpeaker.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: SCRATCH_EVENT.id, userId: formulaSpeaker.id, role: "SPEAKER" },
+  });
+  await prisma.session.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "=SUM(A1:A9)",
+      durationMinutes: 30,
+      contentStatus: "DRAFT",
+    },
+    select: { id: true },
+  });
+
+  const csvDocuments = new Map();
+  for (const [name, path, header] of csvExports) {
+    const anon = await j("GET", path, null);
+    check(`C5-EXPORT ${name}: an unauthenticated export is refused → 401`,
+      anon.status === 401, `got ${anon.status}`);
+    const asSpeaker = await j("GET", path, null, speaker);
+    check(`C5-EXPORT ${name}: a speaker is refused → 403`,
+      asSpeaker.status === 403, `got ${asSpeaker.status}`);
+    const asEvaluator = await j("GET", path, null, evalr);
+    check(`C5-EXPORT ${name}: a reviewer is refused → 403`,
+      asEvaluator.status === 403, `got ${asEvaluator.status}`);
+    // The signed role claim is not authoritative: the persisted membership is.
+    const forged = await j("GET", path, null, { ...speaker, role: "ADMIN" });
+    check(`C5-EXPORT ${name}: a forged ADMIN claim in the cookie is still refused`,
+      forged.status === 403, `got ${forged.status}`);
+
+    const served = await j("GET", path, null, admin);
+    csvDocuments.set(name, typeof served.data === "string" ? served.data : "");
+    const today = new Date().toISOString().slice(0, 10);
+    check(`C5-EXPORT ${name}: ADMIN downloads a dated CSV attachment → 200`,
+      served.status === 200
+        && served.headers.get("content-type") === "text/csv; charset=utf-8"
+        && served.headers.get("content-disposition") === `attachment; filename="greenroom-${name}-${today}.csv"`
+        && served.headers.get("cache-control") === "no-store",
+      `${served.status} ${served.headers.get("content-type")} ${served.headers.get("content-disposition")}`);
+    const firstLine = (csvDocuments.get(name) ?? "").split("\r\n")[0];
+    check(`C5-EXPORT ${name}: the header row is the documented column contract`,
+      firstLine === header, `served "${firstLine}"`);
+    check(`C5-EXPORT ${name}: every record is CRLF-terminated`,
+      (csvDocuments.get(name) ?? "").endsWith("\r\n"), "missing trailing CRLF");
+    // Cell-level: nothing may start a cell with a spreadsheet formula lead.
+    check(`C5-EXPORT ${name}: no cell in the served document can execute on open`,
+      !/(^|\r\n|,)[=+@]/.test(csvDocuments.get(name) ?? ""), "an unguarded formula cell was served");
+  }
+
+  check("C5-EXPORT the speakers export neutralizes a formula-shaped speaker name",
+    (csvDocuments.get("speakers") ?? "").includes("'=cmd|"),
+    "the planted name is missing or unguarded");
+  check("C5-EXPORT the sessions export neutralizes a formula-shaped talk title",
+    (csvDocuments.get("sessions") ?? "").includes("'=SUM(A1:A9)"),
+    "the planted title is missing or unguarded");
+
+  // Non-vacuity: these documents must actually contain this event's data, or
+  // every exclusion assertion below would pass against an empty file.
+  const exportRowCounts = Object.fromEntries(
+    [...csvDocuments].map(([name, csv]) => [name, csv.split("\r\n").filter(Boolean).length - 1]),
+  );
+  check("C5-EXPORT every export carries real scratch rows, not just a header",
+    exportRowCounts.speakers > 0 && exportRowCounts.sessions > 0 && exportRowCounts.schedule > 0,
+    JSON.stringify(exportRowCounts));
+
+  // The blind-review boundary: an evaluator who really does hold assignments in
+  // this event must appear in NO export, by name or by address.
+  const evaluatorAssignments = await prisma.reviewAssignment.count({
+    where: { plan: { eventId: SCRATCH_EVENT.id }, evaluator: { email: evalr.user.email } },
+  });
+  check("C5-EXPORT the scratch reviewer really holds assignments in this event",
+    evaluatorAssignments > 0, `${evaluatorAssignments} assignments`);
+  // Only meaningful while this reviewer is not ALSO a speaker on this event —
+  // a reviewer who is genuinely on the roster belongs in the roster export, and
+  // asserting their absence then would be asserting a bug.
+  const evaluatorIsAlsoSpeaker =
+    (await prisma.eventMember.count({
+      where: { eventId: SCRATCH_EVENT.id, role: "SPEAKER", user: { email: evalr.user.email } },
+    }))
+    + (await prisma.sessionSpeaker.count({
+      where: { session: { eventId: SCRATCH_EVENT.id }, user: { email: evalr.user.email } },
+    }));
+  const evaluatorLeaks = evaluatorIsAlsoSpeaker > 0 ? [] : [...csvDocuments]
+    .filter(([, csv]) => csv.includes(evalr.user.email) || csv.includes(evalr.user.name))
+    .map(([name]) => name);
+  check("C5-EXPORT no export names the reviewer who holds this event's assignments",
+    evaluatorIsAlsoSpeaker === 0 && evaluatorLeaks.length === 0,
+    evaluatorIsAlsoSpeaker > 0 ? "reviewer is also a speaker here" : evaluatorLeaks.join(", "));
+  // The review vocabulary is excluded by the column contract, not by luck.
+  const scoreLeaks = [...csvDocuments]
+    .filter(([, csv]) => /evaluator|reviewer|score|rubric|comment/i.test(csv.split("\r\n")[0] ?? ""))
+    .map(([name]) => name);
+  check("C5-EXPORT no export header carries reviewer or score vocabulary",
+    scoreLeaks.length === 0, scoreLeaks.join(", "));
+
+  // Email exposure is decided per export: the roster prints it, the programme
+  // does not, and the exports mirror that exactly.
+  check("C5-EXPORT the speakers export carries the roster's own email column",
+    (csvDocuments.get("speakers") ?? "").includes("speaker@scratch.test"),
+    "the roster export lost its email column");
+  const emailLeaks = ["sessions", "schedule"]
+    .filter((name) => /@scratch\.test|@greenroom-hq\.com/.test(csvDocuments.get(name) ?? ""));
+  check("C5-EXPORT neither programme export carries a speaker email",
+    emailLeaks.length === 0, emailLeaks.join(", "));
+
+  // 25. D-C5-16 item 3 file uploads (headshots + slide decks).
+  //
+  // REQUIRES THE APPLIED SCHEMA: every check below writes or reads the
+  // `StoredFile` table and the `StoredFileKind` enum, so this block only runs
+  // after the Architect's serialized window — exactly like the C5-LOGIN block
+  // above, which is gated the same way on `User.passwordHash`. Before the
+  // window these checks fail with a missing-relation error, which is the
+  // honest signal, not a reason to soften them.
+  //
+  // Uploads are charged against the per-user durable buckets (6/minute), so
+  // the probes below stay inside that budget per identity and the deliberate
+  // refusals are cheap ones that never reach the store.
+  const uploadPost = async (kind, bytes, contentType, sess) => {
+    const headers = new Headers({ "content-type": contentType });
+    if (sess) headers.set("cookie", cookie(sess));
+    const res = await fetch(`${BASE}/api/files?kind=${kind}`, { method: "POST", headers, body: bytes });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, data, headers: res.headers };
+  };
+  const uploadGet = async (url, sess) => {
+    const headers = new Headers();
+    if (sess) headers.set("cookie", cookie(sess));
+    const res = await fetch(BASE + url, { headers });
+    return { status: res.status, headers: res.headers, bytes: Buffer.from(await res.arrayBuffer()) };
+  };
+  // A real 1x1 PNG and a minimal but genuine PDF: the route sniffs magic bytes,
+  // so a placeholder string would be refused for the right reason and prove
+  // nothing about the accepting path.
+  const PNG_BYTES = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n", "utf8");
+
+  const anonUpload = await uploadPost("headshot", PNG_BYTES, "image/png", null);
+  check("C5-FILES an anonymous upload is refused before anything is stored",
+    anonUpload.status === 401, `${anonUpload.status}/${anonUpload.data?.error?.code}`);
+
+  const headshotUp = await uploadPost("headshot", PNG_BYTES, "image/png", speaker);
+  const headshotUrl = headshotUp.data?.data?.url;
+  check("C5-FILES a speaker stores a headshot and gets its served URL back",
+    headshotUp.status === 201 && headshotUp.data?.ok === true
+      && headshotUp.data?.data?.mime === "image/png" && headshotUp.data?.data?.deduped === false
+      && /^\/api\/files\/[A-Za-z0-9_-]+$/.test(headshotUrl ?? ""),
+    `${headshotUp.status}/${headshotUrl}`);
+
+  const headshotAgain = await uploadPost("headshot", PNG_BYTES, "image/png", speaker);
+  check("C5-FILES re-uploading the same bytes returns the same id instead of a second copy",
+    headshotAgain.status === 200 && headshotAgain.data?.data?.deduped === true
+      && headshotAgain.data?.data?.url === headshotUrl,
+    `${headshotAgain.status}/${headshotAgain.data?.data?.url}`);
+
+  const headshotServed = await uploadGet(headshotUrl, null);
+  check("C5-FILES a headshot is served to anonymous readers with the stored type and an immutable cache",
+    headshotServed.status === 200
+      && headshotServed.headers.get("content-type") === "image/png"
+      && headshotServed.headers.get("cache-control") === "public, max-age=31536000, immutable"
+      && headshotServed.headers.get("x-content-type-options") === "nosniff"
+      && headshotServed.bytes.equals(PNG_BYTES),
+    `${headshotServed.status}/${headshotServed.headers.get("cache-control")}`);
+
+  const deckUp = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", speaker);
+  const deckUrl = deckUp.data?.data?.url;
+  check("C5-FILES a speaker stores a slide deck",
+    deckUp.status === 201 && deckUp.data?.data?.mime === "application/pdf",
+    `${deckUp.status}/${deckUp.data?.data?.mime}`);
+
+  const deckAnon = await uploadGet(deckUrl, null);
+  const deckOwner = await uploadGet(deckUrl, speaker);
+  const deckAdmin = await uploadGet(deckUrl, admin);
+  const deckEvaluator = await uploadGet(deckUrl, evalr);
+  check("C5-FILES a slide deck is readable by its owner and this event's admin, and by nobody else",
+    deckAnon.status === 404 && deckEvaluator.status === 404
+      && deckOwner.status === 200 && deckAdmin.status === 200
+      && deckOwner.headers.get("cache-control") === "private, no-store"
+      && deckOwner.headers.get("content-disposition") === "attachment"
+      && deckOwner.bytes.equals(PDF_BYTES),
+    `anon ${deckAnon.status}/eval ${deckEvaluator.status}/owner ${deckOwner.status}/admin ${deckAdmin.status}`);
+
+  // The same uploader can belong to two events. Identical private bytes must
+  // produce one id per event authority: public headshot dedupe is global, but a
+  // deck uploaded in B must never return A's row or retain A's admin claim.
+  const fileAdminUser = await prisma.user.findUniqueOrThrow({ where: { email: admin.user.email }, select: { id: true } });
+  const fileSpeakerUser = await prisma.user.findUniqueOrThrow({ where: { email: speaker.user.email }, select: { id: true } });
+  await prisma.eventMember.createMany({
+    data: [
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileAdminUser.id, role: "ADMIN" },
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileSpeakerUser.id, role: "SPEAKER" },
+    ],
+    skipDuplicates: true,
+  });
+  const otherSpeaker = { ...speaker, event: OTHER_SCRATCH_EVENT };
+  const otherAdmin = { ...admin, event: OTHER_SCRATCH_EVENT };
+  const deckOther = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  const deckOtherUrl = deckOther.data?.data?.url;
+  const deckOtherAgain = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  check("C5-FILES identical private bytes dedupe within an event but not across events",
+    deckOther.status === 201 && deckOther.data?.data?.deduped === false
+      && deckOtherUrl !== deckUrl
+      && deckOtherAgain.status === 200 && deckOtherAgain.data?.data?.deduped === true
+      && deckOtherAgain.data?.data?.url === deckOtherUrl,
+    `other ${deckOther.status}/again ${deckOtherAgain.status}/distinct ${deckOtherUrl !== deckUrl}`);
+
+  const deckAFromOtherAdmin = await uploadGet(deckUrl, otherAdmin);
+  const deckBFromAdmin = await uploadGet(deckOtherUrl, admin);
+  const deckBFromOtherAdmin = await uploadGet(deckOtherUrl, otherAdmin);
+  const deckBFromOwner = await uploadGet(deckOtherUrl, otherSpeaker);
+  check("C5-FILES each private deck id remains inside its upload event's admin authority",
+    deckAFromOtherAdmin.status === 404 && deckBFromAdmin.status === 404
+      && deckBFromOtherAdmin.status === 200 && deckBFromOwner.status === 200,
+    `A→B ${deckAFromOtherAdmin.status}/B→A ${deckBFromAdmin.status}/B ${deckBFromOtherAdmin.status}/owner ${deckBFromOwner.status}`);
+
+  const missingFile = await uploadGet("/api/files/no-such-stored-file", admin);
+  check("C5-FILES an unreadable deck and an id that does not exist are the same 404",
+    missingFile.status === 404 && deckAnon.status === 404,
+    `${missingFile.status}/${deckAnon.status}`);
+
+  // The claimed type is never believed: a real PDF sent as image/png is a
+  // mismatch, and HTML sent as image/png is not an accepted format at all.
+  const spoofedDeck = await uploadPost("headshot", PDF_BYTES, "image/png", speaker);
+  const spoofedHtml = await uploadPost("headshot", Buffer.from("<script>alert(1)</script>", "utf8"), "image/png", speaker);
+  const wrongKind = await uploadPost("avatar", PNG_BYTES, "image/png", speaker);
+  check("C5-FILES the bytes decide the type, and an unknown kind is refused",
+    spoofedDeck.status === 422 && spoofedDeck.data?.error?.code === "FILE_TYPE_UNSUPPORTED"
+      && spoofedHtml.status === 422 && spoofedHtml.data?.error?.code === "FILE_TYPE_UNSUPPORTED"
+      && wrongKind.status === 422 && wrongKind.data?.error?.code === "FILE_KIND_UNSUPPORTED",
+    `${spoofedDeck.data?.error?.code}/${spoofedHtml.data?.error?.code}/${wrongKind.data?.error?.code}`);
+
+  const filesOversize = await uploadPost("headshot", Buffer.concat([PNG_BYTES, Buffer.alloc(1024 * 1024)]), "image/png", admin);
+  check("C5-FILES an oversize headshot is a 413 against the repo's existing code",
+    filesOversize.status === 413 && filesOversize.data?.error?.code === "REQUEST_TOO_LARGE",
+    `${filesOversize.status}/${filesOversize.data?.error?.code}`);
+
+  // The wire-in: the stored URL saves through the portal's own schema, which
+  // would have rejected an app-relative path before this lane.
+  const savedProfile = await j("PATCH", "/api/portal/profile", { headshotUrl, slideDeckUrl: deckUrl }, speaker);
+  check("C5-FILES an uploaded URL saves through the portal profile schema unchanged",
+    savedProfile.status === 200 && savedProfile.data?.data?.headshotUrl === headshotUrl
+      && savedProfile.data?.data?.slideDeckUrl === deckUrl,
+    `${savedProfile.status}/${savedProfile.data?.error?.code ?? ""}`);
+  const pastedStillWorks = await j("PATCH", "/api/portal/profile", { headshotUrl: "https://cdn.example.test/a.png" }, speaker);
+  const stillRefused = await j("PATCH", "/api/portal/profile", { headshotUrl: "/admin/settings" }, speaker);
+  check("C5-FILES a pasted link still saves and a non-upload relative path is still refused",
+    pastedStillWorks.status === 200 && stillRefused.status === 422
+      && !!stillRefused.data?.error?.fieldErrors?.headshotUrl,
+    `${pastedStillWorks.status}/${stillRefused.status}`);
+
+  // 26. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
   });
