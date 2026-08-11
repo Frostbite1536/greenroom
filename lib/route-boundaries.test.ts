@@ -3,12 +3,19 @@ import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 /**
- * GRA-06. The audit's finding was a file-existence one — zero `loading.tsx`,
- * `error.tsx` or `not-found.tsx` anywhere under `app/` — so the regression it
- * guards against is a deletion, and these assertions are deliberately shaped
- * that way. Everything else here pins the two properties that make a boundary
- * useful rather than decorative: an error boundary must be able to recover, and
- * it must not show a user anything it does not understand.
+ * GRA-06, as amended by D-C5-11 #4. The audit's finding was a file-existence
+ * one — zero `error.tsx` or `not-found.tsx` anywhere under `app/` — so the
+ * regression it guards against is a deletion, and these assertions are
+ * deliberately shaped that way. Everything else here pins the two properties
+ * that make a boundary useful rather than decorative: an error boundary must be
+ * able to recover, and it must not show a user anything it does not understand.
+ *
+ * `loading.tsx` is DELIBERATELY ABSENT and asserted absent. A segment-level
+ * loading boundary makes Next commit status 200 and start streaming before the
+ * page's own `redirect()`/`notFound()` runs, so unauthorized hits to admin
+ * surfaces answered 200 where the authorization contract (and five smoke
+ * checks) require a real 307/404. Refusal semantics outrank a skeleton. If you
+ * are re-adding one, you are re-introducing that bug.
  *
  * Source assertions are CRLF-safe: no pattern crosses a line break.
  */
@@ -20,9 +27,9 @@ const code = (path: string) =>
   read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/[^\r\n]*/g, "$1");
 
 const ERROR_BOUNDARIES = ["app/error.tsx", "app/(app)/error.tsx"];
-const LOADING_BOUNDARIES = ["app/loading.tsx", "app/(app)/loading.tsx"];
 const NOT_FOUND_BOUNDARIES = ["app/not-found.tsx", "app/(app)/not-found.tsx"];
-const ALL = [...ERROR_BOUNDARIES, ...LOADING_BOUNDARIES, ...NOT_FOUND_BOUNDARIES];
+const BANNED_LOADING_BOUNDARIES = ["app/loading.tsx", "app/(app)/loading.tsx"];
+const ALL = [...ERROR_BOUNDARIES, ...NOT_FOUND_BOUNDARIES];
 
 test("every route segment that needs a boundary has one", () => {
   for (const path of ALL) {
@@ -30,16 +37,27 @@ test("every route segment that needs a boundary has one", () => {
   }
 });
 
+test("no segment reintroduces a loading boundary that would break refusal statuses", () => {
+  for (const path of BANNED_LOADING_BOUNDARIES) {
+    assert.ok(
+      !exists(path),
+      `${path} must NOT exist: a segment loading boundary streams status 200 ` +
+        `before redirect()/notFound() runs, breaking 307/404 refusal semantics ` +
+        `on protected surfaces (D-C5-11 #4 amendment)`,
+    );
+  }
+});
+
 test("the workspace boundaries sit inside the shell, and the public ones stand alone", () => {
   // Below `app/(app)/layout.tsx`, so the sidebar and topbar survive: no <main>
   // of its own (the shell already renders one) and no full-viewport background.
-  for (const path of ["app/(app)/error.tsx", "app/(app)/loading.tsx", "app/(app)/not-found.tsx"]) {
+  for (const path of ["app/(app)/error.tsx", "app/(app)/not-found.tsx"]) {
     const boundary = code(path);
     assert.doesNotMatch(boundary, /<main/, `${path} must not nest a second <main>`);
     assert.doesNotMatch(boundary, /boundary-standalone/, `${path} must not paint over the shell`);
   }
   // Outside the group there is no shell, so these own the document body.
-  for (const path of ["app/error.tsx", "app/loading.tsx", "app/not-found.tsx"]) {
+  for (const path of ["app/error.tsx", "app/not-found.tsx"]) {
     assert.match(code(path), /<main/, `${path} must render its own <main>`);
   }
 });
@@ -70,20 +88,6 @@ test("no boundary leaks an error message, digest, or stack to a user", () => {
   }
 });
 
-test("loading boundaries stay server components and announce themselves", () => {
-  for (const path of LOADING_BOUNDARIES) {
-    const boundary = read(path);
-    // A skeleton has no state; making it a client component would ship bundle
-    // for nothing.
-    assert.doesNotMatch(boundary, /"use client"/, `${path} must stay a Server Component`);
-    assert.match(boundary, /role="status"/, `${path} must expose a live region`);
-    assert.match(boundary, /aria-busy="true"/, `${path} must mark itself busy`);
-    // Decorative bars are hidden; the one announced string is the text.
-    assert.match(boundary, /className="sr-only">Loading/, `${path} must name its state`);
-    assert.match(boundary, /aria-hidden="true"/, `${path} must hide the placeholder shapes`);
-  }
-});
-
 test("not-found boundaries are static server components with no dead links", () => {
   for (const path of NOT_FOUND_BOUNDARIES) {
     const boundary = read(path);
@@ -105,11 +109,8 @@ test("not-found boundaries are static server components with no dead links", () 
 test("the boundary styles the markup names are all defined", () => {
   const css = read("app/globals.css");
   for (const className of [
-    "skeleton-stack", "skeleton-panel", "skeleton-bar",
     "boundary", "boundary-standalone", "boundary-card", "boundary-actions", "boundary-link",
   ]) {
     assert.ok(css.includes(`.${className}`), `.${className} must be defined in globals.css`);
   }
-  // The sheen animation is suppressed for readers who ask for less motion.
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.skeleton-bar \{ animation: none; \} \}/);
 });
