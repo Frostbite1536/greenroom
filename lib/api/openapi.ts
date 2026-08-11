@@ -1,41 +1,47 @@
 /**
- * The published contract for the read-only v1 API, as one static OpenAPI 3.1
+ * The published contract for the read-only v1 API, as one static OpenAPI 3.1.1
  * document.
  *
  * This module is the single source for BOTH published surfaces: the machine
- * endpoint at `/api/v1/openapi` serves this object verbatim, and the human page
- * at `/docs/api` renders this object rather than restating it in prose. There
- * is no second copy to drift, and `lib/api/openapi.test.ts` fails when this
- * document stops describing what the route files under `app/api/v1` do.
+ * endpoint at `/api/v1/openapi.json` serves this object verbatim, and the human
+ * page at `/docs/api` renders this object rather than restating it in prose.
+ * There is no second copy to drift, and `lib/api/openapi.test.ts` fails when
+ * this document stops describing what the route files under `app/api/v1` do.
  *
- * Three rules govern what may be written here.
+ * Four rules govern what may be written here.
  *
  * 1. **The code is the contract; this document follows it.** Every field name
  *    below is asserted against the real serializer output in
  *    `lib/api/v1-serialize.ts`, every bound against the exported constants in
- *    `lib/api/v1.ts`, and every ordering guarantee against the route's own
- *    `orderBy`. Describe what ships, including the parts that are awkward.
+ *    `lib/api/v1-contract.ts`, and every ordering guarantee against the route's
+ *    own `orderBy`. Describe what ships, including the parts that are awkward.
  * 2. **No credential ever appears here.** The deployment-wide
  *    `GREENROOM_API_KEY` is not event-scoped, so publishing it would turn every
- *    event reachable by this API into public data (docs/ROADMAP.md, "Next build
- *    queue" item 1). Examples use `API_KEY_PLACEHOLDER` and nothing else; this
+ *    event reachable by this API into public data (docs/ROADMAP.md, the standing
+ *    constraint above the "Next build queue" list). Examples use
+ *    `API_KEY_PLACEHOLDER` and nothing else; this
  *    module reads no environment variable at all, and the drift test proves the
  *    serialized document never contains the configured key.
  * 3. **It stays static.** The document describes a contract, not an event, so
  *    it needs no database read and no key to fetch. That is what makes serving
  *    it unauthenticated safe.
+ * 4. **Its import graph stays pure.** The bounds come from the dependency-free
+ *    `lib/api/v1-contract` module, never from `lib/api/v1` or `lib/env`, so
+ *    nothing this document needs can reach an environment read, an auth helper,
+ *    a Prisma client, or request handling. `lib/api/openapi-purity.test.ts`
+ *    walks the transitive graph and fails if that ever stops being true.
  */
 import {
   DEFAULT_V1_LIMIT,
   MAX_V1_EVENT_SELECTOR_LENGTH,
   MAX_V1_LIMIT,
   MAX_V1_OFFSET,
+  V1_API_KEY_MIN_LENGTH,
   V1_API_VERSION,
-} from "@/lib/api/v1";
-import { V1_API_KEY_MIN_LENGTH } from "@/lib/env";
+} from "@/lib/api/v1-contract";
 
 /** Where the machine-readable document is served. Unauthenticated by design. */
-export const V1_OPENAPI_PATH = "/api/v1/openapi";
+export const V1_OPENAPI_PATH = "/api/v1/openapi.json";
 
 /** Where the human-readable rendering of that same document is served. */
 export const API_DOCS_PATH = "/docs/api";
@@ -152,7 +158,7 @@ function errorResponse(description: string, code: string, message: string) {
 }
 
 export const OPENAPI_DOCUMENT = {
-  openapi: "3.1.0",
+  openapi: "3.1.1",
   info: {
     title: "Greenroom read-only API",
     version: V1_API_VERSION,
@@ -246,7 +252,7 @@ export const OPENAPI_DOCUMENT = {
         operationId: "getOpenApiDocument",
         summary: "This document",
         description: [
-          "Returns this OpenAPI 3.1 document as JSON.",
+          "Returns this OpenAPI 3.1.1 document as JSON.",
           "",
           "Deliberately unauthenticated, and the one route on this surface that is. It performs",
           "no database read and returns no programme data, so requiring the key would only make",

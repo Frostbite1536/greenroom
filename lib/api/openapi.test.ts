@@ -27,7 +27,7 @@ import {
 
 /**
  * The contract-drift rail for the published OpenAPI document
- * (docs/ROADMAP.md, "Next build queue" item 1).
+ * (docs/ROADMAP.md, "Integration and completeness").
  *
  * A published spec is worse than no spec once it stops being true, and nothing
  * about serving a static JSON file makes it notice that a route changed. So
@@ -56,7 +56,13 @@ const code = (path: string) =>
   read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/[^\r\n]*/g, "$1");
 
 const V1_LIB = "lib/api/v1.ts";
+const V1_CONTRACT_LIB = "lib/api/v1-contract.ts";
 const ROUTE_FILE = (path: string) => `app${path}/route.ts`;
+
+/** The four bounds the document states and the parser enforces. */
+const BOUND_CONSTANTS = [
+  "DEFAULT_V1_LIMIT", "MAX_V1_LIMIT", "MAX_V1_OFFSET", "MAX_V1_EVENT_SELECTOR_LENGTH",
+] as const;
 
 type JsonRecord = Record<string, unknown>;
 const document = JSON.parse(JSON.stringify(OPENAPI_DOCUMENT)) as JsonRecord;
@@ -134,10 +140,55 @@ test("the documented pagination bounds are the exported constants, not copies", 
   // Imported rather than restated: a future edit that hard-codes 100 here has
   // to delete this import to do it, which is the moment a reviewer sees it.
   const spec = read("lib/api/openapi.ts");
-  for (const constant of [
-    "DEFAULT_V1_LIMIT", "MAX_V1_LIMIT", "MAX_V1_OFFSET", "MAX_V1_EVENT_SELECTOR_LENGTH",
-  ]) {
+  for (const constant of BOUND_CONSTANTS) {
     assert.match(spec, new RegExp(`^\\s*${constant},$`, "m"), `openapi.ts must import ${constant}`);
+  }
+  // ...and imported from the PURE module, not from the runtime one. Reading
+  // them out of `lib/api/v1` would drag `lib/env` into the static contract
+  // route's graph, which is what lib/api/openapi-purity.test.ts forbids.
+  assert.match(spec, /^\} from "@\/lib\/api\/v1-contract";$/m, "the spec must read its bounds from the pure module");
+  assert.doesNotMatch(spec, /from "@\/lib\/api\/v1"/, "the spec must not import the runtime v1 module");
+  assert.doesNotMatch(spec, /from "@\/lib\/env"/, "the spec must not import the environment reader");
+});
+
+test("each contract number is defined once, in the pure module", () => {
+  const pure = read(V1_CONTRACT_LIB);
+  const runtime = read(V1_LIB);
+  const env = read("lib/env.ts");
+
+  for (const constant of [...BOUND_CONSTANTS, "V1_API_VERSION", "V1_API_KEY_MIN_LENGTH"]) {
+    const declaration = new RegExp(`^export const ${constant} = `, "m");
+    assert.match(pure, declaration, `${V1_CONTRACT_LIB} must declare ${constant}`);
+    // A second declaration anywhere else is a copy that can drift silently.
+    assert.doesNotMatch(runtime, declaration, `${V1_LIB} must re-export ${constant}, not redeclare it`);
+    assert.doesNotMatch(env, declaration, `lib/env.ts must re-export ${constant}, not redeclare it`);
+  }
+  // Both runtime consumers reach the same declarations.
+  assert.match(runtime, /from "@\/lib\/api\/v1-contract";$/m, `${V1_LIB} must import the pure module`);
+  assert.match(env, /from "@\/lib\/api\/v1-contract";$/m, "lib/env.ts must import the pure module");
+});
+
+test("the published path and document version are the accepted ones", () => {
+  // The release contract: the `.json` URL and OAS 3.1.1. Pinned as literals on
+  // purpose — a constant compared against itself would assert nothing.
+  assert.equal(V1_OPENAPI_PATH, "/api/v1/openapi.json");
+  assert.equal(document.openapi, "3.1.1");
+  assert.ok(V1_OPENAPI_PATH in paths, "the accepted path must be the documented one");
+  assert.ok(exists(ROUTE_FILE(V1_OPENAPI_PATH)), `${ROUTE_FILE(V1_OPENAPI_PATH)} must be the served route`);
+
+  // The superseded extensionless path must not come back as a second contract
+  // URL: two URLs for one document is exactly the drift this rail exists for.
+  assert.equal(exists("app/api/v1/openapi/route.ts"), false, "the superseded /api/v1/openapi route must stay removed");
+
+  // Every published surface names the same URL and version.
+  for (const [file, needles] of [
+    ["docs/API.md", ["/api/v1/openapi.json", "OpenAPI 3.1.1"]],
+    ["docs/judging/WORKFLOW-ROUTES.md", ["/api/v1/openapi.json"]],
+  ] as const) {
+    for (const needle of needles) {
+      assert.ok(read(file).includes(needle), `${file} must document ${needle}`);
+    }
+    assert.doesNotMatch(read(file), /`\/api\/v1\/openapi`/, `${file} must not name the superseded path`);
   }
 });
 
@@ -402,7 +453,8 @@ test("nothing that builds or renders the document can read the configured key", 
   for (const path of [
     "lib/api/openapi.ts",
     "lib/api/openapi-view.ts",
-    "app/api/v1/openapi/route.ts",
+    V1_CONTRACT_LIB,
+    ROUTE_FILE(V1_OPENAPI_PATH),
     "app/docs/api/page.tsx",
   ]) {
     const source = read(path);

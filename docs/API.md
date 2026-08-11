@@ -17,11 +17,13 @@ The v1 API is an optional server-to-server, read-only surface. Set
 `503 API_KEY_NOT_CONFIGURED`; the key is never safe to expose in browser code.
 
 The contract for these three routes is published in two forms, both public and
-neither requiring a key: **`GET /api/v1/openapi`** serves a static OpenAPI 3.1
-document, and **`/docs/api`** renders that same document as a page. They cannot
-disagree — the page is generated from the document, and `lib/api/openapi.test.ts`
-fails when the document stops matching the routes. Neither contains programme
-data, and neither ever contains the key.
+neither requiring a key: **`GET /api/v1/openapi.json`** serves a static
+OpenAPI 3.1.1 document, and **`/docs/api`** renders that same document as a page.
+They cannot disagree — the page is generated from the document, and
+`lib/api/openapi.test.ts` fails when the document stops matching the routes.
+Neither contains programme data, and neither ever contains the key, and
+`lib/api/openapi-purity.test.ts` pins the document's whole import graph away
+from the environment, auth, and the database.
 
 Authenticate with either `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 Every request must provide an explicit `event` query parameter containing the
@@ -143,7 +145,7 @@ Unauthenticated `POST /api/cfp/submissions` accepts `saveDraft` and `submit`; **
 the selected form to be published and open. Its JSON body is capped at 128 KiB before parsing,
 and its strict, bounded answers and speaker roster reject duplicate normalized speaker emails.
 The durable, HMAC-fingerprinted limits run in this scope order: 20 public writes per IP per 10
-minutes; 120 per event per hour across both drafts and submits; then, for a submit, 3 per primary
+minutes; 120 per event per hour across both drafts and submits; then, for a submit, 10 per primary
 email per 24 hours and 60 submit attempts per event per hour. Those submit buckets are consumed
 before later business validation or conflict checks. It still refuses any non-`DRAFT` `abstractId`
 with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or accepted proposal.
