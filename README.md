@@ -9,8 +9,10 @@ An alternative to closed CFP/speaker-ops SaaS: CFP forms, abstract evaluation,
 speaker onboarding, and a conflict-aware agenda, with public embeds for your
 event site.
 
-Evaluating this project? Start at the
-[judging index](docs/judging/README.md).
+The repository includes reproducible demo data, deployment instructions,
+verification scripts, and role-based walkthroughs so contributors and evaluators
+can validate the complete programme workflow. Evaluating this project? Start at
+the [evaluation index](docs/judging/README.md).
 
 ## Features (the golden path)
 
@@ -145,7 +147,7 @@ from any static host or localhost.
 ## Current limitations
 
 Stated up front rather than left to be discovered. The fuller list, with
-context, is in the [judging index](docs/judging/README.md#current-limitations).
+context, is in the [evaluation index](docs/judging/README.md#current-limitations).
 
 - **No self-service sign-up** and **no password reset** — organizers provision
   accounts. Public sign-up is roadmap, not shipped.
@@ -177,7 +179,7 @@ no UI framework. See `docs/ARCHITECTURE.md`.
 
 | Document | What it covers |
 | --- | --- |
-| [`docs/judging/`](docs/judging/README.md) | Judging index: walkthrough script, screenshot index, verification receipts, limitations |
+| [`docs/judging/`](docs/judging/README.md) | Evaluation index: walkthrough script, screenshot index, verification receipts, limitations |
 | [`docs/guides/`](docs/guides/) | Plain-language how-tos for admins, evaluators, and speakers |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Product boundary, domain model, routes, security |
 | [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) | Abstract / Session / ScheduleSlot / SpeakerTask state machines |
@@ -185,10 +187,16 @@ no UI framework. See `docs/ARCHITECTURE.md`.
 | [`docs/API.md`](docs/API.md) | Read-only `/api/v1` REST surface and the in-app speaker endpoints |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | Vercel + Neon setup, environment variables, demo operations |
 
-## Contributing / sprint history
+## Contributing
 
-This codebase was built during a 48-hour replication sprint; the multi-agent
-workflow that produced it is documented in `docs/SPRINT_WORKFLOW.md`.
+Greenroom is developed in the open. The engineering rules a change is held to
+are in [`AGENTS.md`](AGENTS.md) — `main` stays deployable, changes stay focused
+and reviewable, and secrets never enter the tree. The boundaries a change must
+respect are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+[`docs/INVARIANTS.md`](docs/INVARIANTS.md), and
+[`docs/LIFECYCLE.md`](docs/LIFECYCLE.md); design rationale is recorded in
+[`docs/DECISIONS.md`](docs/DECISIONS.md). Run the verification commands above
+before opening a pull request.
 
 ## License
 

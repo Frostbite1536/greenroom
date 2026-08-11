@@ -1,39 +1,27 @@
-# Sprint Agent Constitution
+# Engineering rules
 
 ## Mission
-Build a convincing, runnable clone of the revealed target SaaS in 48 hours. Optimize for the judged golden path and fidelity, not speculative completeness.
+Build and maintain a convincing, runnable open-source conference programme platform. Optimize for the supported organizer, evaluator, speaker, and attendee workflows; preserve correctness at domain boundaries; and keep the application deployable.
 
 ## Before coding
 1. Read `README.md`, `docs/ARCHITECTURE.md`, `docs/INVARIANTS.md`, `docs/ROADMAP.md`, and `REVIEW.md`.
-2. Read the current coordination files under `$SPRINT_COORDINATION_DIR`.
-3. Inspect existing code and tests before adding abstractions.
+2. Inspect existing code and tests before adding abstractions.
 
 ## Operating rules
 - Keep `main` runnable and deployable.
-- Whoever prompts an agent owns its output and must understand and verify it.
+- Whoever authors or prompts a change owns its output and must understand and verify it.
 - Make small, focused commits. Never commit unrelated files.
 - Run `git status --short` before committing and after merges.
-- Do not reset, checkout, clean, or amend another agent's work.
+- Do not reset, checkout, clean, or amend someone else's in-flight work.
 - Do not edit secrets or commit `.env` files.
-- Prefer the simplest conventional implementation that supports the golden path.
-- Ask questions in `JEREMY-INBOX.md`, but include a recommendation and continue with a reasonable default.
+- Prefer the simplest conventional implementation that supports the workflow.
+- When a decision affects product behavior, architecture, data, or security, record it in `docs/DECISIONS.md` with its rationale.
 
-## Ownership
-- Architect/main: shared contracts, schema, package/config files, root layout, merges.
-- Backend: API routes and server services required by the golden path.
-- Frontend: dashboard views, components, styles, and client interactions.
-- Ops: auth, environment validation, deployment, mock integrations, demo reset.
-
-Ownership is a coordination rule, not a security sandbox. If a shared-file change is essential, record it in coordination first and keep the diff minimal.
-
-## Shared files
-The live coordination directory is provided by `$SPRINT_COORDINATION_DIR`. It is outside Git worktrees and is intentionally not merged. Treat status notes as potentially stale; include timestamps and commit SHAs.
-
-## Friction logging
-Frog is optional. If installed, run `frog list` before `frog log`; record only reproducible project/tooling papercuts and never secrets. See `docs/FRICTION_LOGGING.md`. Do not add automation or change repository permissions during the sprint without Jeremy's approval.
+## Change surfaces
+Shared contracts (`types/api.ts`), the Prisma schema, package/config files, and the root layout are load-bearing across every surface. Changing one is legitimate, but keep the diff minimal, state why in the pull request, and check the consumers that still speak the old contract. This is a review convention, not a security sandbox — authorization is enforced server-side per `docs/INVARIANTS.md`.
 
 ## Verification gate
-Before reporting work complete: run the narrowest relevant tests, typecheck/lint/build when available, inspect the diff, and write a status note with files changed, checks run, risks, and next action.
+Before reporting work complete: run the narrowest relevant tests plus `npm test`, run typecheck/lint/build when available, inspect the diff, and summarize files changed, checks run, risks, and next action.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
