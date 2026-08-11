@@ -136,10 +136,29 @@ Stated plainly, because a judge should not have to discover them.
 - **The read-only v1 API is off by default.** It serves data only when
   `GREENROOM_API_KEY` is configured on the server.
 - **Accessibility evidence is automated only.** Every audited route scored 100 on
-  Lighthouse accessibility at the recorded measurement, but no manual
+  Lighthouse accessibility at the recorded measurement, and the three admin
+  modal overlays now use the native `<dialog>` focus model — but no manual
   screen-reader pass has been performed. That gap is real and unclosed.
 - **The Greenroom Assistant is not in the product.** It is not in the merged
   tree and is deliberately not described anywhere in this package.
+- **The demo deployment intentionally hands out admin.** The one-click personas
+  are the judging entry point, so any visitor can become the seeded event's
+  admin — including its operations console, whose live-send buttons work when
+  real provider credentials are configured. Every identity and address in the
+  deployment is a fixture (`@greenroom-hq.com` routes to the operator), so the
+  blast radius is the demo itself; a fail-closed persona switch for non-demo
+  deployments is on the roadmap.
+- **Two external code audits were commissioned and triaged during the sprint.**
+  Confirmed defects were fixed and regression-tested (conflict-identity forgery,
+  unlocked unschedule, far-east timezone day labels, unpublished-session leaks
+  into integrations, cross-event reset authority, missing route boundaries,
+  modal focus management). The remaining accepted findings are recorded here as
+  roadmap, not hidden: schema changes apply via audited `db push` windows rather
+  than versioned migrations; email and Airtable delivery run serially in-request
+  (fine at demo scale, an outbox at real scale); the v1 API uses one
+  deployment-wide read-only key rather than scoped credentials; browser security
+  headers beyond framework defaults (CSP et al.) are not yet set; admin profile
+  edits use last-write-wins rather than version checks.
 
 ## Beyond the minimum
 
