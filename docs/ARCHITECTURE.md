@@ -55,9 +55,15 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
 - `/admin/forms` and `/admin/forms/[formId]` — form list, create-form dialog, form builder
 - `/admin/abstracts` — submission pipeline, custom answers, and accept/decline decisions
 - `/admin/evaluations` — evaluator scoring workspace
-- `/admin/agenda` — agenda builder: List / Day / Week / Tracks / Conflicts views.
-  Drag-and-drop moves are offered in the **Day** view only (`onMove` is passed for
-  `view === "day"`); Week is a read-only multi-day overview.
+- `/admin/agenda` — agenda builder: List / Day (rooms) / Week / Track grid /
+  Tracks / Conflicts views. Drag-and-drop moves are offered in the **Day
+  (rooms)** view only (`onMove` is passed for `view === "day"`); Week is a
+  read-only multi-day overview, Track grid is one day laid out in track columns
+  (its view id is still the legacy `"rooms"`), and Tracks is a read-only
+  programme-wide grouping by track. Both track surfaces route through
+  `lib/agenda-track-view.ts`, which is what keeps a slot with no track — or one
+  whose track was deleted — rendered in a "No track" column or bucket rather
+  than matching nothing and vanishing from the view.
 - `/admin/speakers` — speaker onboarding status dashboard (read-only, filterable)
 - `/admin/embeds` — copy-paste `<iframe>`/link snippets for the public embeds
 - `/admin/settings` — event identity/dates/timezone, rooms, categories, and the

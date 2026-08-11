@@ -2,7 +2,7 @@
 
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, Wand2, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, Layers, LayoutGrid, List, Wand2, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, conflictSentences, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
@@ -10,6 +10,14 @@ import { readableChip } from "@/lib/color-contrast";
 import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
 import { applyRefusalCopy, fillOpenSlotsSummary } from "@/lib/agenda-autoplace-view";
 import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
+import {
+  NO_TRACK_COLUMN_ID,
+  groupByTrack,
+  knownTrackIds,
+  trackGridColumnFor,
+  trackGridColumns,
+  trackViewEmptyCopy,
+} from "@/lib/agenda-track-view";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -21,7 +29,13 @@ import {
   zonedToUtcIso,
 } from "@/lib/tz";
 
-type View = "list" | "day" | "week" | "rooms" | "conflicts";
+/**
+ * `"rooms"` is the day grid laid out in track columns. The id is a leftover from
+ * when that grid had room columns and is kept as-is so nothing that persists a
+ * view id has to be migrated; its tab is labelled "Track grid". `"tracks"` is
+ * the programme-wide grouping added beside it.
+ */
+type View = "list" | "day" | "week" | "rooms" | "tracks" | "conflicts";
 
 const PX_PER_MIN = 1;
 /** Drop targets snap to 5-minute marks so dragging produces tidy start times. */
@@ -266,9 +280,12 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
     <div className="card">
       <div className="agenda-toolbar" role="group" aria-label="Agenda views">
         <ViewTab id="list" view={view} setView={setView} icon={<List size={15} />} label="List" />
-        <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day" />
+        {/* Named for its columns, not just its span: this is the room grid, and
+            it is the view that answers "what is in each room" (ROADMAP §6). */}
+        <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day (rooms)" />
         <ViewTab id="week" view={view} setView={setView} icon={<CalendarRange size={15} />} label="Week" />
-        <ViewTab id="rooms" view={view} setView={setView} icon={<LayoutGrid size={15} />} label="Tracks" />
+        <ViewTab id="rooms" view={view} setView={setView} icon={<LayoutGrid size={15} />} label="Track grid" />
+        <ViewTab id="tracks" view={view} setView={setView} icon={<Layers size={15} />} label="Tracks" />
         <ViewTab
           id="conflicts"
           view={view}
@@ -437,7 +454,10 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           columns={
             view === "day"
               ? data.rooms.map((r) => ({ id: r.id, name: r.name }))
-              : data.tracks.map((t) => ({ id: t.id, name: t.name }))
+              // Columns are derived from the placed talks as well as the track
+              // list, so an untracked talk gets a column to render in instead
+              // of matching none and disappearing.
+              : trackGridColumns(data.tracks, placed)
           }
           groupBy={view === "day" ? "room" : "track"}
           conflictIds={conflictIds}
@@ -454,6 +474,16 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           days={days}
           conflictIds={conflictIds}
           trackColor={trackColor}
+          roomName={roomName}
+          onSelect={setScheduling}
+        />
+      )}
+      {view === "tracks" && (
+        <TracksView
+          sessions={placed}
+          tz={tz}
+          tracks={data.tracks}
+          conflictIds={conflictIds}
           roomName={roomName}
           onSelect={setScheduling}
         />
@@ -632,6 +662,10 @@ function DayGrid({
   const daySessions = sessions.filter((s) => zonedParts(s.slot.startsAt, tz).dateKey === day);
   const bounds = gridBounds(toIntervals(daySessions, tz));
   const hours = hourMarks(bounds);
+  // Recovered from the columns rather than passed in: the untracked column is
+  // the one column whose id is not a track id, so the set the filter needs is
+  // exactly the rest of them. Only read when `groupBy` is "track".
+  const known = knownTrackIds(columns.filter((c) => c.id !== NO_TRACK_COLUMN_ID));
 
   function handleDrop(event: React.DragEvent<HTMLDivElement>, colId: string) {
     event.preventDefault();
@@ -681,7 +715,11 @@ function DayGrid({
             >
               {hours.map((h) => <div className="hour-line" key={h} />)}
               {daySessions
-                .filter((s) => (groupBy === "room" ? s.slot.roomId === col.id : s.slot.trackId === col.id))
+                .filter((s) =>
+                  groupBy === "room"
+                    ? s.slot.roomId === col.id
+                    : trackGridColumnFor(s.slot.trackId, known) === col.id,
+                )
                 .map((s) => {
                   const start = zonedParts(s.slot.startsAt, tz).minutesOfDay;
                   // Duration from the real timestamps, clamped to the day
@@ -827,6 +865,107 @@ function WeekGrid({
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Read-only programme-wide grouping by track.
+ *
+ * The track grid beside it answers "what is running at 10am on Tuesday"; this
+ * answers "what is this track, end to end", so it spans every day at once and
+ * names the room and time on each row instead of drawing them. Read-only for
+ * the same reason the week view is: a column here is not a bookable resource,
+ * and scheduling stays behind the dialog where the server can refuse it.
+ *
+ * Grouping, ordering and the empty copy all come from `lib/agenda-track-view`,
+ * so what this renders is what that module's tests assert.
+ */
+function TracksView({
+  sessions,
+  tz,
+  tracks,
+  conflictIds,
+  roomName,
+  onSelect,
+}: {
+  sessions: Placed[];
+  tz: string;
+  tracks: AgendaData["tracks"];
+  conflictIds: Set<string>;
+  roomName: (id: string) => string;
+  onSelect: (s: AgendaSession) => void;
+}) {
+  const groups = groupByTrack(sessions, tracks);
+  const empty = trackViewEmptyCopy(groups);
+  const ids = useId();
+
+  if (empty) {
+    return <EmptyState icon={<Layers size={22} />} title={empty.title}>{empty.detail}</EmptyState>;
+  }
+
+  return (
+    <div>
+      {/* With no tracks configured the whole programme sits under one grey "No
+          track" heading, which reads as a broken view rather than as a setting
+          the organizer has not filled in yet. Named, so it reads as the latter. */}
+      {tracks.length === 0 ? (
+        <p className="hint" role="status" style={{ padding: "12px 16px 0" }}>
+          This event has no tracks, so every scheduled talk is listed under “No track”. Add tracks in event
+          settings to group the programme.
+        </p>
+      ) : null}
+      {groups.map((group) => {
+        const headingId = `${ids}-${group.trackId ?? "untracked"}`;
+        return (
+          <section key={group.trackId ?? "untracked"} aria-labelledby={headingId}>
+            <div className="agenda-track-head">
+              <span className="track-dot" style={{ background: group.color }} aria-hidden="true" />
+              <h3 id={headingId}>{group.name}</h3>
+              <span className="hint">
+                {group.sessions.length === 1 ? "1 talk" : `${group.sessions.length} talks`}
+              </span>
+            </div>
+            {/* A track an organizer created and never filled is a real state of
+                the programme, so it is named rather than left off the page. */}
+            {group.sessions.length === 0 ? (
+              <p className="hint agenda-track-empty">
+                {group.trackId === null
+                  ? "Nothing is scheduled without a track."
+                  : "Nothing is scheduled in this track yet."}
+              </p>
+            ) : (
+              group.sessions.map((s) => (
+                <button
+                  key={s.id}
+                  className="agenda-list-item agenda-track-item"
+                  onClick={() => onSelect(s)}
+                  // No aria-label: the row's own text is the richer name, and
+                  // overriding it here would hide the time, room and speakers
+                  // from a screen reader that can currently hear all three.
+                  title={`Open the scheduler for “${s.title}”`}
+                >
+                  <span className="time">
+                    {formatTime(s.slot.startsAt, tz)}–{formatTime(s.slot.endsAt, tz)}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span className="cell-title">{s.title}</span>
+                    <span className="cell-sub">
+                      {formatDayLabel(zonedParts(s.slot.startsAt, tz).dateKey, tz)} ·{" "}
+                      {roomName(s.slot.roomId)} ·{" "}
+                      {s.speakers.map((sp) => sp.name).join(", ") || "No speakers"}
+                    </span>
+                  </span>
+                  {conflictIds.has(s.id) ? <Pill tone="bad"><AlertTriangle size={12} /> Conflict</Pill> : null}
+                  {/* Same statement the list view makes: an unpublished talk sits
+                      in this grouping but is withheld from the public programme. */}
+                  {s.contentStatus === "DRAFT" ? <Pill tone="neutral">Unpublished</Pill> : null}
+                </button>
+              ))
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
