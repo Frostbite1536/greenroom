@@ -26,6 +26,11 @@ button { letter-spacing: 0; }
 .event-switcher { margin: 0 4px 18px; padding: 11px 12px; border: 1px solid #3b4749; border-radius: var(--radius); display: grid; gap: 4px; }
 .event-label { color: #9fabad; font-size: 11px; text-transform: uppercase; }
 .event-switcher strong { font-size: 13px; }
+.event-switch-form { margin-top: 8px; display: grid; gap: 6px; }
+.event-switch-select { width: 100%; min-height: 32px; padding: 4px 6px; background: #2b3537; color: #eef2f1; border: 1px solid #4a5759; border-radius: 5px; font-size: 12px; }
+.event-switch-button { min-height: 30px; padding: 0 9px; background: #303b3d; color: #eef2f1; border: 1px solid #4a5759; border-radius: 5px; font-size: 12px; cursor: pointer; }
+.event-switch-button:hover, .event-switch-button:focus-visible { background: #3a4749; color: white; }
+.event-switch-note { color: #9fabad; font-size: 11px; }
 .sidebar nav { display: grid; gap: 3px; }
 .nav-link { min-height: 39px; padding: 0 10px; display: flex; align-items: center; gap: 10px; color: #c7d0d0; border-radius: 5px; font-size: 13px; }
 .nav-link:hover, .nav-link:focus-visible { color: white; background: #303b3d; outline: none; }

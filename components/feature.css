@@ -563,6 +563,7 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .settings-inline-form { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(140px, 180px) auto; gap: 12px; align-items: end; }
 .settings-inline-form .primary-button { display: inline-flex; align-items: center; gap: 7px; }
 .settings-notice { margin: 0; color: #0f6b41; font-size: 12.5px; font-weight: 600; }
+.event-switch-inline { display: inline; }
 .settings-table-scroll { border: 1px solid var(--line); border-radius: 8px; }
 .settings-row-actions { justify-content: flex-end; gap: 7px; }
 .settings-room-editor { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(140px, 180px) auto; gap: 12px; align-items: end; padding: 4px 0; }

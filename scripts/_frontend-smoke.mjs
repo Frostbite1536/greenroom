@@ -84,6 +84,9 @@ const FRESH_EVENT_ID = "scratch-frontend-fresh";
 // S20 also needs an event-scoping boundary target. It is created only by this
 // scratch fixture and deleted with the other disposable events.
 const S20_OTHER_EVENT_ID = "scratch-frontend-s20-other";
+// D-C5-16 needs an event the switching admin has NO membership on, so a real
+// foreign event id can be proven indistinguishable from a forged one.
+const SWITCH_FOREIGN_EVENT_ID = "scratch-frontend-switch-foreign";
 // S2 creates a separate event with the same published form slug. It proves
 // canonical public URLs remain event-scoped and the legacy slug route fails
 // closed instead of choosing one candidate.
@@ -179,7 +182,7 @@ function reviewerInviteBearer(invite, nonce = "r".repeat(43)) {
 
 async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
-  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+  await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
   await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
   await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
 
@@ -473,7 +476,7 @@ let cleanupPromise;
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
-      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID] } } });
+      await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
       await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
       await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
       console.log("[smoke] scratch-frontend cleaned up");
@@ -855,6 +858,174 @@ try {
     && /Self-service sign-up is on the roadmap/.test(roadmapLogin.text)
     && /for now organizers provision accounts\./.test(roadmapLogin.text),
     `${roadmapLogin.status}`);
+
+  // ---- D-C5-16 item 1: the event switcher --------------------------------
+  //
+  // The second event here is the one the D-C5-9 block just created THROUGH THE
+  // PRODUCT, so this section proves the whole create-event → switch-into-it
+  // chain rather than a hand-planted fixture. The risk class is S1
+  // event-scoping: the assertions below are mostly negative — after a switch,
+  // none of the first event's data may appear on any surface.
+  //
+  // Note on the negative assertions: the switcher itself lists EVERY event the
+  // caller belongs to, so "Scratch Frontend" legitimately appears in the
+  // dropdown after switching away from it. Residue is therefore asserted
+  // against the shell's current-event line (`<strong>`) and against the first
+  // event's actual DATA, never against the bare event name.
+  // A real event this admin has no membership on, so "foreign" can be proven
+  // indistinguishable from "does not exist" rather than assumed.
+  await prisma.event.create({
+    data: { id: SWITCH_FOREIGN_EVENT_ID, name: "Scratch Frontend Switch Boundary", slug: SWITCH_FOREIGN_EVENT_ID, timezone: "UTC" },
+  });
+
+  async function switchEvent(eventId, { sess = admin, cookieValue = null, origin = BASE, form = true } = {}) {
+    const res = await fetch(`${BASE}/api/auth/switch-event`, {
+      method: "POST",
+      headers: {
+        "content-type": form ? "application/x-www-form-urlencoded" : "application/json",
+        ...(origin === null ? {} : { origin }),
+        ...(cookieValue ? { cookie: cookieValue } : sess ? { cookie: cookie(sess) } : {}),
+      },
+      body: form ? new URLSearchParams({ eventId }).toString() : JSON.stringify({ eventId }),
+      redirect: "manual",
+    });
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    // `getSetCookie()` keeps multiple Set-Cookie headers apart; `.get()` would
+    // join them and make "was a session issued" unanswerable.
+    const setCookies = typeof res.headers.getSetCookie === "function"
+      ? res.headers.getSetCookie()
+      : [res.headers.get("set-cookie") ?? ""];
+    const issued = setCookies.map((value) => value.split(";")[0]).find((value) => value.startsWith("sb_session="));
+    return { status: res.status, location: res.headers.get("location") ?? "", data, issued: issued ?? null };
+  }
+
+  async function getAs(path, cookieValue) {
+    const res = await fetch(BASE + path, { headers: { cookie: cookieValue }, redirect: "manual" });
+    return { status: res.status, location: res.headers.get("location") ?? "", text: await res.text() };
+  }
+
+  // The switcher is presentation over the caller's own memberships, so it only
+  // appears once there is a real choice to make.
+  const shellBeforeSwitch = await req("GET", "/admin/settings", null, admin);
+  check("D-C5-16 the shell offers a switcher listing the caller's own events",
+    /<select[^>]*name="eventId"/.test(shellBeforeSwitch.text)
+    && shellBeforeSwitch.text.includes(`value="${EVENT_ID}"`)
+    && Boolean(createdEventId) && shellBeforeSwitch.text.includes(`value="${createdEventId}"`)
+    // Someone else's event is never offered, however many exist.
+    && !shellBeforeSwitch.text.includes(`value="${SWITCH_FOREIGN_EVENT_ID}"`),
+    `${shellBeforeSwitch.status}`);
+
+  // Non-vacuous by construction: the membership count is asserted, so this
+  // cannot pass because the identity quietly gained or lost an event.
+  const soloMemberships = await prisma.eventMember.count({
+    where: { user: { email: SECOND_EVALUATOR_EMAIL } },
+  });
+  const soloShell = await req("GET", "/admin/evaluations", null, evaluatorTwo);
+  check("D-C5-16 a single-membership user gets no switcher at all",
+    soloMemberships === 1
+    && soloShell.status === 200
+    && !/name="eventId"/.test(soloShell.text)
+    && soloShell.text.includes("<strong>Scratch Frontend</strong>"),
+    `memberships=${soloMemberships} status=${soloShell.status}`);
+
+  const switched = await switchEvent(createdEventId ?? "missing");
+  check("D-C5-16 switching to an event the caller belongs to re-issues the session",
+    switched.status === 303 && switched.location.endsWith("/admin") && Boolean(switched.issued),
+    `${switched.status} ${switched.location} cookie=${Boolean(switched.issued)}`);
+
+  const switchedCookie = switched.issued ?? "";
+  const dashboardAfter = await getAs("/admin", switchedCookie);
+  const agendaAfterSwitch = await getAs("/admin/agenda", switchedCookie);
+  const abstractsAfterSwitch = await getAs("/admin/abstracts", switchedCookie);
+  check("D-C5-16 every workspace surface re-resolves to the event just switched into",
+    dashboardAfter.status === 200
+    && dashboardAfter.text.includes("<strong>Scratch Created Event</strong>")
+    && dashboardAfter.text.includes("Where Scratch Created Event stands right now")
+    && agendaAfterSwitch.text.includes("<strong>Scratch Created Event</strong>")
+    && abstractsAfterSwitch.text.includes("<strong>Scratch Created Event</strong>"),
+    `${dashboardAfter.status}/${agendaAfterSwitch.status}/${abstractsAfterSwitch.status}`);
+
+  // The S1 assertion this whole section exists for.
+  check("D-C5-16 no first-event data survives the switch on any surface",
+    !dashboardAfter.text.includes("<strong>Scratch Frontend</strong>")
+    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    && !agendaAfterSwitch.text.includes("Scratch Session A")
+    && !agendaAfterSwitch.text.includes("Scratch Session B")
+    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    && !abstractsAfterSwitch.text.includes("Scratch: Agents in Production")
+    && !abstractsAfterSwitch.text.includes("Scratch: Accepted Talk")
+    && !dashboardAfter.text.includes("Scratch Session A"));
+
+  // A REAL event the caller has no membership on, and an id that is nobody's,
+  // must be one refusal — same status, same code, and no cookie from either.
+  const foreignSwitch = await switchEvent(SWITCH_FOREIGN_EVENT_ID, { cookieValue: switchedCookie, form: false });
+  const forgedSwitch = await switchEvent("scratch-frontend-no-such-event", { cookieValue: switchedCookie, form: false });
+  check("D-C5-16 a foreign event id and a forged one are one indistinguishable refusal",
+    foreignSwitch.status === 404
+    && forgedSwitch.status === 404
+    && foreignSwitch.data?.error?.code === "EVENT_NOT_FOUND"
+    && forgedSwitch.data?.error?.code === "EVENT_NOT_FOUND"
+    && foreignSwitch.data?.error?.message === forgedSwitch.data?.error?.message
+    && !foreignSwitch.issued && !forgedSwitch.issued,
+    `${foreignSwitch.status}:${foreignSwitch.data?.error?.code} vs ${forgedSwitch.status}:${forgedSwitch.data?.error?.code}`);
+
+  // A refused switch must leave the caller exactly where they were.
+  const afterRefusal = await getAs("/admin", switchedCookie);
+  check("D-C5-16 a refused switch changes nothing about the current workspace",
+    afterRefusal.status === 200 && afterRefusal.text.includes("<strong>Scratch Created Event</strong>"),
+    `${afterRefusal.status}`);
+
+  const crossOriginSwitch = await switchEvent(EVENT_ID, { cookieValue: switchedCookie, origin: "https://evil.example", form: false });
+  const noOriginSwitch = await switchEvent(EVENT_ID, { cookieValue: switchedCookie, origin: null, form: false });
+  const anonSwitch = await switchEvent(EVENT_ID, { sess: null });
+  check("D-C5-16 a cross-origin, origin-less or unauthenticated switch is refused without a cookie",
+    crossOriginSwitch.status === 403 && crossOriginSwitch.data?.error?.code === "CROSS_ORIGIN_REFUSED"
+    && noOriginSwitch.status === 403
+    && anonSwitch.status === 303 && anonSwitch.location.endsWith("/login")
+    && !crossOriginSwitch.issued && !noOriginSwitch.issued && !anonSwitch.issued,
+    `${crossOriginSwitch.status}/${noOriginSwitch.status}/${anonSwitch.status}`);
+
+  // Role is per event, and the landing follows the role held THERE. Ravi is an
+  // EVALUATOR on the scratch event; on the created one he is a SPEAKER.
+  const raviUser = await prisma.user.findUnique({ where: { email: "ravi@greenroom-hq.com" }, select: { id: true } });
+  if (createdEventId && raviUser) {
+    await prisma.eventMember.create({ data: { eventId: createdEventId, userId: raviUser.id, role: "SPEAKER" } });
+  }
+  const raviSwitch = await switchEvent(createdEventId ?? "missing", { sess: evaluator });
+  const raviEvaluations = await getAs("/admin/evaluations", raviSwitch.issued ?? "");
+  check("D-C5-16 the role resolves per event: the switch lands on that event's role home",
+    raviSwitch.status === 303
+    && raviSwitch.location.endsWith("/portal")
+    && Boolean(raviSwitch.issued)
+    // And the authority really moved: the evaluator screen he could open a
+    // moment ago now bounces him, because on THIS event he is a speaker.
+    && [302, 303, 307].includes(raviEvaluations.status)
+    && raviEvaluations.location.includes("/login"),
+    `${raviSwitch.status} ${raviSwitch.location} → evaluations ${raviEvaluations.status} ${raviEvaluations.location}`);
+
+  const switchedBack = await switchEvent(EVENT_ID, { cookieValue: switchedCookie });
+  const agendaBack = await getAs("/admin/agenda", switchedBack.issued ?? "");
+  check("D-C5-16 switching back restores the first event and its data",
+    switchedBack.status === 303
+    && switchedBack.location.endsWith("/admin")
+    && agendaBack.status === 200
+    && agendaBack.text.includes("<strong>Scratch Frontend</strong>")
+    && agendaBack.text.includes("Scratch Session A")
+    && !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
+    `${switchedBack.status} ${switchedBack.location} agenda ${agendaBack.status}`);
+
+  // The obsoleted copy is gone from the surfaces a judge actually reads. (The
+  // create dialog's own switch offer renders only after a successful create, so
+  // it is pinned at source in lib/services/event-switch-route-contract.test.ts
+  // rather than here.)
+  const switcherLogin = await req("GET", "/login", null, null);
+  check("D-C5-16 the login page no longer frames the product as a single event",
+    switcherLogin.status === 200
+    && /switch between the events you belong to/i.test(switcherLogin.text)
+    && !/switching between events is on the roadmap/i.test(switcherLogin.text),
+    `${switcherLogin.status}`);
 
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
