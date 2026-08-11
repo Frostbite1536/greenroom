@@ -20,6 +20,7 @@ import { homeForRole, type DemoSession } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
 import { MobileNavigation } from "@/components/mobile-navigation";
 import { openCfpNavItems, type OpenCfpEntry } from "@/lib/data/open-cfp";
+import { EMPTY_WORKSPACE_LIST, type WorkspaceList } from "@/lib/data/event-memberships";
 
 const ROLE_LABELS: Record<DemoSession["role"], string> = {
   ADMIN: "Event admin",
@@ -72,14 +73,56 @@ const navigation: { href: string; label: string; icon: typeof FileText; roles: R
  */
 const SUBMIT_ENTRY_ROLES: Role[] = ["ADMIN", "SPEAKER"];
 
+/**
+ * The workspace switcher (D-C5-16 item 1).
+ *
+ * A plain form post to the real endpoint, so it works with JavaScript off and
+ * an API client uses the same path the UI does — the same shape the login
+ * page's credential form takes. Nothing here is authorization: the route
+ * re-checks the membership server-side before it re-issues anything, and this
+ * list is already the caller's own memberships.
+ *
+ * With exactly one membership the control is not rendered at all. A dropdown
+ * whose only option is the option you are already on is a promise of a choice
+ * that does not exist; the current-event line above it already says everything
+ * a single-event organizer needs.
+ */
+function EventSwitcher({ session, list }: { session: DemoSession; list: WorkspaceList }) {
+  if (list.workspaces.length <= 1) return null;
+  return (
+    <form action="/api/auth/switch-event" className="event-switch-form" method="post">
+      <label className="sr-only" htmlFor="event-switch-select">Switch event</label>
+      <select
+        className="event-switch-select"
+        defaultValue={session.event.id}
+        id="event-switch-select"
+        name="eventId"
+      >
+        {list.workspaces.map((workspace) => (
+          <option key={workspace.id} value={workspace.id}>
+            {workspace.name} · {ROLE_LABELS[workspace.role]}
+          </option>
+        ))}
+      </select>
+      <button className="event-switch-button" type="submit">Switch</button>
+      {list.truncated ? (
+        <span className="event-switch-note">Showing your first {list.workspaces.length} events.</span>
+      ) : null}
+    </form>
+  );
+}
+
 export function AppShell({
   session,
   openCfp,
+  workspaces = EMPTY_WORKSPACE_LIST,
   children,
 }: {
   session: DemoSession;
   /** D-C5-3 entry projection; `null` hides the entry for non-speaker roles. */
   openCfp: OpenCfpEntry | null;
+  /** The caller's own memberships (D-C5-16); one or none renders no switcher. */
+  workspaces?: WorkspaceList;
   children: React.ReactNode;
 }) {
   const links = navigation.filter((item) => item.roles.includes(session.role));
@@ -98,6 +141,7 @@ export function AppShell({
         <div className="event-switcher">
           <span className="event-label">Current event</span>
           <strong>{session.event.name}</strong>
+          <EventSwitcher list={workspaces} session={session} />
         </div>
         <nav aria-label="Workspace navigation">
           {links.map(({ href, label, icon: Icon }) => (
