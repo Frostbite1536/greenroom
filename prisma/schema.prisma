@@ -83,6 +83,11 @@ enum SessionContentStatus {
 enum StoredFileKind {
   HEADSHOT
   SLIDE_DECK
+  /// A speaker's supporting document on one of their own proposals. Private
+  /// under exactly the SLIDE_DECK rule: the uploader, or an ADMIN whose active
+  /// event is the event the file was uploaded under. Added as an enum VALUE so
+  /// the change stays additive (M4 precedent) — no column is modified.
+  SUPPORTING_DOCUMENT
 }
 
 model Event {
@@ -111,6 +116,7 @@ model Event {
   publicSubmissionRateBuckets PublicSubmissionRateBucket[]
   reviewerInvites             ReviewerInvite[]
   storedFiles                 StoredFile[]
+  speakerDecks                EventSpeakerDeck[]
 
   @@index([startsAt])
 }
@@ -138,6 +144,8 @@ model User {
   sentEmails         EmailDispatch[]    @relation("EmailSender")
   reviewerInvites    ReviewerInvite[]
   storedFiles        StoredFile[]
+  abstractAttachments AbstractAttachment[]
+  eventSpeakerDecks   EventSpeakerDeck[]
 }
 
 model EventMember {
@@ -294,6 +302,7 @@ model Abstract {
   reviewAssignments ReviewAssignment[]
   reviewScores      ReviewScore[]
   session           Session?
+  attachments       AbstractAttachment[]
 
   @@index([eventId, status])
   @@index([formConfigId, status])
@@ -629,9 +638,83 @@ model StoredFile {
 
   uploader User   @relation(fields: [uploaderUserId], references: [id], onDelete: Cascade)
   event    Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  /// Inverse relation metadata only — no column is added to this table.
+  attachments AbstractAttachment[]
 
   @@unique([uploaderUserId, kind, sha256])
   @@index([eventId])
+}
+
+/**
+ * One supporting document linked to one proposal.
+ *
+ * A JOIN ROW rather than an `abstractId` column on `StoredFile`, because
+ * `StoredFile` is deduplicated on `@@unique([uploaderUserId, kind, sha256])`:
+ * the same speaker attaching the same PDF to two of their proposals gets ONE
+ * stored row back from `POST /api/files`, and a single owning column could then
+ * only ever point at whichever proposal claimed it first. The link is also what
+ * the per-proposal cap counts, and what "remove this attachment" deletes.
+ *
+ * Deliberate delete behaviour:
+ * - Deleting the proposal cascades the links away (the bytes are not this
+ *   table's to destroy).
+ * - Deleting the `StoredFile` cascades its links away.
+ * - Removing an attachment deletes ONLY this row. The bytes stay, exactly as
+ *   clearing `slideDeckUrl` has always left an uploaded deck in place: the same
+ *   row may be attached to another proposal and is still the dedupe target for
+ *   the uploader's next identical upload.
+ */
+model AbstractAttachment {
+  id           String   @id @default(cuid())
+  abstractId   String
+  storedFileId String
+  /// Who attached it. The only person who may remove it, and — with the event's
+  /// admins — the only person who may read the bytes back.
+  uploadedById String
+  /// The speaker's own file name, for display. Never a path, never trusted as one.
+  filename     String
+  createdAt    DateTime @default(now())
+
+  abstract   Abstract   @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  storedFile StoredFile @relation(fields: [storedFileId], references: [id], onDelete: Cascade)
+  uploadedBy User       @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@unique([abstractId, storedFileId])
+  @@index([abstractId])
+  @@index([storedFileId])
+  @@index([uploadedById])
+}
+
+/**
+ * One speaker's slide deck FOR ONE EVENT (roadmap "Scoped credentials" item:
+ * "one global profile URL cannot provide per-event-private deck access").
+ *
+ * `SpeakerProfile.slideDeckUrl` is global — one row per person for the whole
+ * instance — so it cannot hold a different deck per event and cannot be private
+ * to one event's organizers. This table holds the per-event value; the global
+ * column is untouched and remains the fallback for events with no row here.
+ *
+ * A URL column rather than a `storedFileId` FK on purpose: the product's deck
+ * field has always accepted EITHER an uploaded `/api/files/<id>` path OR a
+ * pasted absolute link, validated by one schema (`nullableProfileUrl`). An FK
+ * could not represent the pasted link, so it would either drop that capability
+ * or need both columns to say one thing.
+ */
+model EventSpeakerDeck {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  /// Same accepted shapes as `SpeakerProfile.slideDeckUrl`: an absolute URL, or
+  /// this app's own `/api/files/<id>` path. Validated by `nullableProfileUrl`.
+  deckUrl   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId])
 }
 
 model ImportJob {
