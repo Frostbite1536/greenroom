@@ -24,6 +24,7 @@ import {
   GUARANTEED_SESSION_MAX_SPEAKERS,
   guaranteedSessionInputSchema,
 } from "@/types/api";
+import { taskFanOutLockKey } from "@/lib/services/onboarding-task-lock";
 import {
   newGuaranteedSessionData,
   provisionGuaranteedSession,
@@ -283,20 +284,33 @@ test("a talk is never created carrying a category it has no proposal to inherit"
 function provisioningTx(options: { taskIds?: string[] } = {}) {
   const taskIds = options.taskIds ?? [];
   const calls = {
+    advisoryKeys: [] as string[],
+    /** Every recorded step, in the order provisioning took it. */
+    sequence: [] as string[],
     sessionCreates: [] as Record<string, unknown>[],
     speakerRows: [] as Record<string, unknown>[],
     taskRows: [] as Record<string, unknown>[],
   };
   let speakerRows: { userId: string }[] = [];
   const tx = {
+    // C33: the per-event onboarding fan-out lock. Recorded rather than ignored,
+    // because taking it FIRST is the whole fix — see
+    // `session-provisioning-lock.source.test.ts` and the two-client race proof.
+    $executeRaw: async (_strings: TemplateStringsArray, ...values: unknown[]) => {
+      calls.advisoryKeys.push(String(values[0]));
+      calls.sequence.push("lock");
+      return 1;
+    },
     session: {
       create: async (args: { data: Record<string, unknown> }) => {
+        calls.sequence.push("session.create");
         calls.sessionCreates.push(args.data);
         return { id: "session-new" };
       },
     },
     sessionSpeaker: {
       createMany: async (args: { data: Record<string, unknown>[] }) => {
+        calls.sequence.push("sessionSpeaker.createMany");
         calls.speakerRows.push(...args.data);
         speakerRows = args.data.map((row) => ({ userId: String(row.userId) }));
         return { count: args.data.length };
@@ -315,6 +329,7 @@ function provisioningTx(options: { taskIds?: string[] } = {}) {
     },
     speakerTask: {
       createMany: async (args: { data: Record<string, unknown>[] }) => {
+        calls.sequence.push("speakerTask.createMany");
         calls.taskRows.push(...args.data);
         return { count: args.data.length };
       },
@@ -334,6 +349,17 @@ test("provisioning writes the session, its roster, and every speaker's checklist
   });
 
   assert.deepEqual(result, { sessionId: "session-new", speakersAdded: 2, tasksAssigned: 4 });
+  // C33: the event's fan-out lock, under the shared key, before the session
+  // exists. A concurrent `POST /api/admin/tasks` maintains the same
+  // cross-product from the template end; without this both read a snapshot
+  // missing the other's row and this speaker never gets the new required task.
+  assert.deepEqual(calls.advisoryKeys, [taskFanOutLockKey("event-1")]);
+  assert.deepEqual(calls.sequence, [
+    "lock",
+    "session.create",
+    "sessionSpeaker.createMany",
+    "speakerTask.createMany",
+  ]);
   assert.equal(calls.sessionCreates.length, 1);
   assert.equal(calls.sessionCreates[0].sourceAbstractId, null);
   assert.equal(calls.sessionCreates[0].contentStatus, "DRAFT");
@@ -358,6 +384,9 @@ test("a talk created with nobody on it writes no roster and fans out no checklis
     speakers: [],
   });
   assert.deepEqual(result, { sessionId: "session-new", speakersAdded: 0, tasksAssigned: 0 });
+  // Still locked, and still first: a talk with nobody on it today is a talk a
+  // roster edit can join tomorrow, and the lock class is per event, not per row.
+  assert.deepEqual(calls.sequence, ["lock", "session.create"]);
   assert.deepEqual(calls.speakerRows, []);
   // Not "zero tasks because there are no tasks" — zero because there is nobody
   // to assign them to. A fan-out to an empty roster must write nothing.
@@ -372,6 +401,7 @@ test("an event with no onboarding checklist still creates the talk and its roste
     speakers: [{ userId: "user-1", isPrimary: true }],
   });
   assert.deepEqual(result, { sessionId: "session-new", speakersAdded: 1, tasksAssigned: 0 });
+  assert.deepEqual(calls.sequence, ["lock", "session.create", "sessionSpeaker.createMany"]);
   assert.equal(calls.speakerRows.length, 1);
   assert.deepEqual(calls.taskRows, []);
 });
