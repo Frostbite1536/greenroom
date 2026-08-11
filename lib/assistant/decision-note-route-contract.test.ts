@@ -5,21 +5,16 @@ import test from "node:test";
 /**
  * Source contract for `POST /api/assistant/decision-note`.
  *
- * Five claims about this route are the whole feature, and none of them is
- * visible in a response body:
+ * Deliberately narrow. The route's positive behaviour — its authorization, its
+ * scoped 404, its exact `select`, its exact prompt, its structured-output
+ * validation and its response — is proven by driving the real handler in
+ * `decision-note-route.test.ts`, which is a far stronger claim than a regex
+ * over the file.
  *
- *  1. It is admin-only and scoped to the caller's own event, with the unknown
- *     and the foreign id indistinguishable.
- *  2. It charges the durable throttle BEFORE it reads anything.
- *  3. It loads only the fields the projection is allowed to send — the `select`
- *     is the enforcement, not a filter applied later.
- *  4. It writes nothing and locks nothing.
- *  5. It never fabricates a draft when the provider fails.
- *
- * (3) and (5) are the ones that most need pinning by absence. A widened
- * `select` would leak speaker addresses into a third party's logs and every
- * behavioural test would still pass; a deterministic fallback would pass them
- * too, while quietly telling an organizer a template was a generated draft.
+ * What is left here is the negative space, which runtime tests cannot show:
+ * things this route must never acquire. A lock, a write, a log line, an import
+ * of the email builder — each would pass every behavioural test in the suite
+ * while breaking a guarantee the feature was accepted on.
  *
  * Source assertions are CRLF-safe: no pattern below crosses a line break.
  */
@@ -32,85 +27,8 @@ const code = (path: string) =>
 const ROUTE = "app/api/assistant/decision-note/route.ts";
 const route = () => code(ROUTE);
 
-/**
- * The handler body alone.
- *
- * Every ordering claim below is about where a call sits relative to another,
- * and the import list names all the same symbols earlier in the file — so an
- * `indexOf` over the whole module would compare an import to a call site and
- * silently pass or silently produce an empty slice.
- */
-const body = () => {
-  const it = route();
-  const start = it.indexOf("export const POST");
-  assert.ok(start > -1, "the route must export a POST handler");
-  return it.slice(start);
-};
-
-test("the route is admin-only and takes its event from the session, never the body", () => {
-  const it = route();
-  assert.match(it, /requireContext\(\["ADMIN"\]\)/);
-  assert.match(it, /ctx\.eventId/);
-  // A body-supplied event would let an admin of one event draft against
-  // another's proposals. The schema is `.strict()`, so one cannot even arrive.
-  assert.doesNotMatch(it, /eventId:\s*input\./);
-  assert.doesNotMatch(it, /input\.eventId/);
-  assert.match(code("lib/assistant/decision-note.ts"), /\.strict\(\)/);
-  // Scope is decided by the shared resolver, which the unit tests prove returns
-  // an identical 404 for an unknown and a foreign id.
-  assert.match(it, /resolveDecisionNoteTarget\(abstract, ctx\.eventId\)/);
-  assert.match(it, /if \(!resolved\.ok\) throw resolved\.error;/);
-});
-
-test("the throttle is charged before any read, and it is the assistant's own", () => {
-  const it = body();
-  assert.match(it, /enforceAssistantRateLimit\(\{ userId: ctx\.userId, eventId: ctx\.eventId \}\)/);
-  // Order is the property: charging after the lookup would make an unknown id
-  // the cheap path and turn the endpoint into a free id oracle.
-  assert.ok(
-    it.indexOf("requireContext") < it.indexOf("enforceAssistantRateLimit"),
-    "authentication must precede the throttle",
-  );
-  assert.ok(
-    it.indexOf("enforceAssistantRateLimit") < it.indexOf("prisma."),
-    "the throttle must be charged before the first database read",
-  );
-  assert.ok(
-    it.indexOf("enforceAssistantRateLimit") < it.indexOf("runAssistant"),
-    "the throttle must be charged before the provider call",
-  );
-  // Not a different feature's bucket. Asserted against the whole module,
-  // because this claim is about the import rather than the call site.
-  assert.match(route(), /from "@\/lib\/services\/assistant-rate"/);
-  assert.doesNotMatch(route(), /enforceUploadRateLimit|enforceLoginRateLimit|enforcePublicSubmissionRateLimit/);
-});
-
-test("the abstract select loads the four projected fields and nothing adjacent", () => {
-  const it = body();
-  const select = it.slice(it.indexOf("prisma.abstract.findUnique"), it.indexOf("resolveDecisionNoteTarget"));
-  assert.match(select, /select: \{ id: true, eventId: true, title: true, status: true, event: \{ select: \{ name: true \} \} \}/);
-  // Everything the decision-email route legitimately loads from the same row,
-  // asserted absent here: this endpoint talks to a third party.
-  for (const leak of [/submitter/, /speakers/, /email/, /reviewScores/, /_count/, /decidedAt/, /submitterId/]) {
-    assert.doesNotMatch(select, leak, `the abstract select must not reach ${leak}`);
-  }
-});
-
-test("the comment read takes comments only, bounded, and never a reviewer identity", () => {
-  const it = body();
-  const read = it.slice(it.indexOf("prisma.reviewScore.findMany"), it.indexOf("buildDecisionNoteProjection"));
-  assert.match(read, /select: \{ comment: true \},/);
-  assert.match(read, /take: DECISION_NOTE_COMMENT_READ_LIMIT,/);
-  assert.match(read, /comment: \{ not: null \}/);
-  for (const leak of [/reviewerId/, /userId/, /user:/, /score/, /rubric/, /reviewer:/]) {
-    assert.doesNotMatch(read, leak, `the comment read must not reach ${leak}`);
-  }
-  // Scoped to the abstract already proven to belong to the caller's event.
-  assert.match(read, /abstractId: input\.abstractId/);
-});
-
 test("the route writes nothing and locks nothing", () => {
-  const it = body();
+  const it = route();
   // Advisory and read-only, per the assessment's concurrency section: the
   // authoritative boundary stays the email preview proof, not a lock here.
   for (const write of [
@@ -121,39 +39,25 @@ test("the route writes nothing and locks nothing", () => {
     /\.update\(/,
     /\.delete\(/,
     /\.upsert\(/,
-    /dispatchEmail/,
-    /emailDispatch/,
   ]) {
     assert.doesNotMatch(it, write, `the drafting route must not ${write}`);
   }
-  // The only durable effect is the rate accounting, which happens inside the
-  // shared service rather than here.
-  assert.equal((it.match(/prisma\./g) ?? []).length, 2, "exactly two reads, no third database call");
+  // Exactly two reads reach Prisma, and both are the injected ones.
+  assert.equal((it.match(/prisma\./g) ?? []).length, 2, "no third database call");
+  assert.match(it, /prisma\.abstract\.findUnique/);
+  assert.match(it, /prisma\.reviewScore\.findMany/);
 });
 
-test("the prompt is the shared projection's, and the provider gets the capped ask", () => {
-  const it = route();
-  assert.match(it, /instructions: DECISION_NOTE_INSTRUCTIONS,/);
-  assert.match(it, /input: renderDecisionNoteInput\(projection\),/);
-  assert.match(it, /maxOutputChars: DECISION_NOTE_MAX_DRAFT_CHARS,/);
-  // The route must not assemble a prompt of its own; every field that leaves
-  // goes through the tested projection.
-  assert.match(it, /buildDecisionNoteProjection\(\{/);
-  assert.doesNotMatch(it, /`event_name|`proposal_title|`reviewer_comment/);
-  // No tool, no streaming, no structured-output schema: this is prose.
-  assert.doesNotMatch(it, /textFormat|tools|stream/);
-});
-
-test("a provider failure refuses honestly and never fabricates a note", () => {
-  const it = route();
-  assert.match(it, /if \(!result\.ok\) throw decisionNoteUnavailable\(result\.reason\);/);
-  // The forbidden fallback, asserted by absence: the deterministic email
-  // template exists elsewhere and must not be dressed up as a generated draft.
-  for (const fallback of [/buildDecisionEmail/, /@\/lib\/comms\//, /fallback/i, /draft: "/, /draft: `/]) {
-    assert.doesNotMatch(it, fallback, `the route must not substitute ${fallback} for a generation`);
-  }
-  // The success body is exactly the assessment's shape.
-  assert.match(it, /return ok\(\{ draft: result\.text, grounding \}\);/);
+test("no path from a drafted note reaches a mailbox or the preview proof", () => {
+  // Drafting is not sending. A decision email is rendered, previewed, and sent
+  // only against an HMAC proof of that exact content and recipient list, which
+  // this route cannot satisfy and must not try to.
+  const EMAIL_SURFACE =
+    /dispatchEmail|emailDispatch|EmailDispatch|deliverEmail|buildDecisionEmail|issueDecisionPreviewToken|previewToken|contentDigest|@\/lib\/comms\//;
+  assert.doesNotMatch(route(), EMAIL_SURFACE);
+  // Non-vacuity: the regex really does fire on the file that legitimately
+  // sends, so the assertion above is not passing because it matches nothing.
+  assert.match(code("app/api/comms/decision/route.ts"), EMAIL_SURFACE);
 });
 
 test("the route logs nothing, and the shared contract file is untouched", () => {
@@ -163,6 +67,30 @@ test("the route logs nothing, and the shared contract file is untouched", () => 
   // Non-vacuity for the types/api claim: the route that legitimately uses the
   // shared contract does import it, so this pattern really does fire.
   assert.match(code("app/api/evaluations/decisions/bulk/route.ts"), /@\/types\/api/);
+});
+
+test("no deterministic stand-in can be substituted for a generation", () => {
+  const it = route();
+  // The forbidden fallback, asserted by absence. Greenroom's deterministic
+  // email template exists elsewhere and must not be dressed up as a draft.
+  for (const fallback of [/buildDecisionEmail/, /fallback/i, /draft: "/, /draft: `/]) {
+    assert.doesNotMatch(it, fallback, `the route must not substitute ${fallback} for a generation`);
+  }
+  // The only draft it can return is the one it validated.
+  assert.match(it, /ok\(\{ draft: parsed\.draft, grounding \}\)/);
+  assert.match(it, /if \(!parsed\.ok\) throw decisionNoteUnavailable\(parsed\.reason\);/);
+});
+
+test("the body is read through the bounded reader, never the unbounded one", () => {
+  const it = route();
+  assert.match(it, /parseBoundedJson\(req, decisionNoteRequestSchema, DECISION_NOTE_MAX_BODY_BYTES\)/);
+  assert.doesNotMatch(it, /parseBody\(/, "the unbounded reader must not come back");
+  // Non-vacuity: `parseBody` is what other routes use, so the name is real.
+  assert.match(code("app/api/comms/decision/route.ts"), /parseBody\(/);
+});
+
+test("the generated note is never cached by anything between here and the browser", () => {
+  assert.match(route(), /response\.headers\.set\("Cache-Control", "no-store"\)/);
 });
 
 test("the decision email's preview proof is untouched by this feature", () => {
@@ -179,6 +107,11 @@ test("the decision email's preview proof is untouched by this feature", () => {
   // side, not merely in the panel's state.
   assert.match(email, /\.update\(JSON\.stringify\(renderedMessages\)\)/);
   assert.match(email, /personalNote: input\.personalNote,/);
-  // And the drafting route cannot issue or verify one.
-  assert.doesNotMatch(route(), /PreviewToken|previewToken|contentDigest/);
+});
+
+test("US spelling, matching the rest of the reader-facing text", () => {
+  for (const path of [ROUTE, "lib/assistant/decision-note.ts", "lib/decision-note-ui.ts", "e2e/assistant-decision-note.spec.ts"]) {
+    assert.doesNotMatch(source(path), /programme/i, `${path} must use the US "program"`);
+  }
+  assert.match(source("lib/assistant/decision-note.ts"), /say what the program valued/);
 });
