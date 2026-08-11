@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { lockEventTaskFanOut } from "@/lib/services/onboarding-task-lock";
 
 /**
  * Turning an accepted proposal into a confirmed talk (WAVE1-B1).
@@ -10,8 +11,27 @@ import type { Prisma } from "@prisma/client";
  * path (accept) and the manual one (`/api/evaluations/convert`), so they cannot
  * drift apart.
  *
- * Every function here expects to run inside a transaction that already holds
- * the per-abstract advisory lock (`lockAbstractForWrite`).
+ * What each function here expects of its caller differs, so it is stated per
+ * group rather than once for the file:
+ *
+ *  - **The abstract-derived writers** (`provisionSessionForAbstract`,
+ *    `provisionAcceptedAbstract`) run inside a transaction that already holds
+ *    that abstract's advisory lock (`lockAbstractForWrite`). Both callers —
+ *    `POST /api/evaluations/decisions` and `POST /api/evaluations/convert` —
+ *    take it before they read the row these are handed.
+ *  - **`provisionGuaranteedSession`** has no abstract, and so no abstract lock.
+ *    Its route authorizes the event and checks every speaker against the roster
+ *    first instead, under the C17 keys.
+ *  - **The pure helpers** (`resolveSessionDuration`, `planTaskAssignments`,
+ *    `reconciledSessionFields`, `newSessionData`, `newGuaranteedSessionData`)
+ *    touch no database and expect nothing at all.
+ *
+ * The two ENTRY points — `provisionAcceptedAbstract` and
+ * `provisionGuaranteedSession` — take the per-event onboarding fan-out lock
+ * themselves, as their first act. See each for why; the short version is that
+ * provisioning maintains the same task × speaker cross-product the template
+ * writers maintain, from the other end, so it belongs to their lock class
+ * (LOCK-ORDER-v1, C33).
  */
 
 /** Fallback length for an auto-created session when the proposal never stated one. */
@@ -212,6 +232,118 @@ export async function provisionSessionForAbstract(
   return { sessionId: created.id, created: true, topicReconciled: false, summaryReconciled: false };
 }
 
+/** What a directly authored talk carries, before any database work. */
+export type GuaranteedSessionFields = {
+  title: string;
+  description?: string | null;
+  format?: string | null;
+  durationMinutes: number;
+  speakers: readonly { userId: string; isPrimary: boolean }[];
+};
+
+/**
+ * Everything a `Session` authored directly on the programme is created with.
+ *
+ * Pure and exported for the same reason `newSessionData` is: what a keynote or
+ * a sponsor slot starts life as is a product rule, and the two fields that make
+ * this row *different* from an accepted proposal's are both easy to lose in a
+ * refactor and invisible until an organizer notices.
+ *
+ *  - **`sourceAbstractId` is null**, which is what makes this a guaranteed
+ *    session at all (INV-DOMAIN-001: at most one session per abstract; a talk
+ *    with no abstract consumes none of that budget). It is stated explicitly
+ *    rather than omitted so the intent survives a reader who is looking for it.
+ *  - **`contentStatus` is `DRAFT`**, overriding the column's `PUBLISHED`
+ *    default. That default exists because every *scheduled* session was already
+ *    public when the column was added; a talk being typed into a dialog is not,
+ *    and announcing it on the public programme mid-keystroke is not a default
+ *    anyone asked for. The admin publishes it with the existing PATCH.
+ *
+ * `categoryId` is absent, not null-by-accident: a directly authored talk has no
+ * proposal to inherit a topic from, which is exactly the case
+ * `AgendaSession.category` already documents as "null for a directly authored
+ * session".
+ */
+export function newGuaranteedSessionData(
+  eventId: string,
+  input: GuaranteedSessionFields,
+): {
+  eventId: string;
+  sourceAbstractId: null;
+  title: string;
+  description: string | null;
+  format: string | null;
+  durationMinutes: number;
+  contentStatus: "DRAFT";
+} {
+  return {
+    eventId,
+    sourceAbstractId: null,
+    title: input.title,
+    // Trimmed-to-absent becomes an explicit null rather than an empty string, so
+    // the public programme's "has a summary" test stays a null check everywhere.
+    description: input.description?.trim() || null,
+    format: input.format?.trim() || null,
+    durationMinutes: input.durationMinutes,
+    contentStatus: "DRAFT",
+  };
+}
+
+/**
+ * Create a talk that has no source proposal, with its speakers and their
+ * onboarding checklist — the same "make it real" step acceptance takes, minus
+ * the abstract.
+ *
+ * This is deliberately the *only* way `POST /api/agenda/sessions` reaches
+ * `Session`/`SessionSpeaker`. Acceptance's provisioning already owns two rules
+ * that a second writer would drift from within a release: the roster is
+ * snapshotted onto `SessionSpeaker` in one statement, and every speaker on a
+ * confirmed session gets the event's onboarding checklist (INV-TASK-001). A
+ * keynote speaker is a confirmed speaker, so the checklist is not optional for
+ * them either — `assignOnboardingTasks` is the same call, idempotent as ever.
+ *
+ * Expects to run inside a transaction that has already authorized the event and
+ * confirmed every `userId` is on this event's roster.
+ *
+ * **The per-event fan-out lock is taken here, first, before the session exists**
+ * (LOCK-ORDER-v1, C33). Creating a confirmed talk is the other half of the
+ * cross-product `POST /api/admin/tasks` maintains: that route locks, creates a
+ * required template, and fans it out across the event's existing sessions, while
+ * this one creates a session and fans the event's existing templates across its
+ * speakers. Each reads exactly what the other is about to write, so without a
+ * shared lock two overlapping transactions each read a snapshot in which the
+ * other's row does not exist yet, both commit, and the new confirmed speaker is
+ * left without the new required task — INV-TASK-001 broken with no duplicate for
+ * `skipDuplicates` to catch, because the failure is an absence. Taking it before
+ * `session.create` rather than around the fan-out alone keeps every writer in
+ * this class acquiring it first and holding no row locks while it waits.
+ */
+export async function provisionGuaranteedSession(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  input: GuaranteedSessionFields,
+): Promise<{ sessionId: string; speakersAdded: number; tasksAssigned: number }> {
+  await lockEventTaskFanOut(tx, eventId);
+
+  const created = await tx.session.create({ data: newGuaranteedSessionData(eventId, input) });
+
+  if (input.speakers.length > 0) {
+    await tx.sessionSpeaker.createMany({
+      data: input.speakers.map((speaker) => ({
+        sessionId: created.id,
+        userId: speaker.userId,
+        isPrimary: speaker.isPrimary,
+      })),
+    });
+  }
+
+  // Reads the rows just written, never the request, so a talk created with no
+  // speakers assigns nothing rather than fanning a checklist out to no one.
+  const tasksAssigned = await assignOnboardingTasks(tx, eventId, created.id);
+
+  return { sessionId: created.id, speakersAdded: input.speakers.length, tasksAssigned };
+}
+
 /**
  * Give every speaker on a confirmed session the event's onboarding checklist.
  *
@@ -273,6 +405,15 @@ export async function assignOnboardingTasks(
 /**
  * The whole "make it real" step: ensure the session exists, then ensure every
  * speaker on it has the checklist.
+ *
+ * Same C33 race, same first act: the per-event fan-out lock, before the session
+ * is created or reconciled. An acceptance and a concurrent "make this template
+ * required" would otherwise each miss the other's uncommitted row and leave a
+ * freshly confirmed speaker without a required task (INV-TASK-001). Its callers
+ * (`POST /api/evaluations/decisions`, `POST /api/evaluations/convert`) already
+ * hold the per-abstract lock when they get here, so the order is
+ * abstract → fan-out; the four writers on the other side of this lock take no
+ * abstract lock at all, so the graph gains no cycle.
  */
 export async function provisionAcceptedAbstract(
   tx: Prisma.TransactionClient,
@@ -285,6 +426,8 @@ export async function provisionAcceptedAbstract(
   summaryReconciled: boolean;
   tasksAssigned: number;
 }> {
+  await lockEventTaskFanOut(tx, abstract.eventId);
+
   const session = await provisionSessionForAbstract(tx, abstract, requestedDuration);
   const tasksAssigned = await assignOnboardingTasks(tx, abstract.eventId, session.sessionId);
   return { ...session, tasksAssigned };

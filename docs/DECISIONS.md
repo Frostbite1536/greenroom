@@ -84,3 +84,72 @@ Repository automation (GitHub workflows, issue templates, third-party Apps)
 requires the maintainer's approval. A developer CLI that created
 `.github/ISSUE_TEMPLATE/` as an install side effect was reverted under this
 rule.
+
+## Direct session creation names speakers by roster id, not by email
+`guaranteedSessionInputSchema` existed unused and reused `coSpeakerInputSchema`
+for its roster, so a guaranteed session (keynote, sponsor slot) would have been
+created from email/name pairs. `POST /api/agenda/sessions` changes that field to
+`{ userId, isPrimary }[]` drawn from this event's roster, and makes it optional.
+Two reasons. Minting a global `User` from an email is `POST /api/admin/speakers`'
+job and takes that route's C17 identity lock order; a programme surface that
+created accounts as a side effect of scheduling a keynote would be doing identity
+work under the wrong lock, and `User.email` uniqueness (S10) plus recipient
+derivation (C26) hang off it. And `coSpeakerInputSchema` is `.min(1)` because a
+proposal without a submitter does not exist — a sponsor slot blocked out before
+the line-up is known routinely does. The schema had no consumers when it changed,
+so nothing spoke the old contract. Adding a speaker who is not yet on the roster
+is therefore a trip to `/admin/speakers` first, which is where identity already
+lives; the alternative (accepting emails here and duplicating the C17 sequence)
+was declined as a second identity writer.
+
+## Resource/wiki pages are authored in the product, sanitized at write
+The speaker portal always rendered `ResourceWiki` pages, but the only writer was
+the demo seed, so INV-HTML-001's "before storage" half had nothing to enforce
+and an organizer could not create a resource page at all. `/admin/resources` and
+`POST|PATCH|DELETE /api/admin/resources` are that writer: ADMIN-only,
+event-scoped from the session on create and from the row's own `FOR UPDATE` read
+on edit and delete, with `@@unique([eventId, slug])` surfaced as a named 409.
+
+Every authored body passes through the existing `lib/sanitize-html.ts` — the
+same sanitizer the reader uses — before it is stored, and the reader keeps
+sanitizing on render. That duplication is deliberate: rows still arrive from the
+seed and could arrive from a future importer, so neither end may assume the
+other cleaned the bytes. A body where nothing survives sanitizing is a 422
+rather than a silently blank published page, because an organizer who pasted an
+embed needs to be told, not left with an empty page.
+
+The published-only rule both portal surfaces read by lives in one helper
+(`portalResourceWhere`), so an unpublished draft cannot be listed on one surface
+and reachable on the other. No new dependency: the conservative in-repo
+sanitizer stands, and swapping in `sanitize-html`/DOMPurify remains the recorded
+follow-up rather than something this surface forced.
+
+## Session provisioning joins the onboarding fan-out lock class (C33)
+Two writers maintain the onboarding-task x session-speaker cross-product
+(INV-TASK-001) from opposite ends: the template writers create a required task
+and fan it out across the event's confirmed sessions, and provisioning creates a
+confirmed session and fans the event's templates out across its speakers. Only
+the first half took `lockEventTaskFanOut`, so under READ COMMITTED an overlapping
+pair each read a snapshot without the other's row, both committed, and the new
+confirmed speaker was left without the new required task - an absence, so
+`skipDuplicates` could not catch it. Both entry points,
+`provisionGuaranteedSession` and `provisionAcceptedAbstract`, now take that same
+existing per-event lock as their first awaited operation.
+
+Placement was the decision. Not in the routes: four call sites would each have to
+remember, and a forgotten one is invisible until a speaker is silently missing a
+task. Not in `assignOnboardingTasks`: it is the low-level fan-out the C33
+backfill already calls once per session inside a transaction holding this lock,
+so acquiring there is re-entrant noise and would self-deadlock if the lock ever
+stopped being transaction-scoped. At the entry points it is taken before any row
+is written, so no writer in the class holds row locks while waiting for it.
+
+The graph gains an edge, not a cycle: the accept paths take the per-abstract lock
+before provisioning (abstract -> fan-out), and none of the four writers on the
+other side of the fan-out lock takes an abstract lock at all. Proved two ways -
+`session-provisioning-lock.source.test.ts` pins the placement and the absent
+reverse edge on every run, and `session-provisioning-fanout-race.test.ts` drives
+two PrismaClients through both interleavings against a real Postgres, gated
+behind `RACE_PROOF=1` plus a disposable `DATABASE_URL` so `npm test` needs no
+database. Pre-fix, both orders end with zero assignments; post-fix, both end with
+exactly one.

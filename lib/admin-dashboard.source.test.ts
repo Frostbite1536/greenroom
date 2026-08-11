@@ -172,8 +172,10 @@ test("the sidebar entry is ADMIN-only and leads the admin group", () => {
   const nav = shell();
   const start = nav.indexOf("const navigation:");
   const list = nav.slice(start, nav.indexOf("];", start));
-  assert.match(list, /\{ href: "\/admin", label: "Dashboard", icon: Gauge, roles: \["ADMIN"\] \}/);
-  // First entry in the list, ahead of every workspace it links into.
+  assert.match(list, /\{ href: "\/admin", label: "Dashboard", icon: Gauge, roles: \["ADMIN"\], group: "overview" \}/);
+  // First entry in the list, ahead of every workspace it links into, and first
+  // inside the first group the sidebar renders.
+  assert.match(shell(), /\{ key: "overview", label: "Overview" \}/);
   const entries = list.match(/href: "[^"]+"/g) ?? [];
   assert.equal(entries[0], 'href: "/admin"');
 });

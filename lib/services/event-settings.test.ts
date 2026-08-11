@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { eventSettingsUpdateSchema, roomCreateSchema, roomUpdateSchema } from "@/types/api";
+import {
+  categoryUpdateSchema,
+  eventSettingsUpdateSchema,
+  roomCreateSchema,
+  roomUpdateSchema,
+  trackCreateSchema,
+  trackUpdateSchema,
+} from "@/types/api";
 import { planEventSettingsUpdate, serializeSettingsEvent, type SettingsEvent } from "@/lib/services/event-settings";
 import { decideRoomDeletion } from "@/lib/services/room-deletion";
 import { classifyRoomMutationError } from "@/lib/services/room-mutation-errors";
+import { decideTrackDeletion } from "@/lib/services/track-deletion";
+import { classifyTrackMutationError } from "@/lib/services/track-mutation-errors";
+import { decideCategoryDeletion } from "@/lib/services/category-deletion";
+import { normalizeHex } from "@/lib/color-contrast";
 import { isIanaTimeZone } from "@/lib/tz";
 import { Prisma } from "@prisma/client";
 
@@ -115,4 +126,99 @@ test("room update/delete races classify Prisma P2025 as the scoped not-found res
   assert.equal(classifyRoomMutationError(missing), "ROOM_NOT_FOUND");
   assert.equal(classifyRoomMutationError(duplicate), "ROOM_NAME_TAKEN");
   assert.equal(classifyRoomMutationError(new Error("database offline")), null);
+});
+
+test("track contracts require a readable colour and reject blank names and empty updates", () => {
+  assert.equal(trackCreateSchema.safeParse({ name: "Mainstage", color: "#6366f1", sortOrder: 2 }).success, true);
+  // Every form `parseHex` reads is accepted, because those are the forms the
+  // schedule chip can actually render.
+  assert.equal(trackCreateSchema.safeParse({ name: "Mainstage", color: "abc" }).success, true);
+  assert.equal(trackCreateSchema.safeParse({ name: "", color: "#6366f1" }).success, false);
+  assert.equal(trackCreateSchema.safeParse({ name: "Mainstage" }).success, false);
+  assert.equal(trackCreateSchema.safeParse({ name: "Mainstage", color: "rebeccapurple" }).success, false);
+  assert.equal(trackCreateSchema.safeParse({ name: "Mainstage", color: "#12345" }).success, false);
+  // Event scope is the session's, never the body's.
+  assert.equal(trackCreateSchema.safeParse({ eventId: "another-event", name: "Mainstage", color: "#6366f1" }).success, false);
+  assert.equal(trackUpdateSchema.safeParse({ id: "track-1" }).success, false);
+  assert.equal(trackUpdateSchema.safeParse({ id: "track-1", name: "Deep Dives" }).success, true);
+  assert.equal(trackUpdateSchema.safeParse({ id: "track-1", color: "#0ea5e9" }).success, true);
+  assert.equal(trackUpdateSchema.safeParse({ id: "track-1", eventId: "another-event", name: "Deep Dives" }).success, false);
+});
+
+test("track deletion policy permits unused tracks and refuses scheduled ones by name", () => {
+  assert.deepEqual(decideTrackDeletion(false), { allowed: true });
+  assert.deepEqual(decideTrackDeletion(true), {
+    allowed: false,
+    code: "TRACK_IN_USE",
+    message: "This track is on the schedule. Move its sessions to another track before removing it.",
+  });
+});
+
+test("track update/delete races classify Prisma P2025 as the scoped not-found response", () => {
+  const missing = new Prisma.PrismaClientKnownRequestError("record vanished", {
+    code: "P2025",
+    clientVersion: "test",
+  });
+  const duplicate = new Prisma.PrismaClientKnownRequestError("duplicate track", {
+    code: "P2002",
+    clientVersion: "test",
+  });
+  assert.equal(classifyTrackMutationError(missing), "TRACK_NOT_FOUND");
+  assert.equal(classifyTrackMutationError(duplicate), "TRACK_NAME_TAKEN");
+  assert.equal(classifyTrackMutationError(new Error("database offline")), null);
+});
+
+test("a category edit names the row and only the fields it actually changes", () => {
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1" }).success, false);
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1", name: "Platform" }).success, true);
+  // Clearing is explicit; omitting leaves the stored value alone. This is the
+  // whole reason a rename cannot silently drop review routing.
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1", defaultTeamKey: null }).success, true);
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1", description: null }).success, true);
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1", name: "" }).success, false);
+  assert.equal(categoryUpdateSchema.safeParse({ id: "category-1", eventId: "another-event", name: "Platform" }).success, false);
+  const renameOnly = categoryUpdateSchema.safeParse({ id: "category-1", name: "Platform" });
+  assert.equal(renameOnly.success && "defaultTeamKey" in renameOnly.data, false);
+  assert.equal(renameOnly.success && "description" in renameOnly.data, false);
+});
+
+test("category deletion refuses each reference on its own and names what is in the way", () => {
+  assert.deepEqual(decideCategoryDeletion({ hasAbstract: false, hasSession: false }), { allowed: true });
+
+  const withAbstract = decideCategoryDeletion({ hasAbstract: true, hasSession: false });
+  assert.equal(withAbstract.allowed, false);
+  assert.equal(withAbstract.allowed === false && withAbstract.code, "CATEGORY_IN_USE");
+  assert.match(withAbstract.allowed === false ? withAbstract.message : "", /Proposals still use this category/);
+  assert.match(withAbstract.allowed === false ? withAbstract.message : "", /review routing/);
+
+  // A Session may carry a category with no Abstract behind it (an invited
+  // keynote), so the session reference has to refuse on its own or a live
+  // programme loses its topics with nothing said.
+  const withSession = decideCategoryDeletion({ hasAbstract: false, hasSession: true });
+  assert.equal(withSession.allowed, false);
+  assert.match(withSession.allowed === false ? withSession.message : "", /Sessions on the programme still use this category/);
+
+  const withBoth = decideCategoryDeletion({ hasAbstract: true, hasSession: true });
+  assert.equal(withBoth.allowed, false);
+  assert.match(withBoth.allowed === false ? withBoth.message : "", /Proposals and scheduled sessions/);
+
+  // Every refusal says what to do instead; renaming is always safe.
+  for (const usage of [
+    { hasAbstract: true, hasSession: false },
+    { hasAbstract: false, hasSession: true },
+    { hasAbstract: true, hasSession: true },
+  ]) {
+    const decision = decideCategoryDeletion(usage);
+    assert.match(decision.allowed === false ? decision.message : "", /rename this one instead of removing it/);
+  }
+});
+
+test("a stored track colour reaches the settings colour input in the form it can display", () => {
+  assert.equal(normalizeHex("#6366f1", "#000000"), "#6366f1");
+  assert.equal(normalizeHex("abc", "#000000"), "#aabbcc");
+  assert.equal(normalizeHex("#ABC", "#000000"), "#aabbcc");
+  // Without the fallback an unreadable stored value would show as black and a
+  // save would then write black over a colour the operator never touched.
+  assert.equal(normalizeHex("rebeccapurple", "#6366f1"), "#6366f1");
+  assert.equal(normalizeHex(null, "#6366f1"), "#6366f1");
 });

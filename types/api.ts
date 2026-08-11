@@ -108,14 +108,49 @@ export const coSpeakerInputSchema = z
   .min(1)
   .max(20);
 
+const categoryNameSchema = z.string().trim().min(1).max(120);
+const categoryDescriptionSchema = z.string().trim().max(500);
+const categoryTeamKeySchema = z.string().trim().max(120);
+const categorySortOrderSchema = z.number().int().nonnegative();
+
 export const categoryInputSchema = z.object({
   eventId: idSchema,
   id: idSchema.optional(),
-  name: z.string().trim().min(1).max(120),
-  description: z.string().trim().max(500).optional(),
-  defaultTeamKey: z.string().trim().max(120).optional(),
-  sortOrder: z.number().int().nonnegative().default(0),
+  name: categoryNameSchema,
+  description: categoryDescriptionSchema.optional(),
+  defaultTeamKey: categoryTeamKeySchema.optional(),
+  sortOrder: categorySortOrderSchema.default(0),
 });
+
+/**
+ * Partial category edit, the same shape as `roomUpdateSchema`.
+ *
+ * `categoryInputSchema` is whole-row: an update through it rewrites
+ * `description`, `defaultTeamKey` and `sortOrder` from the body every time. A
+ * rename sent through that contract would therefore silently clear the
+ * category's `defaultTeamKey` — the value that routes its proposals to a
+ * review team (`app/api/evaluations/assignments/route.ts`). This contract names
+ * the row and only the fields the operator actually changed, so renaming can
+ * never drop routing. `null` clears an optional column; omitting it leaves the
+ * stored value alone.
+ */
+export const categoryUpdateSchema = z
+  .object({
+    id: idSchema,
+    name: categoryNameSchema.optional(),
+    description: categoryDescriptionSchema.nullable().optional(),
+    defaultTeamKey: categoryTeamKeySchema.nullable().optional(),
+    sortOrder: categorySortOrderSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.name !== undefined
+      || value.description !== undefined
+      || value.defaultTeamKey !== undefined
+      || value.sortOrder !== undefined,
+    { message: "Provide at least one category field to update." },
+  );
 
 const eventDateKeySchema = z
   .string()
@@ -222,6 +257,44 @@ export const roomUpdateSchema = z
   .strict()
   .refine((value) => value.name !== undefined || value.capacity !== undefined || value.sortOrder !== undefined, {
     message: "Provide at least one room field to update.",
+  });
+
+/**
+ * Programme tracks — the schedule's swimlanes, authored alongside rooms.
+ *
+ * `Track.color` is a required, operator-chosen column that the agenda chip and
+ * the public schedule render as a background, so it is bounded here to exactly
+ * the hex forms `parseHex` in `lib/color-contrast.ts` can read. An unparseable
+ * value would not fail loudly; it would silently render every affected slot in
+ * the grey `FALLBACK_BACKGROUND`, so the boundary is the right place to refuse
+ * it. The other two fields mirror `roomNameSchema`/`roomSortOrderSchema`
+ * because a track and a room are authored on the same settings surface.
+ */
+const trackNameSchema = z.string().trim().min(1).max(120);
+const trackColorSchema = z
+  .string()
+  .trim()
+  .regex(/^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Use a hex colour such as #6366f1.");
+const trackSortOrderSchema = z.number().int().nonnegative().max(100_000);
+
+export const trackCreateSchema = z
+  .object({
+    name: trackNameSchema,
+    color: trackColorSchema,
+    sortOrder: trackSortOrderSchema.optional(),
+  })
+  .strict();
+
+export const trackUpdateSchema = z
+  .object({
+    id: idSchema,
+    name: trackNameSchema.optional(),
+    color: trackColorSchema.optional(),
+    sortOrder: trackSortOrderSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.color !== undefined || value.sortOrder !== undefined, {
+    message: "Provide at least one track field to update.",
   });
 
 /**
@@ -554,14 +627,79 @@ export const sessionPublicationSchema = z
   })
   .strict();
 
-export const guaranteedSessionInputSchema = z.object({
-  eventId: idSchema,
-  title: z.string().trim().min(3).max(180),
-  description: z.string().trim().max(5000).optional(),
-  format: z.string().trim().max(80).optional(),
-  durationMinutes: z.number().int().min(5).max(480),
-  speakers: coSpeakerInputSchema,
-});
+/**
+ * How many people may be named on one directly authored talk. The same bound
+ * `coSpeakerInputSchema` puts on a proposal's roster, for the same reason: a
+ * talk's speaker list is a stage line-up, not a mailing list.
+ */
+export const GUARANTEED_SESSION_MAX_SPEAKERS = 20;
+
+/**
+ * A talk authored directly on the programme — a keynote, a sponsor slot — with
+ * no source proposal (`Session.sourceAbstractId` is nullable, INV-DOMAIN-001).
+ *
+ * **Speakers are roster user ids, not email/name pairs.** This schema formerly
+ * reused `coSpeakerInputSchema`, which is the *proposal* contract: it names
+ * people by email so an anonymous CFP submission can mint the accounts behind
+ * them. Creating a global `User` is `POST /api/admin/speakers`' job and takes
+ * that route's C17 identity lock order to do it safely; a programme surface
+ * that silently minted accounts as a side effect of scheduling a keynote would
+ * be doing identity work under the wrong lock. Naming someone already on this
+ * event's roster is instead a pure `SessionSpeaker` write, and an id that is
+ * not on the roster is refused rather than invented.
+ *
+ * Speakers are also **optional** here, where a proposal's roster is `.min(1)`:
+ * a sponsor slot is routinely blocked out before anyone knows who will present
+ * it, and a proposal without a submitter is not a thing that exists.
+ *
+ * `eventId` is carried in the body and checked against the signed ADMIN context
+ * with `assertEventScope`, matching the neighbouring agenda writers
+ * (`scheduleSlotInputSchema`, the autoplace pair) rather than
+ * `sessionPublicationSchema`, which addresses a session id alone.
+ */
+export const guaranteedSessionInputSchema = z
+  .object({
+    eventId: idSchema,
+    title: z.string().trim().min(3).max(180),
+    description: z.string().trim().max(5000).optional(),
+    format: z.string().trim().max(80).optional(),
+    durationMinutes: z.number().int().min(5).max(480),
+    speakers: z
+      .array(
+        z.object({
+          userId: idSchema,
+          isPrimary: z.boolean().default(false),
+        }),
+      )
+      .max(GUARANTEED_SESSION_MAX_SPEAKERS)
+      .default([]),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    // `SessionSpeaker` is keyed on (sessionId, userId), so a repeated id would
+    // reach the database as a unique violation and surface as a 500. Refused at
+    // the boundary instead, where it is a named validation failure.
+    const seen = new Set<string>();
+    for (const [index, speaker] of input.speakers.entries()) {
+      if (seen.has(speaker.userId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["speakers", index, "userId"],
+          message: "Name each speaker only once.",
+        });
+      }
+      seen.add(speaker.userId);
+    }
+    // One stage lead. The proposal path derives its primary from the submitter,
+    // so this is the only surface where a caller could assert two.
+    if (input.speakers.filter((speaker) => speaker.isPrimary).length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["speakers"],
+        message: "Only one speaker can be the primary speaker.",
+      });
+    }
+  });
 
 export const scheduleSlotInputSchema = z
   .object({
@@ -640,14 +778,64 @@ export const speakerTaskUpdateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+/**
+ * Address of one resource page inside the portal (`/portal/resources/<slug>`).
+ * The same shape and bound as `eventSlugSchema` — this one stays editable, but
+ * it is the same kind of value: a unique, lowercase URL path segment. It was
+ * previously unbounded and untrimmed, which an authored `@@unique([eventId,
+ * slug])` column should never be.
+ */
+const resourceSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, "A web address is required.")
+  .max(60, "Use 60 characters or fewer.")
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes.");
+
+const resourceTitleSchema = z.string().trim().min(1).max(180);
+const resourceSummarySchema = z.string().trim().max(500);
+/**
+ * The authored body. Bounded here, and sanitized server-side at write time by
+ * `prepareResourceHtml` (INV-HTML-001) before it is ever stored — in addition
+ * to the portal reader's own sanitize-on-render, which stays.
+ */
+const resourceHtmlSchema = z.string().min(1).max(200_000);
+
 export const resourceWikiInputSchema = z.object({
   eventId: idSchema,
-  slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  title: z.string().min(1).max(180),
-  summary: z.string().max(500).optional(),
-  htmlContent: z.string().min(1),
+  slug: resourceSlugSchema,
+  title: resourceTitleSchema,
+  summary: resourceSummarySchema.optional(),
+  htmlContent: resourceHtmlSchema,
   published: z.boolean(),
 });
+
+/**
+ * Edit one stored resource. No `eventId`: scope comes from the stored row read
+ * under its own write lock (the S1 event-owned pattern), never from the body.
+ * `summary` is nullable so an organizer can actually clear it, and every field
+ * is optional so the publish toggle is a one-field PATCH.
+ */
+export const resourceWikiUpdateSchema = z
+  .object({
+    id: idSchema,
+    slug: resourceSlugSchema.optional(),
+    title: resourceTitleSchema.optional(),
+    summary: resourceSummarySchema.nullable().optional(),
+    htmlContent: resourceHtmlSchema.optional(),
+    published: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.slug !== undefined ||
+      value.title !== undefined ||
+      value.summary !== undefined ||
+      value.htmlContent !== undefined ||
+      value.published !== undefined,
+    { message: "Provide at least one resource field to update." },
+  );
 
 export const importRequestSchema = z.object({
   eventId: idSchema,
@@ -688,6 +876,8 @@ export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;
 export type SpeakerProfileUpdate = z.infer<typeof speakerProfileUpdateSchema>;
 export type OnboardingTaskCreate = z.infer<typeof onboardingTaskCreateSchema>;
 export type OnboardingTaskUpdate = z.infer<typeof onboardingTaskUpdateSchema>;
+export type ResourceWikiInput = z.infer<typeof resourceWikiInputSchema>;
+export type ResourceWikiUpdate = z.infer<typeof resourceWikiUpdateSchema>;
 export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
 export type SignupInput = z.infer<typeof signupSchema>;
