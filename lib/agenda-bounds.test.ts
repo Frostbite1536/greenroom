@@ -20,7 +20,13 @@ const publicAgenda = reads.slice(
   reads.indexOf("export const getPublicAgenda"),
   reads.indexOf("export const getPublicSpeakers"),
 );
-const agendaData = reads.slice(reads.indexOf("export async function getAgendaData"));
+// Bounded at the next export on purpose: an open-ended slice runs to EOF and
+// would let `getEventSettings`'s own caps satisfy an assertion about this
+// function's, which is exactly the gap P-01 was.
+const agendaData = reads.slice(
+  reads.indexOf("export async function getAgendaData"),
+  reads.indexOf("export type RubricCriterionView"),
+);
 const publicRoute = source("app/api/agenda/public/route.ts");
 const adminRoute = source("app/api/agenda/route.ts");
 
@@ -64,6 +70,39 @@ test("both admin agenda reads share one bound, one order, and one overflow rule"
       `${name} renders the cap, not the probe row`,
     );
   }
+});
+
+/**
+ * P-01. The sessions were capped; the axes they are laid out on were not. Both
+ * admin agenda reads are pinned together because the JSON twin at
+ * `/api/agenda` is the parallel path a fix to the server read alone would miss.
+ * Rooms and tracks fail closed (`assertEventQueryBound`) rather than truncating
+ * with a notice, matching `getEventSettings`, which owns these two resources:
+ * a grid quietly missing a column would hide every conflict in it.
+ *
+ * CRLF-safe: no pattern crosses a line break.
+ */
+test("both admin agenda reads bound the grid's axes, not just its sessions", () => {
+  for (const [name, text] of [["getAgendaData", agendaData], ["/api/agenda", adminRoute]] as const) {
+    assert.match(text, /take: OPERATOR_QUERY_LIMITS\.settingsRooms \+ 1/, `${name} bounds rooms`);
+    assert.match(text, /take: OPERATOR_QUERY_LIMITS\.settingsTracks \+ 1/, `${name} bounds tracks`);
+    assert.match(
+      text,
+      /assertEventQueryBound\(rooms, OPERATOR_QUERY_LIMITS\.settingsRooms,/,
+      `${name} refuses rather than silently dropping a room`,
+    );
+    assert.match(
+      text,
+      /assertEventQueryBound\(tracks, OPERATOR_QUERY_LIMITS\.settingsTracks,/,
+      `${name} refuses rather than silently dropping a track`,
+    );
+  }
+  // One cap per resource across every surface that reads it: the builder and
+  // the settings screen must not disagree about how many rooms an event may
+  // have, or the grid would refuse what settings just let an operator create.
+  const settings = reads.slice(reads.indexOf("export async function getEventSettings"));
+  assert.match(settings, /take: OPERATOR_QUERY_LIMITS\.settingsRooms \+ 1/);
+  assert.match(settings, /take: OPERATOR_QUERY_LIMITS\.settingsTracks \+ 1/);
 });
 
 test("the agenda builder tells an operator when the grid is incomplete", () => {

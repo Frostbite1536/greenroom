@@ -699,14 +699,22 @@ export async function getAgendaData(): Promise<AgendaData> {
   const ctx = await pageContext(["ADMIN"]);
   const [event, rooms, tracks, sessions] = await Promise.all([
     prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+    // P-01: the grid's axes were the only unbounded reads left in this builder
+    // while the sessions laid out on them were capped, so a room or track list
+    // that outgrew the page had no bound at all. Same caps and the same
+    // fail-closed shape as `getEventSettings`, which owns these two resources:
+    // an operator gets a precise refusal rather than a silently partial grid
+    // whose missing column makes a real conflict invisible.
     prisma.room.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsRooms + 1,
       select: { id: true, name: true, capacity: true },
     }),
     prisma.track.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsTracks + 1,
       select: { id: true, name: true, color: true },
     }),
     prisma.session.findMany({
@@ -731,6 +739,8 @@ export async function getAgendaData(): Promise<AgendaData> {
       },
     }),
   ]);
+  assertEventQueryBound(rooms, OPERATOR_QUERY_LIMITS.settingsRooms, "rooms in the agenda builder");
+  assertEventQueryBound(tracks, OPERATOR_QUERY_LIMITS.settingsTracks, "tracks in the agenda builder");
 
   return {
     eventId: ctx.eventId,
