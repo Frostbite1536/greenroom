@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, ok } from "@/lib/api/http";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
 import { publicSessionDescription } from "@/lib/public-session-copy";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
  * only exposes placed sessions. Defaults to the demo event when unspecified.
  */
 export const GET = handle(async (req) => {
-  const eventParam = new URL(req.url).searchParams.get("event") ?? "forward-2026";
+  const eventParam = new URL(req.url).searchParams.get("event") ?? DEFAULT_PUBLIC_EVENT;
 
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },

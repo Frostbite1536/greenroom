@@ -75,6 +75,7 @@ import {
   type PublicSpeakers,
 } from "@/lib/public-speakers";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
 import { publicSessionDescription } from "@/lib/public-session-copy";
 import { findConflicts } from "@/lib/agenda-conflicts";
 import { abstractPermalink } from "@/lib/abstract-permalink";
@@ -1017,7 +1018,9 @@ export type PublicAgenda = {
   truncated: boolean;
 };
 
-export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
+export const getPublicAgenda = cache(async function getPublicAgenda(
+  eventParam = DEFAULT_PUBLIC_EVENT,
+): Promise<PublicAgenda | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },
     select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
@@ -1089,7 +1092,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
 });
 
 export const getPublicSpeakers = cache(async function getPublicSpeakers(
-  eventParam = "forward-2026",
+  eventParam = DEFAULT_PUBLIC_EVENT,
 ): Promise<PublicSpeakers | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },
