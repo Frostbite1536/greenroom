@@ -31,6 +31,8 @@ const admin = {
 };
 const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
 const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
+const SCRATCH_EVENT_IDS = [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id];
+const SCRATCH_IDENTITY_EMAILS = [admin.user.email, speaker.user.email, evalr.user.email];
 const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
@@ -211,6 +213,35 @@ server.stderr.on("data", (d) => process.stderr.write(d));
 let cleanupFailed = false;
 let cleanupPromise;
 let fatalError = false;
+
+function assertScratchCleanupTargets() {
+  if (
+    SCRATCH_EVENT_IDS.includes("demo-event") ||
+    SCRATCH_EVENT.slug === "forward-2026" ||
+    OTHER_SCRATCH_EVENT.slug === "forward-2026" ||
+    SCRATCH_IDENTITY_EMAILS.some((email) => !email.endsWith("@scratch.test"))
+  ) {
+    throw new Error("Refusing to clean files outside the smoke's fixed scratch identities and events.");
+  }
+}
+
+async function deleteScratchStoredFiles() {
+  assertScratchCleanupTargets();
+  const scratchUsers = await prisma.user.findMany({
+    where: { email: { in: SCRATCH_IDENTITY_EMAILS } },
+    select: { id: true },
+  });
+  const scratchUserIds = scratchUsers.map((user) => user.id);
+  const scratchFileWhere = {
+    OR: [
+      { eventId: { in: SCRATCH_EVENT_IDS } },
+      ...(scratchUserIds.length > 0 ? [{ uploaderUserId: { in: scratchUserIds } }] : []),
+    ],
+  };
+  await prisma.storedFile.deleteMany({ where: scratchFileWhere });
+  return prisma.storedFile.count({ where: scratchFileWhere });
+}
+
 function stopServer() {
   if (!server.pid || server.exitCode !== null) return true;
   if (process.platform === "win32") {
@@ -234,8 +265,14 @@ function stopServer() {
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
+      const remainingStoredFiles = await deleteScratchStoredFiles();
+      check(
+        "scratch-owned stored files are cleared at final teardown",
+        remainingStoredFiles === 0,
+        remainingStoredFiles,
+      );
       await prisma.publicSubmissionRateBucket.deleteMany({
-        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+        where: { eventId: { in: SCRATCH_EVENT_IDS } },
       });
       await prisma.$executeRaw`
         DELETE FROM "ReviewerInvite" WHERE "eventId" IN (${SCRATCH_EVENT.id}, ${OTHER_SCRATCH_EVENT.id})
@@ -259,7 +296,7 @@ function cleanup() {
       );
     } catch (error) {
       cleanupFailed = true;
-      console.error("[smoke] scratch rate-bucket cleanup failed", error);
+      console.error("[smoke] scratch cleanup failed", error);
     }
     await prisma.$disconnect().catch((error) => {
       cleanupFailed = true;
@@ -299,10 +336,14 @@ check(
  * memberships. Guarded so this can never target the judged demo event.
  */
 async function resetScratchEvent() {
-  if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
-    throw new Error("Refusing to run: smoke must never target the demo event.");
-  }
-  await prisma.event.deleteMany({ where: { id: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } } });
+  assertScratchCleanupTargets();
+  const remainingStoredFiles = await deleteScratchStoredFiles();
+  check(
+    "scratch-owned stored files are cleared before event reset",
+    remainingStoredFiles === 0,
+    remainingStoredFiles,
+  );
+  await prisma.event.deleteMany({ where: { id: { in: SCRATCH_EVENT_IDS } } });
   await prisma.event.create({
     data: {
       ...SCRATCH_EVENT,

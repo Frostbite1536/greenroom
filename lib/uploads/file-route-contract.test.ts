@@ -24,6 +24,7 @@ const serve = read("app/api/files/[id]/route.ts");
 const field = read("components/file-upload-field.tsx");
 const portalForm = read("app/(app)/portal/profile-form.tsx");
 const roster = read("components/speaker-roster-manager.tsx");
+const smoke = read("scripts/_smoke.mjs");
 
 test("an upload requires a session before anything else happens", () => {
   const auth = upload.indexOf("const ctx = await requireContext();");
@@ -85,6 +86,27 @@ test("dedupe returns the existing id, and a race on it is resolved rather than 5
   assert.match(upload, /deduped: true/);
   // A fresh store is a 201; a dedupe hit is a 200 on the row that already exists.
   assert.match(upload, /deduped: false \},\s*201,/);
+});
+
+test("the repeatable smoke clears only guarded scratch-owned files before reset and at teardown", () => {
+  assert.match(smoke, /SCRATCH_EVENT_IDS = \[SCRATCH_EVENT\.id, OTHER_SCRATCH_EVENT\.id\]/);
+  assert.match(smoke, /SCRATCH_IDENTITY_EMAILS = \[admin\.user\.email, speaker\.user\.email, evalr\.user\.email\]/);
+  assert.match(smoke, /SCRATCH_EVENT_IDS\.includes\("demo-event"\)/);
+  assert.match(smoke, /SCRATCH_EVENT\.slug === "forward-2026"/);
+  assert.match(smoke, /OTHER_SCRATCH_EVENT\.slug === "forward-2026"/);
+  assert.match(smoke, /SCRATCH_IDENTITY_EMAILS\.some\(\(email\) => !email\.endsWith\("@scratch\.test"\)\)/);
+
+  const helper = smoke.indexOf("async function deleteScratchStoredFiles()");
+  const reset = smoke.indexOf("async function resetScratchEvent()");
+  const resetCleanup = smoke.indexOf("await deleteScratchStoredFiles();", reset);
+  const eventDelete = smoke.indexOf("await prisma.event.deleteMany", reset);
+  assert.ok(helper > 0 && reset > helper);
+  assert.ok(resetCleanup > reset && resetCleanup < eventDelete, "files must be deleted before Event SetNull can orphan them");
+
+  assert.equal(smoke.split("await deleteScratchStoredFiles();").length - 1, 2, "pre-reset plus final teardown");
+  assert.match(smoke, /scratch-owned stored files are cleared before event reset/);
+  assert.match(smoke, /scratch-owned stored files are cleared at final teardown/);
+  assert.match(smoke, /prisma\.storedFile\.deleteMany\(\{ where: scratchFileWhere \}\)/);
 });
 
 test("the served content type comes from the stored column and is pinned with nosniff", () => {
