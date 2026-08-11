@@ -290,12 +290,21 @@ test("the panel shows a new key exactly once, in a native dialog, and says so", 
 
 test("revoking asks for confirmation and names the key being switched off", () => {
   const panel = read(PANEL);
-  assert.match(panel, /window\.confirm\($/m);
-  assert.match(panel, /Revoke .\$\{credential\.label\}.\? Anything using this key stops working immediately/);
-  assert.match(panel, /if \(\s*$/m);
-  // A refused confirmation does nothing at all.
-  assert.match(panel, /^\s*\) \{\s*$/m);
-  assert.match(panel, /^\s*return;\s*$/m);
+  // The confirmation is the guard on the request, not a notice beside it: the
+  // revoke helper opens by NEGATING window.confirm and returning.
+  assert.match(panel, /^\s*!window\.confirm\($/m, "the confirm result must gate the revoke");
+  // It names the key being switched off, and says what that costs.
+  assert.match(
+    panel,
+    /Revoke .\$\{credential\.label\}.\? Anything using this key stops working immediately, and the key cannot be restored\./,
+  );
+  // A refused confirmation returns before anything is sent. Anchoring on the
+  // early return AFTER the confirm block keeps this from matching any `return`.
+  const confirmAt = panel.indexOf("!window.confirm(");
+  const returnAt = panel.indexOf("return;", confirmAt);
+  const requestAt = panel.indexOf("apiDelete", confirmAt);
+  assert.ok(confirmAt > 0, "the revoke path must confirm");
+  assert.ok(returnAt > confirmAt && returnAt < requestAt, "a refused confirmation must return before the request");
   // The list only ever shows the derived prefix, never a whole key.
   assert.match(panel, /\{credential\.tokenPrefix\}/);
   assert.doesNotMatch(panel, /\{credential\.token\}/);
