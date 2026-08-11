@@ -134,6 +134,15 @@ async function req(method, path, body, sess) {
  */
 const unfoldIcs = (text) => text.replace(/\r\n /g, "");
 
+/**
+ * GRA2-06: the admin overlays are native `<dialog>` elements now, so "a modal
+ * is present in this response" means the element. The retired hand-rolled
+ * `role="dialog"` pattern is still tested for, because every use of this helper
+ * is a NEGATIVE assertion somewhere — dropping the old pattern from the test
+ * would make those pass vacuously if any surface regressed back to it.
+ */
+const hasModal = (html) => /<dialog\b/i.test(html) || /role="dialog"/i.test(html);
+
 async function reqManual(path, sess) {
   const res = await fetch(BASE + path, {
     headers: sess ? { cookie: cookie(sess) } : undefined,
@@ -1433,7 +1442,8 @@ try {
   const confirmedDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin);
   const confirmedDecisionDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}&mode=decide`, null, admin);
   const drawerButtons = (html) => {
-    const drawerIndex = html.indexOf('role="dialog"');
+    // The drawer is the only <dialog> on /admin/abstracts (GRA2-06).
+    const drawerIndex = html.search(/<dialog\b/i);
     if (drawerIndex === -1) return [];
     const drawer = html.slice(drawerIndex);
     return [...drawer.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
@@ -2081,26 +2091,48 @@ try {
   const boardPermalink = await req(
     "GET", `/admin/abstracts?abstract=${encodeURIComponent(fx.abstract.id)}`, null, admin,
   );
+  // GRA2-06: the drawer is a native <dialog>. Only the `open` attribute can be
+  // written by the server, so that attribute is what makes the deep-linked
+  // drawer readable before any JavaScript runs; `showModal()` upgrades it on
+  // hydration. Served JSX keeps camelCase attribute names, so every attribute
+  // here is matched case-insensitively.
+  const drawerTag = (html) => html.match(/<dialog\b[^>]*>/i)?.[0] ?? "";
+  /** The visible heading text `aria-labelledby` actually resolves to, or null. */
+  const drawerLabelText = (html) => {
+    const id = drawerTag(html).match(/aria-labelledby="([^"]+)"/i)?.[1];
+    if (!id) return null;
+    const heading = html.match(
+      new RegExp(`<h2[^>]*\\sid="${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>([\\s\\S]*?)</h2>`, "i"),
+    );
+    return heading ? renderedText(heading[1]) : null;
+  };
   check("§4-4 ?abstract=<id> renders that proposal's drawer in the first response",
     boardPermalink.status === 200
-    && boardPermalink.text.includes('role="dialog"')
-    && boardPermalink.text.includes('aria-modal="true"')
-    // Served JSX keeps camelCase attribute names, so the label is matched
-    // case-insensitively rather than assuming a lowercased `aria-label`.
-    && new RegExp(`aria-label="${fx.abstract.title}"`, "i").test(boardPermalink.text),
-    `${boardPermalink.status}`);
+    && /\sopen(=""|[\s>])/i.test(drawerTag(boardPermalink.text)),
+    `${boardPermalink.status} ${drawerTag(boardPermalink.text) || "no <dialog> in the response"}`);
+  // Not merely present: the accessible name must resolve to this proposal's own
+  // visible heading, so a dangling aria-labelledby fails rather than passing.
+  check("§4-4 the drawer's aria-labelledby resolves to its visible heading",
+    drawerLabelText(boardPermalink.text) === fx.abstract.title,
+    `${JSON.stringify(drawerLabelText(boardPermalink.text))} vs ${JSON.stringify(fx.abstract.title)}`);
+  // The retired pattern must not come back alongside it: a native <dialog> is
+  // already a modal dialog to assistive technology.
+  check("§4-4 the drawer carries no hand-rolled dialog role or aria-modal",
+    !/role="dialog"/i.test(boardPermalink.text) && !/aria-modal/i.test(boardPermalink.text));
   // Control: the same page WITHOUT the parameter must not open a drawer, or
   // the check above proves nothing about the parameter.
   const boardNoParam = await req("GET", "/admin/abstracts", null, admin);
   check("§4-4 the drawer is absent without the parameter — the deep link is what opens it",
-    boardNoParam.status === 200 && !boardNoParam.text.includes('role="dialog"'),
+    boardNoParam.status === 200 && !hasModal(boardNoParam.text),
     `${boardNoParam.status}`);
   // The original parameter still works: existing links must not have broken.
   const boardLegacyParam = await req(
     "GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin,
   );
   check("§4-4 the original ?abstractId= link still opens the same drawer",
-    boardLegacyParam.status === 200 && boardLegacyParam.text.includes('role="dialog"'),
+    boardLegacyParam.status === 200
+    && /\sopen(=""|[\s>])/i.test(drawerTag(boardLegacyParam.text))
+    && drawerLabelText(boardLegacyParam.text) === fx.abstract.title,
     `${boardLegacyParam.status}`);
   // Graceful degrade: a made-up id and a syntactically odd one both render the
   // page normally, with no drawer and no error. (The cross-event case needs a
@@ -2109,8 +2141,8 @@ try {
   const boardUnknown = await req("GET", "/admin/abstracts?abstract=no-such-proposal", null, admin);
   const boardOddId = await req("GET", "/admin/abstracts?abstract=%20%26planId%3Dx", null, admin);
   check("§4-4 an unknown or malformed id renders the page with no drawer and no error",
-    boardUnknown.status === 200 && !boardUnknown.text.includes('role="dialog"')
-    && boardOddId.status === 200 && !boardOddId.text.includes('role="dialog"'),
+    boardUnknown.status === 200 && !hasModal(boardUnknown.text)
+    && boardOddId.status === 200 && !hasModal(boardOddId.text),
     `unknown ${boardUnknown.status}, odd ${boardOddId.status}`);
   // The odd id above also proves the encoding holds: `%26planId%3Dx` decodes to
   // `&planId=x`, and it must stay INSIDE the abstract parameter rather than
@@ -2854,7 +2886,7 @@ try {
     s20OlderDrawer.status === 200
     && s20OlderDrawer.text.includes(`S20 draft ${String(S20_DRAFT_COUNT - 1).padStart(3, "0")}`)
     && (renderedText(s20OlderDrawer.text) ?? "").includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`));
-  const hasSelectedDecisionControls = (html) => /role="dialog"/.test(html)
+  const hasSelectedDecisionControls = (html) => hasModal(html)
     || /<button[^>]*>Accept<\/button>/.test(html)
     || /<button[^>]*>Maybe<\/button>/.test(html)
     || /<button[^>]*>Decline<\/button>/.test(html);
@@ -3152,7 +3184,7 @@ try {
     enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
   check("session detail expands with native details, not a JS-only modal",
     enriched.text.includes('<details class="embed-session-detail">')
-    && !enriched.text.includes('role="dialog"'));
+    && !hasModal(enriched.text));
 
   const chipText = (kind) => renderedText(
     enriched.text.match(new RegExp(`<li class="embed-chip embed-chip-${kind}"[^>]*>([\\s\\S]*?)</li>`))?.[1] ?? "",
@@ -3377,7 +3409,7 @@ try {
   check("speaker detail opens with native details, not a JS-only modal",
     speakersEmbed.text.includes('<details class="speaker-detail">')
     && speakersEmbed.text.includes("Full profile")
-    && !speakersEmbed.text.includes('role="dialog"'));
+    && !hasModal(speakersEmbed.text));
   // The derived-fallback case needs a speaker with genuinely no SpeakerProfile.
   // That cannot be one of the demo users: `lib/demo/seed.ts` upserts a global
   // profile (a distinct fictional title and company per speaker) for every demo
