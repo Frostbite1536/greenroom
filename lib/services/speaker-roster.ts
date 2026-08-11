@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { idSchema, speakerProfileUpdateSchema } from "@/types/api";
+import {
+  lockEventMemberAuthorities,
+  lockExistingEventMembersForShare,
+} from "@/lib/services/event-member-lock";
 
 /**
  * Organizer-side speaker administration for `/admin/speakers` (SPK-02).
@@ -180,4 +184,54 @@ export async function lockSpeakerProfile(
   userId: string,
 ): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${speakerProfileLockKey(userId)}, 0))`;
+}
+
+/**
+ * Which of these user ids this event may put on one of its talks.
+ *
+ * The roster is the same union `PATCH /api/admin/speakers` authorizes against
+ * and the same union `readSpeakerRoster` renders: an `EventMember(role=SPEAKER)`,
+ * **or** somebody already on one of this event's sessions (session speakers are
+ * snapshotted from an accepted abstract's roster and need no membership row of
+ * their own). Restating it here would let the page offer a name the writer then
+ * refuses, so both call this.
+ *
+ * The membership half is read under the C17 authority keys and `FOR SHARE`, so a
+ * concurrent `POST /api/admin/speakers` cannot insert a membership into the gap
+ * between "no row" and this decision — the same reason that route's PATCH takes
+ * them. Only the middle of the C17 order is taken (authority keys → member rows);
+ * the identity key and the profile key are not, which keeps this a prefix of the
+ * documented sequence and therefore unable to cycle with it.
+ *
+ * Returns the accepted ids. The caller decides what an omission means — the
+ * route turns it into the same 404 an unknown id gets, so a cross-event user id
+ * cannot be used to discover that the account exists.
+ */
+export async function readEventRosterMembership(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  userIds: readonly string[],
+): Promise<Set<string>> {
+  const unique = [...new Set(userIds)];
+  if (unique.length === 0) return new Set();
+
+  await lockEventMemberAuthorities(tx, unique.map((userId) => ({ eventId, userId })));
+  const members = await lockExistingEventMembersForShare(tx, eventId, unique);
+  const onRoster = new Set(
+    members.filter((member) => member.role === "SPEAKER").map((member) => member.userId),
+  );
+
+  // The session half of the union, asked only for the ids the membership half
+  // did not already answer for.
+  const remaining = unique.filter((userId) => !onRoster.has(userId));
+  if (remaining.length > 0) {
+    const onSessions = await tx.sessionSpeaker.findMany({
+      where: { userId: { in: remaining }, session: { eventId } },
+      select: { userId: true },
+      distinct: ["userId"],
+    });
+    for (const row of onSessions) onRoster.add(row.userId);
+  }
+
+  return onRoster;
 }

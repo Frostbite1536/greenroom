@@ -554,14 +554,79 @@ export const sessionPublicationSchema = z
   })
   .strict();
 
-export const guaranteedSessionInputSchema = z.object({
-  eventId: idSchema,
-  title: z.string().trim().min(3).max(180),
-  description: z.string().trim().max(5000).optional(),
-  format: z.string().trim().max(80).optional(),
-  durationMinutes: z.number().int().min(5).max(480),
-  speakers: coSpeakerInputSchema,
-});
+/**
+ * How many people may be named on one directly authored talk. The same bound
+ * `coSpeakerInputSchema` puts on a proposal's roster, for the same reason: a
+ * talk's speaker list is a stage line-up, not a mailing list.
+ */
+export const GUARANTEED_SESSION_MAX_SPEAKERS = 20;
+
+/**
+ * A talk authored directly on the programme — a keynote, a sponsor slot — with
+ * no source proposal (`Session.sourceAbstractId` is nullable, INV-DOMAIN-001).
+ *
+ * **Speakers are roster user ids, not email/name pairs.** This schema formerly
+ * reused `coSpeakerInputSchema`, which is the *proposal* contract: it names
+ * people by email so an anonymous CFP submission can mint the accounts behind
+ * them. Creating a global `User` is `POST /api/admin/speakers`' job and takes
+ * that route's C17 identity lock order to do it safely; a programme surface
+ * that silently minted accounts as a side effect of scheduling a keynote would
+ * be doing identity work under the wrong lock. Naming someone already on this
+ * event's roster is instead a pure `SessionSpeaker` write, and an id that is
+ * not on the roster is refused rather than invented.
+ *
+ * Speakers are also **optional** here, where a proposal's roster is `.min(1)`:
+ * a sponsor slot is routinely blocked out before anyone knows who will present
+ * it, and a proposal without a submitter is not a thing that exists.
+ *
+ * `eventId` is carried in the body and checked against the signed ADMIN context
+ * with `assertEventScope`, matching the neighbouring agenda writers
+ * (`scheduleSlotInputSchema`, the autoplace pair) rather than
+ * `sessionPublicationSchema`, which addresses a session id alone.
+ */
+export const guaranteedSessionInputSchema = z
+  .object({
+    eventId: idSchema,
+    title: z.string().trim().min(3).max(180),
+    description: z.string().trim().max(5000).optional(),
+    format: z.string().trim().max(80).optional(),
+    durationMinutes: z.number().int().min(5).max(480),
+    speakers: z
+      .array(
+        z.object({
+          userId: idSchema,
+          isPrimary: z.boolean().default(false),
+        }),
+      )
+      .max(GUARANTEED_SESSION_MAX_SPEAKERS)
+      .default([]),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    // `SessionSpeaker` is keyed on (sessionId, userId), so a repeated id would
+    // reach the database as a unique violation and surface as a 500. Refused at
+    // the boundary instead, where it is a named validation failure.
+    const seen = new Set<string>();
+    for (const [index, speaker] of input.speakers.entries()) {
+      if (seen.has(speaker.userId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["speakers", index, "userId"],
+          message: "Name each speaker only once.",
+        });
+      }
+      seen.add(speaker.userId);
+    }
+    // One stage lead. The proposal path derives its primary from the submitter,
+    // so this is the only surface where a caller could assert two.
+    if (input.speakers.filter((speaker) => speaker.isPrimary).length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["speakers"],
+        message: "Only one speaker can be the primary speaker.",
+      });
+    }
+  });
 
 export const scheduleSlotInputSchema = z
   .object({

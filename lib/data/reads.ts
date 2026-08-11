@@ -711,6 +711,57 @@ export async function getAgendaData(): Promise<AgendaData> {
   return readAgendaData(ctx.eventId);
 }
 
+/** One selectable name for the "Add session" dialog's speaker picker. */
+export type AgendaSpeakerOption = { userId: string; name: string; email: string };
+
+/**
+ * Who this event may put on a directly authored talk.
+ *
+ * Deliberately NOT part of `readAgendaData`: that read is shared with
+ * `/admin/reports` and both agenda CSV exports, none of which need a roster, and
+ * widening it would make three surfaces pay for one dialog's picker.
+ *
+ * Deliberately not `readSpeakerRoster` either, which unions the same two tables
+ * but also loads every `SpeakerTask` on the event to derive onboarding status —
+ * work a name picker has no use for.
+ *
+ * What it does share with both is the union itself, and that is the part that
+ * matters: `EventMember(role=SPEAKER)` ∪ this event's `SessionSpeaker` rows is
+ * exactly what `readEventRosterMembership` authorizes the write against. If this
+ * list were wider the dialog would offer a name the server then refuses with a
+ * 404; if it were narrower an eligible speaker would be unpickable.
+ */
+export async function readAgendaSpeakerOptions(eventId: string): Promise<AgendaSpeakerOption[]> {
+  const [members, onSessions] = await Promise.all([
+    prisma.eventMember.findMany({
+      where: { eventId, role: "SPEAKER" },
+      select: { userId: true, user: { select: { name: true, email: true } } },
+      orderBy: { userId: "asc" },
+      take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers + 1,
+    }),
+    prisma.sessionSpeaker.findMany({
+      where: { session: { eventId } },
+      select: { userId: true, user: { select: { name: true, email: true } } },
+      distinct: ["userId"],
+      orderBy: { userId: "asc" },
+      take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers + 1,
+    }),
+  ]);
+  // Same fail-closed bound as every other operator read: a picker silently
+  // missing the speaker the organizer is looking for is worse than a refusal.
+  assertEventQueryBound(members, OPERATOR_QUERY_LIMITS.reminderSessionSpeakers, "speakers in the agenda builder");
+  assertEventQueryBound(onSessions, OPERATOR_QUERY_LIMITS.reminderSessionSpeakers, "session speakers in the agenda builder");
+
+  const byUserId = new Map<string, AgendaSpeakerOption>();
+  for (const row of [...members, ...onSessions]) {
+    if (byUserId.has(row.userId)) continue;
+    byUserId.set(row.userId, { userId: row.userId, name: row.user.name, email: row.user.email });
+  }
+  // Presented by name, because that is what an organizer is scanning for; the
+  // reads themselves stay userId-ordered so the bound above stays describable.
+  return [...byUserId.values()].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 /**
  * The agenda read itself, addressed by event id.
  *
