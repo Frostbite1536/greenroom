@@ -13,7 +13,6 @@ import {
   resourceHtmlNeedsReplacementConfirmation,
   resourceTemplateNeedsConfirmation,
 } from "@/lib/resources/resource-templates";
-import type { ResourceDraftSuggestion } from "@/lib/assistant/resource-draft";
 import {
   RESOURCE_SLUG_MAX_LENGTH,
   RESOURCE_SLUG_PATTERN,
@@ -43,6 +42,14 @@ type ResourceDraft = {
   summary: string;
   htmlContent: string;
   published: boolean;
+};
+
+/** Local wire view: assistant schemas stay server-only under lib/assistant/. */
+type ResourceDraftSuggestion = {
+  html: string;
+  templateKey: "speaker-handbook" | "venue-travel" | "av-stage" | "day-of";
+  sectionsUsed: string[];
+  placeholders: string[];
 };
 
 const EMPTY_DRAFT: ResourceDraft = {
