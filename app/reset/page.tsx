@@ -134,7 +134,7 @@ export default async function ResetPasswordPage({
             type="password"
           />
         </div>
-        <button className="button primary login-submit" type="submit">
+        <button className="primary-button login-submit" type="submit">
           <KeyRound size={16} aria-hidden="true" />
           Set new password
         </button>

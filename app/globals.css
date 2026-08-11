@@ -200,7 +200,10 @@ button { letter-spacing: 0; }
 .login-card { width: 100%; max-width: 420px; background: var(--surface, white); border: 1px solid var(--line); border-radius: var(--radius, 8px); padding: 32px 28px; display: flex; flex-direction: column; gap: 14px; }
 .login-brand { pointer-events: none; }
 .login-card h1 { margin: 6px 0 0; font-size: 22px; }
-.login-hint { margin: 0; color: var(--muted); font-size: 14px; }
+/* /welcome prints the signed-in address into both of these, and the card is
+   only ~286px wide on a phone. An email has no break opportunity of its own, so
+   without this a long one overflowed the card and scrolled the document. */
+.login-hint { margin: 0; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
 .login-credentials { display: flex; flex-direction: column; gap: 12px; }
 .login-field { display: flex; flex-direction: column; gap: 5px; }
 .login-field label { font-size: 13px; font-weight: 600; }
@@ -208,7 +211,7 @@ button { letter-spacing: 0; }
 .login-field input:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }
 .login-submit { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; }
 .login-error { margin: 0; padding: 9px 11px; border: 1px solid var(--danger, #b42318); border-radius: 6px; background: color-mix(in srgb, var(--danger, #b42318) 8%, white); color: var(--danger, #b42318); font-size: 13px; }
-.login-note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.login-note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .login-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
 .login-divider::before, .login-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .login-personas { display: flex; flex-direction: column; gap: 8px; }
@@ -240,4 +243,13 @@ button { letter-spacing: 0; }
   .metric:last-child { border-bottom: 0; }
   .panel-heading { align-items: flex-start; flex-direction: column; }
   .role-badge { display: none; }
+  /* Touch sizing, matching the 40px this codebase already uses for its
+     touch-first controls (.mobile-nav-link, .landing-cta). Desktop keeps the
+     denser 36/34px defaults above. */
+  .primary-button { min-height: 40px; }
+  .icon-button { width: 40px; height: 40px; }
+  /* Under 16px, mobile Safari zooms the viewport on focus — which presents as
+     exactly the horizontal panning this pass removes. These inputs opted out
+     of the safe `font: inherit` with an explicit 14px. */
+  .login-field input { font-size: 16px; }
 }

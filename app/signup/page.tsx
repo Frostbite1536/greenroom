@@ -1,3 +1,6 @@
+// `.hint` (the password-policy line) is a feature.css class, so without this the
+// policy text rendered at full body size and weight inside the narrow card.
+import "@/components/feature.css";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -119,7 +122,7 @@ export default async function SignUpPage({
               type="password"
             />
           </div>
-          <button className="button primary login-submit" type="submit">
+          <button className="primary-button login-submit" type="submit">
             <UserPlus size={16} aria-hidden="true" />
             Create account
           </button>

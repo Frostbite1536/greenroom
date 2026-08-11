@@ -232,6 +232,10 @@
 
 .formActions {
   display: flex;
+  /* globals.css forces `.primary-button` to `width: 100%` below 820px. Without
+     a wrap opportunity the full-width Save and the save note/error fought over
+     one row, squashing the button to min-content and truncating the message. */
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
@@ -307,4 +311,42 @@
   color: #6b7280;
   font-size: 0.8rem;
   margin-top: 2px;
+}
+
+/*
+ * Touch pass (390px class). Desktop density above is untouched; these are the
+ * two portal-specific controls that fell short of a fingertip, plus the input
+ * font floor that stops mobile Safari zooming the viewport on focus.
+ */
+@media (max-width: 560px) {
+  /* The task checkbox is the portal's primary interaction and was a 20px
+     target. 26px plus the row's own gap is a real one without redrawing it. */
+  .toggle {
+    width: 26px;
+    height: 26px;
+    margin-top: 0;
+  }
+
+  /* The tick is drawn at absolute offsets tuned to the 20px box, so it has to
+     be re-centred with it rather than left in the corner. */
+  .toggle:checked::after {
+    left: 9px;
+    top: 5px;
+    width: 6px;
+    height: 12px;
+  }
+
+  .field input,
+  .field textarea {
+    font-size: 16px;
+  }
+
+  /* `.resourceLink` is a block, so height comes from padding, not min-height. */
+  .resourceLink {
+    padding: 11px 0;
+  }
+
+  .withdrawButton {
+    min-height: 40px;
+  }
 }

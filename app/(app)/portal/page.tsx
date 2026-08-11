@@ -1,3 +1,8 @@
+// The portal home renders `.pill` and `.link-button`, both of which live in
+// feature.css. Its sibling routes (portal/tasks, portal/submissions) already
+// import it; this one did not, so status pills rendered as bare text and
+// "Update this proposal" was indistinguishable from body copy.
+import "@/components/feature.css";
 import { requireSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";

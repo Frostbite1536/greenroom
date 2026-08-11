@@ -85,7 +85,7 @@ export default async function ForgotPasswordPage({
               type="email"
             />
           </div>
-          <button className="button primary login-submit" type="submit">
+          <button className="primary-button login-submit" type="submit">
             <Send size={16} aria-hidden="true" />
             Send reset link
           </button>
