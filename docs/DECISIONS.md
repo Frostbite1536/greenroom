@@ -21,8 +21,8 @@ The project's original working name was borrowed from an existing commercial
 product, which would have implied an affiliation that does not exist. Renamed
 atomically in commit `20976f8` — brand strings, metadata, ICS PRODID/UIDs,
 package name, demo email domain (`@greenroom.demo`), and docs — with the demo
-DB reseeded
-under the new persona emails. (The three persona addresses moved again in
+DB reseeded under the new persona emails. (The three persona addresses moved
+again in
 Cycle 5 — see *Persona addresses on a deliverable domain* below; the rest of
 the seeded cast still uses the non-routable domain this entry describes.)
 
