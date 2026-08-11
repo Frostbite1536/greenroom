@@ -2287,9 +2287,10 @@ try {
     conflictDetails.some((c) => c.startsWith("Room conflict:"))
     && conflictText.includes("Hall A")
     && conflictText.includes("Scratch Session A")
-    // Event-timezone clock, not UTC and not the server's locale: 17:00Z is
-    // 10:00 AM in the scratch event's America/Los_Angeles.
-    && /10:00\s?AM.10:30\s?AM P[DS]T/.test(conflictText),
+    // Event-timezone clock, not UTC and not the server's locale: the settings
+    // checks above moved this fixed fixture to America/Denver, where 17:00Z is
+    // 11:00 AM in May.
+    && /11:00\s?AM.11:30\s?AM MDT/.test(conflictText),
     conflictText);
   check("409 names the double-booked speaker",
     conflictDetails.some((c) => c.startsWith("Speaker conflict:"))

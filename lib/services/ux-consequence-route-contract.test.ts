@@ -99,7 +99,7 @@ test("the smoke asserts the named refusal, not merely a non-empty list", () => {
   assert.match(smoke, /includes\("Hall A"\)/);
   assert.match(smoke, /includes\("Scratch Session A"\)/);
   assert.match(smoke, /includes\("Sofia Marques"\)/);
-  assert.match(smoke, /P\[DS\]T/);
+  assert.match(smoke, /11:00\\s\?AM\.11:30\\s\?AM MDT/);
   // And that the old shape survived alongside it.
   assert.match(smoke, /startsWith\("ROOM_OVERLAP: "\)/);
 });
