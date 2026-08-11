@@ -59,22 +59,48 @@ type ConvertibleAbstract = {
   durationMinutes: number | null;
   categoryId: string | null;
   speakers: { userId: string; isPrimary: boolean }[];
-  session: { id: string; categoryId: string | null } | null;
+  session: { id: string; categoryId: string | null; description: string | null } | null;
+};
+
+export type ReconciledSessionFields = {
+  categoryId?: string | null;
+  description?: string | null;
 };
 
 /**
- * The topic write that would bring an existing Session back in line with its
+ * The write that would bring an existing Session back in line with its
  * proposal, or `null` when they already agree.
  *
- * Returning `null` for an unchanged topic is the point, not an optimization: a
+ * Returning `null` for an unchanged talk is the point, not an optimization: a
  * re-run that writes nothing leaves `updatedAt` alone, so "the admin reconvened
  * this talk" and "the admin changed this talk" stay distinguishable in the row.
+ *
+ * Two fields reconcile, and they reconcile by different rules:
+ *
+ *  - **Topic** is symmetric. The proposal is authoritative in both directions,
+ *    so clearing the proposal's category really does clear the talk's.
+ *  - **Summary** is one-way. A proposal that carries an attendee-facing summary
+ *    pushes it onto the talk; a proposal with a blank summary writes *nothing*.
+ *    The asymmetry is deliberate: the public description is the one field an
+ *    organizer plausibly hand-writes on the Session itself (a keynote has no
+ *    source abstract at all), and a re-run must never silently blank an
+ *    admin-authored programme entry because the proposal's field was empty.
  */
-export function reconciledSessionTopic(
-  abstract: { categoryId: string | null },
-  session: { categoryId: string | null },
-): { categoryId: string | null } | null {
-  return abstract.categoryId === session.categoryId ? null : { categoryId: abstract.categoryId };
+export function reconciledSessionFields(
+  abstract: { categoryId: string | null; abstract: string | null },
+  session: { categoryId: string | null; description: string | null },
+): ReconciledSessionFields | null {
+  const data: ReconciledSessionFields = {};
+
+  if (abstract.categoryId !== session.categoryId) data.categoryId = abstract.categoryId;
+
+  // Trimmed before comparing so whitespace-only edits are not writes, and so a
+  // proposal whose summary is only spaces counts as absent rather than as an
+  // instruction to blank the talk.
+  const summary = abstract.abstract?.trim() || null;
+  if (summary !== null && summary !== session.description) data.description = summary;
+
+  return Object.keys(data).length > 0 ? data : null;
 }
 
 /**
@@ -117,9 +143,13 @@ export function newSessionData(
  * (INV-DOMAIN-001, enforced by the unique `sourceAbstractId`); re-running
  * returns the existing one rather than failing.
  *
- * **Re-running also reconciles the topic, and nothing else.** A proposal's
- * category can legitimately change after acceptance, which left the Session
- * carrying a stale topic on the public agenda with no way to repair it.
+ * **Re-running also reconciles the topic and the public summary, and nothing
+ * else.** A proposal's category can legitimately change after acceptance, which
+ * left the Session carrying a stale topic on the public agenda with no way to
+ * repair it. The summary is here for the same reason and one worse: a Session
+ * created before the copy list carried `description` has *no* attendee-facing
+ * prose at all, so the public programme showed either nothing or whatever
+ * internal note happened to be in the column.
  *
  * Which paths reconcile, and which deliberately do not:
  *
@@ -138,21 +168,31 @@ export function newSessionData(
  *    and the admin CSV import (DRAFT/SUBMITTED only). A Session exists only
  *    after acceptance, so neither can ever face one.
  *
- * Title, description, format and duration are deliberately left alone: the
- * convert route already documents that a requested duration never mutates an
- * existing Session, and scheduling owns later duration changes.
+ * Title, format and duration are deliberately left alone: the convert route
+ * already documents that a requested duration never mutates an existing
+ * Session, and scheduling owns later duration changes.
  */
 export async function provisionSessionForAbstract(
   tx: Prisma.TransactionClient,
   abstract: ConvertibleAbstract,
   requestedDuration?: number | null,
-): Promise<{ sessionId: string; created: boolean; topicReconciled: boolean }> {
+): Promise<{
+  sessionId: string;
+  created: boolean;
+  topicReconciled: boolean;
+  summaryReconciled: boolean;
+}> {
   if (abstract.session) {
-    const topic = reconciledSessionTopic(abstract, abstract.session);
-    if (topic) {
-      await tx.session.update({ where: { id: abstract.session.id }, data: topic });
+    const fields = reconciledSessionFields(abstract, abstract.session);
+    if (fields) {
+      await tx.session.update({ where: { id: abstract.session.id }, data: fields });
     }
-    return { sessionId: abstract.session.id, created: false, topicReconciled: topic !== null };
+    return {
+      sessionId: abstract.session.id,
+      created: false,
+      topicReconciled: fields !== null && "categoryId" in fields,
+      summaryReconciled: fields !== null && "description" in fields,
+    };
   }
 
   const created = await tx.session.create({
@@ -169,7 +209,7 @@ export async function provisionSessionForAbstract(
   }
   // A session created from the proposal a moment ago cannot be out of step
   // with it, so there is nothing to reconcile on this branch.
-  return { sessionId: created.id, created: true, topicReconciled: false };
+  return { sessionId: created.id, created: true, topicReconciled: false, summaryReconciled: false };
 }
 
 /**
@@ -238,7 +278,13 @@ export async function provisionAcceptedAbstract(
   tx: Prisma.TransactionClient,
   abstract: ConvertibleAbstract,
   requestedDuration?: number | null,
-): Promise<{ sessionId: string; created: boolean; topicReconciled: boolean; tasksAssigned: number }> {
+): Promise<{
+  sessionId: string;
+  created: boolean;
+  topicReconciled: boolean;
+  summaryReconciled: boolean;
+  tasksAssigned: number;
+}> {
   const session = await provisionSessionForAbstract(tx, abstract, requestedDuration);
   const tasksAssigned = await assignOnboardingTasks(tx, abstract.eventId, session.sessionId);
   return { ...session, tasksAssigned };

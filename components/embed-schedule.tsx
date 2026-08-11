@@ -8,10 +8,18 @@
  * lib/embed-schedule-view.ts so it can be unit-tested without a DOM.
  */
 import Link from "next/link";
-import { CalendarDays, CalendarPlus, Download, MapPin, Search, User } from "lucide-react";
+import { CalendarDays, CalendarPlus, Download, MapPin, Search, User, Users } from "lucide-react";
 import type { PublicAgenda } from "@/lib/data/reads";
 import { calendarExportUrl } from "@/lib/ics-embed";
-import { formatDayLabel, formatEventDateRange, formatTime, zonedParts } from "@/lib/tz";
+import {
+  EMBED_SCHEDULE_PATH,
+  EMBED_SPEAKERS_PATH,
+  publicSurfaceUrl,
+  type PublicSurfacePath,
+} from "@/lib/embed-alias";
+import { speakerAnchorHref } from "@/lib/speaker-anchor";
+import { PUBLIC_SESSION_SUMMARY_FALLBACK } from "@/lib/public-session-copy";
+import { formatDayLabel, formatEventDateRange, formatTimeRange, timeZoneNote, zonedParts } from "@/lib/tz";
 import {
   ALL,
   agendaTruncationNotice,
@@ -35,14 +43,19 @@ function SessionCard({
   session,
   eventId,
   timeZone,
+  speakersUrl,
 }: {
   session: ScheduleViewSession;
   eventId: string;
   timeZone: string;
+  /** The speaker directory on this same surface, for the name cross-links. */
+  speakersUrl: string;
 }) {
   const chips = sessionChips(session);
   const split = descriptionPreview(session.description);
-  const when = `${formatTime(session.startsAt, timeZone)}–${formatTime(session.endsAt, timeZone)}`;
+  // Labelled with the event's zone at this session's own instant, so a reader
+  // outside the venue's timezone is never left guessing which clock (§5-2).
+  const when = formatTimeRange(session.startsAt, session.endsAt, timeZone);
 
   return (
     <article className="embed-session" id={`session-${session.sessionId}`} style={{ marginTop: 8 }}>
@@ -51,7 +64,19 @@ function SessionCard({
         <h3>{session.title}</h3>
         <div className="meta">
           {session.speakers.length > 0 && (
-            <span className="row" style={{ gap: 4 }}><User size={13} aria-hidden="true" /> {session.speakers.join(", ")}</span>
+            <span className="row" style={{ gap: 4 }}>
+              <User size={13} aria-hidden="true" />{" "}
+              {/* Each name links to its own card on the speaker directory, so
+                  the session -> speaker direction finally exists (§5-3). */}
+              {session.speakers.map((name, index) => (
+                <span key={name}>
+                  {index > 0 ? ", " : ""}
+                  <Link className="embed-speaker-link" href={speakerAnchorHref(speakersUrl, name)} prefetch={false}>
+                    {name}
+                  </Link>
+                </span>
+              ))}
+            </span>
           )}
           <span className="row" style={{ gap: 4 }}><MapPin size={13} aria-hidden="true" /> {session.room.name}</span>
           <span>{when}</span>
@@ -81,7 +106,13 @@ function SessionCard({
             </span>
           </summary>
           <div className="embed-session-full">
-            {session.description ? <p className="embed-session-desc">{session.description}</p> : null}
+            {/* An honest sentence about the absence, never the operational note
+                that used to sit in this column (§5-4). `session.description` is
+                already sanitized by the read, so `null` here means "genuinely
+                unpublished", not "internal text suppressed". */}
+            <p className="embed-session-desc">
+              {session.description ?? PUBLIC_SESSION_SUMMARY_FALLBACK}
+            </p>
             <dl className="embed-session-facts">
               <div>
                 <dt>When</dt>
@@ -114,7 +145,16 @@ function SessionCard({
               {session.speakers.length > 0 ? (
                 <div>
                   <dt>{session.speakers.length === 1 ? "Speaker" : "Speakers"}</dt>
-                  <dd>{session.speakers.join(", ")}</dd>
+                  <dd>
+                    {session.speakers.map((name, index) => (
+                      <span key={name}>
+                        {index > 0 ? ", " : ""}
+                        <Link className="embed-speaker-link" href={speakerAnchorHref(speakersUrl, name)} prefetch={false}>
+                          {name}
+                        </Link>
+                      </span>
+                    ))}
+                  </dd>
                 </div>
               ) : null}
             </dl>
@@ -137,11 +177,19 @@ export function EmbedSchedule({
   agenda,
   eventParam,
   searchParams = {},
+  basePath = EMBED_SCHEDULE_PATH,
+  speakersPath = EMBED_SPEAKERS_PATH,
 }: {
   agenda: PublicAgenda;
   /** Echoed into every generated link exactly as the host page supplied it. */
   eventParam?: string;
   searchParams?: { track?: string; day?: string; q?: string };
+  /** Where this page's own filter links and search form return to: the
+   *  canonical `/schedule` or the frameable `/embed/schedule`. */
+  basePath?: PublicSurfacePath;
+  /** The speaker directory on the SAME surface: a framed reader must not be
+   *  navigated onto the standalone site, nor the reverse. */
+  speakersPath?: PublicSurfacePath;
 }) {
   const tz = agenda.event.timezone;
   const dayKeys = eventDayKeys(agenda);
@@ -154,9 +202,21 @@ export function EmbedSchedule({
   const tabs = dayTabs(agenda, filters, formatDayLabel);
   const days = groupByDay(filtered, tz);
   const dateRange = formatEventDateRange(agenda.event.startsAt, agenda.event.endsAt, tz);
+  // Derived from real instants, not render time, so a summer programme read in
+  // winter still says PDT. The whole programme is offered — not just the event
+  // bounds — because a card labels its own instant, and a programme spanning a
+  // DST change must not be given a header claiming a single abbreviation that
+  // half its cards contradict. `agenda.sessions`, not `filtered`: the note
+  // describes the page's clock, which must not change as the reader filters.
+  const zoneNote = timeZoneNote(tz, [
+    agenda.event.startsAt,
+    agenda.event.endsAt,
+    ...agenda.sessions.flatMap((session) => [session.startsAt, session.endsAt]),
+  ]);
   const isFiltered = filters.track !== ALL || filters.day !== ALL || filters.q !== "";
-  const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides);
+  const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides, basePath);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;
+  const speakersUrl = publicSurfaceUrl(speakersPath, eventParam ?? agenda.event.slug);
 
   return (
     <div className="embed-page">
@@ -167,6 +227,7 @@ export function EmbedSchedule({
             <p className="hint">
               {resultSummary(agenda.sessions.length, filtered.length, isFiltered, agenda.truncated ?? false)}
               {dateRange ? ` · ${dateRange}` : ""}
+              {` · ${zoneNote}`}
             </p>
             {/* A reader whose programme was cut short is told, rather than
                 shown a confident count of a partial schedule (S20). */}
@@ -174,20 +235,27 @@ export function EmbedSchedule({
               <p className="hint" role="status">{agendaTruncationNotice(agenda)}</p>
             ) : null}
           </div>
-          {agenda.sessions.length > 0 && (
-            <a
-              className="ghost-button"
-              href={calendarExportUrl(agenda.event.id)}
-              style={{ textDecoration: "none" }}
-            >
-              <CalendarPlus size={15} /> Add all to calendar
-            </a>
-          )}
+          <div className="row wrap" style={{ gap: 8 }}>
+            {/* The reverse of the gallery's own "Schedule" link, so the two
+                public pages are reachable from each other (§5-3). */}
+            <Link className="ghost-button" href={speakersUrl} prefetch={false}>
+              <Users size={15} aria-hidden="true" /> Speakers
+            </Link>
+            {agenda.sessions.length > 0 && (
+              <a
+                className="ghost-button"
+                href={calendarExportUrl(agenda.event.id)}
+                style={{ textDecoration: "none" }}
+              >
+                <CalendarPlus size={15} /> Add all to calendar
+              </a>
+            )}
+          </div>
         </div>
 
         {/* A plain GET form: submitting works without JavaScript and the result
             is a linkable URL. Hidden inputs keep the other filters intact. */}
-        <form className="embed-search-form" method="get" action="/embed/schedule" role="search">
+        <form className="embed-search-form" method="get" action={basePath} role="search">
           {eventParam ? <input type="hidden" name="event" value={eventParam} /> : null}
           {filters.track !== ALL ? <input type="hidden" name="track" value={filters.track} /> : null}
           {filters.day !== ALL ? <input type="hidden" name="day" value={filters.day} /> : null}
@@ -204,7 +272,7 @@ export function EmbedSchedule({
           </label>
           <button className="ghost-button" type="submit">Search</button>
           {isFiltered ? (
-            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" })} prefetch={false}>
+            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" }, {}, basePath)} prefetch={false}>
               Clear
             </Link>
           ) : null}
@@ -281,7 +349,7 @@ export function EmbedSchedule({
                 ? "This day is part of the event but has no published sessions yet."
                 : "Try another day, track, or search term."}
             </EmptyState>
-            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" })} prefetch={false}>
+            <Link className="ghost-button" href={scheduleHref(eventParam, { track: ALL, day: ALL, q: "" }, {}, basePath)} prefetch={false}>
               Show the full schedule
             </Link>
           </div>
@@ -290,7 +358,7 @@ export function EmbedSchedule({
             <section key={dayKey}>
               <h2 className="time-heading" style={{ fontSize: 13 }}>{formatDayLabel(dayKey, tz)}</h2>
               {items.map((s) => (
-                <SessionCard key={s.slotId} session={s} eventId={agenda.event.id} timeZone={tz} />
+                <SessionCard key={s.slotId} session={s} eventId={agenda.event.id} timeZone={tz} speakersUrl={speakersUrl} />
               ))}
             </section>
           ))

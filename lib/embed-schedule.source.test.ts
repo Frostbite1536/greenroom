@@ -34,7 +34,12 @@ test("descriptions and their expand control are in the served markup", () => {
 test("search is a GET form that preserves the other filters", () => {
   const component = source("components/embed-schedule.tsx");
   assert.match(component, /<form[^>]*method="get"/);
-  assert.match(component, /action="\/embed\/schedule"/);
+  // Surface-aware: search must return to the page the reader is on, so a day
+  // tab on `/schedule` cannot drop them into the chrome-free embed. The default
+  // is the frameable path, which is where this form lived before `/schedule`
+  // became a real page.
+  assert.match(component, /action=\{basePath\}/);
+  assert.match(component, /basePath = EMBED_SCHEDULE_PATH/);
   assert.match(component, /name="q"/);
   assert.match(component, /type="hidden" name="event"/);
   assert.match(component, /type="hidden" name="track"/);
@@ -62,4 +67,23 @@ test("the collapsed preview is hidden only when its own details is open", () => 
   // preview of the sibling cards next to it.
   assert.match(css, /\.embed-session-detail\[open\] > summary \.embed-session-preview \{ display: none; \}/);
   assert.match(css, /\.embed-session-detail > summary::-webkit-details-marker/);
+});
+
+test("§5-2: every public time is labelled with the event's own timezone", () => {
+  const component = source("components/embed-schedule.tsx");
+  // The card's time range and the header note both come from lib/tz, which
+  // derives the abbreviation at the event's instant rather than at render time.
+  assert.match(component, /formatTimeRange\(session\.startsAt, session\.endsAt, timeZone\)/);
+  // The note is fed the event bounds AND every session instant the page shows,
+  // so a programme spanning a DST change cannot be given a single abbreviation
+  // that half its cards contradict.
+  assert.match(component, /timeZoneNote\(tz, \[\s*agenda\.event\.startsAt,\s*agenda\.event\.endsAt,/);
+  assert.match(component, /\.\.\.agenda\.sessions\.flatMap\(\(session\) => \[session\.startsAt, session\.endsAt\]\)/);
+  // Off the unfiltered agenda: the page's clock must not change as the reader
+  // filters or searches.
+  assert.equal(/timeZoneNote\(tz, \[[\s\S]{0,200}?filtered/.test(component), false);
+  // A bare formatTime pair here would silently drop the label again.
+  assert.equal(/formatTime\(session\.(?:starts|ends)At/.test(component), false);
+  // Formatting stays in lib/tz.ts rather than being re-implemented beside it.
+  assert.equal(/new Intl\.DateTimeFormat/.test(component), false);
 });

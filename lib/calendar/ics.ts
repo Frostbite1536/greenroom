@@ -16,6 +16,12 @@ export type IcsEvent = {
   endsAt: Date;
   /** Absolute URL to the session page, if known. */
   url?: string | null;
+  /**
+   * RFC 5545 §3.8.1.2 CATEGORIES — the calendar client's own grouping and
+   * colour-coding hook. A conference's track is exactly this, and without it a
+   * subscribed attendee sees fifteen identical grey blocks.
+   */
+  categories?: readonly string[] | null;
   organizerName?: string | null;
   organizerEmail?: string | null;
 };
@@ -83,6 +89,13 @@ function buildEvent(event: IcsEvent, stamp: Date): string[] {
   if (event.description) out.push(line("DESCRIPTION", escapeIcsText(event.description)));
   if (event.location) out.push(line("LOCATION", escapeIcsText(event.location)));
   if (event.url) out.push(line("URL", escapeIcsText(event.url)));
+  // CATEGORIES is a comma-SEPARATED list, so the separator commas are
+  // structural and only the commas inside each value are escaped. Blank
+  // entries are dropped rather than emitted as an empty category.
+  const categories = (event.categories ?? []).map((c) => c.trim()).filter(Boolean);
+  if (categories.length > 0) {
+    out.push(line("CATEGORIES", categories.map(escapeIcsText).join(",")));
+  }
   if (event.organizerEmail) {
     const cn = event.organizerName ? `;CN=${escapeIcsText(event.organizerName)}` : "";
     out.push(foldIcsLine(`ORGANIZER${cn}:mailto:${event.organizerEmail}`));

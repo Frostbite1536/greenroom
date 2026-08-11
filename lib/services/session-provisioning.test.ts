@@ -8,7 +8,7 @@ import {
   newSessionData,
   planTaskAssignments,
   provisionSessionForAbstract,
-  reconciledSessionTopic,
+  reconciledSessionFields,
   resolveSessionDuration,
   TASK_ASSIGNMENT_PAGE_SIZE,
 } from "@/lib/services/session-provisioning";
@@ -33,31 +33,102 @@ test("a proposal submitted without a topic creates a talk with none", () => {
   assert.equal(newSessionData({ ...proposal, categoryId: null }).categoryId, null);
 });
 
+/** An existing Session already carrying everything this proposal would push. */
+const alignedSession = {
+  id: "session-1",
+  categoryId: "category-devex",
+  description: "How we grew the platform.",
+};
+
 test("a topic that moved on the proposal is reconciled onto the talk", () => {
+  const summary = { abstract: "How we grew the platform.", description: "How we grew the platform." };
   assert.deepEqual(
-    reconciledSessionTopic({ categoryId: "category-devex" }, { categoryId: "category-ai" }),
+    reconciledSessionFields(
+      { categoryId: "category-devex", abstract: summary.abstract },
+      { categoryId: "category-ai", description: summary.description },
+    ),
     { categoryId: "category-devex" },
   );
   // Clearing the proposal's topic really does clear the talk's.
   assert.deepEqual(
-    reconciledSessionTopic({ categoryId: null }, { categoryId: "category-ai" }),
+    reconciledSessionFields(
+      { categoryId: null, abstract: summary.abstract },
+      { categoryId: "category-ai", description: summary.description },
+    ),
     { categoryId: null },
   );
   // ...and a talk that never had one picks the proposal's up.
   assert.deepEqual(
-    reconciledSessionTopic({ categoryId: "category-ai" }, { categoryId: null }),
+    reconciledSessionFields(
+      { categoryId: "category-ai", abstract: summary.abstract },
+      { categoryId: null, description: summary.description },
+    ),
     { categoryId: "category-ai" },
   );
 });
 
-test("an unchanged topic produces no write at all", () => {
-  // Not an optimization: a re-run that writes nothing leaves `updatedAt` alone,
-  // so "reconvened this talk" and "changed this talk" stay distinguishable.
-  assert.equal(reconciledSessionTopic({ categoryId: "category-ai" }, { categoryId: "category-ai" }), null);
-  assert.equal(reconciledSessionTopic({ categoryId: null }, { categoryId: null }), null);
+test("the proposal's attendee-facing summary is reconciled onto the talk", () => {
+  // The §5-4 defect: a Session created before `description` was on the copy
+  // list carries no public prose, so the programme page had nothing honest to
+  // print. An organizer's re-run is the repair.
+  assert.deepEqual(
+    reconciledSessionFields(
+      { categoryId: "category-devex", abstract: "A rewritten, attendee-facing summary." },
+      { categoryId: "category-devex", description: null },
+    ),
+    { description: "A rewritten, attendee-facing summary." },
+  );
+  // A summary that moved on the proposal replaces the stale one.
+  assert.deepEqual(
+    reconciledSessionFields(
+      { categoryId: null, abstract: "Version two." },
+      { categoryId: null, description: "Version one." },
+    ),
+    { description: "Version two." },
+  );
 });
 
-test("re-running provisioning reconciles the topic and touches nothing else", async () => {
+test("a blank proposal summary never blanks an admin-authored description", () => {
+  // One-way on purpose. A keynote has no source abstract at all, and the public
+  // description is the field an organizer plausibly hand-writes on the Session;
+  // a re-run must not wipe it because the proposal's field is empty.
+  for (const empty of [null, "", "   \n "]) {
+    assert.equal(
+      reconciledSessionFields(
+        { categoryId: "category-devex", abstract: empty },
+        { categoryId: "category-devex", description: "Hand-written programme copy." },
+      ),
+      null,
+      JSON.stringify(empty),
+    );
+  }
+});
+
+test("an unchanged talk produces no write at all", () => {
+  // Not an optimization: a re-run that writes nothing leaves `updatedAt` alone,
+  // so "reconvened this talk" and "changed this talk" stay distinguishable.
+  assert.equal(
+    reconciledSessionFields(
+      { categoryId: "category-ai", abstract: "Same words." },
+      { categoryId: "category-ai", description: "Same words." },
+    ),
+    null,
+  );
+  assert.equal(
+    reconciledSessionFields({ categoryId: null, abstract: null }, { categoryId: null, description: null }),
+    null,
+  );
+  // Whitespace-only drift is not a change either.
+  assert.equal(
+    reconciledSessionFields(
+      { categoryId: null, abstract: "  Same words.  " },
+      { categoryId: null, description: "Same words." },
+    ),
+    null,
+  );
+});
+
+test("re-running provisioning reconciles topic and summary, and touches nothing else", async () => {
   const updates: { where: { id: string }; data: Record<string, unknown> }[] = [];
   const tx = {
     session: {
@@ -70,15 +141,44 @@ test("re-running provisioning reconciles the topic and touches nothing else", as
   } as unknown as Prisma.TransactionClient;
   const result = await provisionSessionForAbstract(
     tx,
-    { ...proposal, categoryId: "category-devex", session: { id: "session-1", categoryId: "category-ai" } },
+    {
+      ...proposal,
+      categoryId: "category-devex",
+      session: { id: "session-1", categoryId: "category-ai", description: null },
+    },
   );
-  assert.deepEqual(result, { sessionId: "session-1", created: false, topicReconciled: true });
-  assert.deepEqual(updates, [{ where: { id: "session-1" }, data: { categoryId: "category-devex" } }]);
-  // Title, description, format and duration are the convert route's documented
+  assert.deepEqual(result, {
+    sessionId: "session-1",
+    created: false,
+    topicReconciled: true,
+    summaryReconciled: true,
+  });
+  assert.deepEqual(updates, [{
+    where: { id: "session-1" },
+    data: { categoryId: "category-devex", description: "How we grew the platform." },
+  }]);
+  // Title, format and duration remain the convert route's documented
   // non-mutations; a reconciliation that quietly widened would break them.
-  for (const field of ["title", "description", "format", "durationMinutes"]) {
+  for (const field of ["title", "format", "durationMinutes", "eventId", "contentStatus"]) {
     assert.ok(!(field in updates[0].data), `reconciliation must not write ${field}`);
   }
+});
+
+test("a moved topic alone is reported as a topic reconciliation only", async () => {
+  const tx = {
+    session: {
+      update: async (args: { where: { id: string } }) => ({ id: args.where.id }),
+      create: async () => { throw new Error("must not create a second session"); },
+    },
+  } as unknown as Prisma.TransactionClient;
+  assert.deepEqual(
+    await provisionSessionForAbstract(tx, {
+      ...proposal,
+      categoryId: "category-devex",
+      session: { ...alignedSession, categoryId: "category-ai" },
+    }),
+    { sessionId: "session-1", created: false, topicReconciled: true, summaryReconciled: false },
+  );
 });
 
 test("re-running an already-aligned talk issues no session write", async () => {
@@ -89,8 +189,8 @@ test("re-running an already-aligned talk issues no session write", async () => {
     },
   } as unknown as Prisma.TransactionClient;
   assert.deepEqual(
-    await provisionSessionForAbstract(tx, { ...proposal, session: { id: "session-1", categoryId: "category-devex" } }),
-    { sessionId: "session-1", created: false, topicReconciled: false },
+    await provisionSessionForAbstract(tx, { ...proposal, session: alignedSession }),
+    { sessionId: "session-1", created: false, topicReconciled: false, summaryReconciled: false },
   );
 });
 
@@ -204,19 +304,30 @@ test("task assignment pages through a large checklist without truncating it", as
 const routeSource = (path: string) =>
   readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
-test("only ADMIN-authorized routes reconcile a Session's topic", () => {
+test("only ADMIN-authorized routes reconcile a Session's topic and summary", () => {
   for (const path of ["app/api/evaluations/decisions/route.ts", "app/api/evaluations/convert/route.ts"]) {
     const route = routeSource(path);
     assert.match(route, /requireContext\(\["ADMIN"\]\)/, `${path} is ADMIN-only`);
     // Both reach reconciliation through the shared provisioning helper rather
-    // than writing Session.categoryId themselves. `categoryId` may appear in a
-    // `select` — that read is what makes reconciliation possible — but never
-    // inside a `data:` payload.
+    // than writing Session.categoryId or Session.description themselves. Either
+    // may appear in a `select` — that read is what makes reconciliation
+    // possible — but never inside a `data:` payload.
     assert.match(route, /provisionAcceptedAbstract\(tx, /, `${path} goes through provisioning`);
     for (const payload of route.match(/data: \{[^}]*\}/g) ?? []) {
       assert.doesNotMatch(payload, /categoryId/, `${path} writes no category directly`);
+      assert.doesNotMatch(payload, /description/, `${path} writes no description directly`);
     }
   }
+});
+
+test("the decisions route reads the session fields reconciliation needs", () => {
+  // The reconcile compares against the stored Session; a select that omits
+  // `description` would make every re-accept look like a summary change and
+  // rewrite the row on every run.
+  assert.match(
+    routeSource("app/api/evaluations/decisions/route.ts"),
+    /session: \{ select: \{ id: true, categoryId: true, description: true \} \}/,
+  );
 });
 
 test("INV-EDIT-001: the speaker's edit never mutates its linked Session", () => {

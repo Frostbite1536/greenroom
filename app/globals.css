@@ -116,6 +116,13 @@ button { letter-spacing: 0; }
 .landing-links span { color: var(--muted); font-size: 12.5px; }
 .landing-foot { color: var(--muted); font-size: 12.5px; }
 .landing-foot p { margin: 0; }
+/* Canonical /schedule and /speakers: the landing header pattern reused, plus a
+   nav strip. The programme body drops the landing panel padding because the
+   embed component brings its own. */
+.landing-brand a { display: flex; align-items: center; gap: 10px; color: inherit; }
+.public-programme-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.public-programme-nav a[aria-current="page"] { border-color: var(--brand); background: var(--soft); color: var(--brand-strong); font-weight: 700; }
+.public-programme-body { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
 @media (max-width: 760px) {
   .landing-hero { padding: 24px 20px; }
   .landing-hero h1 { font-size: 27px; }

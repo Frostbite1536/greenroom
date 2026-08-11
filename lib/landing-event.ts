@@ -23,7 +23,7 @@ export type LandingEventResolution = {
 
 /**
  * Trim and drop a blank `?event=` so it behaves as absent, matching
- * `embedAliasTarget()` in `lib/embed-alias.ts`.
+ * `publicSurfaceUrl()` in `lib/embed-alias.ts`.
  */
 export function normalizeLandingEventParam(raw: string | undefined): string | undefined {
   const trimmed = raw?.trim();

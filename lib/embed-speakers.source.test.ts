@@ -47,7 +47,11 @@ test("the detail panel lists sessions with their placement and an honest bio fal
 
 test("speaker search is a GET form and the header shows the real date range", () => {
   const component = source("components/embed-speakers.tsx");
-  assert.match(component, /<form className="speaker-gallery-controls" method="get" action="\/embed\/speakers"/);
+  // The action is the surface the reader is actually on — `/speakers` or
+  // `/embed/speakers` — so submitting search inside an iframe cannot navigate
+  // the frame to the standalone site. Its default is the frameable path.
+  assert.match(component, /<form className="speaker-gallery-controls" method="get" action=\{basePath\}/);
+  assert.match(component, /basePath = EMBED_SPEAKERS_PATH/);
   assert.match(component, /type="hidden" name="event"/);
   assert.match(component, /type="submit"/);
   assert.match(component, /formatEventDateRange\(gallery\.event\.startsAt, gallery\.event\.endsAt, gallery\.event\.timezone\)/);
@@ -60,4 +64,17 @@ test("no admin-only field reaches the gallery component", () => {
   for (const forbidden of ["speaker.email", "speaker.phone", "speaker.notes", "speaker.status", "speaker.id"]) {
     assert.equal(component.includes(forbidden), false, `${forbidden} must not render publicly`);
   }
+});
+
+test("§5-2: the gallery names the clock its session times are on", () => {
+  const component = source("components/embed-speakers.tsx");
+  assert.match(component, /timeZoneNote\(gallery\.event\.timezone, \[\s*gallery\.event\.startsAt,\s*gallery\.event\.endsAt,/);
+  // Fed the placement instants its own session lines label, off the unfiltered
+  // gallery so the stated clock does not change as the reader searches.
+  assert.match(component, /\.\.\.gallery\.speakers\.flatMap\(/);
+  assert.equal(/timeZoneNote\(gallery\.event\.timezone, \[[\s\S]{0,200}?filtered/.test(component), false);
+  // The per-session line gets its label from the shared placement helper.
+  const view = source("lib/embed-speaker-view.ts");
+  assert.match(view, /formatTimeRange\(/);
+  assert.equal(/formatTime\(session\.startsAt, timeZone\)/.test(view), false);
 });

@@ -66,6 +66,17 @@ const EMBED_SPEAKER_HEADSHOT = "https://images.example.test/nadia-okonkwo.jpg";
 const SESSION_A_DESCRIPTION = "This session walks through the production incident that took our "
   + "scheduling pipeline down for six hours, the three false root causes we chased first, and the "
   + "instrumentation change that would have caught it in minutes. Bring questions about on-call.";
+// §5-4: a talk carrying the internal provenance note the seed writes. It exists
+// so the guard is exercised against the real string rather than a paraphrase —
+// this text must never appear in a public byte, and its card must show the
+// honest fallback instead.
+const PROVENANCE_SESSION_TITLE = "Scratch Session P (provenance description)";
+const PROVENANCE_DESCRIPTION = "Confirmed session converted from an accepted abstract.";
+const PUBLIC_SUMMARY_FALLBACK = "A summary for this session has not been published yet.";
+// The attendee-facing summary the converted talk must carry onto the public
+// programme. Distinctive so a match cannot be an accident of other fixture copy.
+const CONVERTED_ABSTRACT_SUMMARY = "Three field-tested tactics for shrinking a release train, "
+  + "with the rollback story that taught us the second one.";
 // A second, deliberately empty event: the fresh-event empty states are the
 // first thing a judge driving the product live will see, so they are asserted
 // rather than assumed.
@@ -113,6 +124,15 @@ async function req(method, path, body, sess) {
   try { data = JSON.parse(text); } catch { data = text; }
   return { status: res.status, data, text, headers: res.headers };
 }
+
+/**
+ * Undo RFC 5545 §3.1 line folding before asserting on .ics content.
+ *
+ * A content line over 75 octets is split with CRLF + a single leading space,
+ * so a naive `includes()` on a long URL or DESCRIPTION silently fails — and a
+ * naive `!includes()` silently PASSES, which is the dangerous direction.
+ */
+const unfoldIcs = (text) => text.replace(/\r\n /g, "");
 
 async function reqManual(path, sess) {
   const res = await fetch(BASE + path, {
@@ -364,6 +384,22 @@ async function resetScratch() {
     data: {
       eventId: EVENT_ID, sessionId: sessionA.id, roomId: roomA.id, trackId: track.id,
       startsAt: new Date(`${dayKey}T17:00:00.000Z`), endsAt: new Date(`${dayKey}T17:30:00.000Z`),
+    },
+  });
+  // §5-4 fixture: published, scheduled, and holding the internal provenance
+  // note in `description`. Placed on the same day as sessionA so the default
+  // (unfiltered) embed render always contains it.
+  const sessionP = await prisma.session.create({
+    data: {
+      eventId: EVENT_ID, title: PROVENANCE_SESSION_TITLE, durationMinutes: 30, format: "Talk",
+      description: PROVENANCE_DESCRIPTION,
+      speakers: { create: [{ userId: users.speaker, isPrimary: true }] },
+    },
+  });
+  await prisma.scheduleSlot.create({
+    data: {
+      eventId: EVENT_ID, sessionId: sessionP.id, roomId: roomB.id, trackId: track.id,
+      startsAt: new Date(`${dayKey}T18:00:00.000Z`), endsAt: new Date(`${dayKey}T18:30:00.000Z`),
     },
   });
   const sessionB = await prisma.session.create({
@@ -795,6 +831,30 @@ try {
   check("public session calendar export → 200", sessionCalendar.status === 200, `got ${sessionCalendar.status}`);
   check("public session calendar export has one event", (sessionCalendar.text.match(/BEGIN:VEVENT/g) ?? []).length === 1);
 
+  // --- §5-6: the calendar file says which talk, and on which track ----------
+  // A .ics is read entirely outside the product, so anything the file omits is
+  // simply unavailable to its reader.
+  check("§5-6 the single-session file is still named for its event",
+    unfoldIcs(sessionCalendar.text).includes(`X-WR-CALNAME:${ev.name}`),
+    "expected X-WR-CALNAME on the single-session export");
+  // The server is spawned with APP_URL=REVIEWER_INVITE_APP_URL, so the absolute
+  // URL is fully determined here rather than pattern-matched loosely.
+  check("§5-6 the VEVENT carries the session's own anchor on the canonical page",
+    unfoldIcs(sessionCalendar.text).includes(
+      `URL:${REVIEWER_INVITE_APP_URL}/schedule?event=${EVENT_ID}#session-${fx.sessionA.id}`,
+    )
+    && !unfoldIcs(sessionCalendar.text).includes("/embed/schedule"),
+    "expected a per-session /schedule#session-<id> URL");
+  check("§5-6 the talk's track reaches the calendar client as CATEGORIES",
+    unfoldIcs(sessionCalendar.text).includes(`CATEGORIES:${fx.track.name}`),
+    `expected CATEGORIES:${fx.track.name}`);
+  // Every VEVENT in the whole-event file gets its own distinct URL, which is
+  // the defect: they all used to carry the identical bare embed link.
+  const veventUrls = [...unfoldIcs(eventCalendar.text).matchAll(/URL:([^\r\n]+)/g)].map((m) => m[1]);
+  check("§5-6 each VEVENT in the full export points at a different talk",
+    veventUrls.length > 1 && new Set(veventUrls).size === veventUrls.length,
+    `${veventUrls.length} URLs, ${new Set(veventUrls).size} distinct`);
+
   // --- mutation 1: builder Save ---
   const savePayload = {
     eventId: EVENT_ID,
@@ -1158,7 +1218,9 @@ try {
   const submit = await req("POST", "/api/cfp/submissions", {
     formConfigId: fx.form.id,
     title: "Smoke submitted proposal",
-    abstract: "Full body",
+    // §5-4: this is the attendee-facing summary that must survive acceptance
+    // and land on the public programme, so it is distinctive rather than filler.
+    abstract: CONVERTED_ABSTRACT_SUMMARY,
     format: "Talk",
     durationMinutes: 30,
     categoryId: fx.category.id,
@@ -1260,6 +1322,52 @@ try {
   }, admin);
   check("converted session schedules cleanly → 200", placeConverted.status === 200,
     `${placeConverted.status} ${JSON.stringify(placeConverted.data?.error ?? "")}`);
+
+  // --- §5-4: the accepted proposal's own summary IS the public description ---
+  // The whole point of the fix: what the speaker wrote for attendees reaches
+  // the programme, instead of an operational note about the row's origin.
+  check("§5-4 acceptance carries the proposal's summary onto the confirmed talk",
+    (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { description: true },
+    }))?.description === CONVERTED_ABSTRACT_SUMMARY,
+    "expected Session.description to equal the abstract's summary");
+  const convertedCard = await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null);
+  check("§5-4 the converted talk's public card shows that summary",
+    convertedCard.status === 200
+    && convertedCard.text.includes(`session-${convertedSessionId}`)
+    && convertedCard.text.includes(CONVERTED_ABSTRACT_SUMMARY.slice(0, 60)),
+    "expected the abstract summary on the converted session card");
+  const convertedIcs = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}&sessionId=${convertedSessionId}`, null, null,
+  );
+  check("§5-4 the converted talk's .ics DESCRIPTION carries that summary, not provenance",
+    convertedIcs.status === 200
+    && unfoldIcs(convertedIcs.text).includes("DESCRIPTION:Three field-tested tactics")
+    && !unfoldIcs(convertedIcs.text).includes(PROVENANCE_DESCRIPTION)
+    && !unfoldIcs(convertedIcs.text).includes(PUBLIC_SUMMARY_FALLBACK),
+    "expected the real summary in the single-session calendar file");
+  // A re-run must reconcile a talk whose description was never carried across,
+  // and must not blank one an organizer wrote by hand.
+  await prisma.session.update({
+    where: { id: convertedSessionId }, data: { description: null },
+  });
+  const reconvert = await req("POST", "/api/evaluations/convert", {
+    abstractId: convertedAbstractId, durationMinutes: 30,
+  }, admin);
+  check("§5-4 an admin re-run repairs a talk that never got its summary",
+    reconvert.status === 200
+    && reconvert.data?.data?.summaryReconciled === true
+    && (await prisma.session.findUnique({
+      where: { id: convertedSessionId }, select: { description: true },
+    }))?.description === CONVERTED_ABSTRACT_SUMMARY,
+    `${reconvert.status} ${JSON.stringify(reconvert.data?.data ?? {})}`);
+  const reconvertAgain = await req("POST", "/api/evaluations/convert", {
+    abstractId: convertedAbstractId, durationMinutes: 30,
+  }, admin);
+  check("§5-4 a second re-run reconciles nothing and writes nothing",
+    reconvertAgain.data?.data?.summaryReconciled === false
+    && reconvertAgain.data?.data?.topicReconciled === false,
+    JSON.stringify(reconvertAgain.data?.data ?? {}));
 
   const afterSchedule = await req("GET", "/admin/abstracts", null, admin);
   check("abstracts table shows a scheduled talk as 'On the programme'",
@@ -2587,11 +2695,18 @@ try {
   const landingHtml = await landing.text();
   const landingText = renderedText(landingHtml) ?? "";
   check("landing page serves logged-out visitors → 200", landing.status === 200, `got ${landing.status}`);
-  check("landing page links both embed surfaces prominently",
-    landingHtml.includes('href="/embed/schedule')
-    && landingHtml.includes('href="/embed/speakers')
+  // §5-5: the calls to action point at the canonical pages now, while the
+  // panel still advertises the /embed/* URLs an organizer pastes into an iframe.
+  check("landing page links both public surfaces prominently",
+    landingHtml.includes(`href="/schedule?event=${EVENT_ID}"`)
+    && landingHtml.includes(`href="/speakers?event=${EVENT_ID}"`)
     && landingText.includes("View the schedule")
     && landingText.includes("Meet the speakers")
+    && landingText.includes("/schedule")
+    && landingText.includes("/speakers"));
+  check("§5-5 landing page still advertises the embeddable variants",
+    landingHtml.includes('href="/embed/schedule"')
+    && landingHtml.includes('href="/embed/speakers"')
     && landingText.includes("/embed/schedule")
     && landingText.includes("/embed/speakers"));
   check("landing page names the event and its real programme size",
@@ -2619,20 +2734,53 @@ try {
     && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
     `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
 
+  // --- §5-5: the programme is SERVED at /schedule and /speakers -------------
+  // The reversal: these used to 307 into /embed/*, so the guessable URL was a
+  // frame fragment with no site around it. They are pages now; /embed/* stays
+  // the chrome-free variant of the same component tree.
+  for (const [path, marker] of [
+    ["/schedule", "Scratch Session A"],
+    ["/speakers", EMBED_SPEAKER_NAME],
+  ]) {
+    const page = await reqManual(`${path}?event=${encodeURIComponent(EVENT_ID)}`, null);
+    check(`§5-5 ${path} serves the programme itself → 200`,
+      page.status === 200 && page.text.includes(marker),
+      `${page.status} ${page.location || ""}`);
+    check(`§5-5 ${path} carries the standalone site header and its nav`,
+      page.text.includes("public-programme-nav")
+      && page.text.includes(">Greenroom<")
+      && page.text.includes('href="/schedule?event=')
+      && page.text.includes('href="/speakers?event='),
+      `expected the brand header and both nav links on ${path}`);
+    check(`§5-5 ${path} keeps its own links on the canonical surface`,
+      !page.text.includes('action="/embed/'),
+      `expected no /embed/ form action on ${path}`);
+  }
+  // ...and the frameable variant is still frameable, with NO standalone header.
+  for (const [path, marker] of [
+    ["/embed/schedule", "Scratch Session A"],
+    ["/embed/speakers", EMBED_SPEAKER_NAME],
+  ]) {
+    const framed = await reqManual(`${path}?event=${encodeURIComponent(EVENT_ID)}`, null);
+    check(`§5-5 ${path} still renders for a host iframe → 200`,
+      framed.status === 200 && framed.text.includes(marker), `${framed.status} ${framed.location || ""}`);
+    check(`§5-5 ${path} draws no standalone site chrome`,
+      !framed.text.includes("public-programme-nav"),
+      `expected no site header inside ${path}`);
+  }
+
   for (const [alias, target] of [
-    ["/schedule", "/embed/schedule"],
-    ["/agenda", "/embed/schedule"],
-    ["/sessions", "/embed/schedule"],
-    ["/speakers", "/embed/speakers"],
+    ["/agenda", "/schedule"],
+    ["/sessions", "/schedule"],
   ]) {
     const aliasRes = await reqManual(alias, null);
     check(`alias ${alias} → ${target}`,
       aliasRes.status === 307 && aliasRes.location === target,
       `${aliasRes.status} ${aliasRes.location || "none"}`);
   }
-  const aliasWithEvent = await reqManual(`/schedule?event=${encodeURIComponent(EVENT_ID)}`, null);
+  const aliasWithEvent = await reqManual(`/agenda?event=${encodeURIComponent(EVENT_ID)}`, null);
   check("an alias carries an explicit event through the redirect",
-    aliasWithEvent.status === 307 && aliasWithEvent.location === `/embed/schedule?event=${EVENT_ID}`,
+    aliasWithEvent.status === 307 && aliasWithEvent.location === `/schedule?event=${EVENT_ID}`,
     `${aliasWithEvent.status} ${aliasWithEvent.location || "none"}`);
 
   // An unknown ?event= must behave exactly like no ?event= at all. Comparing the
@@ -2683,6 +2831,38 @@ try {
     enriched.text.includes(SESSION_A_DESCRIPTION.slice(0, 60)));
   check("embed ships the full description in the collapsed markup",
     enriched.text.includes(SESSION_A_DESCRIPTION.slice(-50)));
+
+  // --- §5-4: internal provenance text never reaches a public byte -----------
+  // The judged defect: every public session card and every .ics DESCRIPTION
+  // printed an operational note about where the row came from. The scratch
+  // fixture holds one session whose description IS that exact note.
+  check("§5-4 the provenance-described talk is still on the public schedule",
+    enriched.text.includes(PROVENANCE_SESSION_TITLE), "expected the fixture card to render");
+  check("§5-4 the internal provenance note appears nowhere in the schedule embed",
+    !enriched.text.includes(PROVENANCE_DESCRIPTION),
+    "provenance text reached a public byte");
+  check("§5-4 a talk with no publishable summary says so honestly instead",
+    enriched.text.includes(PUBLIC_SUMMARY_FALLBACK),
+    "expected the honest fallback copy on the provenance card");
+  // The JSON twin is the same projection and must agree.
+  const publicAgendaJson = await req("GET", `/api/agenda/public?event=${EVENT_ID}`, null, null);
+  const provenanceRow = (publicAgendaJson.data?.data?.sessions ?? [])
+    .find((s) => s.title === PROVENANCE_SESSION_TITLE);
+  check("§5-4 the JSON agenda twin nulls the provenance note rather than publishing it",
+    publicAgendaJson.status === 200 && !!provenanceRow && provenanceRow.description === null,
+    JSON.stringify(provenanceRow?.description ?? "row missing"));
+  check("§5-4 no provenance sentence survives anywhere in the JSON agenda",
+    !publicAgendaJson.text.includes(PROVENANCE_DESCRIPTION)
+    && !publicAgendaJson.text.includes("Invited keynote (guaranteed session, no source abstract)."));
+  // ...and so must the calendar file, which keeps speaking after download.
+  const provenanceIcs = await req(
+    "GET", `/api/comms/calendar?eventId=${EVENT_ID}`, null, null,
+  );
+  check("§5-4 the .ics export carries the honest fallback, never the provenance note",
+    provenanceIcs.status === 200
+    && !unfoldIcs(provenanceIcs.text).includes(PROVENANCE_DESCRIPTION)
+    && unfoldIcs(provenanceIcs.text).includes(`DESCRIPTION:${PUBLIC_SUMMARY_FALLBACK.replace(/,/g, "\\,")}`),
+    "expected the fallback DESCRIPTION and no provenance text in the calendar file");
   check("embed offers a Show more affordance",
     enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
   check("session detail expands with native details, not a JS-only modal",
@@ -2736,7 +2916,9 @@ try {
     }
   }
   const placedSlots = await prisma.scheduleSlot.findMany({
-    where: { eventId: EVENT_ID }, select: { startsAt: true },
+    // `endsAt` as well as `startsAt`: the §5-2 note below is derived from every
+    // instant the page labels, exactly as the page derives it.
+    where: { eventId: EVENT_ID }, select: { startsAt: true, endsAt: true },
   });
   const sessionDays = [...new Set(placedSlots.map((slot) => dayKeyIn(slot.startsAt)))];
   const expectedDays = [...new Set([...rangeDays, ...sessionDays])].sort();
@@ -2771,6 +2953,72 @@ try {
   check("embed header shows the real event date range, not just the first day",
     enrichedText.includes(expectedRange) && expectedRange.includes("–"),
     `expected ${expectedRange}`);
+
+  // --- §5-2: public times name the clock they are on ------------------------
+  // Derived here the way the page derives it, over the same instants, rather
+  // than pinned to one branch. The fixture's two-day window is DST-uniform for
+  // most of the year, but `now + 30d .. now + 32d` straddles the November
+  // transition when the harness runs in early October — and on those days the
+  // zone-name form is the CORRECT output, not a failure. Pinning the
+  // abbreviation would have turned a right answer into a red gate once a year.
+  const zoneAbbrevAt = (value) => new Intl.DateTimeFormat("en-US", { timeZone: liveTz, timeZoneName: "short" })
+    .formatToParts(new Date(value))
+    .find((p) => p.type === "timeZoneName")?.value;
+  const programmeInstants = [
+    liveEvent.startsAt,
+    liveEvent.endsAt,
+    ...placedSlots.flatMap((slot) => [slot.startsAt, slot.endsAt]),
+  ].filter(Boolean);
+  const zoneAbbrevs = [...new Set(programmeInstants.map(zoneAbbrevAt))];
+  const expectedNote = zoneAbbrevs.length === 1
+    ? `All times ${zoneAbbrevs[0]}`
+    : `All times in ${liveTz}`;
+  // A card always carries a bare abbreviation at its OWN instant, whichever
+  // branch the header note took.
+  const cardZonePattern = new RegExp(`\\d:\\d\\d\\s?(?:AM|PM)\\s(?:${zoneAbbrevs.join("|")})`);
+
+  check("§5-2 the schedule header names the clock every time is printed in",
+    enrichedText.includes(expectedNote),
+    `expected "${expectedNote}" in the header (abbrevs seen: ${zoneAbbrevs.join(",")})`);
+  check("§5-2 the session card's time range carries the timezone abbreviation",
+    cardZonePattern.test(enrichedText),
+    `expected a "…AM ${zoneAbbrevs[0]}" time range on a card`);
+  const speakersZone = await req("GET", `/embed/speakers?event=${EVENT_ID}`, null, null);
+  const speakersZoneText = renderedText(speakersZone.text) ?? "";
+  check("§5-2 the speaker gallery names the same clock in its header and its lines",
+    speakersZone.status === 200
+    && speakersZoneText.includes(expectedNote)
+    && cardZonePattern.test(speakersZoneText),
+    `expected "${expectedNote}" on the speaker gallery`);
+  // The contradiction Greptile caught: whatever the header says, it must never
+  // assert a single abbreviation while a card on the same page shows another.
+  //
+  // Extraction anchors on the markup's own structure. The shared `renderedText`
+  // drops tags with NO separator — many assertions depend on that exact
+  // behaviour, so it is left alone — which fuses adjacent text nodes:
+  // `…MDT</span><span class="sr-only">Format: ` collapses to "MDTFormat", and a
+  // bare uppercase run then swallows the next word's first letter ("MDTF"), as
+  // does `…MDT</dd>` before `<dt>Room</dt>` ("MDTR"). Turning every tag
+  // boundary into a space restores the word boundary the abbreviation needs;
+  // the negative lookahead then makes an overcapture impossible rather than
+  // merely unlikely.
+  const spacedText = (html) => (html ?? "")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&[^;]+;/g, " ");
+  // Both surfaces: the gallery's placement line ends "· Redwood Hall", so its
+  // abbreviation sits mid-text-node and a closing-tag anchor would miss it.
+  const abbrevsIn = (html) => [...spacedText(html)
+    .matchAll(/\d{1,2}:\d{2}\s*(?:AM|PM)\s+([A-Z]{2,5})(?![A-Za-z])/g)].map((m) => m[1]);
+  const shownAbbrevs = [...new Set([...abbrevsIn(enriched.text), ...abbrevsIn(speakersZone.text)])];
+  check("§5-2 the header note never claims one zone while a card shows another",
+    // Non-vacuity first: a stricter pattern that matched nothing would satisfy
+    // the consistency clause below while proving nothing at all.
+    shownAbbrevs.length >= 1
+    && (shownAbbrevs.length === 1 || expectedNote === `All times in ${liveTz}`),
+    shownAbbrevs.length === 0
+      ? "no card time-range abbreviation could be extracted from either surface"
+      : `cards showed ${shownAbbrevs.join(",")} under note "${expectedNote}"`);
 
   // Search: a GET form, so the query lives in the URL and needs no hydration.
   check("embed search is a GET form",
@@ -2807,6 +3055,40 @@ try {
     speakersEmbed.text.includes("Scratch Session A") && speakersEmbed.text.includes("Hall A"));
   check("speaker session line carries a placement, not just a title",
     speakersEmbed.text.includes("speaker-session-when"));
+
+  // --- §5-3: the session <-> speaker round trip ------------------------------
+  // Derived here the way the pages derive it, then walked in both directions.
+  // A fragment that does not exist fails silently in a browser, so the anchor
+  // is asserted present on the target rather than inferred from the link.
+  const anchorSlug = (name) => name
+    .normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const embedSpeakerAnchor = `speaker-${anchorSlug(EMBED_SPEAKER_NAME)}`;
+  check("§5-3 the speaker card carries the anchor a session card links to",
+    speakersEmbed.text.includes(`id="${embedSpeakerAnchor}"`),
+    `expected id="${embedSpeakerAnchor}" on the gallery`);
+  check("§5-3 the session card links each speaker name into the directory",
+    enriched.text.includes(`/embed/speakers?event=${EVENT_ID}#${embedSpeakerAnchor}`),
+    `expected a #${embedSpeakerAnchor} link on the schedule embed`);
+  check("§5-3 the schedule embed offers a header link to the speaker directory",
+    enriched.text.includes(`href="/embed/speakers?event=${EVENT_ID}"`)
+    && (renderedText(enriched.text) ?? "").includes("Speakers"));
+  check("§5-3 the speaker gallery offers the return link to the schedule",
+    speakersEmbed.text.includes(`href="/embed/schedule?event=${EVENT_ID}"`)
+    && (renderedText(speakersEmbed.text) ?? "").includes("Schedule"));
+  // ...and the speaker -> session direction still lands on a real anchor.
+  check("§5-3 a speaker's session link targets an anchor the schedule renders",
+    speakersEmbed.text.includes(`/embed/schedule?event=${EVENT_ID}#session-${fx.sessionA.id}`)
+    && enriched.text.includes(`id="session-${fx.sessionA.id}"`),
+    "expected the session anchor round trip to close");
+  // Both surfaces link within themselves: a framed reader is never navigated
+  // onto the standalone site, and a canonical reader never into the frame.
+  const canonicalSchedule = await req("GET", `/schedule?event=${EVENT_ID}`, null, null);
+  check("§5-3 the canonical schedule cross-links to the canonical directory",
+    canonicalSchedule.status === 200
+    && canonicalSchedule.text.includes(`/speakers?event=${EVENT_ID}#${embedSpeakerAnchor}`)
+    && !canonicalSchedule.text.includes(`/embed/speakers?event=${EVENT_ID}#`),
+    "expected canonical-to-canonical speaker links");
   check("speaker detail opens with native details, not a JS-only modal",
     speakersEmbed.text.includes('<details class="speaker-detail">')
     && speakersEmbed.text.includes("Full profile")

@@ -71,6 +71,7 @@ import {
   type PublicSpeakers,
 } from "@/lib/public-speakers";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { publicSessionDescription } from "@/lib/public-session-copy";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -1055,7 +1056,11 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
       slotId: slot.id,
       sessionId: slot.sessionId,
       title: slot.session.title,
-      description: slot.session.description,
+      // Sanitized at the read, not at each renderer: this projection feeds the
+      // schedule embed, the canonical page, the landing metrics and keyword
+      // search alike, and an internal provenance note must not reach any of
+      // them — including as a search match on text nobody can see.
+      description: publicSessionDescription(slot.session.description),
       format: slot.session.format,
       room: slot.room,
       track: slot.track,

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError, handle, ok } from "@/lib/api/http";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { publicSessionDescription } from "@/lib/public-session-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,9 @@ export const GET = handle(async (req) => {
       slotId: slot.id,
       sessionId: slot.sessionId,
       title: slot.session.title,
-      description: slot.session.description,
+      // The same sanitizer the server-rendered embed reads through, so the
+      // JSON twin cannot publish a provenance note the page suppresses.
+      description: publicSessionDescription(slot.session.description),
       format: slot.session.format,
       room: slot.room,
       track: slot.track,

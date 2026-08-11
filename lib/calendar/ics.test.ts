@@ -102,3 +102,30 @@ test("builds safe filenames", () => {
   assert.equal(icsFilename("  Weird///Title!!  "), "weird-title.ics");
   assert.equal(icsFilename("!!!"), "session.ics");
 });
+
+test("a track reaches the calendar client as CATEGORIES", () => {
+  // §5-6: without this a subscribed attendee sees an undifferentiated wall of
+  // identical blocks — CATEGORIES is the grouping and colour hook every major
+  // client already reads.
+  const ics = buildIcsCalendar([{ ...baseEvent, categories: ["Applied AI"] }], { now: NOW });
+  assert.ok(ics.includes("CATEGORIES:Applied AI"));
+});
+
+test("CATEGORIES separates values with commas and escapes only the ones inside", () => {
+  // RFC 5545 §3.8.1.2 is a comma-SEPARATED list, so the separator is structural
+  // and must not be escaped; a comma within one value must be.
+  const ics = buildIcsCalendar(
+    [{ ...baseEvent, categories: ["Mainstage", "Ops, SRE"] }],
+    { now: NOW },
+  );
+  assert.ok(ics.includes("CATEGORIES:Mainstage,Ops\\, SRE"), ics);
+});
+
+test("an untracked session emits no CATEGORIES line at all", () => {
+  // Never an empty or invented category: a client would render the blank as a
+  // real group sitting alongside the real tracks.
+  assert.ok(!buildIcsCalendar([baseEvent], { now: NOW }).includes("CATEGORIES"));
+  assert.ok(!buildIcsCalendar([{ ...baseEvent, categories: [] }], { now: NOW }).includes("CATEGORIES"));
+  assert.ok(!buildIcsCalendar([{ ...baseEvent, categories: null }], { now: NOW }).includes("CATEGORIES"));
+  assert.ok(!buildIcsCalendar([{ ...baseEvent, categories: ["  ", ""] }], { now: NOW }).includes("CATEGORIES"));
+});

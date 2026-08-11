@@ -4,8 +4,15 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CalendarDays, Mic2, Search, Users } from "lucide-react";
 import type { PublicSpeaker, PublicSpeakers } from "@/lib/public-speakers";
-import { formatEventDateRange } from "@/lib/tz";
+import {
+  EMBED_SCHEDULE_PATH,
+  EMBED_SPEAKERS_PATH,
+  publicSurfaceUrl,
+  type PublicSurfacePath,
+} from "@/lib/embed-alias";
+import { formatEventDateRange, timeZoneNote } from "@/lib/tz";
 import { boundedCountLabel } from "@/lib/bounded-count";
+import { speakerAnchorId } from "@/lib/speaker-anchor";
 import {
   headshotAlt,
   initials,
@@ -18,10 +25,22 @@ export function EmbedSpeakers({
   gallery,
   initialQuery,
   initialTrack,
+  eventParam,
+  basePath = EMBED_SPEAKERS_PATH,
+  schedulePath = EMBED_SCHEDULE_PATH,
 }: {
   gallery: PublicSpeakers;
   initialQuery: string;
   initialTrack: string;
+  /** The host page's own `?event=`, echoed back verbatim. Falls back to the
+   *  resolved slug so a link is never eventless on a non-default programme. */
+  eventParam?: string;
+  /** Where this page's own search form returns to: `/speakers` or the
+   *  frameable `/embed/speakers`. */
+  basePath?: PublicSurfacePath;
+  /** The schedule on the SAME surface, so a session link out of the gallery
+   *  never drops a framed reader onto the standalone site (or the reverse). */
+  schedulePath?: PublicSurfacePath;
 }) {
   const isKnownTrack = (value: string) => value === "all" || gallery.tracks.some((item) => item.name === value);
   const [query, setQuery] = useState(initialQuery);
@@ -57,8 +76,24 @@ export function EmbedSpeakers({
     [gallery.speakers, normalizedQuery, track],
   );
 
-  const scheduleUrl = `/embed/schedule?event=${encodeURIComponent(gallery.event.slug)}`;
+  // The host page's parameter wins so a slug-or-id choice stays byte-identical
+  // across the page; the resolved slug is the fallback, never nothing.
+  const eventValue = eventParam?.trim() || gallery.event.slug;
+  const scheduleUrl = publicSurfaceUrl(schedulePath, eventValue);
   const dates = formatEventDateRange(gallery.event.startsAt, gallery.event.endsAt, gallery.event.timezone);
+  // Every session line below prints an event-local time; the header names the
+  // clock once so each card does not have to explain itself (§5-2). Fed the
+  // placement instants those lines actually label, so a lineup spanning a DST
+  // change is described by the zone name rather than one card's abbreviation.
+  // `gallery.speakers`, not `filtered`: the clock must not change as the reader
+  // searches.
+  const zoneNote = timeZoneNote(gallery.event.timezone, [
+    gallery.event.startsAt,
+    gallery.event.endsAt,
+    ...gallery.speakers.flatMap((speaker) =>
+      speaker.sessions.flatMap((session) => [session.startsAt, session.endsAt]),
+    ),
+  ]);
 
   const updateUrl = (nextQuery: string, nextTrack: string, historyMode: "push" | "replace") => {
     const url = new URL(window.location.href);
@@ -93,6 +128,7 @@ export function EmbedSpeakers({
                     below says so in words, and this must not contradict it. */}
                 {boundedCountLabel(gallery.speakers.length, gallery.truncated, "speaker")}
                 {dates ? ` · ${dates}` : ""}
+                {` · ${zoneNote}`}
               </p>
             </div>
             <Link className="ghost-button" href={scheduleUrl}>
@@ -104,8 +140,8 @@ export function EmbedSpeakers({
               the page already reads `?q=` server-side. With JS the onChange
               filters live and rewrites the URL, and Enter submits the same
               query it would have produced. */}
-          <form className="speaker-gallery-controls" method="get" action="/embed/speakers" role="search">
-            <input type="hidden" name="event" value={gallery.event.slug} />
+          <form className="speaker-gallery-controls" method="get" action={basePath} role="search">
+            <input type="hidden" name="event" value={eventValue} />
             {track !== "all" ? <input type="hidden" name="track" value={track} /> : null}
             <label className="speaker-search">
               <span className="sr-only">Search speakers by name, company, bio or session</span>
@@ -167,7 +203,10 @@ export function EmbedSpeakers({
               const detail = speakerDetailLine(speaker);
               const key = `${speaker.name}-${speaker.sessions.map((session) => session.id).join("-")}-${index}`;
               return (
-                <article className="speaker-card" key={key}>
+                // The anchor a session card links back to (§5-3). Derived from
+                // the name, which is the only identifier this projection
+                // publishes — see lib/speaker-anchor.ts.
+                <article className="speaker-card" id={speakerAnchorId(speaker.name)} key={key}>
                   <div className="speaker-avatar">
                     <span aria-hidden="true">{initials(speaker.name)}</span>
                     {speaker.headshotUrl ? (

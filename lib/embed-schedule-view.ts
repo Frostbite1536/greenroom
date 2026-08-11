@@ -281,15 +281,22 @@ export function chipPrefix(kind: ScheduleChipKind): string {
 }
 
 /**
- * Build an `/embed/schedule` URL that keeps every other filter intact.
+ * Build a schedule URL that keeps every other filter intact.
  *
  * `eventParam` is echoed exactly as it arrived (slug or id) so a host page's
  * `?event=` stays byte-identical across every link on the page.
+ *
+ * `basePath` is what lets the same component serve `/schedule` and
+ * `/embed/schedule`: a filter link must return to the page the reader is
+ * actually on, or clicking a day tab on the canonical page would silently drop
+ * them into the chrome-free embed. It defaults to the embed path, which is
+ * where this function's only caller lived before the canonical page existed.
  */
 export function scheduleHref(
   eventParam: string | undefined,
   filters: ScheduleFilters,
   overrides: Partial<ScheduleFilters> = {},
+  basePath = "/embed/schedule",
 ): string {
   const next = { ...filters, ...overrides };
   const params = new URLSearchParams();
@@ -298,7 +305,7 @@ export function scheduleHref(
   if (next.day && next.day !== ALL) params.set("day", next.day);
   if (next.q) params.set("q", next.q);
   const query = params.toString();
-  return query ? `/embed/schedule?${query}` : "/embed/schedule";
+  return query ? `${basePath}?${query}` : basePath;
 }
 
 /**

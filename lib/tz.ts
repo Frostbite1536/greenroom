@@ -169,6 +169,79 @@ export function tzAbbreviation(timeZone: string, at = new Date()): string {
   return parts.find((p) => p.type === "timeZoneName")?.value ?? timeZone;
 }
 
+/**
+ * A public time range that says which clock it is on: "10:00 AM–10:45 AM PDT".
+ *
+ * A bare time on a public programme is ambiguous to every reader who is not
+ * standing at the venue, and it is the one number an attendee acts on. The
+ * abbreviation is derived **at the session's own start instant**, never at
+ * "now": an event in May read in December must still say PDT, and defaulting
+ * `tzAbbreviation` to the current date would have printed PST.
+ *
+ * `endIso` is optional so a session with a start but no stored end still gets a
+ * labelled time rather than being dropped back to a bare one.
+ */
+export function formatTimeRange(
+  startIso: string,
+  endIso: string | null | undefined,
+  timeZone: string,
+): string {
+  const zone = tzAbbreviation(timeZone, new Date(startIso));
+  const start = formatTime(startIso, timeZone);
+  return endIso ? `${start}–${formatTime(endIso, timeZone)} ${zone}` : `${start} ${zone}`;
+}
+
+/**
+ * The header note naming the clock every time on the page is printed in.
+ *
+ * Pinned to real instants for the same reason as `formatTimeRange`, so the note
+ * cannot drift with the reader's calendar. But one abbreviation is only honest
+ * when the whole programme sits on one side of a DST transition: an event
+ * running 31 Oct – 2 Nov in Los Angeles has PDT cards and PST cards on the same
+ * page, and a header claiming "All times PDT" would contradict half of them.
+ *
+ * So the caller passes every instant the page displays, and:
+ *
+ *  - all on one offset  -> "All times PDT", the useful, specific answer;
+ *  - spanning a change  -> "All times in America/Los_Angeles", which explains
+ *    the per-card abbreviations instead of contradicting them.
+ *
+ * Callers pass the event's own bounds AND the sessions' instants, not the
+ * bounds alone: `eventDayKeys` deliberately unions in days holding sessions
+ * that fall outside the stored `startsAt..endsAt`, so an event with absent or
+ * stale dates can still display instants its bounds never covered.
+ *
+ * Invalid and absent entries are skipped rather than defaulting to "now",
+ * which would let a corrupt row silently flip the label. If nothing usable is
+ * supplied at all, it falls back to the current instant so the note is never
+ * blank.
+ */
+export function timeZoneNote(
+  timeZone: string,
+  instants: ReadonlyArray<string | Date | null | undefined> = [],
+): string {
+  // One formatter for the whole scan: `formatToParts` is stateless, and the
+  // agenda read is capped at hundreds of sessions.
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" });
+  const abbreviationAt = (date: Date) =>
+    formatter.formatToParts(date).find((part) => part.type === "timeZoneName")?.value ?? timeZone;
+
+  let seen: string | null = null;
+  for (const value of instants) {
+    if (value === null || value === undefined) continue;
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) continue;
+
+    const abbreviation = abbreviationAt(date);
+    if (seen === null) seen = abbreviation;
+    // Early exit: a second distinct offset is all it takes, and the rest of the
+    // scan cannot change the answer.
+    else if (abbreviation !== seen) return `All times in ${timeZone}`;
+  }
+
+  return `All times ${seen ?? abbreviationAt(new Date())}`;
+}
+
 export function minutesToTimeInput(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
