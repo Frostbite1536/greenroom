@@ -17,7 +17,7 @@ min). No local setup appears on camera.
 | Browser / viewport | *fill in at capture (e.g. Edge 1440 × 900)* |
 
 Restate the commit in the video description or an on-screen card. If the
-deployment moves before the recording, update this table first — every judge
+deployment moves before the recording, update this table first — every evidence
 artifact must name the same commit.
 
 ## Before recording

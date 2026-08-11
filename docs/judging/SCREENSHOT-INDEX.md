@@ -1,6 +1,6 @@
 # Screenshot index — current production evidence
 
-The primary screenshot set for judging. Every row is captured from the deployed
+The primary screenshot set for evaluation. Every row is captured from the deployed
 application at one recorded commit, and every row carries the metadata needed to
 reproduce or challenge it.
 
@@ -120,6 +120,6 @@ record of what was replaced.
 
 - [`VIDEO-SCRIPT.md`](VIDEO-SCRIPT.md) — the walkthrough these shots support,
   recorded at the same commit.
-- [`README.md`](README.md) — the judging index, the product narrative, and the
+- [`README.md`](README.md) — the evaluation index, the product narrative, and the
   current limitations list.
 - [`PERFORMANCE.md`](PERFORMANCE.md) — Lighthouse results, labeled historical.

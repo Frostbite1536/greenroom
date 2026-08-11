@@ -12,7 +12,7 @@ inside an announced single-writer window. This was the first **persisted
 admin-mutation sweep** on the then-current signed-session implementation.
 
 Authentication used the app's own `/login` server action over HTTPS (the same
-one-click persona flow a judge uses) — no forged cookies; the signed
+one-click persona flow an evaluator uses) — no forged cookies; the signed
 `sb_session` cookie was issued by production itself.
 
 ## Results — 14/14 PASS
@@ -43,5 +43,8 @@ residue, event boundaries `2026-05-12` → `2026-05-14` (America/Los_Angeles),
 first slot 9:00 AM local, speaker persona restored to demo defaults.
 `scripts/prod-verify.mjs` passed **5/5** after the reseed.
 
-Note for judges: the deliberate room conflict in the seeded agenda is
-intentional — it demonstrates the conflict banner in the agenda builder.
+Note, and part of what makes this run historical: the seeded agenda **at that
+commit** carried one deliberate room conflict so the agenda builder's conflict
+banner had something to show. The current seed does not — the demo programme is
+conflict-free across all three event days, the Conflicts view reads zero, and
+the walkthrough demonstrates a refusal live instead.
