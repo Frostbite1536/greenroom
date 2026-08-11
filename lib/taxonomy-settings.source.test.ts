@@ -25,11 +25,50 @@ test("a category edit sends PATCH, so renaming cannot clear the review group", (
   assert.match(source, /apiDelete<CategoryView>\([\s\S]{0,120}?\/api\/cfp\/categories\?categoryId=\$\{encodeURIComponent\(category\.id\)\}/);
   const save = source.slice(source.indexOf("async function saveCategory"), source.indexOf("async function removeCategory"));
   assert.doesNotMatch(save, /apiPost/);
-  // The review group is editable and round-trips through the same save, so it
-  // is never a field the operator can only lose.
-  assert.match(save, /defaultTeamKey: optionalText\(editingCategory\.defaultTeamKey\)/);
-  assert.match(save, /description: optionalText\(editingCategory\.description\)/);
+  // The review group is editable, so it is never a field the operator can only
+  // lose.
   assert.match(source, /value=\{draft\.defaultTeamKey\}/);
+});
+
+test("a row editor sends only the planned diff, never a rebuilt whole row", () => {
+  // The stale-overwrite regression: naming the fields inline resends the
+  // editor's snapshot of every one of them, so an untouched field silently
+  // overwrites whatever a colleague changed while this editor sat open. The
+  // body must be the planner's sparse output spread onto the id, nothing else.
+  for (const [name, next, plan] of [
+    // Rooms is the same defect class as the two taxonomies, so it is held to
+    // the same contract here rather than left as the one editor that resends
+    // a whole row.
+    ["saveRoom", "removeRoom", "planRoomPatch\\(\\{ name: editingRoom\\.name, capacity: capacity \\?\\? null \\}, editingRoom\\.loaded\\)"],
+    ["saveTrack", "removeTrack", "planTrackPatch\\(editingTrack, editingTrack\\.loaded\\)"],
+    ["saveCategory", "removeCategory", "planCategoryPatch\\(editingCategory, editingCategory\\.loaded\\)"],
+  ] as const) {
+    const save = source.slice(source.indexOf(`async function ${name}`), source.indexOf(`async function ${next}`));
+    assert.match(save, new RegExp(`const patch = ${plan}`), name);
+    assert.match(save, /\.\.\.patch,/, name);
+    // A no-op edit must not reach the API at all.
+    assert.match(save, /if \(!patch\) \{/, name);
+    // No field may be named in the outbound body beside the id.
+    const bodyStart = save.indexOf("apiPatch");
+    const body = save.slice(bodyStart, save.indexOf("});", bodyStart));
+    for (const field of ["name:", "color:", "capacity:", "description:", "defaultTeamKey:", "sortOrder:"]) {
+      assert.equal(body.includes(field), false, `${name} must not resend ${field}`);
+    }
+  }
+});
+
+test("a row editor diffs against the row as loaded, not against current server truth", () => {
+  // Diffing against the live RSC payload would reintroduce the bug from the
+  // other side: a field this operator never touched would differ from a
+  // colleague's newer value and be resent, reverting it.
+  assert.match(source, /loaded: \{ name: room\.name, capacity: room\.capacity \}/);
+  assert.match(source, /loaded: \{ name: track\.name, color: track\.color \}/);
+  assert.match(source, /loaded: \{[\s\S]{0,200}?defaultTeamKey: category\.defaultTeamKey,[\s\S]{0,40}?\}/);
+  for (const save of ["saveRoom", "saveTrack", "saveCategory"]) {
+    const start = source.indexOf(`async function ${save}`);
+    const body = source.slice(start, source.indexOf("const patch", start));
+    assert.doesNotMatch(body, /view\.(rooms|tracks|categories)\.find/, save);
+  }
 });
 
 test("a refused removal keeps the row, because the record is still real event data", () => {
