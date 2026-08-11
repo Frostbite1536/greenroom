@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui";
 import { AbstractsTable } from "@/components/abstracts-table";
 import { getAdminAbstracts } from "@/lib/data/reads";
+import { readAbstractPermalinkId } from "@/lib/abstract-permalink";
 import { getApiContext } from "@/lib/api/context";
 import { ApiError } from "@/lib/api/http";
 
@@ -12,7 +13,14 @@ export const dynamic = "force-dynamic";
 export default async function AbstractsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ abstractId?: string | string[]; mode?: string | string[]; planId?: string | string[] }>;
+  searchParams: Promise<{
+    /** Canonical shareable permalink; see `@/lib/abstract-permalink`. */
+    abstract?: string | string[];
+    /** The original parameter, still accepted so existing links keep working. */
+    abstractId?: string | string[];
+    mode?: string | string[];
+    planId?: string | string[];
+  }>;
 }) {
   // Resolve the persisted role before starting the proposal read. An evaluator
   // belongs only in the assignment-scoped workspace; redirecting here means
@@ -29,7 +37,12 @@ export default async function AbstractsPage({
   // it must name an abstract already scoped by getAdminAbstracts(). Older
   // proposals are intentionally outside the newest bounded table page, but a
   // valid event-scoped deep link still gets its own drawer record.
-  const requestedId = typeof params.abstractId === "string" ? params.abstractId : null;
+  // `?abstract=<id>` is the canonical permalink and `?abstractId=` the legacy
+  // alias; both are read here rather than at each call site. Resolution stays
+  // server-side, so the drawer is present in the FIRST response — a
+  // deep-linked proposal is readable without JavaScript having run, and the
+  // link survives a paste and a reload.
+  const requestedId = readAbstractPermalinkId(params);
   const requestedPlanId = typeof params.planId === "string" ? params.planId : null;
   const view = await (async () => {
     try {

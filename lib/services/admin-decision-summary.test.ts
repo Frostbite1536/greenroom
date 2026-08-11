@@ -59,8 +59,68 @@ test("decision summary averages complete per-review weighted scores without iden
     completedAssignments: 3,
     includedReviews: 2,
     weightedAverage: (10 / 3 + 5) / 2,
+    // The organizer breakdown: an aggregate per criterion, over exactly the two
+    // reviews the total included. `incomplete-reviewer`'s lone impact score of
+    // 3 is excluded from BOTH, so 4.5 rather than (4+5+3)/3.
+    criteria: [
+      { key: "impact", label: "Impact", weight: 2, min: 1, max: 5, average: 4.5, reviews: 2 },
+      { key: "clarity", label: "Clarity", weight: 1, min: 1, max: 5, average: 3.5, reviews: 2 },
+    ],
   });
+  // The breakdown must not become a route by which a reviewer identity reaches
+  // an organizer screen — the whole point of aggregating it server-side.
   assert.equal(JSON.stringify(summaries).includes("reviewer-a"), false);
+  assert.equal(JSON.stringify(summaries).includes("reviewer-b"), false);
+  assert.equal(JSON.stringify(summaries).includes("evaluatorId"), false);
+});
+
+test("the criterion breakdown and the total always describe the same review set", () => {
+  // One review is complete and valid; the other is missing a criterion. The
+  // partial review must contribute to neither the total nor any criterion —
+  // an "average" that quietly counted it would misdescribe the score above it.
+  const summaries = summarizeCompletedDecisionReviews({
+    abstractIds: ["abstract-1"],
+    rubric: parseDecisionRubric(rubric),
+    assignments: [
+      { abstractId: "abstract-1", evaluatorId: "complete" },
+      { abstractId: "abstract-1", evaluatorId: "partial" },
+    ],
+    scores: [
+      { abstractId: "abstract-1", evaluatorId: "complete", rubricKey: "impact", score: 4 },
+      { abstractId: "abstract-1", evaluatorId: "complete", rubricKey: "clarity", score: 2 },
+      { abstractId: "abstract-1", evaluatorId: "partial", rubricKey: "impact", score: 1 },
+    ],
+  });
+  const summary = summaries["abstract-1"];
+  assert.equal(summary.includedReviews, 1);
+  assert.equal(summary.criteria.length, 2);
+  for (const criterion of summary.criteria) {
+    assert.equal(criterion.reviews, summary.includedReviews, criterion.key);
+  }
+  assert.equal(summary.criteria[0].average, 4, "the excluded review's 1 must not drag impact down");
+  assert.equal(summary.criteria[1].average, 2);
+});
+
+test("a rubric with no included review still names what the round scores against", () => {
+  // An organizer must be able to read the rubric before any review lands.
+  // Absence is an em-dash case in the UI, not a zero: `average` stays null.
+  const summaries = summarizeCompletedDecisionReviews({
+    abstractIds: ["abstract-1"],
+    rubric: parseDecisionRubric(rubric),
+    assignments: [],
+    scores: [],
+  });
+  assert.deepEqual(summaries["abstract-1"], {
+    completedAssignments: 0,
+    includedReviews: 0,
+    weightedAverage: null,
+    criteria: [
+      { key: "impact", label: "Impact", weight: 2, min: 1, max: 5, average: null, reviews: 0 },
+      { key: "clarity", label: "Clarity", weight: 1, min: 1, max: 5, average: null, reviews: 0 },
+    ],
+  });
+  // Stored order, not weight order: the rubric is the author's own sequence.
+  assert.deepEqual(summaries["abstract-1"].criteria.map((c) => c.key), ["impact", "clarity"]);
 });
 
 test("decision summary fails closed for malformed rubrics, duplicate keys, and invalid review rows", () => {
@@ -99,6 +159,9 @@ test("decision summary fails closed for malformed rubrics, duplicate keys, and i
     completedAssignments: 1,
     includedReviews: 0,
     weightedAverage: null,
+    // An unreadable rubric blanks the breakdown for the same reason it blanks
+    // the score: naming criteria we could not parse would be an invention.
+    criteria: [],
   });
 
   const duplicateScores = summarizeCompletedDecisionReviews({

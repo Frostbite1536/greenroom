@@ -1956,6 +1956,224 @@ try {
     && legacySetupText.includes("Scoring is unaffected."));
   await prisma.evaluationPlan.delete({ where: { id: legacyPlan.id } });
 
+  // --- §4-1: the rubric an organizer is reading scores against -------------
+  // Written straight through Prisma so the stored name is EXACTLY the shape
+  // that produced the §4-5 duplication: "Round N — …", which is what both the
+  // demo seed and the New round dialog default to. Ordinal 95 sits in the
+  // same disposable range as the weight-bounds probes above and is deleted at
+  // the end of this block.
+  const boardPlan = await prisma.evaluationPlan.create({
+    data: {
+      eventId: EVENT_ID, name: "Round 95 — Program Committee", ordinal: 95, isBlind: false,
+      rubric: [
+        { key: "relevance", label: "Scratch Relevance", min: 1, max: 5, weight: 3 },
+        { key: "clarity", label: "Scratch Clarity", min: 1, max: 5, weight: 1 },
+      ],
+    },
+  });
+  // §4-3 needs a genuinely withdrawn proposal ON this page. The fixture's own
+  // withdrawal happens much later in this script, so the chip would otherwise
+  // be asserted against a permanent zero — which is exactly the vacuous check
+  // this block exists to avoid. Removed with `boardPlan` at the end so the
+  // abstract counts later assertions rely on are left as they were found.
+  const boardWithdrawn = await prisma.abstract.create({
+    data: {
+      eventId: EVENT_ID, formConfigId: fx.form.id, submitterId: fx.users.speaker,
+      title: "Scratch: Withdrawn before review", abstract: "Pulled by the speaker.",
+      format: "Talk", durationMinutes: 30, categoryId: fx.category.id,
+      status: "WITHDRAWN", submittedAt: new Date(),
+      speakers: { create: [{ userId: fx.users.speaker, isPrimary: true }] },
+    },
+  });
+
+  const boardSetupPage = await req("GET", "/admin/evaluations", null, admin);
+  const boardSetupText = renderedText(boardSetupPage.text) ?? "";
+  check("§4-1 the round card names each rubric criterion, not just how many there are",
+    boardSetupPage.status === 200
+    && boardSetupText.includes("Scratch Relevance")
+    && boardSetupText.includes("Scratch Clarity"),
+    `${boardSetupPage.status}`);
+  // The SHARE, not the raw weight alone: weights are relative multipliers, so
+  // 3 of 4 is the number that answers "how much does this count?".
+  check("§4-1 each criterion states its share of the round's total weight",
+    boardSetupText.includes("Weight 3 · 75% of rubric weight")
+    && boardSetupText.includes("Weight 1 · 25% of rubric weight"),
+    boardSetupText.slice(Math.max(0, boardSetupText.indexOf("Scratch Relevance") - 40), boardSetupText.indexOf("Scratch Relevance") + 160));
+  // Read-only: the card must not have grown a control that could rewrite a
+  // rubric reviewers have already scored against.
+  // Ends at the NEXT panel's own heading rather than at a counted `</div>`:
+  // over-running into the assign panel would find its checkboxes and fail this
+  // check for the wrong reason.
+  const boardRoundList = (() => {
+    const start = boardSetupPage.text.indexOf('<div class="round-list">');
+    if (start === -1) return "";
+    const end = boardSetupPage.text.indexOf("Assign proposals to reviewers", start);
+    return end === -1 ? boardSetupPage.text.slice(start) : boardSetupPage.text.slice(start, end);
+  })();
+  check("§4-1 the rubric on the card is read-only — no input, select or form in the round list",
+    boardRoundList !== ""
+    && !/<input|<select|<textarea|<form/i.test(boardRoundList),
+    boardRoundList.slice(0, 200) || "round list not found");
+
+  // --- §4-5: a round's number is printed once, not once per part -----------
+  // The exact reported regression was "Round 1 — Round 1 — Program Committee".
+  check("§4-5 the round card prints the round number once, never twice",
+    boardSetupText.includes("Round 95")
+    && boardSetupText.includes("Program Committee")
+    && !boardSetupText.includes("Round 95 — Round 95")
+    && !boardSetupText.includes("Round 95Round 95"),
+    boardSetupText.slice(Math.max(0, boardSetupText.indexOf("Round 95") - 20), boardSetupText.indexOf("Round 95") + 120));
+  // Non-vacuity: the assertion above would also pass on a page that never
+  // mentioned this round at all, so pin that the composed label is present.
+  // Counted in VISIBLE text only: renderedText keeps <script> contents, and the
+  // RSC flight payload inside them repeats every rendered string, so a count
+  // over it measures Next's serialization, not the page. Presence checks are
+  // immune; this is the harness's first occurrence COUNT, so it strips
+  // script/style bodies first.
+  const boardVisibleText = (boardSetupPage.text ?? "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[^;]+;/g, "");
+  const boardOrdinalHits = (boardVisibleText.match(/Round 95/g) ?? []).length;
+  check("§4-5 the round IS on the page — the no-duplication check is not vacuous",
+    boardOrdinalHits >= 1 && boardOrdinalHits <= 2, `got ${boardOrdinalHits} visible occurrences`);
+  // Same round, the other surface: the abstracts page's decision-round select.
+  const boardDecisionPage = await req(
+    "GET", `/admin/abstracts?planId=${encodeURIComponent(boardPlan.id)}`, null, admin,
+  );
+  const boardDecisionText = renderedText(boardDecisionPage.text) ?? "";
+  check("§4-5 the decision-round selector composes the same label, once",
+    boardDecisionPage.status === 200
+    && boardDecisionText.includes("Round 95 — Program Committee")
+    && !boardDecisionText.includes("Round 95 — Round 95"),
+    `${boardDecisionPage.status}`);
+
+  // --- §4-2: a coverage row is identifiable and reachable ------------------
+  const boardCoverageRow = (() => {
+    const marker = boardSetupPage.text.indexOf("Review coverage");
+    if (marker === -1) return "";
+    const titleIndex = boardSetupPage.text.indexOf(fx.abstract.title, marker);
+    if (titleIndex === -1) return "";
+    const start = boardSetupPage.text.lastIndexOf("<tr", titleIndex);
+    const end = boardSetupPage.text.indexOf("</tr>", titleIndex);
+    return start === -1 || end === -1 ? "" : boardSetupPage.text.slice(start, end + "</tr>".length);
+  })();
+  check("§4-2 the coverage row names the proposal's speaker, not only its title",
+    renderedText(boardCoverageRow)?.includes("Sofia Marques") === true,
+    boardCoverageRow || "coverage row not found");
+  // The link is the canonical permalink and carries THIS row's id, so a row
+  // linking to the wrong proposal fails rather than passing on "some <a>".
+  check("§4-2 the coverage row links into that proposal's own drawer",
+    boardCoverageRow.includes(`href="/admin/abstracts?abstract=${fx.abstract.id}"`),
+    boardCoverageRow || "coverage row not found");
+  // A real anchor, not a row click handler: copy-link and keyboard use must
+  // work, and the smoke can only see the anchor.
+  check("§4-2 the coverage link is a real anchor rather than a scripted row",
+    /<a [^>]*href="\/admin\/abstracts\?abstract=/.test(boardCoverageRow)
+    && !/onclick/i.test(boardCoverageRow),
+    boardCoverageRow || "coverage row not found");
+
+  // --- §4-4: the permalink resolves server-side on first load --------------
+  // No follow-up request and no client JavaScript: the drawer has to be in
+  // this very response, or the link is not deep-linkable.
+  const boardPermalink = await req(
+    "GET", `/admin/abstracts?abstract=${encodeURIComponent(fx.abstract.id)}`, null, admin,
+  );
+  check("§4-4 ?abstract=<id> renders that proposal's drawer in the first response",
+    boardPermalink.status === 200
+    && boardPermalink.text.includes('role="dialog"')
+    && boardPermalink.text.includes('aria-modal="true"')
+    // Served JSX keeps camelCase attribute names, so the label is matched
+    // case-insensitively rather than assuming a lowercased `aria-label`.
+    && new RegExp(`aria-label="${fx.abstract.title}"`, "i").test(boardPermalink.text),
+    `${boardPermalink.status}`);
+  // Control: the same page WITHOUT the parameter must not open a drawer, or
+  // the check above proves nothing about the parameter.
+  const boardNoParam = await req("GET", "/admin/abstracts", null, admin);
+  check("§4-4 the drawer is absent without the parameter — the deep link is what opens it",
+    boardNoParam.status === 200 && !boardNoParam.text.includes('role="dialog"'),
+    `${boardNoParam.status}`);
+  // The original parameter still works: existing links must not have broken.
+  const boardLegacyParam = await req(
+    "GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin,
+  );
+  check("§4-4 the original ?abstractId= link still opens the same drawer",
+    boardLegacyParam.status === 200 && boardLegacyParam.text.includes('role="dialog"'),
+    `${boardLegacyParam.status}`);
+  // Graceful degrade: a made-up id and a syntactically odd one both render the
+  // page normally, with no drawer and no error. (The cross-event case needs a
+  // real foreign abstract, so it is asserted in the S20 block below, where
+  // that fixture already exists.)
+  const boardUnknown = await req("GET", "/admin/abstracts?abstract=no-such-proposal", null, admin);
+  const boardOddId = await req("GET", "/admin/abstracts?abstract=%20%26planId%3Dx", null, admin);
+  check("§4-4 an unknown or malformed id renders the page with no drawer and no error",
+    boardUnknown.status === 200 && !boardUnknown.text.includes('role="dialog"')
+    && boardOddId.status === 200 && !boardOddId.text.includes('role="dialog"'),
+    `unknown ${boardUnknown.status}, odd ${boardOddId.status}`);
+  // The odd id above also proves the encoding holds: `%26planId%3Dx` decodes to
+  // `&planId=x`, and it must stay INSIDE the abstract parameter rather than
+  // forging a planId — which would 404 the page instead of rendering it.
+  check("§4-4 an id carrying query syntax cannot forge another parameter",
+    boardOddId.status === 200, `got ${boardOddId.status}, expected the page to render`);
+
+  // --- §4-1b: the decision score says which criterion earned it ------------
+  const boardBreakdown = (() => {
+    const start = boardPermalink.text.indexOf('<dl class="criterion-breakdown">');
+    if (start === -1) return "";
+    const end = boardPermalink.text.indexOf("</dl>", start);
+    return end === -1 ? "" : boardPermalink.text.slice(start, end + "</dl>".length);
+  })();
+  const boardBreakdownText = renderedText(boardBreakdown) ?? "";
+  check("§4-1 the drawer breaks the single decision score down by criterion",
+    boardPermalink.text.includes("Score by criterion")
+    && boardBreakdownText.includes("Relevance")
+    && boardBreakdownText.includes("Clarity"),
+    boardBreakdownText.slice(0, 240) || "criterion breakdown not found");
+  check("§4-1 each criterion carries its own weight share beside its score",
+    /% of rubric weight/.test(boardBreakdownText),
+    boardBreakdownText.slice(0, 240) || "criterion breakdown not found");
+  // Blind-review boundary: the breakdown is an aggregate, so no reviewer name
+  // may appear inside it however the round is configured.
+  check("§4-1 the criterion breakdown carries no reviewer identity",
+    !boardBreakdownText.includes("Ravi Patel")
+    && !boardBreakdownText.includes("Casey Morgan")
+    && !boardBreakdownText.includes("ravi@greenroom-hq.com"),
+    boardBreakdownText.slice(0, 240));
+
+  // --- §4-3: every status is reachable by a filter chip --------------------
+  // Anchored on each chip's own accessible name rather than on a sliced <div>:
+  // the aria-label is unique to the chip group and does not depend on the
+  // order the renderer happens to emit attributes in. Matched
+  // case-insensitively, since served JSX preserves the attribute names as
+  // authored.
+  const chipLabel = (label) => new RegExp(`aria-label="${label}: \\d+ loaded proposals"`, "i");
+  check("§4-3 the abstracts pipeline offers a Withdrawn chip alongside the others",
+    chipLabel("Withdrawn").test(boardNoParam.text),
+    boardNoParam.text.includes("Withdrawn") ? "the word appears but not as a counted chip" : "no Withdrawn chip");
+  // Non-vacuous in both directions: the new chip must be built exactly like
+  // the chips that already worked, so a Withdrawn chip that rendered while the
+  // others had regressed would not pass either.
+  check("§4-3 the Withdrawn chip is one of the status chips, built like the rest",
+    ["All", "Submitted", "Under review", "Maybe", "Accepted", "Declined", "Drafts", "Withdrawn"]
+      .every((label) => chipLabel(label).test(boardNoParam.text)),
+    ["All", "Submitted", "Under review", "Maybe", "Accepted", "Declined", "Drafts", "Withdrawn"]
+      .filter((label) => !chipLabel(label).test(boardNoParam.text)).join(", ") || "none missing");
+  // And it isolates something real. Without this the chip could ship reading a
+  // permanent zero and every assertion above would still pass.
+  const withdrawnOnPage = await prisma.abstract.count({
+    where: { eventId: EVENT_ID, status: "WITHDRAWN" },
+  });
+  check("§4-3 the Withdrawn chip counts real rows, not a permanent zero",
+    withdrawnOnPage > 0
+    && /aria-label="Withdrawn: [1-9]\d* loaded proposals"/i.test(boardNoParam.text)
+    && boardNoParam.text.includes(boardWithdrawn.title),
+    `${withdrawnOnPage} withdrawn stored`);
+
+  await prisma.evaluationPlan.delete({ where: { id: boardPlan.id } });
+  await prisma.abstract.delete({ where: { id: boardWithdrawn.id } });
+
   // Role-aware: an evaluator must get the scoring queue, never the setup panel.
   const evaluatorEval = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator does NOT see the setup panel",
@@ -2397,6 +2615,47 @@ try {
     && !("avgScore" in (apiAbstract ?? {}))
     && !("reviewsComplete" in (apiAbstract ?? {}))
     && !("reviewsTotal" in (apiAbstract ?? {})));
+
+  // --- §4-1: the per-criterion breakdown, at the API boundary --------------
+  const apiAbstractSummary = apiSummary?.summariesByAbstractId?.[fx.abstract.id];
+  const apiCriteria = apiAbstractSummary?.criteria ?? [];
+  check("§4-1 the decision summary projects the round's criteria, in stored order",
+    apiCriteria.length === 2
+    && apiCriteria[0]?.key === "relevance" && apiCriteria[0]?.label === "Relevance"
+    && apiCriteria[1]?.key === "clarity" && apiCriteria[1]?.label === "Clarity"
+    && apiCriteria[0]?.weight === 1.5 && apiCriteria[1]?.weight === 1,
+    JSON.stringify(apiCriteria));
+  // The strongest available consistency claim, and it needs no knowledge of
+  // the raw scores: because every included review carries every criterion,
+  // sum(criterionAverage x weight) / sum(weight) is ALGEBRAICALLY the same
+  // number as the weighted average computed per review. If the breakdown were
+  // ever gathered over a different set of reviews than the total, these two
+  // would diverge — which is exactly the regression worth catching.
+  const apiRecomputed = (() => {
+    if (apiCriteria.length === 0) return null;
+    let numerator = 0;
+    let denominator = 0;
+    for (const criterion of apiCriteria) {
+      if (typeof criterion.average !== "number") return null;
+      numerator += criterion.average * criterion.weight;
+      denominator += criterion.weight;
+    }
+    return denominator > 0 ? numerator / denominator : null;
+  })();
+  check("§4-1 the breakdown reconstructs the decision score exactly — same reviews, same maths",
+    apiRecomputed !== null
+    && Math.abs(apiRecomputed - apiAbstractSummary.weightedAverage) < 1e-9,
+    `recomputed ${apiRecomputed} vs projected ${apiAbstractSummary?.weightedAverage}`);
+  check("§4-1 every criterion reports the same review count the total was built from",
+    apiCriteria.length > 0
+    && apiCriteria.every((criterion) => criterion.reviews === apiAbstractSummary.includedReviews),
+    `includedReviews ${apiAbstractSummary?.includedReviews}, per-criterion ${apiCriteria.map((c) => c.reviews).join("/")}`);
+  // Blind-review boundary at the serialization layer, not just in the markup.
+  check("§4-1 the breakdown carries no evaluator id, name or per-reviewer score",
+    !JSON.stringify(apiSummary ?? {}).includes("evaluatorId")
+    && !JSON.stringify(apiSummary ?? {}).includes("Ravi Patel")
+    && !JSON.stringify(apiSummary ?? {}).includes(fx.users.evaluator)
+    && !JSON.stringify(apiSummary ?? {}).includes(fx.users.evaluatorTwo));
   const missingPlanPage = await req("GET", "/admin/abstracts?planId=missing-plan", null, admin);
   check("unknown decision round is a route-level 404", missingPlanPage.status === 404, `got ${missingPlanPage.status}`);
   // The later withdrawn-queue regression is intentionally scoped to its
@@ -2605,6 +2864,32 @@ try {
     && !s20CrossEventDrawer.text.includes("S20 cross-event proposal")
     && !hasSelectedDecisionControls(s20CrossEventDrawer.text)
     && !hasSelectedDecisionControls(s20UnknownDrawer.text));
+  // §4-4: the canonical `?abstract=` parameter inherits that scoping exactly.
+  // A REAL abstract from another event must be indistinguishable from one that
+  // never existed — no drawer, no title leak, and a 200 rather than a 404 that
+  // would confirm the id is real somewhere (S1 / INV-EVENT-001).
+  const s20CrossEventPermalink = await req(
+    "GET", `/admin/abstracts?abstract=${encodeURIComponent(s20CrossEventId)}`, null, admin,
+  );
+  const s20UnknownPermalink = await req("GET", "/admin/abstracts?abstract=s20-missing-proposal", null, admin);
+  check("§4-4 a REAL abstract from another event is refused exactly like a missing one",
+    s20CrossEventPermalink.status === 200
+    && s20UnknownPermalink.status === 200
+    && !s20CrossEventPermalink.text.includes("S20 cross-event proposal")
+    && !hasSelectedDecisionControls(s20CrossEventPermalink.text)
+    && !hasSelectedDecisionControls(s20UnknownPermalink.text),
+    `cross-event ${s20CrossEventPermalink.status}, unknown ${s20UnknownPermalink.status}`);
+  // Non-vacuity: the same parameter DOES open a drawer for an id in this
+  // event, so the two refusals above are the scoping working, not the
+  // parameter being ignored.
+  const s20OwnPermalink = await req(
+    "GET", `/admin/abstracts?abstract=${encodeURIComponent(s20SubmittedId)}`, null, admin,
+  );
+  check("§4-4 the same parameter DOES open an in-event proposal — the refusals are scoping",
+    s20OwnPermalink.status === 200
+    && s20OwnPermalink.text.includes("S20 submitted boundary proposal")
+    && hasSelectedDecisionControls(s20OwnPermalink.text),
+    `${s20OwnPermalink.status}`);
   check("S20 scopes organizer notes to materialized abstracts",
     !s20Page.text.includes("S20 older scoped review note")
     && s20OlderNotes.includes("S20 older scoped review note"));

@@ -99,10 +99,18 @@ export function rubricWeightShare(
   return (weight / total) * 100;
 }
 
-/** Trim a computed number to at most one decimal, without a trailing `.0`. */
-function formatWeightNumber(value: number): string {
+/**
+ * Trim a computed number to at most one decimal, without a trailing `.0`.
+ *
+ * Exported so the read-only rubric view (`lib/rubric-display.ts`) prints a
+ * weight and a share exactly as the round editor does. Two formatters would
+ * eventually disagree over a value like `33.333…`.
+ */
+export function formatRubricWeightNumber(value: number): string {
   return String(Math.round(value * 10) / 10);
 }
+
+const formatWeightNumber = formatRubricWeightNumber;
 
 /**
  * The share line under a weight input: `Weight 2 · 50% of rubric weight`.

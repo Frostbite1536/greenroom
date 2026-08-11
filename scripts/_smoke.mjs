@@ -4678,10 +4678,22 @@ try {
   const csvRoundPlan = await prisma.evaluationPlan.findUnique({
     where: { id: planId }, select: { name: true, ordinal: true },
   });
+  // Mirrors lib/round-label.ts: a name that repeats its own round number is
+  // deduplicated, so the expected label is composed, not `Round N — ${name}`.
+  const csvRoundStoredName = (csvRoundPlan?.name ?? "").trim();
+  const csvRoundNamePrefix = /^round\s*(\d+)\s*(?:[-–—:·|]\s*)?/i.exec(csvRoundStoredName);
+  const csvRoundSuffix =
+    csvRoundNamePrefix && Number(csvRoundNamePrefix[1]) === csvRoundPlan?.ordinal
+      ? csvRoundStoredName.slice(csvRoundNamePrefix[0].length).trim()
+      : csvRoundStoredName;
+  const csvRoundLabel = csvRoundSuffix === ""
+    ? `Round ${csvRoundPlan?.ordinal}`
+    : `Round ${csvRoundPlan?.ordinal} — ${csvRoundSuffix}`;
   check("ABS-13 an explicit round is named in every row exactly as the table labels it",
     csvRound.status === 200 &&
-      csvRoundBody.includes(`Round ${csvRoundPlan?.ordinal} — ${csvRoundPlan?.name}`),
-    csvRound.status);
+      csvRoundBody.includes(csvRoundLabel) &&
+      !csvRoundBody.includes(`Round ${csvRoundPlan?.ordinal} — Round ${csvRoundPlan?.ordinal}`),
+    `${csvRound.status}/${csvRoundLabel}`);
   const csvUnknownRound = await j("GET", `${csvPath}?planId=no-such-plan`, null, admin);
   check("ABS-13 an unknown round is a stable 404, never a silent default export",
     csvUnknownRound.status === 404 && csvUnknownRound.data?.error?.code === "PLAN_NOT_FOUND",

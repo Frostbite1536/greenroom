@@ -72,6 +72,41 @@ test("sorting is local to the loaded page and the overflow notice still says so"
   assert.equal(/weightedAverage[^\n]*\?\?\s*0/.test(component), false);
 });
 
+test("every submitted status has a filter chip, including Withdrawn", () => {
+  const component = table();
+  const tabs = component.slice(component.indexOf("const TABS"), component.indexOf("export function AbstractsTable"));
+  // The gap this closes: a speaker withdrawing mid-review was loaded, rendered
+  // under "All", and reachable by no filter at all.
+  assert.match(tabs, /\{ key: "WITHDRAWN", label: "Withdrawn" \}/);
+
+  // Every chip key must be a real status, because the filter is an equality
+  // test against `a.status` — a key naming no status shows an empty table
+  // rather than failing. `ALL` is the deliberate exception.
+  const statuses = component.slice(component.indexOf("const STATUS_META"), component.indexOf("type ProgrammeState"));
+  const chipKeys = [...tabs.matchAll(/key: "([A-Z_]+)"/g)].map((match) => match[1]);
+  assert.ok(chipKeys.length >= 8, `got ${chipKeys.length} chips`);
+  for (const key of chipKeys) {
+    if (key === "ALL") continue;
+    assert.match(statuses, new RegExp(`^\\s*${key}: \\{`, "m"), `${key} is not a rendered status`);
+  }
+  // And the reverse: no status may be left without a way to reach it.
+  const statusKeys = [...statuses.matchAll(/^\s{2}([A-Z_]+): \{ label:/gm)].map((match) => match[1]);
+  assert.ok(statusKeys.includes("WITHDRAWN"));
+  for (const status of statusKeys) {
+    assert.ok(chipKeys.includes(status), `${status} has no filter chip`);
+  }
+
+  // Filtering follows the existing pattern exactly: one equality test against
+  // the server-rendered rows, with the count read from the same collection.
+  assert.match(component, /\.filter\(\(a\) => \(tab === "ALL" \? true : a\.status === tab\)\)/);
+  assert.match(component, /for \(const a of abstracts\) c\[a\.status\] = \(c\[a\.status\] \?\? 0\) \+ 1;/);
+  // No chip may become a server round trip; the page is server-rendered once.
+  const chipBlock = component.slice(component.indexOf("{TABS.map"), component.indexOf("{hasMore ?"));
+  assert.equal(/router\.(push|refresh)|apiPost|fetch\(/.test(chipBlock), false);
+  // The accessible name still carries the count, as the other chips do.
+  assert.match(component, /aria-label=\{`\$\{t\.label\}: \$\{counts\[t\.key\] \?\? 0\} \$\{loadedLabel\}`\}/);
+});
+
 test("nothing implies that sorting changed the round or the included-review rules", () => {
   const component = table();
   // The round control's own copy is the only place either subject is

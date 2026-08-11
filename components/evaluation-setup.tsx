@@ -15,6 +15,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import type { EvaluationSetupView, SetupPlan } from "@/lib/data/reads";
+import { abstractPermalink } from "@/lib/abstract-permalink";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EVALUATION_SETUP_STATUS_LABELS } from "@/lib/evaluation-setup-status";
 import {
@@ -23,7 +24,9 @@ import {
   roundWindowError,
   roundWindowInput,
 } from "@/lib/evaluation-round-window";
+import { rubricCriterionLines } from "@/lib/rubric-display";
 import { uniqueRubricKeys } from "@/lib/rubric-key";
+import { roundNameSuffix } from "@/lib/round-label";
 import {
   RUBRIC_WEIGHT_MAX,
   legacyRubricWeightNote,
@@ -156,6 +159,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
     const rows = view.abstracts.map((a) => ({
       id: a.id,
       title: a.title,
+      primarySpeakerName: a.primarySpeakerName,
       categoryName: a.categoryName,
       status: a.status,
       assignable: a.assignable,
@@ -260,6 +264,15 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
             // Informational, not a warning: the round is valid, its scoring is
             // unaffected, and the weight is kept exactly as configured.
             const legacyWeights = legacyRubricWeightNote(p.rubric);
+            // The heading already prints "Round N"; a stored name that repeats
+            // it (which is what the New round dialog and the seed both default
+            // to) would otherwise render "Round 1" over "Round 1 — Program
+            // Committee". Null when the name adds nothing to the number.
+            const nameSuffix = roundNameSuffix(p);
+            // Read-only: an organizer could see how many criteria a round had
+            // but never what they were or how much each counted, which is the
+            // one thing they need in order to read a score at all.
+            const criteria = rubricCriterionLines(p.rubric);
             return (
               <button
                 type="button"
@@ -274,12 +287,28 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                     <Pill tone="info"><EyeOff size={11} aria-hidden="true" /> Blind</Pill>
                   ) : null}
                 </div>
-                <div className="cell-sub">{p.name}</div>
+                {nameSuffix ? <div className="cell-sub">{nameSuffix}</div> : null}
                 <div className="cell-sub">
                   {p.rubric.length} criteria · {p.assignmentCount === 0
                     ? "no active reviews"
                     : `${p.completedCount}/${p.assignmentCount} reviews done`}
                 </div>
+                {/* The rubric itself, not just its size. Weights are relative
+                    multipliers, so each criterion states its SHARE of the
+                    round's total weight (D-C5-8 §2.2) — the number that
+                    actually answers "how much does this count?". */}
+                {criteria.length > 0 ? (
+                  <ul className="round-rubric-list">
+                    {criteria.map((criterion) => (
+                      <li key={criterion.key}>
+                        <span className="round-rubric-label">{criterion.label}</span>
+                        <span className="round-rubric-meta">{criterion.meta}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="cell-sub muted">This round has no readable scoring criteria.</div>
+                )}
                 {/* Only rendered when the round actually carries a window: an
                     absent date is left absent rather than shown as a dash. */}
                 {roundWindow ? <div className="cell-sub">{roundWindow}</div> : null}
@@ -535,7 +564,21 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                   const done = a.completed;
                   return (
                     <tr key={a.id}>
-                      <td className="cell-title">{a.title}</td>
+                      <td>
+                        {/* A coverage gap is only actionable if you can reach
+                            the submission it belongs to. The link opens that
+                            proposal's drawer directly on the abstracts screen
+                            (server-rendered from `?abstract=`), so an organizer
+                            goes from "no reviewers" to the actual submission in
+                            one click instead of hunting the pipeline table. */}
+                        <Link className="cell-title" href={abstractPermalink(a.id)}>{a.title}</Link>
+                        {/* Two proposals can carry the same title; the speaker
+                            is what tells them apart. Absent only when a
+                            proposal genuinely has no speaker on it. */}
+                        <div className="cell-sub">
+                          {a.primarySpeakerName ?? <span className="muted">No speaker on record</span>}
+                        </div>
+                      </td>
                       <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                       <td>{EVALUATION_SETUP_STATUS_LABELS[a.status]}</td>
                       <td>
