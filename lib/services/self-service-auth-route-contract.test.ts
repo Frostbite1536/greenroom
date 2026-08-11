@@ -36,6 +36,8 @@ const signupPage = read("app/signup/page.tsx");
 const forgotPage = read("app/forgot/page.tsx");
 const resetPage = read("app/reset/page.tsx");
 const welcomePage = read("app/welcome/page.tsx");
+const loginPage = read("app/login/page.tsx");
+const smoke = read("scripts/_smoke.mjs");
 
 const SESSION_CHANGING = [
   ["signup", signup],
@@ -381,6 +383,14 @@ test("the public pages post plain forms, label every field, and link the other d
   assert.doesNotMatch(forgotPage, /we sent|we have sent|no account/i);
 });
 
+test("login and the runtime smoke both advertise the shipped self-service doors", () => {
+  assert.match(loginPage, /<Link href="\/signup">Create one<\/Link>/);
+  assert.match(loginPage, /<Link href="\/forgot">Reset it<\/Link>/);
+  assert.ok(smoke.includes(`loginHtml.includes('href="/signup"') && /Create one/.test(loginHtml)`));
+  assert.ok(smoke.includes(`loginHtml.includes('href="/forgot"') && /Reset it/.test(loginHtml)`));
+  assert.doesNotMatch(smoke, /Self-service sign-up is on the roadmap|for now organizers provision accounts/);
+});
+
 test("the welcome page is the membership-less landing, and it offers both ways out", () => {
   // A real session belongs somewhere else; an unsigned visitor belongs at login.
   assert.match(welcomePage, /if \(session\) redirect\(homeForRole\(session\.role\)\);/);
@@ -390,7 +400,6 @@ test("the welcome page is the membership-less landing, and it offers both ways o
   assert.match(welcomePage, /ask an organizer to/i);
   // And /login knows to send a pending identity here rather than showing it the
   // form it just came from.
-  const loginPage = read("app/login/page.tsx");
   assert.match(loginPage, /const pending = await getPendingIdentity\(\);/);
   assert.match(loginPage, /redirect\("\/welcome"\);/);
 });
