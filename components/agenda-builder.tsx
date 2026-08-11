@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useId, useMemo, useRef, useState, useTransit
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, Wand2, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
-import { conflictedSessionIds, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
+import { conflictedSessionIds, conflictSentences, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
 import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
@@ -74,6 +74,14 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Unscheduling used to report nothing at all: a refused DELETE left the block
+  // sitting on the grid with no explanation, which reads exactly like a click
+  // that never registered. Both outcomes are now stated.
+  const [slotError, setSlotError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // One in-flight row mutation at a time, so a publish or unschedule trigger
+  // cannot be double-fired while its request is still open.
+  const [rowBusyId, setRowBusyId] = useState<string | null>(null);
 
   const tz = data.timezone;
   const roomName = (id: string) => data.rooms.find((r) => r.id === id)?.name ?? id;
@@ -116,14 +124,22 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
     const control = publicationControl(session.contentStatus);
     if (control.confirm && !window.confirm(control.confirm(session.title))) return;
     setPublishError(null);
+    setNotice(null);
+    setRowBusyId(session.id);
     const res = await apiPatch("/api/agenda/sessions", {
       sessionId: session.id,
       contentStatus: control.next,
     });
+    setRowBusyId(null);
     if (!res.ok) {
       setPublishError(res.error.message);
       return;
     }
+    setNotice(
+      control.next === "PUBLISHED"
+        ? `“${session.title}” is now published — it appears on the public programme.`
+        : `“${session.title}” is now unpublished — it is withheld from the public programme.`,
+    );
     startTransition(() => router.refresh());
   }
 
@@ -169,14 +185,37 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
       return;
     }
     setPreview(null);
+    // The panel closing was the only signal that the plan had been written.
+    // Name the count, because "complete plan or nothing" means this number is
+    // exactly what landed on the grid.
+    setNotice(
+      `${plan.placements.length} talk${plan.placements.length === 1 ? " was" : "s were"} placed on the schedule.`,
+    );
     startTransition(() => router.refresh());
   }
 
+  /**
+   * Take a talk off the schedule. The DELETE can be refused (a concurrent
+   * write, a lost session, an expired role), and until now a refusal produced
+   * nothing at all — the block simply stayed put, indistinguishable from a
+   * click that never landed. Both outcomes now say what happened.
+   */
   async function unschedule(sessionId: string, title?: string) {
     if (!window.confirm(`Unschedule${title ? ` “${title}”` : " this session"}?`)) return false;
+    setSlotError(null);
+    setNotice(null);
+    setRowBusyId(sessionId);
     const res = await apiDelete(`/api/agenda/slots?sessionId=${encodeURIComponent(sessionId)}`);
-    if (res.ok) startTransition(() => router.refresh());
-    return res.ok;
+    setRowBusyId(null);
+    if (!res.ok) {
+      setSlotError(res.error.message);
+      return false;
+    }
+    setNotice(
+      `${title ? `“${title}”` : "That talk"} was taken off the schedule. It is still a confirmed talk and can be placed again.`,
+    );
+    startTransition(() => router.refresh());
+    return true;
   }
 
   /**
@@ -213,7 +252,10 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         delete next[session.id];
         return next;
       });
-      const detail = res.error.fieldErrors?.conflicts?.join(" · ");
+      // `conflictDetails` names the room, the occupying talk, the time range
+      // and the double-booked speaker; `conflicts` is the older type-and-code
+      // list, kept as the fallback for a refusal whose slots could not be read.
+      const detail = conflictSentences(res.error.fieldErrors).join(" · ");
       setMoveError(detail ? `${res.error.message} ${detail}` : res.error.message);
       return;
     }
@@ -276,6 +318,32 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
             <div>
               <strong>Publication change refused.</strong> {publishError}{" "}
               <button className="link-button" onClick={() => setPublishError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {slotError && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="conflict-banner" role="alert">
+            <AlertTriangle size={17} aria-hidden="true" />
+            <div>
+              <strong>Unschedule refused.</strong> {slotError} The talk is still on the schedule.{" "}
+              <button className="link-button" onClick={() => setSlotError(null)}>Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The success half of the same contract: a write that changed the
+          programme says so, rather than leaving the operator to infer it from a
+          re-rendered grid. */}
+      {notice && (
+        <div style={{ padding: "12px 12px 0" }}>
+          <div className="agenda-notice" role="status">
+            <div>
+              {notice}{" "}
+              <button className="link-button" onClick={() => setNotice(null)}>Dismiss</button>
             </div>
           </div>
         </div>
@@ -358,6 +426,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           onUnschedule={unschedule}
           onPublication={setPublication}
           busy={pending}
+          busyId={rowBusyId}
         />
       )}
       {(view === "day" || view === "rooms") && (
@@ -449,6 +518,7 @@ function ListView({
   onUnschedule,
   onPublication,
   busy,
+  busyId,
 }: {
   sessions: Placed[];
   tz: string;
@@ -459,6 +529,8 @@ function ListView({
   onUnschedule: (id: string, title?: string) => void;
   onPublication: (s: AgendaSession) => void;
   busy: boolean;
+  /** The one row with a publish/unschedule request open, if any. */
+  busyId: string | null;
 }) {
   const sorted = [...sessions].sort((a, b) => a.slot.startsAt.localeCompare(b.slot.startsAt));
   if (sorted.length === 0) {
@@ -491,16 +563,19 @@ function ListView({
               this grid, so nothing else here would tell an organizer that the
               public agenda has stopped showing it. */}
           {s.contentStatus === "DRAFT" ? <Pill tone="neutral">Unpublished</Pill> : null}
+          {/* Both row writes are gated on `busyId`, not just the transition:
+              `pending` only begins after a successful response, so before this
+              a second click landed a second request while the first was open. */}
           <button
             className="ghost-button"
-            disabled={busy}
+            disabled={busy || busyId !== null}
             onClick={() => onPublication(s)}
             aria-label={publicationControl(s.contentStatus).actionLabel(s.title)}
           >
-            {publicationControl(s.contentStatus).label}
+            {busyId === s.id ? "Working…" : publicationControl(s.contentStatus).label}
           </button>
           <button className="ghost-button" onClick={() => onReschedule(s)}>Move</button>
-          <button className="ghost-button danger-button" disabled={busy} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
+          <button className="ghost-button danger-button" disabled={busy || busyId !== null} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
             <CalendarX size={15} />
           </button>
         </div>
@@ -1017,7 +1092,9 @@ function ScheduleDialog({
     setBusy(false);
     if (!res.ok) {
       setError(res.error.message);
-      setConflictDetail(res.error.fieldErrors?.conflicts ?? []);
+      // Prefer the server's named sentences ("Room conflict: Hall A is occupied
+      // by “…” from 10:00 AM–10:45 AM PDT.") over the coded list.
+      setConflictDetail(conflictSentences(res.error.fieldErrors));
       return;
     }
     onSaved();

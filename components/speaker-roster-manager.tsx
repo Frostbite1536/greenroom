@@ -221,6 +221,11 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
   const [baseline, setBaseline] = useState<SpeakerProfileDraft>(() => draftFromSpeaker(speaker));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  // A saved profile used to be reported by the dialog simply disappearing —
+  // and the dialog also disappears on an empty diff, on Escape and on Cancel,
+  // so closing carried no information at all. An edit that touched only a
+  // hidden field (a bio, a headshot URL) was indistinguishable from a no-op.
+  const [notice, setNotice] = useState<string | null>(null);
 
   function close() {
     setOpen(false);
@@ -234,11 +239,14 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
     // refuses an all-omitted body outright (422) — so asking would produce a
     // validation error for a no-op.
     if (speakerProfileDiffIsEmpty(patch)) {
+      setNotice(`Nothing to save — ${speaker.name}’s profile is unchanged.`);
       close();
       return;
     }
+    const changedFields = Object.keys(patch).length;
     setSubmitting(true);
     setErrors({});
+    setNotice(null);
     const res = await apiPatch<unknown>("/api/admin/speakers", {
       userId: speaker.userId,
       ...patch,
@@ -249,6 +257,11 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
       setErrors(Object.keys(mapped).length > 0 ? mapped : { _root: res.error.message });
       return;
     }
+    // Count the fields the diff actually sent, so the confirmation reports the
+    // write that happened rather than the form that was open.
+    setNotice(
+      `Saved ${changedFields} change${changedFields === 1 ? "" : "s"} to ${speaker.name}’s speaker profile.`,
+    );
     close();
     router.refresh();
   }
@@ -263,12 +276,14 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
           // refresh neither edits nor diffs against a stale snapshot.
           setDraft(draftFromSpeaker(speaker));
           setBaseline(draftFromSpeaker(speaker));
+          setNotice(null);
           setOpen(true);
         }}
       >
         <Pencil size={15} aria-hidden="true" /> Edit
         <span className="sr-only"> {speaker.name}&rsquo;s speaker profile</span>
       </button>
+      {notice ? <p className="settings-notice" role="status" aria-live="polite">{notice}</p> : null}
 
       {open ? (
         <SpeakerDialog

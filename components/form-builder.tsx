@@ -338,9 +338,17 @@ export function FormBuilder({
             className="ghost-button"
             type="button"
             onClick={async () => {
-              await navigator.clipboard?.writeText(`${location.origin}${publicFormPath}`);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
+              // A missing or permission-denied clipboard used to still flip the
+              // label to "Link copied" — a confirmation for something that
+              // never happened, and an unhandled rejection besides.
+              try {
+                if (!navigator.clipboard) throw new Error("no clipboard");
+                await navigator.clipboard.writeText(`${location.origin}${publicFormPath}`);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              } catch {
+                setError("Could not copy the link — your browser blocked clipboard access. Open the form and copy the address bar instead.");
+              }
             }}
           >
             {copied ? "Link copied" : "Copy link"}
@@ -353,6 +361,9 @@ export function FormBuilder({
       </div>
 
       {error ? <div className="conflict-banner" role="alert">{error}</div> : null}
+      {/* The button's own label was the only success signal, and a label swap
+          is not announced. This is the same confirmation, in a live region. */}
+      <p className="sr-only" role="status" aria-live="polite">{saved ? "Form saved." : ""}</p>
 
       <div className="card builder">
         <nav className="builder-nav" aria-label="Form setup steps">
