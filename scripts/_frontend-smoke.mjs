@@ -601,7 +601,7 @@ async function getWith(path, cookie) {
  */
 function mintResetToken(userId, passwordHash, expiresAtMs) {
   const digest = createHmac("sha256", SMOKE_SESSION_SECRET)
-    .update(`greenroom:password-reset:credential:v1 ${passwordHash}`)
+    .update(`greenroom:password-reset:credential:v1\0${passwordHash}`)
     .digest("base64url");
   const exp = Math.floor(expiresAtMs / 1_000);
   const signature = createHmac("sha256", SMOKE_SESSION_SECRET)
@@ -1044,6 +1044,11 @@ try {
     && settingsDateUpdate.data?.data?.event?.endsOn === "2032-05-14",
     `${settingsDateUpdate.status} ${JSON.stringify(settingsDateUpdate.data?.error ?? "")}`);
 
+  // The forged smoke sessions mirror the event identity the product just
+  // persisted, so subsequent shell assertions name the current event rather
+  // than the fixture's pre-update value.
+  ev.name = "Scratch Frontend Settings";
+
   const settingsRoom = await req("POST", "/api/admin/settings/rooms", {
     name: "Settings Studio", capacity: 85,
   }, admin);
@@ -1279,7 +1284,7 @@ try {
     soloMemberships === 1
     && soloShell.status === 200
     && !/name="eventId"/.test(soloShell.text)
-    && soloShell.text.includes("<strong>Scratch Frontend</strong>"),
+    && soloShell.text.includes("<strong>Scratch Frontend Settings</strong>"),
     `memberships=${soloMemberships} status=${soloShell.status}`);
 
   const switched = await switchEvent(createdEventId ?? "missing");
@@ -1301,11 +1306,11 @@ try {
 
   // The S1 assertion this whole section exists for.
   check("D-C5-16 no first-event data survives the switch on any surface",
-    !dashboardAfter.text.includes("<strong>Scratch Frontend</strong>")
-    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    !dashboardAfter.text.includes("<strong>Scratch Frontend Settings</strong>")
+    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
     && !agendaAfterSwitch.text.includes("Scratch Session A")
     && !agendaAfterSwitch.text.includes("Scratch Session B")
-    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
     && !abstractsAfterSwitch.text.includes("Scratch: Agents in Production")
     && !abstractsAfterSwitch.text.includes("Scratch: Accepted Talk")
     && !dashboardAfter.text.includes("Scratch Session A"));
@@ -1364,7 +1369,7 @@ try {
     redirect: switchedBack.status === 303 && switchedBack.location.endsWith("/admin"),
     issued: Boolean(switchedBack.issued),
     page: agendaBack.status === 200,
-    currentEvent: agendaBack.text.includes("<strong>Scratch Frontend</strong>"),
+    currentEvent: agendaBack.text.includes("<strong>Scratch Frontend Settings</strong>"),
     restoredSession: agendaDataBack.status === 200 && agendaDataBack.data?.data?.sessions?.some(
       (session) => session.id === fx.sessionA.id && session.title === "Scratch Session A",
     ),

@@ -84,10 +84,14 @@ test("the frontend smoke proves switch-back restoration through the scoped API, 
   assert.match(frontendSmoke, /const agendaDataBack = await getAs\("\/api\/agenda", switchedBack\.issued \?\? ""\);/);
   assert.match(frontendSmoke, /redirect: switchedBack\.status === 303 && switchedBack\.location\.endsWith\("\/admin"\)/);
   assert.match(frontendSmoke, /issued: Boolean\(switchedBack\.issued\)/);
-  assert.match(frontendSmoke, /currentEvent: agendaBack\.text\.includes\("<strong>Scratch Frontend<\/strong>"\)/);
+  assert.match(frontendSmoke, /ev\.name = "Scratch Frontend Settings"/);
+  assert.match(frontendSmoke, /currentEvent: agendaBack\.text\.includes\("<strong>Scratch Frontend Settings<\/strong>"\)/);
   assert.match(frontendSmoke, /session\.id === fx\.sessionA\.id && session\.title === "Scratch Session A"/);
   assert.match(frontendSmoke, /createdEventAbsent: !agendaBack\.text\.includes\("<strong>Scratch Created Event<\/strong>"\)/);
   assert.match(frontendSmoke, /Object\.values\(switchedBackPredicates\)\.every\(Boolean\)/);
+  for (const surface of ["dashboardAfter", "agendaAfterSwitch", "abstractsAfterSwitch"]) {
+    assert.match(frontendSmoke, new RegExp(`!${surface}\\.text\\.includes\\("<strong>Scratch Frontend Settings<\\/strong>"\\)`));
+  }
 });
 
 test("the shell renders no switcher for a single membership", () => {

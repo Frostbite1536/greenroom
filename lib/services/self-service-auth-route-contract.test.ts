@@ -217,6 +217,12 @@ test("the frontend smoke checks an empty composite EventMember projection", () =
   assert.doesNotMatch(frontendSmoke, /memberships: \{ select: \{ id: true \} \}/);
 });
 
+test("the frontend smoke reset mint uses the product credential delimiter without binary source", () => {
+  assert.match(frontendSmoke, /credential:v1\\0\$\{passwordHash\}/);
+  assert.doesNotMatch(frontendSmoke, /credential:v1 \$\{passwordHash\}/);
+  assert.equal(frontendSmoke.includes("\0"), false, "the source contains no literal NUL byte");
+});
+
 test("the taken-address 409 is deliberate, documented, and the only one", () => {
   assert.match(signup, /const EMAIL_TAKEN_CODE = "EMAIL_TAKEN";/);
   assert.equal(signup.split("authFail(409,").length - 1, 1, "exactly one 409 construction site");
