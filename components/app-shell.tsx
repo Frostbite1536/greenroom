@@ -16,6 +16,7 @@ import {
   Settings2,
   UserCheck,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { homeForRole, type DemoSession } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
@@ -64,6 +65,9 @@ const navigation: { href: string; label: string; icon: typeof FileText; roles: R
   { href: "/admin/speakers", label: "Speaker onboarding", icon: UserCheck, roles: ["ADMIN"] },
   { href: "/admin/embeds", label: "Website embeds", icon: Code2, roles: ["ADMIN"] },
   { href: "/admin/settings", label: "Event settings", icon: SlidersHorizontal, roles: ["ADMIN"] },
+  // Beside Event settings: both configure the event itself rather than its
+  // programme. ADMIN-only, mirroring the page's own `ctx.role !== "ADMIN"` check.
+  { href: "/admin/team", label: "Event team", icon: UsersRound, roles: ["ADMIN"] },
   { href: "/admin/operations", label: "Operations", icon: Settings2, roles: ["ADMIN"] },
   { href: "/admin/emails", label: "Email history", icon: MailCheck, roles: ["ADMIN"] },
   { href: "/portal", label: "Speaker portal", icon: Users, roles: ["ADMIN", "SPEAKER"] },

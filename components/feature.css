@@ -573,6 +573,34 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   .roster-bio { max-width: none; }
 }
 
+/* ---- Event team (/admin/team) ----
+   Deliberately thin: the members table, the pills and the dialog shell are the
+   shared vocabulary already defined above, and `.app-dialog.team-dialog` reuses
+   the speaker dialog's width. Only the role picker is new, because a radio
+   group that has to show what each role *means* is not a <select>. */
+.app-dialog.team-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.team-dialog-identity {
+  display: grid; gap: 2px; margin: 0 0 14px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; font-size: 13px;
+}
+.team-dialog-identity .hint { margin-top: 4px; }
+.team-dialog-fields { display: grid; gap: 12px; }
+.team-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.team-role-choice { display: grid; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.team-role-choice legend { padding: 0; margin-bottom: 2px; }
+.team-role-option {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+}
+.team-role-option:hover,
+.team-role-option:has(input:checked) { border-color: var(--brand); background: var(--soft); }
+/* Focus lands on the radio itself, so the ring is drawn on the row around it —
+   otherwise a keyboard user sees a 13px dot move with no context. */
+.team-role-option:has(input:focus-visible) { outline: 2px solid var(--brand); outline-offset: 1px; }
+.team-role-option > span { display: grid; gap: 2px; font-size: 13px; }
+.team-role-option input { margin-top: 3px; }
+.team-actions { gap: 6px; }
+
 /* ---- Embed snippets ---- */
 .embed-snippet-list { display: grid; gap: 16px; }
 .embed-snippet { padding: 20px 22px; display: grid; gap: 14px; }
