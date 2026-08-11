@@ -84,3 +84,41 @@ Repository automation (GitHub workflows, issue templates, third-party Apps)
 requires the maintainer's approval. A developer CLI that created
 `.github/ISSUE_TEMPLATE/` as an install side effect was reverted under this
 rule.
+
+## Event team: an event-wide key, not a per-member one
+`/admin/team` is the first surface that *changes* and *deletes* `EventMember`
+rows; before it, the three provisioning paths only ever created them. The
+last-organizer rule is a predicate over the whole event, so the C17 per-member
+authority keys cannot hold it — two concurrent demotions of two different
+admins each lock only their own target, each read "2 admins", and between them
+leave zero. `eventTeamLockKey(eventId)` therefore serializes every team write
+for one event and is taken *first*, ahead of the identity and member keys, so
+the order stays narrowing and cycle-free. Nothing outside the team routes takes
+it. All guard counts are read after the member rows are locked and inside the
+transaction that writes; every refusal is a named 422.
+
+## Event team: a provisioned account cannot let itself in
+Adding an unknown address creates a `User` shell plus a membership, under the
+same C17 identity order `/api/admin/speakers` uses. That shell **cannot sign
+in, and cannot obtain a way in by itself**: the reset token is signed over a
+digest of the credential a user currently stores, so an account holding none
+has nothing to sign against and `/api/auth/forgot` sends no mail; and
+`/api/auth/signup` answers an address that already has a `User` row with a 409,
+which is precisely the row the add just created. Deliberately not fixed here —
+minting reset tokens for credential-less accounts would weaken the redeem
+path's use-once-by-construction property, and that is an auth decision, not a
+team-screen one. The working order is the reverse one, and it is the one
+`/welcome` and `/api/auth/continue` were built for: the person signs up first,
+then an organizer adds that address. The UI states this rather than implying a
+reset email is coming, and no notification mail is sent at all — a "you were
+added" message would point somebody at a door that does not open for them.
+
+## Event team: removing a speaker is refused, never cascaded
+`/admin/speakers` renders a *union* of `EventMember(role=SPEAKER)` and
+`SessionSpeaker`, and `SpeakerTask` is keyed on `(taskId, userId)` with no
+membership involved. Deleting a speaker's membership therefore leaves their
+sessions on the schedule, their tasks in the checklist, and the person still on
+the roster. Rather than cascade (destroying programme data from a team screen)
+or half-remove, a speaker with sessions or tasks on this event is refused with
+a 422 naming the counts. A role *change* away from speaker is not gated the
+same way: nothing is deleted by one, and the rows stay keyed to the same user.
