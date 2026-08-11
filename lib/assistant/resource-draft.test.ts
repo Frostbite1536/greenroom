@@ -1,12 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ASSISTANT_MAX_OUTPUT_CHARS,
+  ASSISTANT_MAX_TOTAL_INPUT_CHARS,
+  type AssistantRequest,
+} from "./client";
+import {
   RESOURCE_DRAFT_HTML_MAX_CHARS,
   RESOURCE_DRAFT_INSTRUCTIONS,
   RESOURCE_DRAFT_MAX_PLACEHOLDERS,
   RESOURCE_DRAFT_NOTES_MAX_CHARS,
+  RESOURCE_DRAFT_PROVIDER_MAX_OUTPUT_CHARS,
   RESOURCE_DRAFT_TEXT_FORMAT,
+  generateResourceDraft,
   parseResourceDraftSuggestion,
+  resourceDraftInputFitsSharedBoundary,
   resourceDraftProviderInput,
   resourceDraftProviderOutputSchema,
   resourceDraftRequestSchema,
@@ -68,6 +76,22 @@ test("the provider envelope contains only approved caller fields and fixed templ
   const serialized = JSON.stringify(value);
   for (const forbidden of ["eventId", "roster", "email", "reviewer", "proposal", "schedule"]) {
     assert.equal(serialized.includes(`\"${forbidden}\"`), false, forbidden);
+  }
+});
+
+test("every maximum valid request fits the shared input boundary without truncation", () => {
+  for (const templateKey of ["speaker-handbook", "venue-travel", "av-stage", "day-of"] as const) {
+    const widest: ResourceDraftRequest = {
+      templateKey,
+      title: "t".repeat(180),
+      summary: "s".repeat(500),
+      notes: "n".repeat(RESOURCE_DRAFT_NOTES_MAX_CHARS),
+    };
+    assert.equal(resourceDraftInputFitsSharedBoundary(widest), true, templateKey);
+    assert.ok(
+      RESOURCE_DRAFT_INSTRUCTIONS.length + resourceDraftProviderInput(widest).length <= ASSISTANT_MAX_TOTAL_INPUT_CHARS,
+      templateKey,
+    );
   }
 });
 
@@ -152,4 +176,43 @@ test("mismatched templates, reordered sections, hidden placeholders and malforme
   ]) {
     assert.equal(parseResourceDraftSuggestion(request, raw), null);
   }
+});
+
+test("generation uses the shared runner with strict format and returns only the sanitized suggestion", async () => {
+  const calls: AssistantRequest[] = [];
+  const generated = await generateResourceDraft(request, async (assistantRequest) => {
+    calls.push(assistantRequest);
+    return {
+      ok: true,
+      text: result(
+        '<h2>Welcome, speakers</h2><p onclick="bad()">Slides are due Friday.</p>' +
+          "<script>bad()</script><p>[Add speaker check-in time]</p>",
+      ),
+    };
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.instructions, RESOURCE_DRAFT_INSTRUCTIONS);
+  assert.equal(calls[0]!.input, resourceDraftProviderInput(request));
+  assert.equal(calls[0]!.maxOutputChars, RESOURCE_DRAFT_PROVIDER_MAX_OUTPUT_CHARS);
+  assert.equal(calls[0]!.maxOutputChars, ASSISTANT_MAX_OUTPUT_CHARS);
+  assert.deepEqual(calls[0]!.textFormat, RESOURCE_DRAFT_TEXT_FORMAT);
+  assert.deepEqual(generated, {
+    ok: true,
+    suggestion: {
+      html: "<h2>Welcome, speakers</h2><p>Slides are due Friday.</p><p>[Add speaker check-in time]</p>",
+      templateKey: "speaker-handbook",
+      sectionsUsed: sections,
+      placeholders: ["[Add speaker check-in time]"],
+    },
+  });
+});
+
+test("every shared provider failure stays a closed value and malformed success becomes invalid_output", async () => {
+  for (const reason of ["disabled", "timeout", "rate_limited", "provider_error", "invalid_output"] as const) {
+    assert.deepEqual(await generateResourceDraft(request, async () => ({ ok: false, reason })), { ok: false, reason });
+  }
+  assert.deepEqual(await generateResourceDraft(request, async () => ({ ok: true, text: "not json" })), {
+    ok: false,
+    reason: "invalid_output",
+  });
 });

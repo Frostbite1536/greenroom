@@ -1,5 +1,13 @@
 import { z } from "zod";
 import {
+  ASSISTANT_MAX_OUTPUT_CHARS,
+  ASSISTANT_MAX_TOTAL_INPUT_CHARS,
+  runAssistant,
+  type AssistantFailureReason,
+  type AssistantRequest,
+  type AssistantResult,
+} from "@/lib/assistant/client";
+import {
   RESOURCE_ASSISTANT_TEMPLATE_KEYS,
   getResourceTemplate,
   type ResourceAssistantTemplateKey,
@@ -15,6 +23,7 @@ export const RESOURCE_DRAFT_SECTION_KEY_MAX_CHARS = 40;
 export const RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS = 120;
 export const RESOURCE_DRAFT_MAX_SECTIONS = 8;
 export const RESOURCE_DRAFT_MAX_PLACEHOLDERS = 20;
+export const RESOURCE_DRAFT_PROVIDER_MAX_OUTPUT_CHARS = 24_000;
 
 const templateKeySchema = z.enum(RESOURCE_ASSISTANT_TEMPLATE_KEYS);
 
@@ -98,6 +107,12 @@ export type ResourceDraftSuggestion = {
   placeholders: string[];
 };
 
+export type ResourceDraftGenerationResult =
+  | { ok: true; suggestion: ResourceDraftSuggestion }
+  | { ok: false; reason: AssistantFailureReason };
+
+export type ResourceDraftAssistantRunner = (request: AssistantRequest) => Promise<AssistantResult>;
+
 /**
  * Fixed writing policy. User notes are never interpolated into instructions;
  * they travel only in the JSON data envelope built below.
@@ -131,6 +146,11 @@ export function resourceDraftProviderInput(input: ResourceDraftRequest): string 
     ...(input.summary === undefined || input.summary === "" ? {} : { summary: input.summary }),
     notes: input.notes,
   });
+}
+
+/** The feature request fits without relying on silent shared-boundary truncation. */
+export function resourceDraftInputFitsSharedBoundary(input: ResourceDraftRequest): boolean {
+  return RESOURCE_DRAFT_INSTRUCTIONS.length + resourceDraftProviderInput(input).length <= ASSISTANT_MAX_TOTAL_INPUT_CHARS;
 }
 
 function exactSectionOrder(input: ResourceDraftRequest, sectionsUsed: readonly string[]): boolean {
@@ -172,4 +192,25 @@ export function parseResourceDraftSuggestion(
     sectionsUsed: [...parsed.data.grounding.sectionsUsed],
     placeholders: [...parsed.data.grounding.placeholders],
   };
+}
+
+/**
+ * The one resource-specific generation call. The dependency seam exists only
+ * for deterministic provider mocks in tests; production always uses the one
+ * shared `runAssistant` boundary.
+ */
+export async function generateResourceDraft(
+  input: ResourceDraftRequest,
+  runner: ResourceDraftAssistantRunner = runAssistant,
+): Promise<ResourceDraftGenerationResult> {
+  if (!resourceDraftInputFitsSharedBoundary(input)) return { ok: false, reason: "invalid_output" };
+  const result = await runner({
+    instructions: RESOURCE_DRAFT_INSTRUCTIONS,
+    input: resourceDraftProviderInput(input),
+    maxOutputChars: Math.min(RESOURCE_DRAFT_PROVIDER_MAX_OUTPUT_CHARS, ASSISTANT_MAX_OUTPUT_CHARS),
+    textFormat: RESOURCE_DRAFT_TEXT_FORMAT,
+  });
+  if (!result.ok) return result;
+  const suggestion = parseResourceDraftSuggestion(input, result.text);
+  return suggestion ? { ok: true, suggestion } : { ok: false, reason: "invalid_output" };
 }
