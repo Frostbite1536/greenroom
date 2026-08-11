@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 import {
+  bulkDecisionEligibility,
   canAdminDecide,
   decisionProvisionsSession,
   decisionTimestamp,
@@ -21,25 +22,39 @@ import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
  * onboarding checklist in the same transaction (INV-DOMAIN-001, INV-TASK-001),
  * and a reversal still only unpublishes.
  *
- * It is a function rather than route code so a second caller can run the same
- * path one abstract at a time, taking one transaction per abstract, instead of
- * growing a second copy of the accept semantics.
+ * It exists because bulk decisions must run the *same* path, one abstract at a
+ * time. A batch is a loop over this function with one transaction each — never
+ * one transaction spanning the selection. Fifty proposals sharing a transaction
+ * would hold fifty advisory locks against every speaker edit and conversion for
+ * the length of the slowest provisioning, and would throw away forty-nine
+ * correct writes to report the fiftieth's refusal.
  *
  * **This function never sends mail.** A decision is not a decision email:
  * `POST /api/comms/decision` is preview-gated and bound by an HMAC proof to the
  * exact content and recipients an admin previewed. Nothing here may reach it.
  *
- * Refusals are returned rather than thrown so a caller can shape them: the
- * single-row route raises the `ApiError` it always did.
+ * Refusals are returned rather than thrown so both callers can shape them: the
+ * single-row route raises the `ApiError` it always did, and the bulk route turns
+ * the same code into a named skip beside the rows it did write.
  */
 
-/** The refusal vocabulary, owned here so every caller speaks it identically. */
+/** The refusal vocabulary, owned here so both callers speak it identically. */
 export const ABSTRACT_DECISION_REFUSALS = {
   ABSTRACT_NOT_FOUND: { status: 404, message: "Abstract not found." },
   ABSTRACT_WITHDRAWN: { status: 409, message: "This abstract has been withdrawn." },
   MAYBE_NOT_AVAILABLE: {
     status: 409,
     message: "Maybe is only available before a proposal becomes a confirmed Session.",
+  },
+  // Reachable only when the caller asked for the awaiting-a-decision gate, so
+  // the single-row route's re-decision contract is untouched.
+  ABSTRACT_ALREADY_DECIDED: {
+    status: 409,
+    message: "This proposal already has a decision. Open it and use “Change decision” to change it.",
+  },
+  ABSTRACT_NOT_SUBMITTED: {
+    status: 409,
+    message: "This proposal is still a draft and has not been submitted for a decision.",
   },
 } as const;
 
@@ -67,6 +82,13 @@ export type AbstractDecisionWriteInput = {
   /** The caller's own event. A row outside it is reported as not found. */
   eventId: string;
   decision: AbstractDecision;
+  /**
+   * When true, only a proposal still awaiting a decision is written; anything
+   * already decided, withdrawn, or still a draft is refused by name. The bulk
+   * caller sets this. The single-row route leaves it false, keeping its
+   * long-standing "a decision is reversible" contract exactly as it was.
+   */
+  requireAwaitingDecision?: boolean;
   /** Injectable so the stamped timestamp is deterministic under test. */
   now?: Date;
 };
@@ -96,6 +118,10 @@ export async function writeAbstractDecision(
   }
   if (!canAdminDecide(abstract.status)) {
     return { decided: false, refusal: "ABSTRACT_WITHDRAWN" };
+  }
+  if (input.requireAwaitingDecision) {
+    const eligibility = bulkDecisionEligibility(abstract.status);
+    if (eligibility !== "ELIGIBLE") return { decided: false, refusal: eligibility };
   }
   if (maybeBlockedByConfirmedSession(input.decision, Boolean(abstract.session))) {
     return { decided: false, refusal: "MAYBE_NOT_AVAILABLE" };

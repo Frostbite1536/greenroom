@@ -306,9 +306,10 @@ const routeSource = (path: string) =>
 
 test("only ADMIN-authorized routes reconcile a Session's topic and summary", () => {
   // Authorization is a property of the ROUTE, so it stays asserted on every
-  // route that can reach reconciliation.
+  // route that can reach reconciliation — G7 added a third.
   for (const path of [
     "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
     "app/api/evaluations/convert/route.ts",
   ]) {
     const route = routeSource(path);
@@ -323,18 +324,19 @@ test("only ADMIN-authorized routes reconcile a Session's topic and summary", () 
   }
 
   // And each reaches reconciliation only through the shared provisioning
-  // helper. The decision route reaches it one hop away, through the locked
-  // write it now runs; the convert route calls it directly.
+  // helper. The two decision routes reach it one hop away, through the locked
+  // write they share; the convert route calls it directly.
   assert.match(
     routeSource("lib/services/abstract-decision-write.ts"),
     /provisionAcceptedAbstract\(tx, /,
     "the shared decision write goes through provisioning",
   );
-  assert.match(
-    routeSource("app/api/evaluations/decisions/route.ts"),
-    /writeAbstractDecision\(tx, \{/,
-    "the decision route runs the shared write",
-  );
+  for (const path of [
+    "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
+  ]) {
+    assert.match(routeSource(path), /writeAbstractDecision\(tx, \{/, `${path} runs the shared write`);
+  }
   assert.match(
     routeSource("app/api/evaluations/convert/route.ts"),
     /provisionAcceptedAbstract\(tx, /,

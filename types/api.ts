@@ -537,6 +537,31 @@ export const abstractDecisionSchema = z.object({
   decision: z.enum(["ACCEPTED", "MAYBE", "REJECTED"]),
 });
 
+/**
+ * How many proposals one bulk decision may name.
+ *
+ * The batch is a loop of independent transactions, so this bound is about the
+ * request's own duration rather than a lock: a hundred sequential provisioning
+ * transactions is already the far end of what an operator should wait on one
+ * response for, and the table the selection is made in loads at most a hundred
+ * rows anyway (`QUERY_LIMITS.adminAbstracts`). Beyond it the request is refused
+ * whole, before any write — a partially applied batch nobody asked for would be
+ * worse than a refusal the operator can split.
+ */
+export const BULK_ABSTRACT_DECISION_LIMIT = 100;
+
+/**
+ * Deciding a selection. Ids are deduplicated exactly as the review-assignment
+ * body dedupes them: a multi-select or a retried payload naming the same
+ * proposal twice must not produce two entries in the per-item report for one
+ * write. `.max()` runs on the array as sent, so padding a request with
+ * duplicates cannot buy a larger batch.
+ */
+export const bulkAbstractDecisionSchema = z.object({
+  abstractIds: z.array(idSchema).min(1).max(BULK_ABSTRACT_DECISION_LIMIT).transform(uniqueIds),
+  decision: z.enum(["ACCEPTED", "MAYBE", "REJECTED"]),
+});
+
 export const abstractToSessionSchema = z.object({
   abstractId: idSchema,
   durationMinutes: z.number().int().min(5).max(480),

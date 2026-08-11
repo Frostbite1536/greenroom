@@ -187,8 +187,10 @@ test("the publication route writes only contentStatus, and only inside this even
 });
 
 test("a reversed decision unpublishes under the same lock that wrote the status", () => {
-  // The write moved out of the route and into the service the route now runs,
-  // so the rule is asserted where it lives. Same code, same order.
+  // The write lives in the service both decision routes run — the single-row
+  // one and the bulk one — so the rule is asserted where it lives. It matters
+  // more now: a bulk decline must unpublish every talk it reverses, not merely
+  // the first.
   const write = source("lib/services/abstract-decision-write.ts");
   assert.match(write, /sessionPublicationForDecision\(input\.decision\)/);
   assert.match(write, /data: \{ contentStatus: publication \}/);
@@ -196,11 +198,16 @@ test("a reversed decision unpublishes under the same lock that wrote the status"
   // Scoped to the abstract's own session id, never a broader write.
   assert.match(write, /where: \{ id: provisioned\.sessionId \}/);
 
-  // And the route really does reach it, rather than growing a second
+  // And both callers really do reach it, so neither can grow a second
   // publication rule of its own.
-  const route = source("app/api/evaluations/decisions/route.ts");
-  assert.match(route, /writeAbstractDecision\(tx, \{/);
-  assert.ok(!route.includes("contentStatus"), "the route must not publish on its own");
+  for (const path of [
+    "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
+  ]) {
+    const route = source(path);
+    assert.match(route, /writeAbstractDecision\(tx, \{/, path);
+    assert.ok(!route.includes("contentStatus"), `${path} must not publish on its own`);
+  }
 });
 
 test("past the cap, the unpublished count is a floor and says the page is partial", () => {

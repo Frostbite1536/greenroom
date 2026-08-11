@@ -31,6 +31,7 @@ import {
   type AbstractStatusFilter,
 } from "@/lib/abstract-status";
 import { EmptyState, Pill } from "@/components/ui";
+import { BulkDecisionBar } from "@/components/bulk-decision-bar";
 
 // Widened to a string index on purpose: the drawer reads `String(status)` off a
 // row, so the lookup site is not statically an `AbstractStatus`. The map itself
@@ -113,6 +114,14 @@ export function AbstractsTable({
   // Lifted out of the drawer on purpose: the drawer closes on a backdrop click,
   // and this consequence is too easy to miss if it disappears with it.
   const [warning, setWarning] = useState<ProgrammeWarning | null>(null);
+  // G7. Multi-select for bulk decisions. Client state only, and deliberately
+  // keyed by id rather than by row index: the chips, the search box and the
+  // score sort all reorder and re-filter this table without a server round
+  // trip, and a selection that survives those has to be keyed by the thing that
+  // does not move. Selecting is not a mutation, so nothing here is server-
+  // rendered and nothing below changes for a reader with JavaScript off.
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const selectAllRef = useRef<HTMLInputElement>(null);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { ALL: abstracts.length };
@@ -143,6 +152,47 @@ export function AbstractsTable({
   const selected = abstracts.find((a) => a.id === selectedId)
     ?? (selectedId === initialSelectedAbstract?.id ? initialSelectedAbstract : null);
   const loadedLabel = "loaded proposals";
+
+  // The bulk bar acts on what is ticked, wherever it is: a proposal ticked
+  // under one chip stays ticked when the chip changes, so a selection built
+  // across two filters is still one selection. Ordered by the loaded page so
+  // the request and its per-item report read in a stable order.
+  const bulkSelection = abstracts.filter((a) => selectedIds.has(a.id));
+  // "Select all" means all VISIBLE — the rows this filter and search left on
+  // screen — never all loaded and never all stored. Anything else would let one
+  // click reach proposals the operator cannot see.
+  const visibleSelectedCount = rows.reduce((n, a) => n + (selectedIds.has(a.id) ? 1 : 0), 0);
+  const allVisibleSelected = rows.length > 0 && visibleSelectedCount === rows.length;
+
+  useEffect(() => {
+    // Partial selection is a third state, and only the DOM property can carry
+    // it — React has no `indeterminate` attribute. Without this the header box
+    // reads "nothing selected" while rows below it are ticked.
+    const box = selectAllRef.current;
+    if (box) box.indeterminate = visibleSelectedCount > 0 && !allVisibleSelected;
+  }, [visibleSelectedCount, allVisibleSelected]);
+
+  function toggleRow(id: string, checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleVisible(checked: boolean) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      // Scoped to `rows`: unticking the header clears the visible rows and
+      // leaves a selection made under another filter alone.
+      for (const row of rows) {
+        if (checked) next.add(row.id);
+        else next.delete(row.id);
+      }
+      return next;
+    });
+  }
 
   function changeDecisionPlan(planId: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -212,6 +262,11 @@ export function AbstractsTable({
         <ExportResultsLink selectedPlan={decisionSummary.selectedPlan} />
       </div>
 
+      <BulkDecisionBar
+        selected={bulkSelection.map((a) => ({ id: a.id, title: a.title, status: String(a.status) }))}
+        onClearSelection={() => setSelectedIds(new Set())}
+      />
+
       {abstracts.length === 0 ? (
         <EmptyState icon={<FileStack size={22} />} title="No submissions yet">
           Abstracts appear here once speakers submit through a published CFP form.
@@ -225,6 +280,16 @@ export function AbstractsTable({
           <table className="data-table">
             <thead>
               <tr>
+                <th className="row-select-cell">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    className="row-select"
+                    checked={allVisibleSelected}
+                    onChange={(e) => toggleVisible(e.target.checked)}
+                    aria-label={`Select all ${rows.length} proposals shown`}
+                  />
+                </th>
                 <th>Status</th>
                 <th>Title</th>
                 <th>Category</th>
@@ -256,6 +321,15 @@ export function AbstractsTable({
                 const meta = STATUS_META[a.status];
                 return (
                   <tr key={a.id}>
+                    <td className="row-select-cell">
+                      <input
+                        type="checkbox"
+                        className="row-select"
+                        checked={selectedIds.has(a.id)}
+                        onChange={(e) => toggleRow(a.id, e.target.checked)}
+                        aria-label={`Select ${a.title}`}
+                      />
+                    </td>
                     <td>
                       <Pill tone={meta.tone}>{meta.label}</Pill>
                       {isProgrammeMismatch(a) ? (
