@@ -1,5 +1,6 @@
 import { formatDecisionScore } from "@/lib/decision-summary-display";
 import { roundLabel } from "@/lib/round-label";
+import { CRLF, csvCell, csvFilename, csvRow } from "@/lib/services/csv";
 import type {
   AdminDecisionAbstractSummary,
   AdminDecisionPlan,
@@ -20,36 +21,13 @@ import type {
  * one — the export can only ever be as revealing as the decision table itself.
  */
 
-/** RFC 4180 record separator. Excel and Sheets both expect CRLF. */
-const CRLF = "\r\n";
-
 /**
- * Leading characters a spreadsheet treats as the start of a formula. A cell
- * beginning with one is prefixed with `'` so an imported proposal title can
- * never execute in the recipient's spreadsheet.
+ * The cell escaper and record separator moved to `@/lib/services/csv` when the
+ * reports lane added three more exports; they are re-exported here so this
+ * module's existing callers and tests keep their import unchanged. There is
+ * still exactly one implementation of the formula guard in the codebase.
  */
-const FORMULA_LEAD = new Set(["=", "+", "-", "@", "\t", "\r"]);
-
-/**
- * Escape one cell: formula guard first, then RFC 4180 quoting.
- *
- * The guard runs before quoting so the apostrophe lands inside the quoted
- * value. It is applied to every cell, including numeric ones, which means a
- * negative weighted average exports as text rather than a number. That is the
- * intended trade: a safe export beats a marginally tidier one for a value that
- * only occurs with a negative-scored rubric.
- */
-export function csvCell(value: string | number | null | undefined): string {
-  if (value === null || value === undefined) return "";
-  const raw = typeof value === "number" ? String(value) : value;
-  if (raw === "") return "";
-  const guarded = FORMULA_LEAD.has(raw[0]) ? `'${raw}` : raw;
-  return /[",\r\n]/.test(guarded) ? `"${guarded.replace(/"/g, '""')}"` : guarded;
-}
-
-export function csvRow(cells: readonly (string | number | null | undefined)[]): string {
-  return cells.map(csvCell).join(",");
-}
+export { csvCell, csvRow };
 
 /**
  * Column order is part of the contract: a saved spreadsheet template breaks if
@@ -156,5 +134,5 @@ export function buildDecisionExportCsv(input: DecisionExportInput): string {
 
 /** Fixed, input-free download name: nothing user-supplied reaches the header. */
 export function decisionExportFilename(now: Date = new Date()): string {
-  return `greenroom-review-results-${now.toISOString().slice(0, 10)}.csv`;
+  return csvFilename("review-results", now);
 }
