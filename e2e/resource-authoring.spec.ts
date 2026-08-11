@@ -104,7 +104,8 @@ test.describe("resource templates and preview", () => {
     await expect(suggestion.getByText("Slides are due Friday.", { exact: true })).toBeVisible();
     await expect(suggestion.getByText("[Add speaker check-in time]", { exact: true })).toBeVisible();
     await expect(suggestion.locator("script, iframe, svg, style")).toHaveCount(0);
-    await expect(suggestion.getByRole("link", { name: "Unsafe link" })).not.toHaveAttribute("href", /.+/);
+    await expect(suggestion.getByText("Unsafe link", { exact: true })).toBeVisible();
+    await expect(suggestion.locator("a[href]").filter({ hasText: "Unsafe link" })).toHaveCount(0);
     expect(
       await page.evaluate(() => (globalThis as { __ASSISTANT_PREVIEW_EXECUTED?: boolean }).__ASSISTANT_PREVIEW_EXECUTED),
     ).toBeUndefined();
@@ -180,6 +181,7 @@ test.describe("resource templates and preview", () => {
     const publishedContent = publishedEdit.locator("xpath=ancestor::section[1]");
     await expect(publishedContent.getByText("Slides are due Friday.", { exact: true })).toBeVisible();
     await expect(publishedContent.locator("script, iframe, svg, style")).toHaveCount(0);
-    await expect(publishedContent.locator("a").filter({ hasText: "Unsafe link" })).not.toHaveAttribute("href", /.+/);
+    await expect(publishedContent.getByText("Unsafe link", { exact: true })).toBeVisible();
+    await expect(publishedContent.locator("a[href]").filter({ hasText: "Unsafe link" })).toHaveCount(0);
   });
 });
