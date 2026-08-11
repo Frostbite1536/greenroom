@@ -13,18 +13,33 @@ import {
   validateEventDatePair,
   type EventSettingsDraft,
 } from "@/lib/event-settings-form";
+import { normalizeHex } from "@/lib/color-contrast";
 import { EmptyState, Pill } from "@/components/ui";
 
 type EventForm = EventSettingsDraft;
 
 type RoomDraft = { id: string; name: string; capacity: string };
+type TrackDraft = { id: string; name: string; color: string };
+type CategoryDraft = { id: string; name: string; description: string; defaultTeamKey: string };
 type EventError = { message: string; field: "name" | "timezone" | "dates" | "general" };
+
+type TrackView = EventSettingsView["tracks"][number];
+type CategoryView = EventSettingsView["categories"][number];
+
+/** The seeded Mainstage colour: a sensible first swatch, not a constraint. */
+const DEFAULT_TRACK_COLOUR = "#6366f1";
 
 function positiveCapacity(value: string): number | null | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
   const parsed = Number(trimmed);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** `null` clears an optional text column; a value sets it. */
+function optionalText(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 export function EventSettings({ view }: { view: EventSettingsView }) {
@@ -44,11 +59,18 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
   const [roomNotice, setRoomNotice] = useState<string | null>(null);
   const [roomBusy, setRoomBusy] = useState<string | null>(null);
   const [editingRoom, setEditingRoom] = useState<RoomDraft | null>(null);
+  const [newTrackName, setNewTrackName] = useState("");
+  const [newTrackColour, setNewTrackColour] = useState(DEFAULT_TRACK_COLOUR);
+  const [trackError, setTrackError] = useState<string | null>(null);
+  const [trackNotice, setTrackNotice] = useState<string | null>(null);
+  const [trackBusy, setTrackBusy] = useState<string | null>(null);
+  const [editingTrack, setEditingTrack] = useState<TrackDraft | null>(null);
   const [categoryName, setCategoryName] = useState("");
   const [categoryDescription, setCategoryDescription] = useState("");
   const [categoryError, setCategoryError] = useState<string | null>(null);
   const [categoryNotice, setCategoryNotice] = useState<string | null>(null);
-  const [savingCategory, setSavingCategory] = useState(false);
+  const [categoryBusy, setCategoryBusy] = useState<string | null>(null);
+  const [editingCategory, setEditingCategory] = useState<CategoryDraft | null>(null);
 
   const applyAuthoritativeEvent = useCallback((
     authoritative: EventSettingsView["event"],
@@ -209,12 +231,79 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
     refresh();
   }
 
+  async function addTrack() {
+    if (!newTrackName.trim()) {
+      setTrackError("Give the track a name.");
+      return;
+    }
+    setTrackBusy("new");
+    setTrackError(null);
+    setTrackNotice(null);
+    const res = await apiPost<{ track: TrackView }>("/api/admin/settings/tracks", {
+      name: newTrackName.trim(),
+      color: newTrackColour,
+    });
+    setTrackBusy(null);
+    if (!res.ok) {
+      const fields = firstFieldErrors(res.error.fieldErrors);
+      setTrackError(fields.name ?? fields.color ?? res.error.message);
+      return;
+    }
+    setNewTrackName("");
+    setNewTrackColour(DEFAULT_TRACK_COLOUR);
+    setTrackNotice(`Added ${res.data.track.name}.`);
+    refresh();
+  }
+
+  async function saveTrack() {
+    if (!editingTrack) return;
+    if (!editingTrack.name.trim()) {
+      setTrackError("Give the track a name.");
+      return;
+    }
+    setTrackBusy(editingTrack.id);
+    setTrackError(null);
+    setTrackNotice(null);
+    const res = await apiPatch<{ track: TrackView }>("/api/admin/settings/tracks", {
+      id: editingTrack.id,
+      name: editingTrack.name.trim(),
+      color: editingTrack.color,
+    });
+    setTrackBusy(null);
+    if (!res.ok) {
+      const fields = firstFieldErrors(res.error.fieldErrors);
+      setTrackError(fields.name ?? fields.color ?? res.error.message);
+      return;
+    }
+    setEditingTrack(null);
+    setTrackNotice(`Saved ${res.data.track.name}.`);
+    refresh();
+  }
+
+  async function removeTrack(track: TrackView) {
+    if (!window.confirm(`Remove “${track.name}”? This is only available when no sessions are scheduled on the track.`)) return;
+    setTrackBusy(`delete:${track.id}`);
+    setTrackError(null);
+    setTrackNotice(null);
+    const res = await apiDelete<{ track: TrackView }>(
+      `/api/admin/settings/tracks?trackId=${encodeURIComponent(track.id)}`,
+    );
+    setTrackBusy(null);
+    if (!res.ok) {
+      // Never remove the row locally: a 409 means it remains real event data.
+      setTrackError(res.error.message);
+      return;
+    }
+    setTrackNotice(`Removed ${res.data.track.name}.`);
+    refresh();
+  }
+
   async function addCategory() {
     if (!categoryName.trim()) {
       setCategoryError("Give the category a name.");
       return;
     }
-    setSavingCategory(true);
+    setCategoryBusy("new");
     setCategoryError(null);
     setCategoryNotice(null);
     const res = await apiPost<{ id: string; name: string }>("/api/cfp/categories", {
@@ -223,7 +312,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       ...(categoryDescription.trim() ? { description: categoryDescription.trim() } : {}),
       sortOrder: 0,
     });
-    setSavingCategory(false);
+    setCategoryBusy(null);
     if (!res.ok) {
       const fields = firstFieldErrors(res.error.fieldErrors);
       setCategoryError(fields.name ?? fields.description ?? res.error.message);
@@ -232,6 +321,52 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
     setCategoryName("");
     setCategoryDescription("");
     setCategoryNotice(`Added ${res.data.name}.`);
+    refresh();
+  }
+
+  async function saveCategory() {
+    if (!editingCategory) return;
+    if (!editingCategory.name.trim()) {
+      setCategoryError("Give the category a name.");
+      return;
+    }
+    setCategoryBusy(editingCategory.id);
+    setCategoryError(null);
+    setCategoryNotice(null);
+    // PATCH, not the whole-row POST: sending only what changed is what keeps a
+    // rename from clearing the review group this category routes proposals to.
+    const res = await apiPatch<CategoryView>("/api/cfp/categories", {
+      id: editingCategory.id,
+      name: editingCategory.name.trim(),
+      description: optionalText(editingCategory.description),
+      defaultTeamKey: optionalText(editingCategory.defaultTeamKey),
+    });
+    setCategoryBusy(null);
+    if (!res.ok) {
+      const fields = firstFieldErrors(res.error.fieldErrors);
+      setCategoryError(fields.name ?? fields.description ?? fields.defaultTeamKey ?? res.error.message);
+      return;
+    }
+    setEditingCategory(null);
+    setCategoryNotice(`Saved ${res.data.name}.`);
+    refresh();
+  }
+
+  async function removeCategory(category: CategoryView) {
+    if (!window.confirm(`Remove “${category.name}”? This is only available when no proposals or sessions use it.`)) return;
+    setCategoryBusy(`delete:${category.id}`);
+    setCategoryError(null);
+    setCategoryNotice(null);
+    const res = await apiDelete<CategoryView>(
+      `/api/cfp/categories?categoryId=${encodeURIComponent(category.id)}`,
+    );
+    setCategoryBusy(null);
+    if (!res.ok) {
+      // Never remove the row locally: a 409 means it remains real event data.
+      setCategoryError(res.error.message);
+      return;
+    }
+    setCategoryNotice(`Removed ${res.data.name}.`);
     refresh();
   }
 
@@ -402,20 +537,53 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
           <div className="settings-icon"><Tags size={18} aria-hidden="true" /></div>
           <div>
             <h2 id="programme-structure-heading">Tracks & Categories</h2>
-            <p>These existing programme groupings are shown here for reference while you set up reviews and scheduling.</p>
+            <p>Keep the programme groupings your team uses current: tracks are the schedule's swimlanes, categories are the topics proposals are filed and routed under.</p>
           </div>
         </div>
 
         <div className="settings-structure-grid">
           <section aria-labelledby="tracks-list-heading">
             <h3 id="tracks-list-heading">Tracks</h3>
-            {view.tracks.length === 0 ? <p className="hint">No tracks yet.</p> : (
+
+            <form
+              className="settings-inline-form settings-track-form"
+              onSubmit={(formEvent) => {
+                formEvent.preventDefault();
+                void addTrack();
+              }}
+            >
+              <label className="stack" htmlFor="new-track-name">
+                <span className="field-label">Track name</span>
+                <input id="new-track-name" className="text-input" name="new-track-name" autoComplete="off" value={newTrackName} onChange={(change) => setNewTrackName(change.target.value)} />
+              </label>
+              <label className="stack" htmlFor="new-track-colour">
+                <span className="field-label">Colour</span>
+                <input id="new-track-colour" className="colour-input" type="color" name="new-track-colour" value={newTrackColour} onChange={(change) => setNewTrackColour(change.target.value)} />
+              </label>
+              <button className="primary-button" type="submit" disabled={trackBusy !== null || pending}>
+                <Plus size={16} aria-hidden="true" /> {trackBusy === "new" ? "Adding…" : "Add track"}
+              </button>
+            </form>
+            {trackError ? <p className="field-error" role="alert">{trackError}</p> : null}
+            {trackNotice ? <p className="settings-notice" role="status" aria-live="polite">{trackNotice}</p> : null}
+
+            {view.tracks.length === 0 ? <p className="hint">No tracks yet — add one above.</p> : (
               <ul className="settings-list">
                 {view.tracks.map((track) => (
-                  <li key={track.id}>
-                    <span className="settings-track-colour" style={{ background: track.color }} aria-hidden="true" />
-                    <span>{track.name}</span>
-                  </li>
+                  <TrackRow
+                    key={track.id}
+                    track={track}
+                    draft={editingTrack?.id === track.id ? editingTrack : null}
+                    busy={trackBusy === track.id || trackBusy === `delete:${track.id}`}
+                    onEdit={() => {
+                      setTrackError(null);
+                      setEditingTrack({ id: track.id, name: track.name, color: normalizeHex(track.color, DEFAULT_TRACK_COLOUR) });
+                    }}
+                    onCancel={() => setEditingTrack(null)}
+                    onDraftChange={setEditingTrack}
+                    onSave={saveTrack}
+                    onRemove={() => void removeTrack(track)}
+                  />
                 ))}
               </ul>
             )}
@@ -426,13 +594,25 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
             {view.categories.length === 0 ? <p className="hint">No categories yet — add one below.</p> : (
               <ul className="settings-list">
                 {view.categories.map((category) => (
-                  <li key={category.id}>
-                    <span>
-                      <strong>{category.name}</strong>
-                      {category.description ? <span className="cell-sub">{category.description}</span> : null}
-                    </span>
-                    {category.defaultTeamKey ? <Pill tone="neutral">Review group: {category.defaultTeamKey}</Pill> : null}
-                  </li>
+                  <CategoryRow
+                    key={category.id}
+                    category={category}
+                    draft={editingCategory?.id === category.id ? editingCategory : null}
+                    busy={categoryBusy === category.id || categoryBusy === `delete:${category.id}`}
+                    onEdit={() => {
+                      setCategoryError(null);
+                      setEditingCategory({
+                        id: category.id,
+                        name: category.name,
+                        description: category.description ?? "",
+                        defaultTeamKey: category.defaultTeamKey ?? "",
+                      });
+                    }}
+                    onCancel={() => setEditingCategory(null)}
+                    onDraftChange={setEditingCategory}
+                    onSave={saveCategory}
+                    onRemove={() => void removeCategory(category)}
+                  />
                 ))}
               </ul>
             )}
@@ -459,8 +639,8 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
           </div>
           {categoryError ? <p className="field-error" role="alert">{categoryError}</p> : null}
           {categoryNotice ? <p className="settings-notice" role="status" aria-live="polite">{categoryNotice}</p> : null}
-          <button className="ghost-button" type="submit" disabled={savingCategory || pending}>
-            <Plus size={15} aria-hidden="true" /> {savingCategory ? "Adding…" : "Add category"}
+          <button className="ghost-button" type="submit" disabled={categoryBusy !== null || pending}>
+            <Plus size={15} aria-hidden="true" /> {categoryBusy === "new" ? "Adding…" : "Add category"}
           </button>
         </form>
       </section>
@@ -529,5 +709,134 @@ function RoomRow({
         </div>
       </td>
     </tr>
+  );
+}
+
+function TrackRow({
+  track,
+  draft,
+  busy,
+  onEdit,
+  onCancel,
+  onDraftChange,
+  onSave,
+  onRemove,
+}: {
+  track: TrackView;
+  draft: TrackDraft | null;
+  busy: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onDraftChange: (draft: TrackDraft) => void;
+  onSave: () => Promise<void>;
+  onRemove: () => void;
+}) {
+  if (draft) {
+    return (
+      <li>
+        <form
+          className="settings-taxonomy-editor"
+          onSubmit={(formEvent) => {
+            formEvent.preventDefault();
+            void onSave();
+          }}
+        >
+          <label className="stack" htmlFor={`track-name-${track.id}`}>
+            <span className="field-label">Track name</span>
+            <input id={`track-name-${track.id}`} className="text-input" name={`track-name-${track.id}`} autoComplete="off" value={draft.name} onChange={(change) => onDraftChange({ ...draft, name: change.target.value })} />
+          </label>
+          <label className="stack" htmlFor={`track-colour-${track.id}`}>
+            <span className="field-label">Colour</span>
+            <input id={`track-colour-${track.id}`} className="colour-input" type="color" name={`track-colour-${track.id}`} value={draft.color} onChange={(change) => onDraftChange({ ...draft, color: change.target.value })} />
+          </label>
+          <div className="row wrap settings-row-actions">
+            <button className="primary-button" type="submit" disabled={busy}>{busy ? "Saving…" : "Save track"}</button>
+            <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+          </div>
+        </form>
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <span className="settings-track-colour" style={{ background: track.color }} aria-hidden="true" />
+      <span>{track.name}</span>
+      <div className="row wrap settings-row-actions">
+        <button className="ghost-button" type="button" disabled={busy} onClick={onEdit}>Edit</button>
+        <button className="ghost-button danger-button" type="button" disabled={busy} onClick={onRemove}>
+          <Trash2 size={15} aria-hidden="true" /> {busy ? "Working…" : "Remove"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function CategoryRow({
+  category,
+  draft,
+  busy,
+  onEdit,
+  onCancel,
+  onDraftChange,
+  onSave,
+  onRemove,
+}: {
+  category: CategoryView;
+  draft: CategoryDraft | null;
+  busy: boolean;
+  onEdit: () => void;
+  onCancel: () => void;
+  onDraftChange: (draft: CategoryDraft) => void;
+  onSave: () => Promise<void>;
+  onRemove: () => void;
+}) {
+  if (draft) {
+    return (
+      <li>
+        <form
+          className="settings-taxonomy-editor"
+          onSubmit={(formEvent) => {
+            formEvent.preventDefault();
+            void onSave();
+          }}
+        >
+          <label className="stack" htmlFor={`category-name-${category.id}`}>
+            <span className="field-label">Category name</span>
+            <input id={`category-name-${category.id}`} className="text-input" name={`category-name-${category.id}`} autoComplete="off" value={draft.name} onChange={(change) => onDraftChange({ ...draft, name: change.target.value })} />
+          </label>
+          <label className="stack" htmlFor={`category-description-${category.id}`}>
+            <span className="field-label">Description <span className="muted">(optional)</span></span>
+            <input id={`category-description-${category.id}`} className="text-input" name={`category-description-${category.id}`} autoComplete="off" value={draft.description} onChange={(change) => onDraftChange({ ...draft, description: change.target.value })} />
+          </label>
+          {/* Editable here so a rename can never be the reason a category
+              silently stops routing its proposals to a review group. */}
+          <label className="stack" htmlFor={`category-team-${category.id}`}>
+            <span className="field-label">Review group <span className="muted">(optional)</span></span>
+            <input id={`category-team-${category.id}`} className="text-input" name={`category-team-${category.id}`} autoComplete="off" value={draft.defaultTeamKey} onChange={(change) => onDraftChange({ ...draft, defaultTeamKey: change.target.value })} />
+          </label>
+          <div className="row wrap settings-row-actions">
+            <button className="primary-button" type="submit" disabled={busy}>{busy ? "Saving…" : "Save category"}</button>
+            <button className="ghost-button" type="button" disabled={busy} onClick={onCancel}>Cancel</button>
+          </div>
+        </form>
+      </li>
+    );
+  }
+
+  return (
+    <li>
+      <span>
+        <strong>{category.name}</strong>
+        {category.description ? <span className="cell-sub">{category.description}</span> : null}
+      </span>
+      {category.defaultTeamKey ? <Pill tone="neutral">Review group: {category.defaultTeamKey}</Pill> : null}
+      <div className="row wrap settings-row-actions">
+        <button className="ghost-button" type="button" disabled={busy} onClick={onEdit}>Edit</button>
+        <button className="ghost-button danger-button" type="button" disabled={busy} onClick={onRemove}>
+          <Trash2 size={15} aria-hidden="true" /> {busy ? "Working…" : "Remove"}
+        </button>
+      </div>
+    </li>
   );
 }
