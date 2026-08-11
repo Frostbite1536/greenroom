@@ -11,7 +11,31 @@ import { Menu, X } from "lucide-react";
  */
 type NavigationLink = { href: string | null; label: string };
 
-export function MobileNavigation({ links }: { links: NavigationLink[] }) {
+/**
+ * One labelled block of the drawer, in the order the drawer renders them.
+ *
+ * The drawer used to render every destination as a single flat column — the
+ * same "list to be searched rather than a workspace to be navigated" the
+ * sidebar fixed by grouping, except a phone is where that column is longest.
+ * It now renders the sidebar's own blocks, in the sidebar's own order.
+ *
+ * The grouping is computed once, in `app-shell.tsx`, off the `NAV_GROUPS`
+ * table that already drives the sidebar, and handed down: this file holds no
+ * second copy of the table and applies no authorization of its own. `roles`
+ * on the server is still the only thing that decides what a session sees, and
+ * a group the role reaches nothing in arrives empty and renders nothing —
+ * never a heading with no entries under it.
+ */
+export type NavigationGroup = { key: string; label: string; links: NavigationLink[] };
+
+export function MobileNavigation({
+  groups,
+  cfpLinks,
+}: {
+  groups: NavigationGroup[];
+  /** The open-call entries the sidebar renders in its own trailing block. */
+  cfpLinks: NavigationLink[];
+}) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -58,6 +82,19 @@ export function MobileNavigation({ links }: { links: NavigationLink[] }) {
     }
   }
 
+  /** One entry, unchanged by the grouping: the blocks wrap them, nothing more. */
+  function entry(link: NavigationLink, index: number) {
+    return link.href ? (
+      <Link className="mobile-nav-link" href={link.href} key={link.href} onClick={closeMenu}>
+        {link.label}
+      </Link>
+    ) : (
+      <p className="mobile-nav-link mobile-nav-static" key={`static-${index}`}>
+        {link.label}
+      </p>
+    );
+  }
+
   return (
     <>
       <button
@@ -87,18 +124,27 @@ export function MobileNavigation({ links }: { links: NavigationLink[] }) {
               </button>
             </div>
             <nav>
-              {links.map((link, index) =>
-                link.href ? (
-                  <Link className="mobile-nav-link" href={link.href} key={link.href} onClick={closeMenu}>
-                    {link.label}
-                  </Link>
-                ) : (
-                  <p className="mobile-nav-link mobile-nav-static" key={`static-${index}`}>
-                    {link.label}
-                  </p>
-                ),
-              )}
+              {groups.map(({ key, label, links }) => {
+                // A role that reaches nothing in this group gets no heading for it.
+                if (links.length === 0) return null;
+                return (
+                  <div
+                    aria-labelledby={`mobile-nav-group-${key}`}
+                    className="nav-group"
+                    key={key}
+                    role="group"
+                  >
+                    <p className="nav-group-label" id={`mobile-nav-group-${key}`}>{label}</p>
+                    {links.map(entry)}
+                  </div>
+                );
+              })}
             </nav>
+            {cfpLinks.length > 0 ? (
+              <nav aria-label="Call for proposals" className="nav-cfp">
+                {cfpLinks.map(entry)}
+              </nav>
+            ) : null}
           </aside>
         </div>
       ) : null}

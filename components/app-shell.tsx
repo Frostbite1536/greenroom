@@ -240,8 +240,20 @@ export function AppShell({
       </aside>
       <div className="workspace">
         <header className="topbar">
+          {/* The drawer renders the same labelled blocks the sidebar does, so the
+              grouping is applied once — here, off the same NAV_GROUPS table and
+              the same role-filtered `links`. The drawer is a client component;
+              handing it finished groups keeps the table, and the role filter
+              that is the actual authorization mirror, on the server. */}
           <MobileNavigation
-            links={[...links.map(({ href, label }) => ({ href, label })), ...cfpItems]}
+            cfpLinks={cfpItems}
+            groups={NAV_GROUPS.map(({ key, label }) => ({
+              key,
+              label,
+              links: links
+                .filter((item) => item.group === key)
+                .map(({ href, label: entry }) => ({ href, label: entry })),
+            }))}
           />
           <span className="status-dot" aria-hidden="true" />
           <span>Planning workspace</span>

@@ -37,6 +37,7 @@ const source = (path: string) =>
     .filter((line) => !/^\s*(\/\/|\*)/.test(line))
     .join("\n");
 const shell = () => source("components/app-shell.tsx");
+const drawer = () => source("components/mobile-navigation.tsx");
 const css = () => source("app/globals.css");
 
 /**
@@ -116,6 +117,52 @@ test("the sidebar renders one labelled, named block per non-empty group", () => 
   assert.match(component, /const links = navigation\.filter\(\(item\) => item\.roles\.includes\(session\.role\)\);/);
   // The single labelled landmark is unchanged; groups live inside it.
   assert.match(component, /<nav aria-label="Workspace navigation">/);
+});
+
+test("the mobile drawer renders the same labelled blocks, off the same table", () => {
+  const component = drawer();
+  // The drawer rendered a flat column of every destination until this pass —
+  // the exact reading problem the sidebar's grouping solved, on the screen
+  // where the column is longest.
+  assert.equal(
+    /links=\{\[\.\.\.links\.map/.test(shell()),
+    false,
+    "the shell still hands the drawer one flat list",
+  );
+  assert.match(shell(), /groups=\{NAV_GROUPS\.map\(/);
+  // One table, on the server. A second copy here is the drift this forbids.
+  assert.equal(
+    /NAV_GROUPS/.test(component),
+    false,
+    "the drawer holds its own copy of the group table",
+  );
+  assert.match(component, /groups\.map\(\(\{ key, label, links \}\) => \{/);
+  // The same accessible structure the sidebar block above asserts: a real
+  // group with a name, not a bare div behind a styled paragraph.
+  assert.match(component, /role="group"/);
+  assert.match(component, /aria-labelledby=\{`mobile-nav-group-\$\{key\}`\}/);
+  assert.match(component, /<p className="nav-group-label" id=\{`mobile-nav-group-\$\{key\}`\}>\{label\}<\/p>/);
+  // A role that reaches nothing in a group must not get an empty heading.
+  assert.match(component, /if \(links\.length === 0\) return null;/);
+  // Entries are the same `.mobile-nav-link` they were as a flat list: the
+  // blocks wrap them, they do not replace them.
+  assert.match(component, /<Link className="mobile-nav-link" href=\{link\.href\} key=\{link\.href\} onClick=\{closeMenu\}>/);
+});
+
+test("the drawer shares the sidebar's label style rather than re-declaring it", () => {
+  const sheet = css();
+  // `.nav-group`/`.nav-group-label` are declared above the phone breakpoint,
+  // so the sidebar and the drawer inside `@media (max-width: 820px)` render
+  // one definition of the muted uppercase heading and cannot drift apart.
+  const mediaStart = sheet.indexOf("@media (max-width: 820px)");
+  assert.ok(mediaStart > 0, "the 820px block was not found");
+  assert.ok(sheet.indexOf(".nav-group {") < mediaStart, "`.nav-group` is trapped inside the phone block");
+  assert.ok(sheet.indexOf(".nav-group-label {") < mediaStart, "`.nav-group-label` is trapped inside the phone block");
+  assert.equal(
+    sheet.slice(mediaStart).includes(".nav-group-label"),
+    false,
+    "the phone block re-declares the label style instead of sharing it",
+  );
 });
 
 test("the group labels are styled as the sidebar's existing muted uppercase text", () => {
