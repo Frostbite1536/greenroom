@@ -11,6 +11,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { SMOKE_SESSION_SECRET, cookieForSession } from "./_signed-session.mjs";
 
@@ -472,8 +473,9 @@ const check = (name, pass, detail = "") => {
   console.log(`${pass ? "  ok  " : " FAIL "} ${name}${detail && !pass ? ` — ${detail}` : ""}`);
 };
 
-const server = spawn("npx", ["next", "start", "-p", PORT], {
-  cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
+const nextCli = resolve(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+const server = spawn(process.execPath, [nextCli, "start", "-p", PORT], {
+  cwd: process.cwd(), shell: false, stdio: ["ignore", "pipe", "pipe"],
   env: {
     ...process.env,
     SESSION_SECRET: SMOKE_SESSION_SECRET,
@@ -494,21 +496,57 @@ console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 /**
  * Kill the spawned server and its children.
  *
- * `shell: true` means `server.pid` is the shell wrapper; killing only that
- * leaves the real `next-server` holding the port, which makes the next run fail
- * to bind. `/T` kills the tree. Never kill node by image name (see the incident
- * rule in coordination STATE.md) — this is scoped to our own PID.
+ * The repo-local Next CLI is launched directly, so `server.pid` is the exact
+ * process this harness owns rather than a transient cmd/npx wrapper. Ask that
+ * child to stop first and await its exit. The bounded hard fallback remains
+ * scoped to that exact PID/tree; never kill Node by image name (see the
+ * incident rule in coordination STATE.md).
  */
-function stopServer() {
-  if (!server.pid || server.exitCode !== null) return true;
-  const res = spawnSync("taskkill", ["/F", "/T", "/PID", String(server.pid)], { encoding: "utf8" });
-  console.log(`[smoke] stopped server tree for pid ${server.pid}${res.status === 0 ? "" : ` (exit ${res.status})`}`);
-  if (res.error || res.status !== 0) {
-    cleanupFailed = true;
-    console.error(`[smoke] failed to stop server tree: ${res.error?.message ?? res.stderr ?? `exit ${res.status}`}`);
-    return false;
+function waitForServerExit(timeoutMs) {
+  if (server.exitCode !== null || server.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolveExit) => {
+    const timeout = setTimeout(() => {
+      server.off("exit", onExit);
+      resolveExit(false);
+    }, timeoutMs);
+    function onExit() {
+      clearTimeout(timeout);
+      resolveExit(true);
+    }
+    server.once("exit", onExit);
+  });
+}
+
+async function stopServer() {
+  if (!server.pid || server.exitCode !== null || server.signalCode !== null) return true;
+  const serverPid = server.pid;
+  const gracefulExit = waitForServerExit(5_000);
+  const gracefulSignalDelivered = server.kill("SIGTERM");
+  if (await gracefulExit) {
+    console.log(`[smoke] stopped server pid ${serverPid}`);
+    return true;
   }
-  return true;
+
+  let fallbackError = null;
+  if (process.platform === "win32") {
+    const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(serverPid)], { encoding: "utf8" });
+    if (result.error || result.status !== 0) {
+      fallbackError = result.error?.message ?? result.stderr ?? `exit ${result.status}`;
+    }
+  } else if (!server.kill("SIGKILL")) {
+    fallbackError = "SIGKILL was not delivered";
+  }
+  const stopped = await waitForServerExit(5_000);
+  if (stopped) {
+    const diagnostic = fallbackError || !gracefulSignalDelivered
+      ? " (fallback target was already exiting)"
+      : "";
+    console.log(`[smoke] stopped server tree for pid ${serverPid} after timeout${diagnostic}`);
+    return true;
+  }
+  cleanupFailed = true;
+  console.error(`[smoke] failed to stop server pid ${serverPid}: ${fallbackError ?? "exit was not observed"}`);
+  return false;
 }
 let cleanupFailed = false;
 let cleanupPromise;
@@ -532,7 +570,7 @@ function cleanup() {
       cleanupFailed = true;
       console.error("[smoke] Prisma cleanup failed", error);
     });
-    stopServer();
+    await stopServer();
     return cleanupFailed;
   })();
   return cleanupPromise;
@@ -2180,6 +2218,8 @@ try {
     .replace(/<[^>]+>/g, "")
     .replace(/&[^;]+;/g, "")
     .trim() ?? null;
+  const tableRowContaining = (html, marker) =>
+    (html.match(/<tr\b[\s\S]*?<\/tr>/g) ?? []).find((row) => row.includes(marker)) ?? null;
   const evaluatorCommentPage = await req("GET", "/admin/evaluations", null, evaluator);
   check("evaluator textarea pre-fills the recovered own comment",
     evaluatorCommentPage.status === 200 && textareaValue(evaluatorCommentPage.text) === "Strong.");
@@ -3213,10 +3253,14 @@ try {
     null,
     admin,
   );
-  const partialRoundText = renderedText(partialRoundPage.text) ?? "";
+  const partialReviewRow = tableRowContaining(partialRoundPage.text, partialReview.title);
+  const partialReviewRowText = renderedText(partialReviewRow) ?? "";
   check("partial completed review is counted but withheld from the decision score",
-    partialRoundText.includes("No included reviews")
-    && partialRoundText.includes("0 of 1 completed"));
+    partialReviewRow !== null
+    && partialReviewRowText.includes(partialReview.title)
+    && partialReviewRowText.includes("No included reviews")
+    && partialReviewRowText.includes("0/1 completed reviews included"),
+    partialReviewRowText || "partial-review row not found");
 
   // --- D-C5-8 §3.2: ABS-10 decision-score sort ----------------------------
   // The ordering itself is client state; the comparator, missing-scores-last in
@@ -3257,7 +3301,11 @@ try {
   // A missing score must still read as an absence, never as a number, on a page
   // whose score column is now sortable.
   check("§3.2 an unscored proposal still reads 'No included reviews', not 0.00",
-    partialRoundText.includes("No included reviews") && !partialRoundText.includes("0.00"));
+    partialReviewRow !== null
+    && partialReviewRowText.includes(partialReview.title)
+    && partialReviewRowText.includes("No included reviews")
+    && !partialReviewRowText.includes("0.00"),
+    partialReviewRowText || "partial-review row not found");
   const adminSubmissions = await req("GET", `/api/cfp/submissions?planId=${encodeURIComponent(fx.plan.id)}`, null, admin);
   const apiSummary = adminSubmissions.data?.data?.decisionSummary;
   const apiAbstract = (adminSubmissions.data?.data?.abstracts ?? []).find((abstract) => abstract.id === fx.abstract.id);
