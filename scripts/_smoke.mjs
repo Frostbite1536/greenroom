@@ -5129,7 +5129,122 @@ try {
   check("C5-EXPORT neither programme export carries a speaker email",
     emailLeaks.length === 0, emailLeaks.join(", "));
 
-  // 25. Guard: the run must not have touched the judged demo event.
+  // 25. D-C5-16 item 3 file uploads (headshots + slide decks).
+  //
+  // REQUIRES THE APPLIED SCHEMA: every check below writes or reads the
+  // `StoredFile` table and the `StoredFileKind` enum, so this block only runs
+  // after the Architect's serialized window — exactly like the C5-LOGIN block
+  // above, which is gated the same way on `User.passwordHash`. Before the
+  // window these checks fail with a missing-relation error, which is the
+  // honest signal, not a reason to soften them.
+  //
+  // Uploads are charged against the per-user durable buckets (6/minute), so
+  // the probes below stay inside that budget per identity and the deliberate
+  // refusals are cheap ones that never reach the store.
+  const uploadPost = async (kind, bytes, contentType, sess) => {
+    const headers = new Headers({ "content-type": contentType });
+    if (sess) headers.set("cookie", cookie(sess));
+    const res = await fetch(`${BASE}/api/files?kind=${kind}`, { method: "POST", headers, body: bytes });
+    const text = await res.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, data, headers: res.headers };
+  };
+  const uploadGet = async (url, sess) => {
+    const headers = new Headers();
+    if (sess) headers.set("cookie", cookie(sess));
+    const res = await fetch(BASE + url, { headers });
+    return { status: res.status, headers: res.headers, bytes: Buffer.from(await res.arrayBuffer()) };
+  };
+  // A real 1x1 PNG and a minimal but genuine PDF: the route sniffs magic bytes,
+  // so a placeholder string would be refused for the right reason and prove
+  // nothing about the accepting path.
+  const PNG_BYTES = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n", "utf8");
+
+  const anonUpload = await uploadPost("headshot", PNG_BYTES, "image/png", null);
+  check("C5-FILES an anonymous upload is refused before anything is stored",
+    anonUpload.status === 401, `${anonUpload.status}/${anonUpload.data?.error?.code}`);
+
+  const headshotUp = await uploadPost("headshot", PNG_BYTES, "image/png", speaker);
+  const headshotUrl = headshotUp.data?.data?.url;
+  check("C5-FILES a speaker stores a headshot and gets its served URL back",
+    headshotUp.status === 201 && headshotUp.data?.ok === true
+      && headshotUp.data?.data?.mime === "image/png" && headshotUp.data?.data?.deduped === false
+      && /^\/api\/files\/[A-Za-z0-9_-]+$/.test(headshotUrl ?? ""),
+    `${headshotUp.status}/${headshotUrl}`);
+
+  const headshotAgain = await uploadPost("headshot", PNG_BYTES, "image/png", speaker);
+  check("C5-FILES re-uploading the same bytes returns the same id instead of a second copy",
+    headshotAgain.status === 200 && headshotAgain.data?.data?.deduped === true
+      && headshotAgain.data?.data?.url === headshotUrl,
+    `${headshotAgain.status}/${headshotAgain.data?.data?.url}`);
+
+  const headshotServed = await uploadGet(headshotUrl, null);
+  check("C5-FILES a headshot is served to anonymous readers with the stored type and an immutable cache",
+    headshotServed.status === 200
+      && headshotServed.headers.get("content-type") === "image/png"
+      && headshotServed.headers.get("cache-control") === "public, max-age=31536000, immutable"
+      && headshotServed.headers.get("x-content-type-options") === "nosniff"
+      && headshotServed.bytes.equals(PNG_BYTES),
+    `${headshotServed.status}/${headshotServed.headers.get("cache-control")}`);
+
+  const deckUp = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", speaker);
+  const deckUrl = deckUp.data?.data?.url;
+  check("C5-FILES a speaker stores a slide deck",
+    deckUp.status === 201 && deckUp.data?.data?.mime === "application/pdf",
+    `${deckUp.status}/${deckUp.data?.data?.mime}`);
+
+  const deckAnon = await uploadGet(deckUrl, null);
+  const deckOwner = await uploadGet(deckUrl, speaker);
+  const deckAdmin = await uploadGet(deckUrl, admin);
+  const deckEvaluator = await uploadGet(deckUrl, evalr);
+  check("C5-FILES a slide deck is readable by its owner and this event's admin, and by nobody else",
+    deckAnon.status === 404 && deckEvaluator.status === 404
+      && deckOwner.status === 200 && deckAdmin.status === 200
+      && deckOwner.headers.get("cache-control") === "private, no-store"
+      && deckOwner.headers.get("content-disposition") === "attachment"
+      && deckOwner.bytes.equals(PDF_BYTES),
+    `anon ${deckAnon.status}/eval ${deckEvaluator.status}/owner ${deckOwner.status}/admin ${deckAdmin.status}`);
+
+  const missingFile = await uploadGet("/api/files/no-such-stored-file", admin);
+  check("C5-FILES an unreadable deck and an id that does not exist are the same 404",
+    missingFile.status === 404 && deckAnon.status === 404,
+    `${missingFile.status}/${deckAnon.status}`);
+
+  // The claimed type is never believed: a real PDF sent as image/png is a
+  // mismatch, and HTML sent as image/png is not an accepted format at all.
+  const spoofedDeck = await uploadPost("headshot", PDF_BYTES, "image/png", speaker);
+  const spoofedHtml = await uploadPost("headshot", Buffer.from("<script>alert(1)</script>", "utf8"), "image/png", speaker);
+  const wrongKind = await uploadPost("avatar", PNG_BYTES, "image/png", speaker);
+  check("C5-FILES the bytes decide the type, and an unknown kind is refused",
+    spoofedDeck.status === 422 && spoofedDeck.data?.error?.code === "FILE_TYPE_UNSUPPORTED"
+      && spoofedHtml.status === 422 && spoofedHtml.data?.error?.code === "FILE_TYPE_UNSUPPORTED"
+      && wrongKind.status === 422 && wrongKind.data?.error?.code === "FILE_KIND_UNSUPPORTED",
+    `${spoofedDeck.data?.error?.code}/${spoofedHtml.data?.error?.code}/${wrongKind.data?.error?.code}`);
+
+  const filesOversize = await uploadPost("headshot", Buffer.concat([PNG_BYTES, Buffer.alloc(1024 * 1024)]), "image/png", admin);
+  check("C5-FILES an oversize headshot is a 413 against the repo's existing code",
+    filesOversize.status === 413 && filesOversize.data?.error?.code === "REQUEST_TOO_LARGE",
+    `${filesOversize.status}/${filesOversize.data?.error?.code}`);
+
+  // The wire-in: the stored URL saves through the portal's own schema, which
+  // would have rejected an app-relative path before this lane.
+  const savedProfile = await j("PATCH", "/api/portal/profile", { headshotUrl, slideDeckUrl: deckUrl }, speaker);
+  check("C5-FILES an uploaded URL saves through the portal profile schema unchanged",
+    savedProfile.status === 200 && savedProfile.data?.data?.headshotUrl === headshotUrl
+      && savedProfile.data?.data?.slideDeckUrl === deckUrl,
+    `${savedProfile.status}/${savedProfile.data?.error?.code ?? ""}`);
+  const pastedStillWorks = await j("PATCH", "/api/portal/profile", { headshotUrl: "https://cdn.example.test/a.png" }, speaker);
+  const stillRefused = await j("PATCH", "/api/portal/profile", { headshotUrl: "/admin/settings" }, speaker);
+  check("C5-FILES a pasted link still saves and a non-upload relative path is still refused",
+    pastedStillWorks.status === 200 && stillRefused.status === 422
+      && !!stillRefused.data?.error?.fieldErrors?.headshotUrl,
+    `${pastedStillWorks.status}/${stillRefused.status}`);
+
+  // 26. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
   });

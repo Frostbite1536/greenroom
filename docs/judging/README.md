@@ -122,9 +122,10 @@ Stated plainly, because a judge should not have to discover them.
   and it is created genuinely empty, but the workspace stays on the event the
   session was issued for — the app says "switching between events is on the
   roadmap". A newly created event therefore cannot yet be configured from the UI.
-- **No file upload on proposals or speaker profiles.** Slide decks and headshots
-  are stored as URLs. The only file input in the product is the admin CSV
-  proposal import.
+- **No file upload on proposals.** Speaker profiles do take real uploads —
+  headshots and slide decks are stored in the database and served from
+  `/api/files/<id>`, with a URL field still offered as the alternative — but a
+  proposal itself still carries no attachment.
 - **One topic per submission, by design.** A CFP form can offer several topic
   options, but each submitted proposal stores exactly one selected topic, which
   is what routes it to a review team. The agenda `Track` is a separate placement

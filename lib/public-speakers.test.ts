@@ -91,6 +91,38 @@ test("safePublicImageUrl allows web images and rejects credentialed or executabl
   assert.equal(safePublicImageUrl("not a url"), null);
 });
 
+test("safePublicImageUrl passes this app's own upload path through, and no other relative path", () => {
+  // Without this the gallery would silently render initials for every headshot
+  // a speaker actually uploaded: `new URL("/api/files/x")` throws.
+  assert.equal(safePublicImageUrl("/api/files/clx1234567890"), "/api/files/clx1234567890");
+  for (const rejected of [
+    "//evil.test/api/files/x",
+    "/api/files/x/../../admin/settings",
+    "/api/files/",
+    "/uploads/x.png",
+    "/admin/settings",
+    "../secret.png",
+  ]) {
+    assert.equal(safePublicImageUrl(rejected), null, `${rejected} must not reach a public card`);
+  }
+});
+
+test("an uploaded headshot survives the public projection, and a spoofed path still does not", () => {
+  const card = (id: string, name: string, headshotUrl: string) => ({
+    id,
+    name,
+    avatarUrl: null,
+    speakerProfile: { bio: null, company: null, jobTitle: null, headshotUrl },
+    sessionSpeakers: [],
+  });
+  const { speakers } = buildPublicSpeakers(event, [
+    card("u-1", "Ada Uploaded", "/api/files/clx1234567890"),
+    card("u-2", "Bo Spoofed", "/api/files/../../admin/settings"),
+  ]);
+  assert.equal(speakers[0]!.headshotUrl, "/api/files/clx1234567890");
+  assert.equal(speakers[1]!.headshotUrl, null);
+});
+
 test("buildPublicSpeakers returns a graceful sentinel summary for oversized lineups", () => {
   const sources = Array.from({ length: PUBLIC_SPEAKER_LIMITS.speakers + 1 }, (_, index) => ({
     id: `user-${index}`,

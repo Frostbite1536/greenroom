@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isIanaTimeZone } from "@/lib/tz";
+import { isStoredFilePath } from "@/lib/uploads/stored-file";
 
 // NOTE: relaxed from z.string().cuid() by the backend worker to accept the
 // seeded demo ids (e.g. event id "demo-event") that are not cuids. Entity ids
@@ -553,9 +554,24 @@ const nullableProfileText = (maxLength: number) => z.preprocess(
   z.string().max(maxLength).nullable(),
 ).optional();
 
+/**
+ * A profile link: an absolute URL exactly as before, **or** one of this app's
+ * own upload URLs.
+ *
+ * The `.url()` branch is untouched, so GRA2-07's documented follow-up (that
+ * `.url()` still accepts non-HTTP schemes, re-filtered by the public image
+ * renderer) neither improves nor worsens here. The second branch is not a
+ * widening of what counts as a URL: `isStoredFilePath` accepts `/api/files/<id>`
+ * and literally nothing else — no scheme, no host, no traversal, no query — so
+ * an uploaded file can be stored in the same column as a pasted link without
+ * that column becoming able to hold a relative path in general.
+ */
 const nullableProfileUrl = z.preprocess(
   (value) => typeof value === "string" ? value.trim() || null : value,
-  z.string().url().nullable(),
+  z.union([
+    z.string().url(),
+    z.string().refine(isStoredFilePath, { message: "Invalid url" }),
+  ]).nullable(),
 ).optional();
 
 const nullableSocialLinks = z.record(z.string().trim().min(1), z.string().trim().url())

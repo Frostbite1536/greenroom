@@ -4,6 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, UserPlus } from "lucide-react";
 import { apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
+import { FileUploadField } from "@/components/file-upload-field";
 import {
   speakerDialogRecovery,
   speakerProfileDiff,
@@ -370,7 +371,13 @@ function ProfileFields({
         <input
           id={`${ids}-headshotUrl`}
           className="text-input"
-          type="url"
+          // Not `type="url"`: an uploaded headshot is this app's own
+          // `/api/files/<id>` path, which native URL validation rejects — the
+          // dialog's submit would be blocked with a browser bubble and no
+          // explanation the operator could act on. `inputMode` still brings up
+          // the URL keyboard, and the server schema is the real validation.
+          type="text"
+          inputMode="url"
           autoComplete="off"
           placeholder="https://…"
           value={draft.headshotUrl}
@@ -382,6 +389,16 @@ function ProfileFields({
         </span>
         {errors.headshotUrl ? <span className="field-error">{errors.headshotUrl}</span> : null}
       </label>
+
+      {/* Either/or, never both: the upload writes the URL field above, which is
+          still the value the dialog diffs and sends. A pasted link is unchanged,
+          and clearing the field is still a real clear. */}
+      <FileUploadField
+        kind="HEADSHOT"
+        label="…or upload a headshot"
+        hint="PNG, JPEG or WebP."
+        onUploaded={(url) => onChange({ ...draft, headshotUrl: url })}
+      />
 
       <label className="stack" htmlFor={`${ids}-bio`}>
         <span className="field-label">Bio <span className="muted">(optional)</span></span>
