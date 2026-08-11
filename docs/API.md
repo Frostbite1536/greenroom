@@ -68,6 +68,27 @@ Expected error codes are `UNAUTHORIZED` (401), `EVENT_REQUIRED` or
 All three endpoints accept `event=<slug|id>`, `limit=<1..100>`, and
 `offset=<0..1000000>`.
 
+## Planned v1 expansion — not shipped
+
+This is an ordered design queue, not an available API contract.
+
+1. A public, static OpenAPI document will describe the existing read-only v1
+   routes first, with a test that detects contract drift. It may be read without
+   a key because it contains no programme data.
+2. The deployment-wide `GREENROOM_API_KEY` will **not** be published as a demo
+   credential. It is not event-scoped, so exposing it would turn every event
+   addressable by the current API into public data.
+3. Event discovery and resource visibility come before new read endpoints. In
+   particular, held-back or unplaced sessions must remain private unless a
+   future scoped-read contract explicitly permits them; filters and incremental
+   sync also need bounded, stable cursor semantics.
+4. Hashed, revocable per-event credentials and a safely scoped demo-access path
+   precede any broader discovery or data demonstrations.
+5. Generic webhook delivery and any agent-writable API come last. A write must
+   carry idempotency, per-token rate limits, auditability, and the same server
+   authorization, abstract locks, and schedule locks used by the application
+   routes. It must never reimplement or bypass those protections.
+
 ## In-app speaker submission endpoints (session-authenticated)
 
 These back the speaker's "my submissions" surface (requirement R1: speakers may edit their

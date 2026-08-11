@@ -72,6 +72,33 @@ without instructions from the authors.
   and on which commit.
 - A standalone page proving the schedule embed renders from a foreign origin.
 
+## Stage 5 — Post-release integration queue
+
+**Entry gate:** Stage 4's clean-install rehearsal, final-SHA evidence set, and
+deployed golden-path verification are complete. This stage is intentionally not
+part of the current release promise.
+
+1. Ship a public static OpenAPI contract for the existing read-only v1 API, with
+   drift tests, safe static examples, and a workflow-to-route evidence map. Do
+   not publish the deployment-wide `GREENROOM_API_KEY`.
+2. Define scoped-read rules before adding discovery or breadth: event discovery,
+   resource visibility, held/unplaced-session privacy, filters, and an
+   incremental-sync cursor contract.
+3. Introduce hashed, revocable per-event credentials and scoped demo access in a
+   reviewed schema/authorization change. Only then add the approved bounded read
+   models and their contract tests.
+4. Add generic webhook delivery and any narrow agent writes last. Writes require
+   idempotency, per-token rate limits, audit records, and reuse of the existing
+   abstract and schedule lock-protected service paths.
+5. Take on lower-risk operator polish afterward: hidden-tab-paused speaker
+   refresh, `Day (rooms)` clarity, preview-safe bulk decisions, pacing reports,
+   and manual assistive-technology evidence.
+
+**Exit gate:** every added route has a documented visibility model, authorization
+and rate-limit tests, no global-key disclosure, and exact-head build plus
+integration verification. Any write surface additionally proves the same
+conflict and lifecycle refusals as its UI counterpart.
+
 ## Deployment decision
 
 Vercel + Neon, chosen for zero Prisma friction and instant provisioning.

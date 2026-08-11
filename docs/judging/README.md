@@ -18,6 +18,7 @@ presented as current evidence.
 | --- | --- |
 | [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) | Shot list and narration for the walkthrough video: the full operating loop, one deliberate conflict refusal, and the greenfield event/CFP proof |
 | [SCREENSHOT-INDEX.md](SCREENSHOT-INDEX.md) | The current screenshot set, organized by role and workflow, with per-artifact commit, URL, timestamp, viewport, access role, and read-only/mutation status |
+| [WORKFLOW-ROUTES.md](WORKFLOW-ROUTES.md) | Current shipped workflow-to-route map for admins, evaluators, speakers, and the public, linked to the applicable evidence rows |
 | [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) | Clean-install rehearsal from a fresh clone and an empty database (**historical** — recorded at `f80247e`) |
 | [PERFORMANCE.md](PERFORMANCE.md) | Lighthouse performance and accessibility results for ten routes (**historical** — measured 2026-08-08 on the pre-cutover deployment) |
 | [A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) | An authenticated production verification receipt, 14/14 (**historical** — recorded at `0bb4aad`) |
