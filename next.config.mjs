@@ -16,24 +16,37 @@
  * which is the restrictive one — silently breaking embeds while looking correct.
  */
 
-/** Applies everywhere, including `/embed/*`. */
-const BASELINE_SECURITY_HEADERS = [
+/** Applies everywhere, including `/embed/*` and `/api/*`. */
+const UNIVERSAL_SECURITY_HEADERS = [
   // Never let a browser re-interpret a response as a type we did not send.
   { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+];
+
+/**
+ * Document-only headers. API routes are excluded on purpose: several security
+ * routes set a STRICTER Referrer-Policy of their own (the reviewer-invite
+ * surface sends `no-referrer` because its URLs carry bearer material), and a
+ * config-level value on the same header would override or duplicate the
+ * handler's — `no-referrer, strict-origin-when-cross-origin` is not a policy
+ * any check or browser should have to disentangle. Documents get the baseline;
+ * an API route that needs a referrer policy states its own.
+ */
+const DOCUMENT_SECURITY_HEADERS = [
   // Full URL to same origin, bare origin cross-origin, nothing over a downgrade:
   // abstract and review permalinks carry ids that third parties have no claim to.
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   // The app asks for none of these; say so, so an injected frame cannot either.
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-  { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
 ];
 
 /**
- * Everything except `/embed/...`. path-to-regexp negative lookahead, the same
- * form Next documents for matchers: `/` and `/admin/speakers` match,
- * `/embed/schedule` does not.
+ * Everything except `/embed/...` and `/api/...`. path-to-regexp negative
+ * lookahead, the same form Next documents for matchers: `/` and
+ * `/admin/speakers` match; `/embed/schedule` and `/api/...` do not.
  */
-const NON_EMBED_SOURCE = "/((?!embed/).*)";
+const NON_EMBED_DOCUMENT_SOURCE = "/((?!embed/|api/).*)";
+const DOCUMENT_SOURCE = "/((?!api/).*)";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -41,9 +54,10 @@ const nextConfig = {
   turbopack: { root: process.cwd() },
   async headers() {
     return [
-      { source: "/:path*", headers: BASELINE_SECURITY_HEADERS },
+      { source: "/:path*", headers: UNIVERSAL_SECURITY_HEADERS },
+      { source: DOCUMENT_SOURCE, headers: DOCUMENT_SECURITY_HEADERS },
       {
-        source: NON_EMBED_SOURCE,
+        source: NON_EMBED_DOCUMENT_SOURCE,
         headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }],
       },
     ];

@@ -56,6 +56,7 @@ function headersFor(rules: HeaderRule[], pathname: string): Map<string, string> 
 
 const SHELL_PATHS = ["/", "/login", "/admin/speakers", "/admin/agenda", "/portal", "/cfp/demo-event/cfp"];
 const EMBED_PATHS = ["/embed/schedule", "/embed/speakers", "/embed/schedule/anything"];
+const API_PATHS = ["/api/auth/login", "/api/auth/reviewer-invites/accept", "/api/v1/schedule"];
 
 test("the config actually declares a headers() rule set", async () => {
   const { config, rules } = await load();
@@ -65,14 +66,29 @@ test("the config actually declares a headers() rule set", async () => {
   assert.equal(config.poweredByHeader, false);
 });
 
-test("every path gets the four baseline headers, embeds included", async () => {
+test("every path gets nosniff and HSTS — embeds and APIs included", async () => {
+  const { rules } = await load();
+  for (const pathname of [...SHELL_PATHS, ...EMBED_PATHS, ...API_PATHS]) {
+    const applied = headersFor(rules, pathname);
+    assert.equal(applied.get("x-content-type-options"), "nosniff", pathname);
+    assert.equal(applied.get("strict-transport-security"), "max-age=31536000; includeSubDomains", pathname);
+  }
+});
+
+test("documents get referrer and permissions policies; API routes are left to their own", async () => {
   const { rules } = await load();
   for (const pathname of [...SHELL_PATHS, ...EMBED_PATHS]) {
     const applied = headersFor(rules, pathname);
-    assert.equal(applied.get("x-content-type-options"), "nosniff", pathname);
     assert.equal(applied.get("referrer-policy"), "strict-origin-when-cross-origin", pathname);
     assert.equal(applied.get("permissions-policy"), "camera=(), microphone=(), geolocation=()", pathname);
-    assert.equal(applied.get("strict-transport-security"), "max-age=31536000; includeSubDomains", pathname);
+  }
+  // The reviewer-invite surface sets a STRICTER no-referrer of its own; a
+  // config value on the same key would override or duplicate it. So the config
+  // must not claim referrer/permissions on any /api path.
+  for (const pathname of API_PATHS) {
+    const applied = headersFor(rules, pathname);
+    assert.equal(applied.get("referrer-policy"), undefined, pathname);
+    assert.equal(applied.get("permissions-policy"), undefined, pathname);
   }
 });
 
@@ -135,9 +151,10 @@ test("the excluding matcher is anchored, so a nested embed path cannot slip past
   const cspRule = rules.find((rule) =>
     rule.headers.some((header) => header.key.toLowerCase() === "content-security-policy"));
   assert.ok(cspRule);
-  assert.equal(cspRule.source, "/((?!embed/).*)");
-  // A path that merely CONTAINS "embed" is still the shell and is still framed-denied.
-  for (const pathname of ["/admin/embeds", "/embedded", "/x/embed/schedule"]) {
+  assert.equal(cspRule.source, "/((?!embed/|api/).*)");
+  // A path that merely CONTAINS "embed" or "api" is still the shell and is
+  // still framing-denied.
+  for (const pathname of ["/admin/embeds", "/embedded", "/x/embed/schedule", "/rapid"]) {
     assert.equal(headersFor(rules, pathname).get("content-security-policy"), "frame-ancestors 'none'", pathname);
   }
 });

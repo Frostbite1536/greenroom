@@ -21,7 +21,7 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `DATABASE_URL` | ✅ | Neon **pooled** URL (contains `-pooler`), `sslmode=require`. |
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
-   | `DEMO_PERSONA_LOGIN_ENABLED` | **production required for the demo** | Must be exactly `true` for the one-click `/login` personas to work in production (GRA2-01). Anything else — unset, `false`, `TRUE`, `1` — refuses them and hides the buttons; the email/password form still works. Not consulted outside production, so local dev, tests and the smoke harnesses need nothing. |
+   | `DEMO_PERSONA_LOGIN_ENABLED` | **production required for the demo** | Must be exactly `true` for the one-click `/login` personas to work in production (GRA2-01). Anything else — unset, `false`, `TRUE`, `1` — refuses them and hides the buttons; the email/password form still works. The gate keys on `NODE_ENV=production`, which `next start` also sets — so the smoke harnesses (which run a production build) pass the flag explicitly, while `next dev` and unit tests need nothing. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`; production should use the canonical `https://greenroom-hq.com`. |
    | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a sender verified for the deployment's domain and keep mocks on otherwise. Submission, decision, and reminder mail share the same audited delivery path—see "Email status" below. |
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
