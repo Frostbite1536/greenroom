@@ -155,11 +155,15 @@ test("C33: no writer takes the abstract lock after the fan-out lock", () => {
     );
   }
   // And the accept paths take them in the documented order: abstract first, then
-  // the fan-out lock inside provisioning.
-  for (const route of ["app/api/evaluations/decisions/route.ts", "app/api/evaluations/convert/route.ts"]) {
+  // the fan-out lock inside provisioning. The decision transaction lives in the
+  // shared writer (both the single-row and bulk routes loop it), so that file is
+  // where the ordering is real; convert still holds its own transaction.
+  for (const route of ["lib/services/abstract-decision-write.ts", "app/api/evaluations/convert/route.ts"]) {
     const source = code(route);
+    const lockAt = source.indexOf("lockAbstractForWrite(");
+    const provisionAt = source.indexOf("provisionAcceptedAbstract(");
     assert.ok(
-      source.indexOf("lockAbstractForWrite(") < source.indexOf("provisionAcceptedAbstract("),
+      lockAt !== -1 && provisionAt !== -1 && lockAt < provisionAt,
       `${route} must hold the abstract lock before provisioning takes the fan-out lock`,
     );
   }
