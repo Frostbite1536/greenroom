@@ -40,6 +40,14 @@ button { letter-spacing: 0; }
 .event-switch-button:hover, .event-switch-button:focus-visible { background: #3a4749; color: white; }
 .event-switch-note { color: #9fabad; font-size: 11px; }
 .sidebar nav { display: grid; gap: 3px; }
+/* Labelled groups inside that nav. The block keeps the 3px rhythm the flat list
+   had, and the separation between groups is whitespace plus the heading rather
+   than a rule — five more borders in a 244px column reads as a table of
+   contents. The heading borrows `.event-label`'s muted 11px uppercase, the
+   style this sidebar already uses for "Current event". */
+.nav-group { display: grid; gap: 3px; }
+.nav-group + .nav-group { margin-top: 14px; }
+.nav-group-label { margin: 0 0 3px; padding: 0 10px; color: #9fabad; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .nav-link { min-height: 39px; padding: 0 10px; display: flex; align-items: center; gap: 10px; color: #c7d0d0; border-radius: 5px; font-size: 13px; }
 .nav-link:hover, .nav-link:focus-visible { color: white; background: #303b3d; outline: none; }
 .sidebar-footer { margin-top: auto; border-top: 1px solid #394446; padding: 16px 7px 2px; display: flex; gap: 10px; align-items: center; font-size: 12px; }
