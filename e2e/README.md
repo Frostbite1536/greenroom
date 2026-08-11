@@ -18,7 +18,8 @@ has to write to the product.
 So they run **only against a throwaway or local database**. Never the shared
 demo database, never production.
 
-This is enforced, not merely documented. Before a single step runs, the guard in
+This is enforced, not merely documented. Before the owned server starts, and
+again before either suite seeds, the guard in
 [`db-guard.ts`](db-guard.ts) — the same pattern as
 [`../scripts/install-rehearsal.mjs`](../scripts/install-rehearsal.mjs) —
 refuses to continue unless:
@@ -54,15 +55,16 @@ either one twice in a row and the second run starts from the same state as the
 first. The golden path also stamps its proposal title with the run's timestamp
 so two runs can never collide on a title.
 
-`playwright.config.ts` starts `next start` on port **3400** (outside the
-3200–3299 range the sprint's other lanes use) and reuses an already-running
-server if one is there. Override with `E2E_PORT`, or point at an existing server
-with `E2E_BASE_URL`.
+`playwright.config.ts` owns the `next start` process on port **3400** (outside
+the 3200–3299 range the sprint's other lanes use). Override that port with a
+valid `E2E_PORT`. If the canonical loopback URL is already serving, Playwright
+fails before the seed or browser journey; it never reuses an independently
+started server whose database identity it cannot prove.
 
 `next start` runs in production mode, where the session-cookie secret fails
-closed; the config supplies a local-only `SESSION_SECRET` for the server it
-spawns unless one is already in the environment. That secret is for a
-throwaway local server and nothing else.
+closed; the config passes the validated `DATABASE_URL` and a local-only
+`SESSION_SECRET` to the server it spawns (unless a session secret is already in
+the environment). That secret is for a throwaway local server and nothing else.
 
 ## Artifacts
 

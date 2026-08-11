@@ -1,5 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
-import { assertLoopbackTarget, loadRepoEnv } from "./e2e/db-guard";
+import { assertDisposableDatabase, assertLoopbackTarget, loadRepoEnv } from "./e2e/db-guard";
 
 /**
  * Browser-level proof harness (D-C5-15 item 1).
@@ -10,13 +10,18 @@ import { assertLoopbackTarget, loadRepoEnv } from "./e2e/db-guard";
  * so parallelism and retries would only make the evidence less legible.
  *
  * Ports 3200-3299 belong to the sprint's other lanes; this harness stays out of
- * that range. Override with `E2E_PORT` or point at an already-running server
- * with `E2E_BASE_URL`.
+ * that range. Override its owned server's port with `E2E_PORT`.
  */
 loadRepoEnv();
+assertDisposableDatabase();
 
-const PORT = Number(process.env.E2E_PORT ?? 3400);
-const baseURL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`;
+const rawPort = process.env.E2E_PORT?.trim() || "3400";
+const PORT = Number(rawPort);
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
+  throw new Error("E2E_PORT must be an integer from 1 through 65535.");
+}
+const baseURL = `http://127.0.0.1:${PORT}`;
+const validatedDatabaseUrl = process.env.DATABASE_URL!;
 
 assertLoopbackTarget(baseURL);
 
@@ -58,11 +63,14 @@ export default defineConfig({
     // one. Requires `npm run build` first — see e2e/README.md.
     command: `npx next start -p ${PORT}`,
     url: baseURL,
-    reuseExistingServer: true,
+    // Browser writes must reach this owned process, whose validated DB URL is
+    // inherited below. A listener already on the URL is a hard failure.
+    reuseExistingServer: false,
     timeout: 180_000,
     stdout: "ignore",
     stderr: "pipe",
     env: {
+      DATABASE_URL: validatedDatabaseUrl,
       SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
     },
   },
