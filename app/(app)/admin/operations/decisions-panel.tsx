@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Mails, Send, Sparkles } from "lucide-react";
 import {
   applyDraftToNote,
   describeApplyAction,
   describeDraftFailure,
   describeDraftGrounding,
+  isDraftResponseCurrent,
   type DraftSuggestion,
 } from "@/lib/decision-note-ui";
 import styles from "./operations.module.css";
@@ -55,8 +56,22 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
 
   const selected = decided.find((item) => item.id === selectedId) ?? null;
 
-  /** Drop a suggestion whose grounding no longer matches what is selected. */
+  // Latest-value refs, so a response that resolves after the organizer moved on
+  // can be compared against what is selected NOW rather than against the values
+  // its own closure captured.
+  const draftSeq = useRef(0);
+  const selectedIdRef = useRef(selectedId);
+  const includeFeedbackRef = useRef(includeFeedback);
+  selectedIdRef.current = selectedId;
+  includeFeedbackRef.current = includeFeedback;
+
+  /**
+   * Drop a suggestion whose grounding no longer matches what is selected, and
+   * retire any request still in flight by bumping the counter its response will
+   * be checked against.
+   */
   function clearSuggestion() {
+    draftSeq.current += 1;
     setSuggestion(null);
     setDraftError(null);
     setConfirmReplace(false);
@@ -66,17 +81,30 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
    * Ask for a draft. Nothing here writes to `personalNote`: a failure, a retry,
    * or a second generation leaves whatever the organizer has written exactly
    * where it was, and only `applyDraft` can change it.
+   *
+   * Every state write below is gated on the response still being the current
+   * one. A slow draft for one proposal must never install under another: that
+   * is a suggestion about the wrong talk, one click from a speaker's inbox.
    */
   async function draftNote() {
-    setDrafting(true);
     clearSuggestion();
+    const token = { seq: draftSeq.current, abstractId: selectedId, includeFeedback };
+    const current = () => ({
+      seq: draftSeq.current,
+      abstractId: selectedIdRef.current,
+      includeFeedback: includeFeedbackRef.current,
+    });
+    setDrafting(true);
     try {
       const res = await fetch("/api/assistant/decision-note", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ abstractId: selectedId, includeFeedback }),
+        body: JSON.stringify({ abstractId: token.abstractId, includeFeedback: token.includeFeedback }),
       });
       const body = await res.json();
+      // Superseded: drop it silently. The organizer abandoned this request by
+      // navigating away, so an error about it would be noise they cannot act on.
+      if (!isDraftResponseCurrent(token, current())) return;
       if (!body?.ok) {
         setDraftError(describeDraftFailure(body?.error?.message));
         return;
@@ -89,7 +117,7 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
     } catch {
       // Deliberately not logged: a failed draft request is not worth a console
       // entry that could carry the request or response near a prompt.
-      setDraftError(describeDraftFailure(null));
+      if (isDraftResponseCurrent(token, current())) setDraftError(describeDraftFailure(null));
     } finally {
       setDrafting(false);
     }
@@ -195,8 +223,8 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
             Include the review team&apos;s comments
           </label>
           <p className={styles.hintText}>
-            Comments only — scores and reviewer names are never included. This choice also
-            decides whether those comments are sent to the AI provider when you ask for a draft below.
+            Comment text only — no scores or reviewer names are attached. This choice also decides
+            whether that comment text is sent to the AI provider when you ask for a draft below.
           </p>
 
           <div className={styles.field}>
@@ -220,8 +248,12 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
               </span>
             </div>
             <p className={styles.hintText}>
-              Speaker and reviewer names, email addresses, and scores are never sent. You always
-              choose whether to use what comes back.
+              Those four things are all that is sent: no speaker or reviewer name, email address,
+              score, or ID is looked up or added as a separate field.{" "}
+              {includeFeedback
+                ? "Reviewer comments are sent word for word, so if a reviewer wrote a name, an address, or a score inside a comment, that text goes too. Uncheck the box above to send none of them."
+                : "No comment text leaves this deployment while that box is unchecked."}{" "}
+              You always choose whether to use what comes back.
             </p>
 
             {/* One live region for the whole drafting interaction, so a screen

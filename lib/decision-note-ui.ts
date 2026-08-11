@@ -21,6 +21,39 @@ export type DraftSuggestion = {
 };
 
 /**
+ * What a drafting request was asked for, captured at the moment it was fired.
+ *
+ * `seq` is a monotonic counter the panel bumps on every generation and on every
+ * change that invalidates one. The selection fields ride alongside it rather
+ * than instead of it: the counter alone would be sufficient, but a draft about
+ * the wrong proposal is the one mistake here that can reach a speaker, and a
+ * second independent reason to refuse it costs nothing.
+ */
+export type DraftRequestToken = {
+  seq: number;
+  abstractId: string;
+  includeFeedback: boolean;
+};
+
+/**
+ * Whether a response that has just arrived may still be shown.
+ *
+ * Without this, a slow request for proposal A resolves after the organizer has
+ * moved to proposal B and installs A's draft under B's name — a suggestion
+ * about the wrong talk, one click from a speaker's inbox. A superseded response
+ * is dropped silently: the organizer abandoned that request by navigating away,
+ * so an error about it would be noise about something they did not ask for and
+ * cannot act on.
+ */
+export function isDraftResponseCurrent(request: DraftRequestToken, current: DraftRequestToken): boolean {
+  return (
+    request.seq === current.seq &&
+    request.abstractId === current.abstractId &&
+    request.includeFeedback === current.includeFeedback
+  );
+}
+
+/**
  * What the suggestion was built from, shown beside it.
  *
  * Names the comments actually used, not the comments that existed, so an

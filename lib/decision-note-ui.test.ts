@@ -5,6 +5,7 @@ import {
   describeApplyAction,
   describeDraftFailure,
   describeDraftGrounding,
+  isDraftResponseCurrent,
   type DraftSuggestion,
 } from "./decision-note-ui";
 
@@ -101,6 +102,56 @@ test("no comments used is distinguished from no comments existing", () => {
       /Based on/,
     );
   }
+});
+
+test("a response is current only when nothing about the request has moved on", () => {
+  const token = { seq: 3, abstractId: "abstract-a", includeFeedback: true };
+  assert.equal(isDraftResponseCurrent(token, { ...token }), true);
+
+  // The counter is bumped by every generation and by every change that
+  // invalidates one, so a stale response fails on it alone.
+  assert.equal(isDraftResponseCurrent(token, { ...token, seq: 4 }), false);
+  // Belt and braces: the selection is checked independently, so a response
+  // could not install under another proposal even if a counter were reused.
+  assert.equal(isDraftResponseCurrent(token, { ...token, abstractId: "abstract-b" }), false);
+  assert.equal(isDraftResponseCurrent(token, { ...token, includeFeedback: false }), false);
+  assert.equal(
+    isDraftResponseCurrent(token, { seq: 4, abstractId: "abstract-b", includeFeedback: false }),
+    false,
+  );
+});
+
+test("the stale-response race: A is fired, B is selected, A resolves late and installs nothing", () => {
+  // The exact sequence the panel runs, with the counter it keeps.
+  let seq = 0;
+  let selectedId = "abstract-a";
+  const includeFeedback = true;
+  const installed = [] as string[];
+
+  // 1. The organizer asks for a draft of proposal A.
+  seq += 1;
+  const requestA = { seq, abstractId: selectedId, includeFeedback };
+
+  // 2. Before it returns they switch to proposal B. The panel's selection
+  //    handler calls clearSuggestion(), which bumps the counter.
+  selectedId = "abstract-b";
+  seq += 1;
+
+  // 3. A's response finally arrives.
+  if (isDraftResponseCurrent(requestA, { seq, abstractId: selectedId, includeFeedback })) {
+    installed.push("A's draft");
+  }
+  // `.length`, not `deepEqual(installed, [])`: node's assert narrows `actual` to
+  // the type of `expected`, which would freeze this array as `never[]`.
+  assert.equal(installed.length, 0, "a draft for the abandoned proposal must not install under the new one");
+
+  // Non-vacuity: the request the organizer is actually waiting for still installs.
+  seq += 1;
+  const requestB = { seq, abstractId: selectedId, includeFeedback };
+  if (isDraftResponseCurrent(requestB, { seq, abstractId: selectedId, includeFeedback })) {
+    installed.push("B's draft");
+  }
+  assert.deepEqual(installed, ["B's draft"], "the current request must still be installable");
 });
 
 test("a failure message is the server's, and the fallback never implies the note was lost", () => {
