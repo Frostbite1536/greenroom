@@ -98,6 +98,62 @@ export function groupByTrack<S extends TrackViewSession>(
 }
 
 /**
+ * Column id for the track grid's untracked column.
+ *
+ * A sentinel rather than `null` because the grid's keys, drop targets and
+ * column filters all speak `string`, and widening them for one column would
+ * touch the room grid that shares the component. Bracketed with underscores so
+ * it cannot collide with a cuid.
+ */
+export const NO_TRACK_COLUMN_ID = "__no-track__";
+
+export type TrackGridColumn = { id: string; name: string };
+
+/**
+ * The configured track ids, as a set the per-column filter can probe cheaply.
+ * Takes only what it reads, so the grid can rebuild the set from its own
+ * columns without inventing the name and colour it does not need.
+ */
+export function knownTrackIds(tracks: readonly { id: string }[]): ReadonlySet<string> {
+  return new Set(tracks.map((track) => track.id));
+}
+
+/**
+ * Which grid column a placed slot belongs in. A track id naming no configured
+ * track resolves to the untracked column for the same reason it joins the "No
+ * track" group in `groupByTrack`: the row has to land somewhere visible.
+ */
+export function trackGridColumnFor(trackId: string | null, known: ReadonlySet<string>): string {
+  return trackId !== null && known.has(trackId) ? trackId : NO_TRACK_COLUMN_ID;
+}
+
+/**
+ * Columns for the day grid laid out in track swimlanes.
+ *
+ * The grid matched slots to columns by track id, so a talk with no track — or
+ * one whose track had been deleted — matched no column and rendered nowhere at
+ * all. A placed talk invisible in a schedule view is the failure this closes:
+ * the same silent-omission class the truncation notice and the conflict view
+ * already guard against, and an organizer cannot resolve a clash they cannot
+ * see.
+ *
+ * The untracked column is appended only when something actually falls into it,
+ * so an event that tracks everything keeps exactly the columns it configured.
+ */
+export function trackGridColumns(
+  tracks: readonly TrackViewTrack[],
+  sessions: readonly TrackViewSession[],
+): TrackGridColumn[] {
+  const columns = tracks.map((track) => ({ id: track.id, name: track.name }));
+  const known = knownTrackIds(tracks);
+  const untracked = sessions.some(
+    (session) => trackGridColumnFor(session.slot.trackId, known) === NO_TRACK_COLUMN_ID,
+  );
+  if (untracked) columns.push({ id: NO_TRACK_COLUMN_ID, name: NO_TRACK_NAME });
+  return columns;
+}
+
+/**
  * What the view should say instead of a list, or null when it has one to show.
  *
  * Separated from the grouping so the empty cases are asserted as copy rather

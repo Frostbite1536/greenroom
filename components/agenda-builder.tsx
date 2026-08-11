@@ -10,7 +10,14 @@ import { readableChip } from "@/lib/color-contrast";
 import { publicationControl, unpublishedNotice } from "@/lib/agenda-publication";
 import { applyRefusalCopy, fillOpenSlotsSummary } from "@/lib/agenda-autoplace-view";
 import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
-import { groupByTrack, trackViewEmptyCopy } from "@/lib/agenda-track-view";
+import {
+  NO_TRACK_COLUMN_ID,
+  groupByTrack,
+  knownTrackIds,
+  trackGridColumnFor,
+  trackGridColumns,
+  trackViewEmptyCopy,
+} from "@/lib/agenda-track-view";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
@@ -273,7 +280,9 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
     <div className="card">
       <div className="agenda-toolbar" role="group" aria-label="Agenda views">
         <ViewTab id="list" view={view} setView={setView} icon={<List size={15} />} label="List" />
-        <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day" />
+        {/* Named for its columns, not just its span: this is the room grid, and
+            it is the view that answers "what is in each room" (ROADMAP §6). */}
+        <ViewTab id="day" view={view} setView={setView} icon={<CalendarDays size={15} />} label="Day (rooms)" />
         <ViewTab id="week" view={view} setView={setView} icon={<CalendarRange size={15} />} label="Week" />
         <ViewTab id="rooms" view={view} setView={setView} icon={<LayoutGrid size={15} />} label="Track grid" />
         <ViewTab id="tracks" view={view} setView={setView} icon={<Layers size={15} />} label="Tracks" />
@@ -445,7 +454,10 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           columns={
             view === "day"
               ? data.rooms.map((r) => ({ id: r.id, name: r.name }))
-              : data.tracks.map((t) => ({ id: t.id, name: t.name }))
+              // Columns are derived from the placed talks as well as the track
+              // list, so an untracked talk gets a column to render in instead
+              // of matching none and disappearing.
+              : trackGridColumns(data.tracks, placed)
           }
           groupBy={view === "day" ? "room" : "track"}
           conflictIds={conflictIds}
@@ -650,6 +662,10 @@ function DayGrid({
   const daySessions = sessions.filter((s) => zonedParts(s.slot.startsAt, tz).dateKey === day);
   const bounds = gridBounds(toIntervals(daySessions, tz));
   const hours = hourMarks(bounds);
+  // Recovered from the columns rather than passed in: the untracked column is
+  // the one column whose id is not a track id, so the set the filter needs is
+  // exactly the rest of them. Only read when `groupBy` is "track".
+  const known = knownTrackIds(columns.filter((c) => c.id !== NO_TRACK_COLUMN_ID));
 
   function handleDrop(event: React.DragEvent<HTMLDivElement>, colId: string) {
     event.preventDefault();
@@ -699,7 +715,11 @@ function DayGrid({
             >
               {hours.map((h) => <div className="hour-line" key={h} />)}
               {daySessions
-                .filter((s) => (groupBy === "room" ? s.slot.roomId === col.id : s.slot.trackId === col.id))
+                .filter((s) =>
+                  groupBy === "room"
+                    ? s.slot.roomId === col.id
+                    : trackGridColumnFor(s.slot.trackId, known) === col.id,
+                )
                 .map((s) => {
                   const start = zonedParts(s.slot.startsAt, tz).minutesOfDay;
                   // Duration from the real timestamps, clamped to the day
