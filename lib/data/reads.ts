@@ -39,7 +39,11 @@ import {
   type AdminDecisionAbstractSummary,
   type AdminDecisionSummary,
 } from "@/lib/services/admin-decision-summary";
-export type { AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/services/admin-decision-summary";
+export type {
+  AdminDecisionAbstractSummary,
+  AdminDecisionCriterionSummary,
+  AdminDecisionSummary,
+} from "@/lib/services/admin-decision-summary";
 import {
   EMAIL_HISTORY_TAKE,
   emailHistoryOrderBy,

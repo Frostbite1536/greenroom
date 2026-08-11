@@ -4,7 +4,13 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CalendarPlus, Download, FileStack, Search, X } from "lucide-react";
-import type { AbstractRow, AdminDecisionAbstractSummary, AdminDecisionSummary } from "@/lib/data/reads";
+import type {
+  AbstractRow,
+  AdminDecisionAbstractSummary,
+  AdminDecisionCriterionSummary,
+  AdminDecisionSummary,
+} from "@/lib/data/reads";
+import { rubricCriterionLines } from "@/lib/rubric-display";
 import { formatDecisionScore } from "@/lib/decision-summary-display";
 import {
   decisionScoreAriaSort,
@@ -15,6 +21,7 @@ import {
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
+import { roundLabel } from "@/lib/round-label";
 import { coSpeakerSummary, proposalRosterLine } from "@/lib/speakers/proposal-roster";
 import { EmptyState, Pill } from "@/components/ui";
 
@@ -337,8 +344,14 @@ function DecisionScoreSortIndicator({ state }: { state: DecisionScoreSortState }
   );
 }
 
+/**
+ * Composed rather than concatenated: the stored name of a round created by the
+ * New round dialog (and by the seed) already begins "Round 1 — …", so the old
+ * template printed "Round 1 — Round 1 — Program Committee" in the round
+ * selector, the export tooltip, and the drawer's decision-round row.
+ */
 function planLabel(plan: AdminDecisionSummary["plans"][number]) {
-  return `Round ${plan.ordinal} — ${plan.name}`;
+  return roundLabel(plan);
 }
 
 /**
@@ -679,12 +692,76 @@ function DecisionSummaryDetails({
           No review round is available for a decision score.
         </p>
       ) : (
-        <dl className="detail-drawer">
-          <div className="kv"><dt>Decision round</dt><dd>{planLabel(selectedPlan)}</dd></div>
-          <div className="kv"><dt>Decision score</dt><dd>{score ?? "No included reviews"}</dd></div>
-          <div className="kv"><dt>Included reviews</dt><dd>{summary?.includedReviews ?? 0} of {summary?.completedAssignments ?? 0} completed</dd></div>
-        </dl>
+        <>
+          <dl className="detail-drawer">
+            <div className="kv"><dt>Decision round</dt><dd>{planLabel(selectedPlan)}</dd></div>
+            <div className="kv"><dt>Decision score</dt><dd>{score ?? "No included reviews"}</dd></div>
+            <div className="kv"><dt>Included reviews</dt><dd>{summary?.includedReviews ?? 0} of {summary?.completedAssignments ?? 0} completed</dd></div>
+          </dl>
+          <CriterionBreakdown criteria={summary?.criteria ?? []} abstractId={abstractId} />
+        </>
       )}
+    </section>
+  );
+}
+
+/**
+ * What the single decision score is actually made of.
+ *
+ * The drawer used to show a total and nothing else, which left an organizer
+ * unable to tell a proposal that scored evenly from one that was carried by a
+ * single heavily weighted criterion — the whole reason the rubric has weights.
+ *
+ * Aggregate per criterion, never per reviewer: the server projection carries no
+ * evaluator identity (see `AdminDecisionCriterionSummary`), so a per-reviewer
+ * column is not merely unimplemented here — the data to build one never leaves
+ * the service. A criterion no included review reached prints an em dash rather
+ * than a zero, matching the "No included reviews" wording above it.
+ */
+function CriterionBreakdown({
+  criteria,
+  abstractId,
+}: {
+  criteria: AdminDecisionCriterionSummary[];
+  abstractId: string;
+}) {
+  const headingId = `criterion-breakdown-heading-${abstractId}`;
+  if (criteria.length === 0) return null;
+  const lines = rubricCriterionLines(criteria);
+  const byKey = new Map(lines.map((line) => [line.key, line]));
+
+  return (
+    <section aria-labelledby={headingId} style={{ marginTop: 14 }}>
+      <h4 id={headingId} style={{ fontSize: 12, margin: "0 0 2px" }}>Score by criterion</h4>
+      <p className="hint" style={{ margin: 0 }}>
+        Averaged across the included reviews. Reviewer identities are never part of this view.
+      </p>
+      <dl className="criterion-breakdown">
+        {criteria.map((criterion) => {
+          const average = formatDecisionScore(criterion.average);
+          const line = byKey.get(criterion.key);
+          return (
+            <div className="criterion-breakdown-row" key={criterion.key}>
+              {/* The meta line lives inside the <dt>: a bare <span> as a child
+                  of the <div> wrapper would not be valid <dl> content. */}
+              <dt>
+                {criterion.label}
+                <span className="criterion-breakdown-meta">
+                  {line?.meta ?? ""}
+                  {criterion.reviews > 0
+                    ? ` · from ${criterion.reviews} review${criterion.reviews === 1 ? "" : "s"}`
+                    : " · no included review scored this yet"}
+                </span>
+              </dt>
+              <dd>
+                {average === null
+                  ? <span className="muted">—</span>
+                  : <>{average}{line?.range ? <span className="muted" style={{ fontWeight: 400 }}> / {criterion.max}</span> : null}</>}
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
     </section>
   );
 }

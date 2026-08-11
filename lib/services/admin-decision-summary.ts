@@ -12,10 +12,41 @@ export type AdminDecisionPlan = {
   ordinal: number;
 };
 
+/**
+ * One rubric criterion, as it contributed to this proposal's decision score.
+ *
+ * Aggregate, never per-evaluator. The organizer surfaces around this service
+ * are deliberately identity-free — `OrganizerReviewComment` already strips
+ * reviewer names, and a blind round hides them from the reviewer's own queue —
+ * so a per-reviewer column here would re-introduce, on the decision screen,
+ * exactly what blind review exists to remove. What an organizer needs in order
+ * to read a total is which criterion earned it, not who said what.
+ *
+ * `average` counts only the reviews that were *included* in `weightedAverage`,
+ * so the breakdown and the total can never describe different review sets.
+ */
+export type AdminDecisionCriterionSummary = {
+  key: string;
+  label: string;
+  weight: number;
+  min: number;
+  max: number;
+  /** Mean score across the included reviews; null when none contributed. */
+  average: number | null;
+  /** How many included reviews carried this criterion. */
+  reviews: number;
+};
+
 export type AdminDecisionAbstractSummary = {
   completedAssignments: number;
   includedReviews: number;
   weightedAverage: number | null;
+  /**
+   * The round's criteria in stored order, each with this proposal's aggregate.
+   * Empty when the round's rubric is unreadable (the same condition that
+   * blanks `weightedAverage`) or when no round is selected.
+   */
+  criteria: AdminDecisionCriterionSummary[];
 };
 
 export type AdminDecisionSummary = {
@@ -33,6 +64,8 @@ export type AdminDecisionSummaryInput = {
 
 export type DecisionRubricCriterion = {
   key: string;
+  /** Carried so the organizer breakdown can name the criterion it scores. */
+  label: string;
   min: number;
   max: number;
   weight: number;
@@ -54,12 +87,34 @@ const planTake = OPERATOR_QUERY_LIMITS.adminDecisionPlans + 1;
 const assignmentTake = OPERATOR_QUERY_LIMITS.adminDecisionAssignments + 1;
 const scoreTake = OPERATOR_QUERY_LIMITS.adminDecisionScores + 1;
 
-function emptySummary(): AdminDecisionAbstractSummary {
-  return { completedAssignments: 0, includedReviews: 0, weightedAverage: null };
+/**
+ * `rubric` seeds the criterion rows so a proposal with no included review still
+ * shows *what* it will be scored against, rather than an empty section that
+ * reads as "this round has no rubric". A null rubric yields no rows, matching
+ * the null `weightedAverage` it also produces.
+ */
+function emptySummary(rubric?: DecisionRubricCriterion[] | null): AdminDecisionAbstractSummary {
+  return {
+    completedAssignments: 0,
+    includedReviews: 0,
+    weightedAverage: null,
+    criteria: (rubric ?? []).map((criterion) => ({
+      key: criterion.key,
+      label: criterion.label,
+      weight: criterion.weight,
+      min: criterion.min,
+      max: criterion.max,
+      average: null,
+      reviews: 0,
+    })),
+  };
 }
 
-function emptySummaries(abstractIds: readonly string[]): Record<string, AdminDecisionAbstractSummary> {
-  return Object.fromEntries(abstractIds.map((abstractId) => [abstractId, emptySummary()]));
+function emptySummaries(
+  abstractIds: readonly string[],
+  rubric?: DecisionRubricCriterion[] | null,
+): Record<string, AdminDecisionAbstractSummary> {
+  return Object.fromEntries(abstractIds.map((abstractId) => [abstractId, emptySummary(rubric)]));
 }
 
 /**
@@ -84,6 +139,7 @@ export function parseDecisionRubric(raw: unknown): DecisionRubricCriterion[] | n
     seenKeys.add(parsed.data.key);
     rubric.push({
       key: parsed.data.key,
+      label: parsed.data.label,
       min: parsed.data.min,
       max: parsed.data.max,
       weight: parsed.data.weight,
@@ -137,7 +193,7 @@ export function summarizeCompletedDecisionReviews(args: {
   scores: readonly DecisionScore[];
 }): Record<string, AdminDecisionAbstractSummary> {
   const abstractIds = [...new Set(args.abstractIds)];
-  const summaries = emptySummaries(abstractIds);
+  const summaries = emptySummaries(abstractIds, args.rubric);
   const permittedAbstractIds = new Set(abstractIds);
   const scoresByAbstract = new Map<string, Map<string, DecisionScore[]>>();
 
@@ -154,6 +210,10 @@ export function summarizeCompletedDecisionReviews(args: {
   }
 
   const weightedByAbstract = new Map<string, number[]>();
+  // Per-criterion values, gathered from the SAME reviews that pass the
+  // fail-closed check below — so the breakdown never describes a review the
+  // total excluded, and vice versa. Keyed abstract → rubric key → values.
+  const criterionValuesByAbstract = new Map<string, Map<string, number[]>>();
   for (const assignment of args.assignments) {
     const summary = summaries[assignment.abstractId];
     if (!summary) continue;
@@ -197,11 +257,36 @@ export function summarizeCompletedDecisionReviews(args: {
     const values = weightedByAbstract.get(assignment.abstractId) ?? [];
     values.push(numerator / denominator);
     weightedByAbstract.set(assignment.abstractId, values);
+
+    // Recorded only after the review has been accepted in full, so a review
+    // rejected for one bad criterion contributes to none of them.
+    let byCriterion = criterionValuesByAbstract.get(assignment.abstractId);
+    if (!byCriterion) {
+      byCriterion = new Map();
+      criterionValuesByAbstract.set(assignment.abstractId, byCriterion);
+    }
+    for (const criterion of args.rubric) {
+      const score = scoresByKey.get(criterion.key);
+      if (score === undefined) continue;
+      const criterionValues = byCriterion.get(criterion.key) ?? [];
+      criterionValues.push(score);
+      byCriterion.set(criterion.key, criterionValues);
+    }
   }
 
   for (const [abstractId, values] of weightedByAbstract) {
     const average = values.reduce((sum, value) => sum + value, 0) / values.length;
     summaries[abstractId].weightedAverage = Number.isFinite(average) ? average : null;
+  }
+
+  for (const [abstractId, byCriterion] of criterionValuesByAbstract) {
+    for (const criterion of summaries[abstractId].criteria) {
+      const values = byCriterion.get(criterion.key);
+      if (!values || values.length === 0) continue;
+      const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+      criterion.reviews = values.length;
+      criterion.average = Number.isFinite(average) ? average : null;
+    }
   }
   return summaries;
 }

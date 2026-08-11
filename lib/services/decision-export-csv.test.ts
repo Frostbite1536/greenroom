@@ -82,8 +82,11 @@ const rows: DecisionExportRow[] = [
 const baseInput: DecisionExportInput = {
   rows,
   summariesByAbstractId: {
-    "abs-1": { completedAssignments: 3, includedReviews: 2, weightedAverage: 4.25 },
-    "abs-2": { completedAssignments: 0, includedReviews: 0, weightedAverage: null },
+    // `criteria` is the drawer's per-criterion breakdown. It is deliberately
+    // NOT a CSV column — this export's shape is fixed by DECISION_EXPORT_HEADER
+    // and the assertions below prove the breakdown does not leak into it.
+    "abs-1": { completedAssignments: 3, includedReviews: 2, weightedAverage: 4.25, criteria: [] },
+    "abs-2": { completedAssignments: 0, includedReviews: 0, weightedAverage: null, criteria: [] },
   },
   selectedPlan: { id: "plan-1", name: "Programme review", ordinal: 1 },
   total: 2,
