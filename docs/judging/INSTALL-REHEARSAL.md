@@ -42,7 +42,7 @@ against the suites of the day, golden path 20/20), so this is a repeatable
 property of the project rather than a lucky machine.
 
 The seeded counts are byte-identical to the production demo event, which is the
-point of a deterministic seed: a judge who installs locally sees the same data as
+point of a deterministic seed: anyone who installs locally sees the same data as
 the deployed demo.
 
 ## Golden path on the fresh install — 20/20
@@ -73,7 +73,7 @@ authorization on.
 
 1. **README Quickstart had no prerequisites.** Next 16 requires **Node ≥ 20.9**
    (`next@16.3.0` `engines`), and the documented smoke command uses
-   `node --env-file`, which needs Node ≥ 20.6. A judge on Node 18 would have hit
+   `node --env-file`, which needs Node ≥ 20.6. An evaluator on Node 18 would have hit
    a confusing failure. Fixed in this pass — the Quickstart now states Node 20.9+
    and that a Postgres database is required first.
 2. **Nothing else drifted.** `cp .env.example .env` plus one `DATABASE_URL` is

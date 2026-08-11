@@ -1,3 +1,9 @@
+// This page renders `NewEventDialog`, which is built entirely from feature.css
+// classes (.app-dialog, .text-input, .field-label, .grid-2, .stack …). Without
+// this import a direct load or refresh of /welcome painted the whole
+// create-your-first-event dialog unstyled; it only looked right when reached by
+// client-side navigation from a route that had already injected the sheet.
+import "@/components/feature.css";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
@@ -68,7 +74,7 @@ export default async function WelcomePage() {
             {/* Plain form post, same as the login page: no JavaScript required,
                 and the server re-checks the membership before issuing anything. */}
             <form method="post" action="/api/auth/continue">
-              <button className="button primary login-submit" type="submit">
+              <button className="primary-button login-submit" type="submit">
                 <ArrowRight size={16} aria-hidden="true" />
                 Continue to your workspace
               </button>

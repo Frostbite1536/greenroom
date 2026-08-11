@@ -22,14 +22,18 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
   const [form, setForm] = useState(profile);
   const formRef = useRef(profile);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  // The confirmation itself, not a flag. A save that landed while the speaker
+  // kept typing is still a save: the old boolean went false in exactly that
+  // case, so a successful write reported neither success nor failure and the
+  // button simply re-enabled.
+  const [saved, setSaved] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function update<K extends keyof PortalProfile>(key: K, value: string) {
     const next = { ...formRef.current, [key]: value };
     formRef.current = next;
     setForm(next);
-    setSaved(false);
+    setSaved(null);
   }
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -37,7 +41,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
     if (saving) return;
     setSaving(true);
     setError(null);
-    setSaved(false);
+    setSaved(null);
 
     const submitted = formRef.current;
     const payload = profilePatch(baseline, submitted);
@@ -59,7 +63,13 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
         formRef.current = reconciled;
         setBaseline(savedProfile);
         setForm(reconciled);
-        setSaved(Object.keys(profilePatch(savedProfile, reconciled)).length === 0);
+        // Either way the write succeeded and is confirmed; the difference is
+        // only whether what is on screen now still matches what was stored.
+        setSaved(
+          Object.keys(profilePatch(savedProfile, reconciled)).length === 0
+            ? "Profile saved."
+            : "Profile saved — you have edited it again since, so save once more to store those changes.",
+        );
         startTransition(() => router.refresh());
       }
     } catch {
@@ -132,7 +142,7 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
         <button className="primary-button" type="submit" disabled={saving || !dirty}>
           {saving ? "Saving…" : "Save profile"}
         </button>
-        {saved ? <span className={styles.saveNote} role="status">Saved</span> : null}
+        {saved ? <span className={styles.saveNote} role="status">{saved}</span> : null}
         {error ? <span className={styles.saveError} role="alert">{error}</span> : null}
       </div>
     </form>

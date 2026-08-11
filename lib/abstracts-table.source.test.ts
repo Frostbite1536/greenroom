@@ -13,6 +13,29 @@ import test from "node:test";
 
 const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const table = () => source("components/abstracts-table.tsx");
+const frontendSmoke = () => source("scripts/_frontend-smoke.mjs");
+
+test("the frontend smoke scopes the missing-score assertion to its exact SSR row", () => {
+  const smoke = frontendSmoke();
+  assert.match(smoke, /const tableRowContaining = \(html, marker\) =>/);
+  assert.match(smoke, /const partialReviewRow = tableRowContaining\(partialRoundPage\.text, partialReview\.title\);/);
+  assert.match(smoke, /partialReviewRowText\.includes\(partialReview\.title\)/);
+  assert.match(smoke, /partialReviewRowText\.includes\("No included reviews"\)/);
+  assert.match(smoke, /partialReviewRowText\.includes\("0\/1 included"\)/);
+  assert.match(smoke, /!partialReviewRowText\.includes\("0\.00"\)/);
+  assert.doesNotMatch(smoke, /!partialRoundText\.includes\("0\.00"\)/);
+});
+
+test("the frontend smoke owns a direct repo-local Next CLI process", () => {
+  const smoke = frontendSmoke();
+  assert.match(smoke, /resolve\(process\.cwd\(\), "node_modules", "next", "dist", "bin", "next"\)/);
+  assert.match(smoke, /spawn\(process\.execPath, \[nextCli, "start", "-p", PORT\]/);
+  assert.match(smoke, /shell: false/);
+  assert.doesNotMatch(smoke, /spawn\("npx"/);
+  assert.match(smoke, /server\.kill\("SIGTERM"\)/);
+  assert.match(smoke, /await waitForServerExit\(5_000\)/);
+  assert.match(smoke, /spawnSync\("taskkill", \["\/F", "\/T", "\/PID", String\(serverPid\)\]/);
+});
 
 test("the decision-score header is a real button in its th, with aria-sort only when sorted", () => {
   const component = table();

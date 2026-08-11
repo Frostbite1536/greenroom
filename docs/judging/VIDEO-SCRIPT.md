@@ -17,7 +17,7 @@ min). No local setup appears on camera.
 | Browser / viewport | *fill in at capture (e.g. Edge 1440 × 900)* |
 
 Restate the commit in the video description or an on-screen card. If the
-deployment moves before the recording, update this table first — every judge
+deployment moves before the recording, update this table first — every evidence
 artifact must name the same commit.
 
 ## Before recording
@@ -84,9 +84,9 @@ deliverable address, then submit.*
 *Go to* `/login`. *Point out the email-and-password form and the honest note
 under it, then sign in with the one-click* **Event admin** *persona.*
 
-> "Organizers sign in with an email and password. Self-service sign-up and
-> password reset are on the roadmap — today an organizer provisions accounts.
-> For this walkthrough I'll use the demo shortcut."
+> "Organizers sign in with an email and password — and anyone can create their
+> own account here, or reset a forgotten password, without waiting on an
+> administrator. For this walkthrough I'll use the demo shortcut."
 
 *Open* **Abstracts** *and select the new row.*
 
@@ -308,9 +308,9 @@ name, dates, timezone, rooms, and the programme groupings — then choose*
 dates, and choose* **Create event***. Pause on the confirmation notice and read
 it aloud.*
 
-> "A new event is created empty — no rooms, no forms, nothing copied. And
-> Greenroom is honest about the limit: this workspace is still showing Forward
-> 2026, because switching between events is on the roadmap."
+> "A new event is created empty — no rooms, no forms, nothing copied. The
+> workspace is still showing Forward 2026, and the sidebar switcher is how you
+> move into the new one; it lists every event you hold a membership on."
 
 *Try creating it again with the same web address and show the refusal.*
 
@@ -354,9 +354,10 @@ distinctive title.*
 > "It lands in this event's pipeline, against the form it was submitted to —
 > a call built from nothing minutes ago, not seeded data."
 
-**Say plainly on camera:** authoring a call inside the *newly created* event
-needs event switching, which is on the roadmap; this half of the proof is
-recorded in the event the organizer is signed in to.
+**Say plainly on camera:** this half of the proof is recorded in the event the
+organizer is signed in to. Authoring a call inside the *newly created* event is
+possible — the sidebar switcher moves you there — and is simply not the path
+this take records.
 
 ---
 
@@ -366,7 +367,7 @@ recorded in the event the organizer is signed in to.
 | --- | --- | --- |
 | 1 | Public CFP, logged out | topic selector, a conditional question, co-speaker role |
 | 2 | Submission | distinctive title and thank-you state |
-| 3 | Login | credential form **and** persona buttons, roadmap note |
+| 3 | Login | credential form **and** persona buttons, sign-up and reset links |
 | 4 | Admin Abstracts | custom answers under their labels; **Export CSV** |
 | 5 | Evaluations setup | weight-share line, round window dates, coverage table, new assignment |
 | 6 | Evaluator queue | rubric scored, review submitted, **Declare a conflict** |

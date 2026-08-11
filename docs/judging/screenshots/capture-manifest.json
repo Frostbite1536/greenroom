@@ -1,0 +1,221 @@
+{
+  "capturedAt": "2026-08-11T05:35:14.188Z",
+  "shots": [
+    {
+      "file": "login.png",
+      "path": "/login",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:09.048Z"
+    },
+    {
+      "file": "landing.png",
+      "path": "/",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:13.936Z"
+    },
+    {
+      "file": "public-cfp.png",
+      "path": "/cfp/forward-2026/call-for-speakers",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:15.794Z"
+    },
+    {
+      "file": "public-cfp-participants.png",
+      "path": "/cfp/forward-2026/call-for-speakers",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:16.391Z"
+    },
+    {
+      "file": "public-schedule.png",
+      "path": "/embed/schedule?event=forward-2026",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:17.968Z"
+    },
+    {
+      "file": "public-speakers.png",
+      "path": "/embed/speakers?event=forward-2026",
+      "access": "logged out",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:20.652Z"
+    },
+    {
+      "file": "public-schedule-mobile.png",
+      "path": "/embed/schedule?event=forward-2026",
+      "access": "logged out",
+      "viewport": "390 × 844",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:22.641Z"
+    },
+    {
+      "file": "public-speakers-mobile.png",
+      "path": "/embed/speakers?event=forward-2026",
+      "access": "logged out",
+      "viewport": "390 × 844",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:24.918Z"
+    },
+    {
+      "file": "public-cfp-mobile.png",
+      "path": "/cfp/forward-2026/call-for-speakers",
+      "access": "logged out",
+      "viewport": "390 × 844",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:26.489Z"
+    },
+    {
+      "file": "event-settings.png",
+      "path": "/admin/settings",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:30.928Z"
+    },
+    {
+      "file": "new-event-dialog.png",
+      "path": "/admin/settings",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": false,
+      "capturedAt": "2026-08-11T05:34:31.406Z"
+    },
+    {
+      "file": "cfp-builder.png",
+      "path": "/admin/forms/cmso85idl004gx2i0t9sxqp4g",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:34.187Z"
+    },
+    {
+      "file": "cfp-builder-settings.png",
+      "path": "/admin/forms/cmso85idl004gx2i0t9sxqp4g",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:34.650Z"
+    },
+    {
+      "file": "admin-abstracts.png",
+      "path": "/admin/abstracts",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:40.821Z"
+    },
+    {
+      "file": "admin-abstracts-drawer.png",
+      "path": "/admin/abstracts",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": false,
+      "capturedAt": "2026-08-11T05:34:41.505Z"
+    },
+    {
+      "file": "evaluation-setup.png",
+      "path": "/admin/evaluations",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:45.669Z"
+    },
+    {
+      "file": "evaluation-coverage.png",
+      "path": "/admin/evaluations",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:46.460Z"
+    },
+    {
+      "file": "agenda-day.png",
+      "path": "/admin/agenda",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:48.945Z"
+    },
+    {
+      "file": "agenda-conflict-refusal.png",
+      "path": "/admin/agenda",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": false,
+      "capturedAt": "2026-08-11T05:34:51.521Z"
+    },
+    {
+      "file": "agenda-fill-open-slots.png",
+      "path": "/admin/agenda",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": false,
+      "capturedAt": "2026-08-11T05:34:53.364Z"
+    },
+    {
+      "file": "admin-speakers.png",
+      "path": "/admin/speakers",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:56.947Z"
+    },
+    {
+      "file": "admin-emails.png",
+      "path": "/admin/emails",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:34:59.082Z"
+    },
+    {
+      "file": "admin-embeds.png",
+      "path": "/admin/embeds",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:35:01.457Z"
+    },
+    {
+      "file": "admin-operations.png",
+      "path": "/admin/operations",
+      "access": "ADMIN",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:35:04.290Z"
+    },
+    {
+      "file": "evaluator-workspace.png",
+      "path": "/admin/evaluations",
+      "access": "EVALUATOR",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:35:08.043Z"
+    },
+    {
+      "file": "speaker-portal.png",
+      "path": "/portal",
+      "access": "SPEAKER",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:35:11.259Z"
+    },
+    {
+      "file": "speaker-task-form.png",
+      "path": "/portal/tasks/cmso869s600vcx2i0sgkmhb5g",
+      "access": "SPEAKER",
+      "viewport": "1440 × 900",
+      "fullPage": true,
+      "capturedAt": "2026-08-11T05:35:14.061Z"
+    }
+  ]
+}

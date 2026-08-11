@@ -8,8 +8,8 @@ back at any point; nothing is lost.
 
 Your event itself lives under **Event settings**: its name, dates and time zone, the rooms
 talks can be placed in, and the tracks and topics the programme is grouped by. **New event**
-there creates another event from scratch — it starts genuinely empty, and your workspace
-stays on the event you signed in to, because switching between events is on the roadmap.
+there creates another event from scratch — it starts genuinely empty, and you can move into
+it from the workspace switcher in the sidebar, which lists every event you belong to.
 
 ---
 

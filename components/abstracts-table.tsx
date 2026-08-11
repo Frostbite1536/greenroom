@@ -21,6 +21,7 @@ import {
 import { formatAnswer } from "@/lib/answer-display";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
+import { decisionConfirmation } from "@/lib/decision-confirmation";
 import { roundLabel } from "@/lib/round-label";
 import { coSpeakerSummary, proposalRosterLine } from "@/lib/speakers/proposal-roster";
 import {
@@ -583,7 +584,15 @@ function AbstractDrawer({
     }
     setBusy(decision === "ACCEPTED" ? "accept" : decision === "MAYBE" ? "maybe" : "reject");
     setError(null);
-    const res = await apiPost<{ sessionId?: string | null; session?: { id: string } | null }>("/api/evaluations/decisions", {
+    // The response's additive keys are what makes the confirmation specific:
+    // `sessionCreated`/`tasksAssigned` report what this click actually built,
+    // and `session.isScheduled` says whether a placement is still outstanding.
+    const res = await apiPost<{
+      sessionId?: string | null;
+      session?: { id: string; isScheduled?: boolean } | null;
+      sessionCreated?: boolean;
+      tasksAssigned?: number;
+    }>("/api/evaluations/decisions", {
       abstractId: abstract.id,
       decision,
     });
@@ -603,7 +612,21 @@ function AbstractDrawer({
       setNotice(null);
       onClose();
     } else {
-      setNotice(decision === "ACCEPTED" ? "Accepted." : decision === "MAYBE" ? "Marked as maybe — it remains in review." : "Declined.");
+      setNotice(
+        decisionConfirmation({
+          decision,
+          sessionCreated: res.data?.sessionCreated ?? false,
+          tasksAssigned: res.data?.tasksAssigned ?? 0,
+          // The route always emits `session` (the object or an explicit null),
+          // so it is authoritative; the row's own value is only a fallback for
+          // a response that somehow carried no body at all.
+          hasSession: res.data ? Boolean(res.data.session) : Boolean(linkedSessionId),
+          // Falls back to what the row already knew rather than to "not
+          // scheduled": claiming a placement is outstanding when the talk is
+          // already on the programme would be the one dishonest branch.
+          sessionScheduled: res.data?.session?.isScheduled ?? abstract.sessionScheduled,
+        }),
+      );
     }
     startTransition(() => router.refresh());
   }

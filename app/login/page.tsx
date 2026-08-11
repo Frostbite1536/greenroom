@@ -135,7 +135,7 @@ export default async function LoginPage({
               type="password"
             />
           </div>
-          <button className="button primary login-submit" type="submit">
+          <button className="primary-button login-submit" type="submit">
             <LogIn size={16} aria-hidden="true" />
             Sign in
           </button>

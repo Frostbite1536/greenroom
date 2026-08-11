@@ -169,7 +169,10 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .answer-item:last-child { border-bottom: none; padding-bottom: 0; }
 .answer-item dt { font-size: 12px; font-weight: 600; color: var(--muted); }
 .answer-item dd { margin: 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.cfp-actions { display: flex; gap: 10px; margin-top: 8px; }
+/* Wraps because globals.css forces `.primary-button` to `width: 100%` below
+   820px: without a wrap opportunity that full-width Submit shared one row with
+   Back and the draft-status button, and all three crushed to min-content. */
+.cfp-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
 /* Name, email, role, remove. The role column is narrower than the two that
    identify the person, and the whole row collapses to one column on narrow
    viewports (see the media query below). */
@@ -224,6 +227,10 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .agenda-list-item .track-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .agenda-list-item .time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; width: 130px; flex-shrink: 0; }
 .conflict-banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; background: #fbeeeb; border: 1px solid #eccabf; border-radius: 8px; color: #8a2f22; font-size: 13px; }
+/* The success counterpart of `.conflict-banner`, in the same box, so a write
+   that changed the programme confirms itself where a refusal would have said
+   why. Green rather than red is the only difference that matters. */
+.agenda-notice { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; background: #eef8f2; border: 1px solid #bfe0cd; border-radius: 8px; color: #0f6b41; font-size: 13px; }
 
 /* ---- embed schedule (public, mobile-first) ---- */
 .embed-page { min-height: 100vh; background: var(--canvas); }
@@ -233,7 +240,10 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .embed-body { padding: 16px 18px 40px; display: grid; gap: 12px; max-width: 760px; margin: 0 auto; }
 .embed-session { display: flex; gap: 12px; padding: 14px; background: white; border: 1px solid var(--line); border-radius: 10px; scroll-margin-top: 132px; }
 .embed-session .rail { width: 4px; border-radius: 4px; flex-shrink: 0; }
-.embed-session h3 { margin: 0 0 4px; font-size: 15px; }
+/* `overflow-wrap` for the same reason the description and facts below already
+   carry it: a talk title is speaker-supplied and can hold a URL or a long
+   hyphen-free compound with no break opportunity of its own. */
+.embed-session h3 { margin: 0 0 4px; font-size: 15px; overflow-wrap: anywhere; }
 .embed-session .meta { font-size: 12.5px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
 /* Session -> speaker cross-links. Underlined on hover/focus rather than
    coloured only, so the affordance is not carried by hue alone. */
@@ -342,6 +352,11 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .detail-drawer { display: grid; gap: 14px; }
 .detail-drawer .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px; font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .detail-drawer .kv span:first-child { color: var(--muted); }
+/* A `1fr` track floors at its content's min-content width, and these values are
+   the ones most likely to hold an unbreakable token — the CFP review step
+   prints "Name (email@domain)" here. Without a wrap opportunity that email set
+   the column's floor and pushed the whole page into horizontal scroll. */
+.detail-drawer .kv > * { min-width: 0; overflow-wrap: anywhere; }
 .abstract-overflow-notice { margin: 12px 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: #f7faf9; color: var(--ink); font-size: 13px; line-height: 1.5; }
 .abstract-overflow-notice strong { font-weight: 700; }
 .review-notes { margin-top: 18px; }
@@ -619,4 +634,22 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   .embed-search-form { flex-wrap: wrap; }
   .embed-search { flex-basis: 100%; }
   .embed-session-facts > div { grid-template-columns: 1fr; gap: 0; }
+  /* The same collapse its `.embed-session-facts` twin above already got — this
+     one was simply missed, leaving a 70px label track inside a ~180px card. */
+  .speaker-detail-facts > div { grid-template-columns: 1fr; gap: 0; }
+  /* The 120px label track leaves under 200px for the value on a phone. One
+     column per row is the same answer the other key/value grids here give. */
+  .detail-drawer .kv { grid-template-columns: 1fr; gap: 2px; }
+  /* Mobile Safari zooms the viewport on focusing any input under 16px, and a
+     zoomed viewport is exactly the horizontal panning this pass exists to
+     remove. `.text-input` already avoids it via `font: inherit`; these two
+     search fields set an explicit 13px and did not. */
+  .embed-search input,
+  .speaker-search input { font-size: 16px; }
+  /* 34px is comfortable with a mouse and short of a fingertip. 40px is already
+     this codebase's own touch size (.score-btn, .mobile-nav-link,
+     .landing-cta), so this raises it to that on touch-sized viewports only —
+     desktop density is unchanged. `.primary-button`/`.icon-button` get the same
+     treatment in globals.css, where they are defined. */
+  .ghost-button { min-height: 40px; }
 }
