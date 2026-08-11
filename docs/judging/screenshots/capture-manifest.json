@@ -1,5 +1,5 @@
 {
-  "capturedAt": "2026-08-11T05:19:07.762Z",
+  "capturedAt": "2026-08-11T05:35:14.188Z",
   "shots": [
     {
       "file": "login.png",
@@ -7,7 +7,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:02.173Z"
+      "capturedAt": "2026-08-11T05:34:09.048Z"
     },
     {
       "file": "landing.png",
@@ -15,7 +15,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:06.349Z"
+      "capturedAt": "2026-08-11T05:34:13.936Z"
     },
     {
       "file": "public-cfp.png",
@@ -23,7 +23,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:07.568Z"
+      "capturedAt": "2026-08-11T05:34:15.794Z"
     },
     {
       "file": "public-cfp-participants.png",
@@ -31,7 +31,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:08.124Z"
+      "capturedAt": "2026-08-11T05:34:16.391Z"
     },
     {
       "file": "public-schedule.png",
@@ -39,7 +39,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:09.597Z"
+      "capturedAt": "2026-08-11T05:34:17.968Z"
     },
     {
       "file": "public-speakers.png",
@@ -47,7 +47,7 @@
       "access": "logged out",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:12.440Z"
+      "capturedAt": "2026-08-11T05:34:20.652Z"
     },
     {
       "file": "public-schedule-mobile.png",
@@ -55,7 +55,7 @@
       "access": "logged out",
       "viewport": "390 × 844",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:14.364Z"
+      "capturedAt": "2026-08-11T05:34:22.641Z"
     },
     {
       "file": "public-speakers-mobile.png",
@@ -63,7 +63,7 @@
       "access": "logged out",
       "viewport": "390 × 844",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:16.511Z"
+      "capturedAt": "2026-08-11T05:34:24.918Z"
     },
     {
       "file": "public-cfp-mobile.png",
@@ -71,7 +71,7 @@
       "access": "logged out",
       "viewport": "390 × 844",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:17.711Z"
+      "capturedAt": "2026-08-11T05:34:26.489Z"
     },
     {
       "file": "event-settings.png",
@@ -79,7 +79,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:22.935Z"
+      "capturedAt": "2026-08-11T05:34:30.928Z"
     },
     {
       "file": "new-event-dialog.png",
@@ -87,23 +87,23 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": false,
-      "capturedAt": "2026-08-11T05:18:23.387Z"
+      "capturedAt": "2026-08-11T05:34:31.406Z"
     },
     {
       "file": "cfp-builder.png",
-      "path": "/admin/forms/cmso7kuvk004gx2mwb7e8gvz9",
+      "path": "/admin/forms/cmso85idl004gx2i0t9sxqp4g",
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:25.847Z"
+      "capturedAt": "2026-08-11T05:34:34.187Z"
     },
     {
       "file": "cfp-builder-settings.png",
-      "path": "/admin/forms/cmso7kuvk004gx2mwb7e8gvz9",
+      "path": "/admin/forms/cmso85idl004gx2i0t9sxqp4g",
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:26.328Z"
+      "capturedAt": "2026-08-11T05:34:34.650Z"
     },
     {
       "file": "admin-abstracts.png",
@@ -111,7 +111,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:31.287Z"
+      "capturedAt": "2026-08-11T05:34:40.821Z"
     },
     {
       "file": "admin-abstracts-drawer.png",
@@ -119,7 +119,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": false,
-      "capturedAt": "2026-08-11T05:18:31.882Z"
+      "capturedAt": "2026-08-11T05:34:41.505Z"
     },
     {
       "file": "evaluation-setup.png",
@@ -127,7 +127,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:35.784Z"
+      "capturedAt": "2026-08-11T05:34:45.669Z"
     },
     {
       "file": "evaluation-coverage.png",
@@ -135,7 +135,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:36.588Z"
+      "capturedAt": "2026-08-11T05:34:46.460Z"
     },
     {
       "file": "agenda-day.png",
@@ -143,7 +143,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:39.635Z"
+      "capturedAt": "2026-08-11T05:34:48.945Z"
     },
     {
       "file": "agenda-conflict-refusal.png",
@@ -151,7 +151,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": false,
-      "capturedAt": "2026-08-11T05:18:41.622Z"
+      "capturedAt": "2026-08-11T05:34:51.521Z"
     },
     {
       "file": "agenda-fill-open-slots.png",
@@ -159,7 +159,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": false,
-      "capturedAt": "2026-08-11T05:18:43.481Z"
+      "capturedAt": "2026-08-11T05:34:53.364Z"
     },
     {
       "file": "admin-speakers.png",
@@ -167,7 +167,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:47.080Z"
+      "capturedAt": "2026-08-11T05:34:56.947Z"
     },
     {
       "file": "admin-emails.png",
@@ -175,7 +175,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:49.789Z"
+      "capturedAt": "2026-08-11T05:34:59.082Z"
     },
     {
       "file": "admin-embeds.png",
@@ -183,7 +183,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:52.270Z"
+      "capturedAt": "2026-08-11T05:35:01.457Z"
     },
     {
       "file": "admin-operations.png",
@@ -191,7 +191,7 @@
       "access": "ADMIN",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:18:54.946Z"
+      "capturedAt": "2026-08-11T05:35:04.290Z"
     },
     {
       "file": "evaluator-workspace.png",
@@ -199,7 +199,7 @@
       "access": "EVALUATOR",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:19:00.253Z"
+      "capturedAt": "2026-08-11T05:35:08.043Z"
     },
     {
       "file": "speaker-portal.png",
@@ -207,15 +207,15 @@
       "access": "SPEAKER",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:19:04.676Z"
+      "capturedAt": "2026-08-11T05:35:11.259Z"
     },
     {
       "file": "speaker-task-form.png",
-      "path": "/portal/tasks/cmso7ll7l00vcx2mwjpvmsgf6",
+      "path": "/portal/tasks/cmso869s600vcx2i0sgkmhb5g",
       "access": "SPEAKER",
       "viewport": "1440 × 900",
       "fullPage": true,
-      "capturedAt": "2026-08-11T05:19:07.557Z"
+      "capturedAt": "2026-08-11T05:35:14.061Z"
     }
   ]
 }

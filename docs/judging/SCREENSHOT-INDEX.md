@@ -21,7 +21,7 @@ running the same script against it.
 | Capture source | **local `next build` + `next start`** on `http://127.0.0.1:3400`, disposable database, freshly `npm run db:seed`ed |
 | Production URL | <https://greenroom-hq.com> (the surface these paths correspond to) |
 | Capture owner | `e2e/screenshots.spec.ts` (automated) |
-| Capture window (start–end, with timezone) | 2026-08-11T05:18:02Z – 2026-08-11T05:19:08Z |
+| Capture window (start–end, with timezone) | 2026-08-11T05:34:09Z – 2026-08-11T05:35:14Z |
 | Viewport | 1440 × 900 unless a row says otherwise |
 | Browser | headless Chromium via Playwright, fresh context per role |
 | Machine-readable record | [`screenshots/capture-manifest.json`](screenshots/capture-manifest.json) — file, path, role, viewport, capture mode and timestamp for every shot |
@@ -57,33 +57,33 @@ exist at this commit. `Access` is the authenticated role or `logged out`;
 
 | # | File | Surface | URL / path | Access | Mutation | Must be visible | Captured (ISO 8601 + TZ) | Viewport |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `login.png` | Sign-in | `/login` | logged out | read-only | credential form, the sign-up/reset roadmap note, and all three persona buttons | 2026-08-11T05:18:02Z | 1440 × 900 |
-| 2 | `landing.png` | Public landing page | `/` | logged out | read-only | event name and dates, session/speaker/track metrics, open-CFP panel | 2026-08-11T05:18:06Z | 1440 × 900 |
-| 3 | `public-cfp.png` | Public call for speakers | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | topic selector, a custom question, the co-speaker block with its role field | 2026-08-11T05:18:08Z | 1440 × 900 |
-| 4 | `event-settings.png` | Event settings + event creation | `/admin/settings` | ADMIN | read-only | event name/dates/timezone, rooms, groupings, and the **New event** button | 2026-08-11T05:18:23Z | 1440 × 900 |
-| 5 | `new-event-dialog.png` | New event dialog | `/admin/settings` (dialog open) | ADMIN | read-only | name, web address with its `/cfp/{slug}` hint, timezone, optional dates | 2026-08-11T05:18:23Z | 1440 × 900 |
-| 6 | `cfp-builder.png` | CFP form builder | `/admin/forms/[formId]` | ADMIN | read-only | question list, a conditional rule, the **Published** switch, live preview | 2026-08-11T05:18:26Z | 1440 × 900 |
-| 7 | `admin-abstracts.png` | Submission pipeline | `/admin/abstracts` | ADMIN | read-only | filter chips, summary metrics, a selected proposal with its custom answers, **Export CSV** | 2026-08-11T05:18:31Z | 1440 × 900 |
-| 8 | `evaluation-setup.png` | Review round setup | `/admin/evaluations` | ADMIN | read-only | rubric criteria with the `Weight … · …% of rubric weight` line, round window dates | 2026-08-11T05:18:36Z | 1440 × 900 |
-| 9 | `evaluation-coverage.png` | Reviewer coverage | `/admin/evaluations` | ADMIN | read-only | the **Review coverage** table with a sorted column and its sort indicator | 2026-08-11T05:18:37Z | 1440 × 900 |
-| 10 | `evaluator-workspace.png` | Reviewer workspace | `/admin/evaluations` | EVALUATOR | read-only | own queue with statuses, rubric scoring, running weighted score, **Declare a conflict** | 2026-08-11T05:19:00Z | 1440 × 900 |
-| 11 | `agenda-day.png` | Agenda Day view + backlog | `/admin/agenda` | ADMIN | read-only | Day grid with room columns and the **Unscheduled backlog** strip | 2026-08-11T05:18:40Z | 1440 × 900 |
-| 12 | `agenda-conflict-refusal.png` | Conflict refusal | `/admin/agenda` | ADMIN | coordinated mutation (refused write) | the server's refusal message naming what the placement collides with | 2026-08-11T05:18:42Z | 1440 × 900 |
-| 13 | `agenda-fill-open-slots.png` | Assisted placement preview | `/admin/agenda` | ADMIN | read-only (preview saves nothing) | proposed placements, "could not be placed" list, **Apply**/**Discard** | 2026-08-11T05:18:43Z | 1440 × 900 |
-| 14 | `speaker-portal.png` | Speaker portal | `/portal` | SPEAKER | read-only | profile completeness, confirmed sessions, the task checklist with due dates | 2026-08-11T05:19:05Z | 1440 × 900 |
-| 15 | `speaker-task-form.png` | Form-carrying onboarding task | `/portal/tasks/[taskId]` | SPEAKER | read-only | a conditional question and the **Save and mark done** gate | 2026-08-11T05:19:08Z | 1440 × 900 |
-| 16 | `admin-speakers.png` | Speaker readiness chase list | `/admin/speakers` | ADMIN | read-only | metrics row, per-speaker profile/task/next-due columns, overdue and status pills | 2026-08-11T05:18:47Z | 1440 × 900 |
-| 17 | `admin-emails.png` | Email history | `/admin/emails` | ADMIN | read-only | per-row delivery status and outcome wording | 2026-08-11T05:18:50Z | 1440 × 900 |
-| 18 | `public-schedule.png` | Public schedule | `/embed/schedule?event=forward-2026` | logged out | read-only | day tabs, search form, track filters, session details, topic/track/room chips | 2026-08-11T05:18:10Z | 1440 × 900 |
-| 19 | `public-schedule-mobile.png` | Public schedule, narrow | `/embed/schedule?event=forward-2026` | logged out | read-only | the same page usable at phone width | 2026-08-11T05:18:14Z | 390 × 844 |
-| 20 | `public-speakers.png` | Public speaker directory | `/embed/speakers?event=forward-2026` | logged out | read-only | headshots, an expanded full profile, session links | 2026-08-11T05:18:12Z | 1440 × 900 |
-| 21 | `admin-embeds.png` | Embed configuration | `/admin/embeds` | ADMIN | read-only | both copyable `<iframe>` snippets and the direct links | 2026-08-11T05:18:52Z | 1440 × 900 |
-| 22 | `admin-operations.png` | Decision mail preview gate | `/admin/operations` | ADMIN | read-only | **Send it** disabled until **Preview email** has run | 2026-08-11T05:18:55Z | 1440 × 900 |
-| 23 | `public-cfp-participants.png` | Public call for speakers, Participants step | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | the co-speaker block with its role field (row 3's third item — see the note below) | 2026-08-11T05:18:08Z | 1440 × 900 |
-| 24 | `cfp-builder-settings.png` | CFP form builder, Form settings step | `/admin/forms/[formId]` | ADMIN | read-only | the **Published** switch, the submission window and the speaker limits (row 6's third item — see the note below) | 2026-08-11T05:18:26Z | 1440 × 900 |
-| 25 | `admin-abstracts-drawer.png` | Submission pipeline, one proposal open | `/admin/abstracts` (drawer open) | ADMIN | read-only | the decision summary and score-by-criterion, the review notes, and the custom answers under their original question labels (row 7's third item — see the note below) | 2026-08-11T05:18:32Z | 1440 × 900 |
-| 26 | `public-speakers-mobile.png` | Public speaker directory, narrow | `/embed/speakers?event=forward-2026` | logged out | read-only | the same page usable at phone width | 2026-08-11T05:18:17Z | 390 × 844 |
-| 27 | `public-cfp-mobile.png` | Public call for speakers, narrow | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | the same form usable at phone width | 2026-08-11T05:18:18Z | 390 × 844 |
+| 1 | `login.png` | Sign-in | `/login` | logged out | read-only | credential form, the sign-up/reset roadmap note, and all three persona buttons | 2026-08-11T05:34:09Z | 1440 × 900 |
+| 2 | `landing.png` | Public landing page | `/` | logged out | read-only | event name and dates, session/speaker/track metrics, open-CFP panel | 2026-08-11T05:34:13Z | 1440 × 900 |
+| 3 | `public-cfp.png` | Public call for speakers | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | topic selector, a custom question, the co-speaker block with its role field | 2026-08-11T05:34:15Z | 1440 × 900 |
+| 4 | `event-settings.png` | Event settings + event creation | `/admin/settings` | ADMIN | read-only | event name/dates/timezone, rooms, groupings, and the **New event** button | 2026-08-11T05:34:30Z | 1440 × 900 |
+| 5 | `new-event-dialog.png` | New event dialog | `/admin/settings` (dialog open) | ADMIN | read-only | name, web address with its `/cfp/{slug}` hint, timezone, optional dates | 2026-08-11T05:34:31Z | 1440 × 900 |
+| 6 | `cfp-builder.png` | CFP form builder | `/admin/forms/[formId]` | ADMIN | read-only | question list, a conditional rule, the **Published** switch, live preview | 2026-08-11T05:34:34Z | 1440 × 900 |
+| 7 | `admin-abstracts.png` | Submission pipeline | `/admin/abstracts` | ADMIN | read-only | filter chips, summary metrics, a selected proposal with its custom answers, **Export CSV** | 2026-08-11T05:34:40Z | 1440 × 900 |
+| 8 | `evaluation-setup.png` | Review round setup | `/admin/evaluations` | ADMIN | read-only | rubric criteria with the `Weight … · …% of rubric weight` line, round window dates | 2026-08-11T05:34:45Z | 1440 × 900 |
+| 9 | `evaluation-coverage.png` | Reviewer coverage | `/admin/evaluations` | ADMIN | read-only | the **Review coverage** table with a sorted column and its sort indicator | 2026-08-11T05:34:46Z | 1440 × 900 |
+| 10 | `evaluator-workspace.png` | Reviewer workspace | `/admin/evaluations` | EVALUATOR | read-only | own queue with statuses, rubric scoring, running weighted score, **Declare a conflict** | 2026-08-11T05:35:08Z | 1440 × 900 |
+| 11 | `agenda-day.png` | Agenda Day view + backlog | `/admin/agenda` | ADMIN | read-only | Day grid with room columns and the **Unscheduled backlog** strip | 2026-08-11T05:34:48Z | 1440 × 900 |
+| 12 | `agenda-conflict-refusal.png` | Conflict refusal | `/admin/agenda` | ADMIN | coordinated mutation (refused write) | the server's refusal message naming what the placement collides with | 2026-08-11T05:34:51Z | 1440 × 900 |
+| 13 | `agenda-fill-open-slots.png` | Assisted placement preview | `/admin/agenda` | ADMIN | read-only (preview saves nothing) | proposed placements, "could not be placed" list, **Apply**/**Discard** | 2026-08-11T05:34:53Z | 1440 × 900 |
+| 14 | `speaker-portal.png` | Speaker portal | `/portal` | SPEAKER | read-only | profile completeness, confirmed sessions, the task checklist with due dates | 2026-08-11T05:35:11Z | 1440 × 900 |
+| 15 | `speaker-task-form.png` | Form-carrying onboarding task | `/portal/tasks/[taskId]` | SPEAKER | read-only | a conditional question and the **Save and mark done** gate | 2026-08-11T05:35:14Z | 1440 × 900 |
+| 16 | `admin-speakers.png` | Speaker readiness chase list | `/admin/speakers` | ADMIN | read-only | metrics row, per-speaker profile/task/next-due columns, overdue and status pills | 2026-08-11T05:34:56Z | 1440 × 900 |
+| 17 | `admin-emails.png` | Email history | `/admin/emails` | ADMIN | read-only | per-row delivery status and outcome wording | 2026-08-11T05:34:59Z | 1440 × 900 |
+| 18 | `public-schedule.png` | Public schedule | `/embed/schedule?event=forward-2026` | logged out | read-only | day tabs, search form, track filters, session details, topic/track/room chips | 2026-08-11T05:34:17Z | 1440 × 900 |
+| 19 | `public-schedule-mobile.png` | Public schedule, narrow | `/embed/schedule?event=forward-2026` | logged out | read-only | the same page usable at phone width | 2026-08-11T05:34:22Z | 390 × 844 |
+| 20 | `public-speakers.png` | Public speaker directory | `/embed/speakers?event=forward-2026` | logged out | read-only | headshots, an expanded full profile, session links | 2026-08-11T05:34:20Z | 1440 × 900 |
+| 21 | `admin-embeds.png` | Embed configuration | `/admin/embeds` | ADMIN | read-only | both copyable `<iframe>` snippets and the direct links | 2026-08-11T05:35:01Z | 1440 × 900 |
+| 22 | `admin-operations.png` | Decision mail preview gate | `/admin/operations` | ADMIN | read-only | **Send it** disabled until **Preview email** has run | 2026-08-11T05:35:04Z | 1440 × 900 |
+| 23 | `public-cfp-participants.png` | Public call for speakers, Participants step | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | the co-speaker block with its role field (row 3's third item — see the note below) | 2026-08-11T05:34:16Z | 1440 × 900 |
+| 24 | `cfp-builder-settings.png` | CFP form builder, Form settings step | `/admin/forms/[formId]` | ADMIN | read-only | the **Published** switch, the submission window and the speaker limits (row 6's third item — see the note below) | 2026-08-11T05:34:34Z | 1440 × 900 |
+| 25 | `admin-abstracts-drawer.png` | Submission pipeline, one proposal open | `/admin/abstracts` (drawer open) | ADMIN | read-only | the decision summary and score-by-criterion, the review notes, and the custom answers under their original question labels (row 7's third item — see the note below) | 2026-08-11T05:34:41Z | 1440 × 900 |
+| 26 | `public-speakers-mobile.png` | Public speaker directory, narrow | `/embed/speakers?event=forward-2026` | logged out | read-only | the same page usable at phone width | 2026-08-11T05:34:24Z | 390 × 844 |
+| 27 | `public-cfp-mobile.png` | Public call for speakers, narrow | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | the same form usable at phone width | 2026-08-11T05:34:26Z | 390 × 844 |
 
 Rows 12 and 13 are the safety evidence called for by the contract: a visible
 server refusal, and an assisted placement that writes nothing until applied.
