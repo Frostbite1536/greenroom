@@ -62,6 +62,21 @@ function isProgrammeMismatch(a: Pick<AbstractRow, "hasSession" | "status">): boo
 type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "REJECTED" };
 type Decision = "ACCEPTED" | "MAYBE" | "REJECTED";
 
+/**
+ * The status filter chips.
+ *
+ * Every key must be a real `AbstractStatus`, because the filter is an equality
+ * test against `a.status` — a chip whose key names no status silently shows an
+ * empty table rather than failing.
+ *
+ * `WITHDRAWN` was the one status with no chip. Withdrawn proposals were loaded
+ * and rendered under "All", but there was no way to isolate them, so a speaker
+ * pulling out mid-review was invisible unless an organizer already knew to
+ * scroll for it — and the drawer's "still on the programme" warning for a
+ * withdrawn talk was unreachable by filtering. It sits last, matching the tail
+ * of `STATUS_META`: it is an outcome nobody decided, so it does not belong
+ * among the decision chips.
+ */
 const TABS: { key: string; label: string }[] = [
   { key: "ALL", label: "All" },
   { key: "SUBMITTED", label: "Submitted" },
@@ -70,6 +85,7 @@ const TABS: { key: string; label: string }[] = [
   { key: "ACCEPTED", label: "Accepted" },
   { key: "REJECTED", label: "Declined" },
   { key: "DRAFT", label: "Drafts" },
+  { key: "WITHDRAWN", label: "Withdrawn" },
 ];
 
 export function AbstractsTable({
