@@ -115,9 +115,11 @@ invariant references in [`../INVARIANTS.md`](../INVARIANTS.md).
 
 Stated plainly, because an evaluator should not have to discover them.
 
-- **No self-service sign-up.** Organizers provision accounts; the login page says
-  so. Public sign-up is roadmap, not shipped.
-- **No password reset.** An organizer re-provisions access.
+- **A new self-service account starts outside every event.** Sign-up (`/signup`)
+  and password reset (`/forgot`, a signed single-use link that expires in 30
+  minutes) are both public. What sign-up does not do is grant membership: a new
+  account holds no `EventMember` row, so it lands on `/welcome` to create its own
+  event or wait for an organizer to add its address.
 - **Event switching is bounded by your own memberships.** An admin can create a new
   event from **Event settings** and switch straight into it from the success notice.
   The sidebar switcher lists every event you hold an `EventMember` row on, and your
@@ -149,8 +151,9 @@ Stated plainly, because an evaluator should not have to discover them.
   admin — including its operations console, whose live-send buttons work when
   real provider credentials are configured. Every identity and address in the
   deployment is a fixture (`@greenroom-hq.com` routes to the operator), so the
-  blast radius is the demo itself; a fail-closed persona switch for non-demo
-  deployments is on the roadmap.
+  blast radius is the demo itself. Any other production deployment is fail-closed:
+  the personas require `DEMO_PERSONA_LOGIN_ENABLED=true` exactly, and the refusal
+  lives in the server action rather than in whether the buttons render.
 - **Two external code audits were commissioned and triaged.**
   Confirmed defects were fixed and regression-tested (conflict-identity forgery,
   unlocked unschedule, far-east timezone day labels, unpublished-session leaks

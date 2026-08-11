@@ -58,8 +58,10 @@ npm run dev
 ```
 
 Then open http://localhost:3000/login. Sign in with an email and password, or
-use the one-click demo personas (Admin / Evaluator / Speaker). There is no
-self-service sign-up and no password reset — organizers provision accounts.
+use the one-click demo personas (Admin / Evaluator / Speaker). You can also
+create an account at `/signup` and recover one at `/forgot`. A brand-new account
+belongs to no event yet, so it lands on `/welcome` to create its first event or
+wait for an organizer to add it.
 
 Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
 `sofia@greenroom-hq.com` (speaker).
@@ -149,8 +151,10 @@ from any static host or localhost.
 Stated up front rather than left to be discovered. The fuller list, with
 context, is in the [evaluation index](docs/judging/README.md#current-limitations).
 
-- **No self-service sign-up** and **no password reset** — organizers provision
-  accounts. Public sign-up is roadmap, not shipped.
+- **A new self-service account starts outside every event.** Sign-up (`/signup`)
+  and password reset (`/forgot`) are both public, but signing up joins you to
+  nothing: a new account holds no membership, so it must create its own event or
+  wait for an organizer to add its address.
 - **Event switching is bounded by your own memberships.** The sidebar switcher
   lists every event you hold a membership on, and your role is re-resolved per
   event. You cannot join an event you were not added to, and no screen shows

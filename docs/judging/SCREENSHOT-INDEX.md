@@ -43,7 +43,7 @@ exist at this commit. `Access` is the authenticated role or `logged out`;
 
 | # | File | Surface | URL / path | Access | Mutation | Must be visible | Captured (ISO 8601 + TZ) | Viewport |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `login.png` | Sign-in | `/login` | logged out | read-only | credential form, the sign-up/reset roadmap note, and all three persona buttons | *fill in* | 1440 × 1000 |
+| 1 | `login.png` | Sign-in | `/login` | logged out | read-only | credential form, the sign-up and password-reset links, and all three persona buttons | *fill in* | 1440 × 1000 |
 | 2 | `landing.png` | Public landing page | `/` | logged out | read-only | event name and dates, session/speaker/track metrics, open-CFP panel | *fill in* | 1440 × 1000 |
 | 3 | `public-cfp.png` | Public call for speakers | `/cfp/forward-2026/call-for-speakers` | logged out | read-only | topic selector, a custom question, the co-speaker block with its role field | *fill in* | 1440 × 1000 |
 | 4 | `event-settings.png` | Event settings + event creation | `/admin/settings` | ADMIN | read-only | event name/dates/timezone, rooms, groupings, and the **New event** button | *fill in* | 1440 × 1000 |
