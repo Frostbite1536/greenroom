@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ASSISTANT_MAX_OUTPUT_CHARS,
   ASSISTANT_MAX_TOTAL_INPUT_CHARS,
+  runAssistant,
   type AssistantRequest,
 } from "./client";
 import {
@@ -205,6 +206,55 @@ test("generation uses the shared runner with strict format and returns only the 
       placeholders: ["[Add speaker check-in time]"],
     },
   });
+});
+
+test("the complete feature path sends only the allowlisted payload to a provider mock and logs no content", async () => {
+  const priorKey = process.env.OPENAI_API_KEY;
+  const priorInfo = console.info;
+  const logs: string[] = [];
+  const outbound: Record<string, unknown>[] = [];
+  try {
+    process.env.OPENAI_API_KEY = "sk-test-resource-provider-mock-00000000";
+    console.info = (...args: unknown[]) => logs.push(args.map(String).join(" "));
+    const generated = await generateResourceDraft(request, (assistantRequest) =>
+      runAssistant({
+        ...assistantRequest,
+        fetcher: (async (_url: string | URL | Request, init?: RequestInit) => {
+          outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+          return Response.json({
+            status: "completed",
+            output: [{ type: "message", content: [{ type: "output_text", text: result() }] }],
+            usage: { input_tokens: 100, output_tokens: 100 },
+          });
+        }) as typeof fetch,
+      }),
+    );
+    assert.equal(generated.ok, true);
+  } finally {
+    console.info = priorInfo;
+    if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = priorKey;
+  }
+
+  assert.equal(outbound.length, 1);
+  const sent = outbound[0]!;
+  assert.deepEqual(Object.keys(sent).sort(), [
+    "input",
+    "instructions",
+    "max_output_tokens",
+    "model",
+    "reasoning",
+    "store",
+    "text",
+  ]);
+  assert.equal(sent.store, false);
+  assert.deepEqual(sent.text, { format: RESOURCE_DRAFT_TEXT_FORMAT });
+  assert.deepEqual(Object.keys(JSON.parse(String(sent.input))).sort(), ["notes", "summary", "template", "title"]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0]!, /^\[assistant\] model=.+ outcome=ok in=100 out=100$/);
+  for (const sensitive of [request.title, request.summary!, request.notes, "<h2>", "sk-test-resource"]) {
+    assert.equal(logs[0]!.includes(sensitive), false);
+  }
 });
 
 test("every shared provider failure stays a closed value and malformed success becomes invalid_output", async () => {
