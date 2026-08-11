@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/ui";
 import { AbstractsTable } from "@/components/abstracts-table";
 import { getAdminAbstracts } from "@/lib/data/reads";
 import { readAbstractPermalinkId } from "@/lib/abstract-permalink";
+import { parseAbstractStatusFilter } from "@/lib/abstract-status";
 import { getApiContext } from "@/lib/api/context";
 import { ApiError } from "@/lib/api/http";
 
@@ -20,6 +21,8 @@ export default async function AbstractsPage({
     abstractId?: string | string[];
     mode?: string | string[];
     planId?: string | string[];
+    /** Preselects one status chip; see `@/lib/abstract-status`. */
+    status?: string | string[];
   }>;
 }) {
   // Resolve the persisted role before starting the proposal read. An evaluator
@@ -44,6 +47,11 @@ export default async function AbstractsPage({
   // link survives a paste and a reload.
   const requestedId = readAbstractPermalinkId(params);
   const requestedPlanId = typeof params.planId === "string" ? params.planId : null;
+  // `?status=` preselects one chip so a funnel segment on `/admin` lands on the
+  // proposals it counted rather than on the unfiltered table. Resolved here,
+  // like every other parameter this page reads, so the FIRST response already
+  // carries the pressed chip. An unrecognized value falls back to "All".
+  const initialStatusFilter = parseAbstractStatusFilter(params.status);
   const view = await (async () => {
     try {
       return await getAdminAbstracts(requestedId, requestedPlanId);
@@ -77,6 +85,7 @@ export default async function AbstractsPage({
         initialSelectedAbstract={selectedAbstract}
         initialSelectedId={initialSelectedId}
         initialChanging={initialChanging}
+        initialStatusFilter={initialStatusFilter}
         total={total}
         hasMore={hasMore}
         decisionSummary={decisionSummary}

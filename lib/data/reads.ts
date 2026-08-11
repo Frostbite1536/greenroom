@@ -76,6 +76,18 @@ import {
 } from "@/lib/public-speakers";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
 import { publicSessionDescription } from "@/lib/public-session-copy";
+import { findConflicts } from "@/lib/agenda-conflicts";
+import { abstractPermalink } from "@/lib/abstract-permalink";
+import { readSpeakerRoster } from "@/lib/speakers/roster-read";
+import {
+  summarizeAbstractFunnel,
+  summarizeProgrammeHealth,
+  summarizeReviewProgress,
+  summarizeRoundTotals,
+  type AbstractFunnel,
+  type ProgrammeHealth,
+  type ReviewProgress,
+} from "@/lib/dashboard/metrics";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -1455,10 +1467,14 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
 
   const assignedByPlan = new Map<string, Record<string, number>>();
   const completedByPlan = new Map<string, Record<string, number>>();
-  const planTotals = new Map<string, { assigned: number; completed: number }>();
   const withdrawnAbstractIds = new Set(
     abstracts.filter((abstract) => abstract.status === "WITHDRAWN").map((abstract) => abstract.id),
   );
+  // A withdrawn proposal remains in historical coverage, but its assignment is
+  // no longer actionable and cannot keep round progress below 100%. That rule
+  // lives in `summarizeRoundTotals` so the `/admin` dashboard's review card
+  // folds these same rows the same way.
+  const planTotals = summarizeRoundTotals(byAbstract, (id) => withdrawnAbstractIds.has(id));
   for (const row of byAbstract) {
     const n = row._count._all;
     const assigned = assignedByPlan.get(row.abstractId) ?? {};
@@ -1469,15 +1485,6 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
       const completed = completedByPlan.get(row.abstractId) ?? {};
       completed[row.planId] = (completed[row.planId] ?? 0) + n;
       completedByPlan.set(row.abstractId, completed);
-    }
-
-    // A withdrawn proposal remains in historical coverage, but its assignment
-    // is no longer actionable and cannot keep round progress below 100%.
-    if (!withdrawnAbstractIds.has(row.abstractId)) {
-      const totals = planTotals.get(row.planId) ?? { assigned: 0, completed: 0 };
-      totals.assigned += n;
-      if (row.status === "COMPLETED") totals.completed += n;
-      planTotals.set(row.planId, totals);
     }
   }
 
@@ -1540,5 +1547,223 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     })),
     categories,
     routingUnconfigured: categories.length > 0 && categories.every((c) => !c.defaultTeamKey),
+  };
+}
+
+// ---- /admin dashboard ------------------------------------------------------
+
+/**
+ * How many rows the recent-activity strip shows per column. Bounded on purpose:
+ * this is a "what just happened" glance, not a log — `/admin/abstracts` is the
+ * list, and every row here links into it.
+ */
+export const DASHBOARD_ACTIVITY_TAKE = 5;
+
+export type DashboardActivityRow = {
+  id: string;
+  title: string;
+  status: AbstractStatus;
+  /** The stored instant this row records: a submission or a decision. */
+  at: string;
+  /** Primary speaker where one is flagged, else the first stored one. */
+  speakerName: string | null;
+  /** `/admin/abstracts?abstract=<id>` — the canonical drawer permalink. */
+  href: string;
+};
+
+export type DashboardSpeakers = {
+  /** Everyone this event calls a speaker, on a session or not. */
+  total: number;
+  /** The confirmed-session cohort the roster's headline metrics describe. */
+  confirmed: number;
+  awaitingSession: number;
+  /** Confirmed speakers with a complete profile and no open required task. */
+  onboardingComplete: number;
+  /** Confirmed speakers holding at least one required task past its deadline. */
+  overdue: number;
+  requiredOutstanding: number;
+  truncated: boolean;
+};
+
+export type AdminDashboardView = {
+  eventId: string;
+  eventName: string;
+  timezone: string;
+  funnel: AbstractFunnel;
+  forms: { total: number; published: number };
+  review: ReviewProgress & {
+    /**
+     * Accepted proposals not on the programme: no confirmed talk yet, or a talk
+     * holding no ScheduleSlot. Same rule as the abstracts table's
+     * `sessionScheduled`, which is what its "On the programme" line reports.
+     */
+    acceptedUnscheduled: number;
+  };
+  programme: ProgrammeHealth;
+  speakers: DashboardSpeakers;
+  recentSubmissions: DashboardActivityRow[];
+  recentDecisions: DashboardActivityRow[];
+};
+
+/** Primary speaker first, then a stable tie-break — one row, not a roster. */
+const dashboardActivitySelect = {
+  id: true,
+  title: true,
+  status: true,
+  submittedAt: true,
+  decidedAt: true,
+  speakers: {
+    select: { user: { select: { name: true } } },
+    orderBy: [{ isPrimary: "desc" }, { userId: "asc" }],
+    take: 1,
+  },
+} satisfies Prisma.AbstractSelect;
+
+type DashboardActivityRecord = {
+  id: string;
+  title: string;
+  status: AbstractStatus;
+  speakers: { user: { name: string } }[];
+};
+
+function toActivityRow(row: DashboardActivityRecord, at: Date): DashboardActivityRow {
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    at: at.toISOString(),
+    speakerName: row.speakers[0]?.user.name ?? null,
+    href: abstractPermalink(row.id),
+  };
+}
+
+/**
+ * Everything the `/admin` dashboard renders, in ONE batched event-scoped read.
+ *
+ * Every figure is deliberately borrowed rather than invented, so the dashboard
+ * cannot contradict the screen its link leads to:
+ *
+ * - the funnel is the same `groupBy(["status"])` over the same
+ *   `adminAbstractListWhere` that `getAdminAbstracts` counts its metric strip
+ *   from, and each segment links to the chip it counted;
+ * - round progress is `summarizeRoundTotals`, the fold `getEvaluationSetup`
+ *   itself uses, withdrawn assignments excluded exactly as there;
+ * - the programme reads `getAgendaData()` and counts conflicts with
+ *   `findConflicts` — the very function the builder's Conflicts view renders;
+ * - the speaker numbers are `readSpeakerRoster()`, the read behind
+ *   `/admin/speakers`, including its bounds and its truncation rule.
+ *
+ * The eleven reads run concurrently (`getAgendaData` and `readSpeakerRoster`
+ * each batch internally), so this is one round of parallel queries rather than
+ * a per-card waterfall.
+ */
+export async function getAdminDashboard(): Promise<AdminDashboardView> {
+  const ctx = await pageContext(["ADMIN"]);
+  const eventId = ctx.eventId;
+  const abstractWhere = adminAbstractListWhere({ eventId });
+
+  const [
+    event,
+    funnelGroups,
+    formGroups,
+    plans,
+    assignmentGroups,
+    withdrawn,
+    acceptedUnscheduled,
+    agenda,
+    roster,
+    submissionRows,
+    decisionRows,
+  ] = await Promise.all([
+    prisma.event.findUnique({ where: { id: eventId }, select: { name: true, timezone: true } }),
+    prisma.abstract.groupBy({ by: ["status"], where: abstractWhere, _count: { _all: true } }),
+    prisma.formConfig.groupBy({ by: ["published"], where: { eventId }, _count: { _all: true } }),
+    prisma.evaluationPlan.findMany({
+      where: { eventId },
+      orderBy: { ordinal: "asc" },
+      select: { id: true, name: true, ordinal: true },
+    }),
+    prisma.reviewAssignment.groupBy({
+      by: ["planId", "abstractId", "status"],
+      where: { plan: { eventId } },
+      _count: { _all: true },
+    }),
+    prisma.abstract.findMany({
+      where: { eventId, status: "WITHDRAWN" },
+      select: { id: true },
+    }),
+    // "Decided but not on the programme": accepted, and either no talk was
+    // created from it or the talk holds no slot. INV-DOMAIN-001 keeps the two
+    // steps separate, so both gaps have to be counted.
+    prisma.abstract.count({
+      where: {
+        eventId,
+        status: "ACCEPTED",
+        OR: [{ session: { is: null } }, { session: { scheduleSlot: { is: null } } }],
+      },
+    }),
+    getAgendaData(),
+    readSpeakerRoster(eventId),
+    prisma.abstract.findMany({
+      where: { ...abstractWhere, submittedAt: { not: null } },
+      orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+      take: DASHBOARD_ACTIVITY_TAKE,
+      select: dashboardActivitySelect,
+    }),
+    // `decidedAt` is written only by the organizer decision route; a speaker's
+    // own withdrawal deliberately leaves it null, so this column is decisions
+    // an organizer made rather than every status change.
+    prisma.abstract.findMany({
+      where: { ...abstractWhere, decidedAt: { not: null } },
+      orderBy: [{ decidedAt: "desc" }, { id: "desc" }],
+      take: DASHBOARD_ACTIVITY_TAKE,
+      select: dashboardActivitySelect,
+    }),
+  ]);
+
+  const withdrawnIds = new Set(withdrawn.map((row) => row.id));
+  const review = summarizeReviewProgress(
+    plans,
+    summarizeRoundTotals(assignmentGroups, (id) => withdrawnIds.has(id)),
+  );
+
+  const roomName = (id: string) => agenda.rooms.find((room) => room.id === id)?.name ?? "Room";
+  const programme = summarizeProgrammeHealth(
+    agenda.sessions,
+    agenda.rooms.length,
+    findConflicts(agenda.sessions, roomName).length,
+    agenda.truncated,
+  );
+
+  const speakers: DashboardSpeakers = {
+    total: roster.rows.length,
+    confirmed: roster.summary.speakers,
+    awaitingSession: roster.awaitingSession,
+    onboardingComplete: roster.summary.onboardingComplete,
+    overdue: roster.summary.speakersOverdue,
+    requiredOutstanding: roster.summary.requiredOutstanding,
+    truncated: roster.truncated,
+  };
+
+  return {
+    eventId,
+    eventName: event?.name ?? "This event",
+    timezone: event?.timezone ?? "UTC",
+    funnel: summarizeAbstractFunnel(funnelGroups),
+    forms: {
+      total: formGroups.reduce((sum, group) => sum + group._count._all, 0),
+      published: formGroups
+        .filter((group) => group.published)
+        .reduce((sum, group) => sum + group._count._all, 0),
+    },
+    review: { ...review, acceptedUnscheduled },
+    programme,
+    speakers,
+    recentSubmissions: submissionRows.flatMap((row) =>
+      row.submittedAt ? [toActivityRow(row, row.submittedAt)] : [],
+    ),
+    recentDecisions: decisionRows.flatMap((row) =>
+      row.decidedAt ? [toActivityRow(row, row.decidedAt)] : [],
+    ),
   };
 }
