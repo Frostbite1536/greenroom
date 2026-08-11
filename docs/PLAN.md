@@ -1,71 +1,86 @@
-# Sprint Plan — Greenroom
+# Release plan — Greenroom
 
-Deadline: **Wed Aug 12, 10 PM PT**. Human availability is front-loaded (next ~48h);
-agents are fast, so phases are scoped to *merge-and-verify cycles*, not days.
-Requirement videos land Saturday and Sunday, then requirements FREEZE.
+The delivery plan for the first release, in the order the work was sequenced.
+It is written as *what must be true to ship*, not as a schedule: each stage is a
+merge-and-verify cycle, and no stage starts before the one under it is
+demonstrable on a deployed URL.
 
-Judging: deployed site walked through by the AIE team. Tiebreaker: product
-judgment they would actually use. Explicit bonuses: speed/performance, an API,
-Cloudflare infra (mild), Airtable persistence.
+Durable product priorities live here; the state machines they operate on are in
+[`LIFECYCLE.md`](LIFECYCLE.md) and the rules the server enforces are in
+[`INVARIANTS.md`](INVARIANTS.md).
 
 ## Standing rules
-- `main` stays deployable; workers merge early and often (target: every 2–4 hours of agent work).
-- After every merge: `tsc`, build, and click the golden path on the deployed URL.
-- Golden path (from STATE.md) outranks any other feature at all times.
-- Screenshot references: `$SPRINT_COORDINATION_DIR/reference/screenshots/` with
-  `brief-with-screenshot-markers.txt` mapping images to the reference product's pages.
-  Match the *job to be done*, not pixel fidelity. Fast > faithful.
 
-## Phase 1 — Golden path, end to end (now)
-Goal: a demo-able vertical slice on a deployed URL.
-- **Ops (first 30 min):** deploy current main to Vercel (Neon env vars), confirm
-  `/login` works in production. From then on, every merge auto-deploys.
-- **Backend:** CFP submit (shell-user upsert by email), form CRUD, evaluation
-  plans/assignments/scores, accept→Session conversion, schedule slots with
-  conflict detection (room overlap + speaker overlap), category→teamKey routing.
-- **Frontend:** form builder (fields, conditional logic, welcome/thank-you,
-  limits), public CFP renderer at `/cfp/[formId]`, abstracts table with status
-  pipeline, evaluator scoring queue, agenda builder (day/room grid + list).
-- **Ops:** speaker portal (status, profile, task checklist incl. form-in-task),
-  admin speaker-status dashboard, `.ics` generation, email dispatch (log-only
-  behind `MOCK_EXTERNAL_APIS=true`), seed script (`prisma/seed.ts`): 1 event,
-  4 categories, 3 tracks, 4 rooms, ~40 abstracts across all states, 3 evaluators
-  with scores, a conflict-free three-day schedule, demo personas as Users.
+- `main` stays deployable; changes merge early and often in small, reviewable
+  slices.
+- After every merge: `npm test`, typecheck, build, and exercise the golden path
+  on the deployed URL.
+- The golden path outranks every other feature at all times. A change that makes
+  a new surface nicer and the golden path less reliable does not ship.
 
-Exit: judge-persona can do the full walkthrough on the deployed URL.
+## Stage 1 — Golden path, end to end
 
-## Phase 2 — Breadth + Saturday video
-- Frontend: week/track schedule views, drag-and-drop polish, embeds
-  (`/embed/schedule`, `/embed/speakers`) + copyable iframe snippet page.
-- Backend: Accelevents one-way push (real POST, configurable base URL, delivery
-  log; mock target when unset), CSV import with field mapping.
-- Ops: resource wiki (sanitized HTML embeds), email templates UI, reminder
-  triggers, real send via Resend if key present, `.ics` attachment with
-  `METHOD:REQUEST`.
-- Architect: fold in Saturday-video deltas (additive schema changes only),
-  re-sync worktrees.
+Goal: one proposal travels from an open CFP to a published programme slot.
 
-## Phase 3 — Bonuses + Sunday video (requirement freeze)
-- Public REST API (`/api/v1/*`: read submissions/speakers/schedule, API-key
-  auth) mirroring the reference product's public docs surface — bonus points.
-- Airtable one-way mirror (accepted sessions/speakers/schedule → base via
-  `AIRTABLE_API_KEY`; no-op when unset) — bonus points.
-- Performance pass: no N+1 queries, server-render list pages, measure the
-  five hottest pages; "we do not want slow SaaS."
-- Optional dashboard (counts, funnel) — best effort only.
+- **Platform:** deployed on Vercel + Neon with environment validation at boot;
+  every push to `main` auto-deploys.
+- **Backend:** public CFP submit (shell-user upsert by email), form CRUD,
+  evaluation plans/assignments/scores, accept→Session provisioning, schedule
+  slots with transactional conflict detection (room overlap and speaker
+  double-booking), category→review-team routing.
+- **Frontend:** form builder (fields, conditional logic, welcome/thank-you
+  pages, submission limits), public CFP renderer at the event-scoped URL,
+  submission pipeline with status filters, evaluator scoring queue, agenda
+  builder (day/room grid plus list).
+- **Speaker and operations:** speaker portal (status, profile, task checklist
+  including form-carrying tasks), admin speaker-readiness dashboard, `.ics`
+  generation, audited email dispatch (mockable), and a deterministic demo seed:
+  one event, four categories, three tracks, four rooms, 40 proposals across
+  every status, three evaluators with scores, and a conflict-free three-day
+  schedule.
 
-## Phase 4 — Freeze + judging package (low human availability)
-Self-imposed feature freeze Tuesday evening.
-- README: demo credentials, golden-path script, architecture summary, env setup.
-- Demo-reset script; verify seed from scratch on a clean DB.
-- Static HTML page proving the embed snippet works from an external origin.
-- Record fallback walkthrough video/screenshots in case the deploy misbehaves.
-- Submission form + token-cost receipts.
+Exit: a first-time operator can complete the whole workflow on the deployed URL
+without instructions from the authors.
 
-## Deploy decision
-Vercel + Neon (chosen for zero Prisma friction). Cloudflare is only a *mild*
-bonus and risks Workers/Prisma incompatibility late in the sprint; revisit only
-if Phases 1–3 finish early. Airtable bonus is captured via the Phase 3 mirror.
+## Stage 2 — Breadth on the same spine
 
-## Out of scope (locked)
-CRM, marketing, payments, multi-language, AI evaluation, pixel-perfect cloning.
+- Week and track schedule views, drag-and-drop refinement, public embeds
+  (`/embed/schedule`, `/embed/speakers`) with copy-paste snippets.
+- One-way Accelevents push (real POST, configurable base URL, delivery log;
+  mocked when unconfigured) and mapped CSV import.
+- Speaker resources (sanitized HTML), email templates, reminder triggers, real
+  delivery through a provider when a key is present, and `.ics` attachments.
+
+## Stage 3 — Integration surfaces and performance
+
+- Read-only REST API at `/api/v1/*` (API-key gated, off by default) for
+  submissions, speakers, and schedule.
+- One-way Airtable mirror of confirmed programme data; a no-op when
+  unconfigured, with per-table repair reporting and no delete operation.
+- Performance pass: no N+1 queries, server-rendered list pages, and measured
+  timings for the hottest routes. A programme tool that is slow to read is not
+  finished.
+
+## Stage 4 — Release readiness
+
+- Documentation an operator can act on: quickstart, deployment, environment
+  variables, role-based guides, and an honest limitations list.
+- Clean-install rehearsal from a fresh clone and an empty database.
+- Authorized, idempotent demo reset — refused unless an operator opts in, and
+  never reachable from the UI.
+- Accessibility and performance evidence, each labeled with what was measured
+  and on which commit.
+- A standalone page proving the schedule embed renders from a foreign origin.
+
+## Deployment decision
+
+Vercel + Neon, chosen for zero Prisma friction and instant provisioning.
+Cloudflare Workers hosting was evaluated and declined over Prisma/Workers
+compatibility risk for a Postgres-backed application. See
+[`DECISIONS.md`](DECISIONS.md).
+
+## Out of scope (explicit)
+
+CRM, marketing automation, payments, multi-language support, AI evaluation of
+proposals, production OAuth, and speculative enterprise permission models.
+These are exclusions, not backlog: adding one changes what this product is.
