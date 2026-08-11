@@ -108,6 +108,21 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   answers/roster, reject duplicate normalized speaker emails, and pass durable rate limits.
 - Resource HTML must be sanitized before persistence or rendering.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
+  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck` takes a raw
+  authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
+  headshot, 5 MiB for a deck), sniffs the magic bytes and refuses anything whose real format is
+  not accepted for that kind or does not match the claimed content type (`422`), then stores the
+  bytes in `StoredFile` keyed by `(uploader, kind, sha256)` so a re-upload returns the id that
+  already exists. The **stored, server-derived** mime — never the client's header — is what
+  `GET /api/files/:id` sets as `Content-Type`, which is what makes the deployment-wide `nosniff`
+  binding. Reads mirror the exposure each column already had: a `HEADSHOT` is public because it
+  renders on the anonymous speaker gallery and the speakers embed (`public, max-age=31536000,
+  immutable`), a `SLIDE_DECK` is the uploader's or that event's ADMIN's only (`private, no-store`,
+  served as an attachment), and a file that does not exist is the same 404 as one the caller may
+  not read. The matrix, caps and sniffer are one pure module (`lib/uploads/stored-file.ts`); the
+  per-user throttle reuses the S19 durable bucket table rather than counting the product table,
+  which dedupe would undercount. Bytes in Postgres was chosen over a blob service deliberately: a
+  headshot is small and rarely read, and the alternative was a new external credential.
 - Schedule conflict checks and writes happen in one transaction (INV-SCHEDULE-001).
 - Every writer that check-then-writes one abstract (speaker edit/withdrawal, review assignment
   or score, admin decision, legacy conversion)
