@@ -8,10 +8,14 @@ import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client
 import {
   COMMON_TIME_ZONES,
   eventSettingsDraft,
+  planCategoryPatch,
   planEventSettingsPatch,
+  planTrackPatch,
   reconcileEventSettingsDraft,
   validateEventDatePair,
+  type CategoryRowAuthority,
   type EventSettingsDraft,
+  type TrackRowAuthority,
 } from "@/lib/event-settings-form";
 import { normalizeHex } from "@/lib/color-contrast";
 import { EmptyState, Pill } from "@/components/ui";
@@ -19,8 +23,21 @@ import { EmptyState, Pill } from "@/components/ui";
 type EventForm = EventSettingsDraft;
 
 type RoomDraft = { id: string; name: string; capacity: string };
-type TrackDraft = { id: string; name: string; color: string };
-type CategoryDraft = { id: string; name: string; description: string; defaultTeamKey: string };
+/**
+ * A row draft carries the row exactly as it was loaded. The save diffs against
+ * that `loaded` snapshot rather than against the current RSC payload: a field
+ * the operator never touched must be omitted from the PATCH even when a
+ * colleague has already changed it server-side, which is precisely the case a
+ * diff against current truth would get wrong.
+ */
+type TrackDraft = { id: string; name: string; color: string; loaded: TrackRowAuthority };
+type CategoryDraft = {
+  id: string;
+  name: string;
+  description: string;
+  defaultTeamKey: string;
+  loaded: CategoryRowAuthority;
+};
 type EventError = { message: string; field: "name" | "timezone" | "dates" | "general" };
 
 type TrackView = EventSettingsView["tracks"][number];
@@ -34,12 +51,6 @@ function positiveCapacity(value: string): number | null | undefined {
   if (trimmed === "") return undefined;
   const parsed = Number(trimmed);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-/** `null` clears an optional text column; a value sets it. */
-function optionalText(value: string): string | null {
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
 }
 
 export function EventSettings({ view }: { view: EventSettingsView }) {
@@ -261,13 +272,21 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       setTrackError("Give the track a name.");
       return;
     }
+    // Only what this operator actually changed, diffed against the row as it
+    // was loaded, so a colleague's colour change survives a rename here.
+    const patch = planTrackPatch(editingTrack, editingTrack.loaded);
+    if (!patch) {
+      setEditingTrack(null);
+      setTrackError(null);
+      setTrackNotice("No track details have changed.");
+      return;
+    }
     setTrackBusy(editingTrack.id);
     setTrackError(null);
     setTrackNotice(null);
     const res = await apiPatch<{ track: TrackView }>("/api/admin/settings/tracks", {
       id: editingTrack.id,
-      name: editingTrack.name.trim(),
-      color: editingTrack.color,
+      ...patch,
     });
     setTrackBusy(null);
     if (!res.ok) {
@@ -330,16 +349,22 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       setCategoryError("Give the category a name.");
       return;
     }
+    // PATCH, not the whole-row POST — and a sparse one. Diffing against the row
+    // as loaded is what keeps a rename here from reverting a review-group
+    // change another admin made while this editor sat open.
+    const patch = planCategoryPatch(editingCategory, editingCategory.loaded);
+    if (!patch) {
+      setEditingCategory(null);
+      setCategoryError(null);
+      setCategoryNotice("No category details have changed.");
+      return;
+    }
     setCategoryBusy(editingCategory.id);
     setCategoryError(null);
     setCategoryNotice(null);
-    // PATCH, not the whole-row POST: sending only what changed is what keeps a
-    // rename from clearing the review group this category routes proposals to.
     const res = await apiPatch<CategoryView>("/api/cfp/categories", {
       id: editingCategory.id,
-      name: editingCategory.name.trim(),
-      description: optionalText(editingCategory.description),
-      defaultTeamKey: optionalText(editingCategory.defaultTeamKey),
+      ...patch,
     });
     setCategoryBusy(null);
     if (!res.ok) {
@@ -577,7 +602,12 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
                     busy={trackBusy === track.id || trackBusy === `delete:${track.id}`}
                     onEdit={() => {
                       setTrackError(null);
-                      setEditingTrack({ id: track.id, name: track.name, color: normalizeHex(track.color, DEFAULT_TRACK_COLOUR) });
+                      setEditingTrack({
+                        id: track.id,
+                        name: track.name,
+                        color: normalizeHex(track.color, DEFAULT_TRACK_COLOUR),
+                        loaded: { name: track.name, color: track.color },
+                      });
                     }}
                     onCancel={() => setEditingTrack(null)}
                     onDraftChange={setEditingTrack}
@@ -606,6 +636,11 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
                         name: category.name,
                         description: category.description ?? "",
                         defaultTeamKey: category.defaultTeamKey ?? "",
+                        loaded: {
+                          name: category.name,
+                          description: category.description,
+                          defaultTeamKey: category.defaultTeamKey,
+                        },
                       });
                     }}
                     onCancel={() => setEditingCategory(null)}

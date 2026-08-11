@@ -1,3 +1,8 @@
+import { normalizeHex } from "@/lib/color-contrast";
+
+/** Never a value `normalizeHex` can return from readable input. */
+const UNREADABLE = "unreadable";
+
 /**
  * Suggested IANA zones offered as a datalist. Shared by the settings editor and
  * the new-event dialog so the two suggest the same zones; both are free-text
@@ -115,5 +120,72 @@ export function planEventSettingsPatch(
     patch.endsOn = draft.endsOn || null;
   }
 
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+// ---- Taxonomy row editors -------------------------------------------------
+//
+// The track and category row editors need the same guarantee the event form
+// above already makes, for the same reason: two admins share one settings page.
+// A row editor loads a snapshot, so resending every field on save would carry
+// that snapshot's now-stale values over a colleague's newer edit — a rename
+// would quietly undo a routing-key change made thirty seconds earlier. The
+// server contracts (`trackUpdateSchema`, `categoryUpdateSchema`) are partial
+// and require at least one field precisely so the client can send sparsely;
+// these planners are what make the client actually do it.
+
+/** `null` clears an optional text column; a value sets it; `""` means cleared. */
+export function optionalText(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+export type TrackRowDraft = { name: string; color: string };
+export type TrackRowAuthority = { name: string; color: string };
+export type TrackRowPatch = { name?: string; color?: string };
+
+/**
+ * Omit every track field the editor did not change from the server-rendered
+ * row. Colours are compared in their normalized `#rrggbb` form: the column also
+ * accepts `#rgb` and the bare forms, and the editor's colour input always shows
+ * the expanded one, so a raw string compare would report a spurious change and
+ * write a colour the operator never touched.
+ */
+export function planTrackPatch(
+  draft: TrackRowDraft,
+  authoritative: TrackRowAuthority,
+): TrackRowPatch | null {
+  const patch: TrackRowPatch = {};
+  const name = draft.name.trim();
+  if (name !== authoritative.name) patch.name = name;
+  // A sentinel, not a real colour: two unreadable stored values compare equal
+  // to each other and never to a colour the editor could actually be showing.
+  if (normalizeHex(draft.color, UNREADABLE) !== normalizeHex(authoritative.color, UNREADABLE)) {
+    patch.color = draft.color;
+  }
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+export type CategoryRowDraft = { name: string; description: string; defaultTeamKey: string };
+export type CategoryRowAuthority = { name: string; description: string | null; defaultTeamKey: string | null };
+export type CategoryRowPatch = { name?: string; description?: string | null; defaultTeamKey?: string | null };
+
+/**
+ * Omit every category field the editor did not change from the server-rendered
+ * row. This is the one that matters most: `defaultTeamKey` routes a category's
+ * proposals to a review team, and a rename that resent a stale copy of it would
+ * silently unroute the category or revert a colleague's routing change.
+ */
+export function planCategoryPatch(
+  draft: CategoryRowDraft,
+  authoritative: CategoryRowAuthority,
+): CategoryRowPatch | null {
+  const patch: CategoryRowPatch = {};
+  const name = draft.name.trim();
+  const description = optionalText(draft.description);
+  const defaultTeamKey = optionalText(draft.defaultTeamKey);
+  if (name !== authoritative.name) patch.name = name;
+  if (description !== (authoritative.description ?? null)) patch.description = description;
+  if (defaultTeamKey !== (authoritative.defaultTeamKey ?? null)) patch.defaultTeamKey = defaultTeamKey;
   return Object.keys(patch).length > 0 ? patch : null;
 }
