@@ -462,6 +462,7 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .app-dialog::backdrop { background: rgba(16, 24, 22, 0.42); }
 .app-dialog.round-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .app-dialog.speaker-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.app-dialog.resource-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
 .app-dialog .conflict-banner { font-size: 12.5px; }
 

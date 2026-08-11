@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getApiContext } from "@/lib/api/context";
 import { prisma } from "@/lib/prisma";
 import { sanitizeHtml } from "@/lib/sanitize-html";
+import { portalResourceWhere } from "@/lib/services/resource-wiki";
 import { getOpenCfpEntry } from "@/lib/data/open-cfp";
 import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 import styles from "../../portal.module.css";
@@ -16,7 +17,9 @@ export default async function ResourcePage({ params }: { params: Promise<{ slug:
 
   const [resource, openCfp] = await Promise.all([
     prisma.resourceWiki.findFirst({
-      where: { eventId: ctx.eventId, slug, published: true },
+      // The published-only rule comes from the one place that states it, so a
+      // draft cannot become reachable here without also becoming listed.
+      where: { ...portalResourceWhere(ctx.eventId), slug },
       select: { title: true, summary: true, htmlContent: true, updatedAt: true },
     }),
     // Deduplicated with the workspace shell's own entry read.

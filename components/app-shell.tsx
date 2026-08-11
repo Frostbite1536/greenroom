@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   BarChart3,
+  BookOpen,
   CalendarDays,
   ClipboardCheck,
   Code2,
@@ -62,6 +63,10 @@ const navigation: { href: string; label: string; icon: typeof FileText; roles: R
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"] },
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard, roles: ["ADMIN"] },
   { href: "/admin/speakers", label: "Speaker onboarding", icon: UserCheck, roles: ["ADMIN"] },
+  // Beside speaker onboarding, because both author what a speaker meets in the
+  // portal: the checklist they must finish, and the pages that tell them how.
+  // ADMIN-only, mirroring the page's own `ctx.role !== "ADMIN"` redirect.
+  { href: "/admin/resources", label: "Resources & wiki", icon: BookOpen, roles: ["ADMIN"] },
   { href: "/admin/embeds", label: "Website embeds", icon: Code2, roles: ["ADMIN"] },
   { href: "/admin/settings", label: "Event settings", icon: SlidersHorizontal, roles: ["ADMIN"] },
   { href: "/admin/operations", label: "Operations", icon: Settings2, roles: ["ADMIN"] },
