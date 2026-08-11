@@ -23,17 +23,18 @@ import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
 import { roundLabel } from "@/lib/round-label";
 import { coSpeakerSummary, proposalRosterLine } from "@/lib/speakers/proposal-roster";
+import {
+  ABSTRACT_STATUS_ALL,
+  ABSTRACT_STATUS_META,
+  ABSTRACT_STATUS_TABS,
+  type AbstractStatusFilter,
+} from "@/lib/abstract-status";
 import { EmptyState, Pill } from "@/components/ui";
 
-const STATUS_META: Record<string, { label: string; tone: string }> = {
-  DRAFT: { label: "Draft", tone: "neutral" },
-  SUBMITTED: { label: "Submitted", tone: "info" },
-  UNDER_REVIEW: { label: "Under review", tone: "warn" },
-  MAYBE: { label: "Maybe", tone: "warn" },
-  ACCEPTED: { label: "Accepted", tone: "good" },
-  REJECTED: { label: "Declined", tone: "bad" },
-  WITHDRAWN: { label: "Withdrawn", tone: "neutral" },
-};
+// Widened to a string index on purpose: the drawer reads `String(status)` off a
+// row, so the lookup site is not statically an `AbstractStatus`. The map itself
+// stays the exhaustive one in `lib/abstract-status`.
+const STATUS_META: Record<string, { label: string; tone: string }> = ABSTRACT_STATUS_META;
 
 /**
  * How far a proposal has travelled towards the public programme. Deliberately
@@ -63,36 +64,23 @@ type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "REJEC
 type Decision = "ACCEPTED" | "MAYBE" | "REJECTED";
 
 /**
- * The status filter chips.
+ * The status filter chips live in `lib/abstract-status` so the server surfaces
+ * that link *into* this filter (the `/admin` funnel) carry the same labels,
+ * the same order, and a parameter this page actually reads.
  *
- * Every key must be a real `AbstractStatus`, because the filter is an equality
- * test against `a.status` — a chip whose key names no status silently shows an
- * empty table rather than failing.
- *
- * `WITHDRAWN` was the one status with no chip. Withdrawn proposals were loaded
- * and rendered under "All", but there was no way to isolate them, so a speaker
- * pulling out mid-review was invisible unless an organizer already knew to
- * scroll for it — and the drawer's "still on the programme" warning for a
- * withdrawn talk was unreachable by filtering. It sits last, matching the tail
- * of `STATUS_META`: it is an outcome nobody decided, so it does not belong
- * among the decision chips.
+ * `WITHDRAWN` was once the one status with no chip. Withdrawn proposals were
+ * loaded and rendered under "All", but there was no way to isolate them, so a
+ * speaker pulling out mid-review was invisible unless an organizer already knew
+ * to scroll for it.
  */
-const TABS: { key: string; label: string }[] = [
-  { key: "ALL", label: "All" },
-  { key: "SUBMITTED", label: "Submitted" },
-  { key: "UNDER_REVIEW", label: "Under review" },
-  { key: "MAYBE", label: "Maybe" },
-  { key: "ACCEPTED", label: "Accepted" },
-  { key: "REJECTED", label: "Declined" },
-  { key: "DRAFT", label: "Drafts" },
-  { key: "WITHDRAWN", label: "Withdrawn" },
-];
+const TABS = ABSTRACT_STATUS_TABS;
 
 export function AbstractsTable({
   abstracts,
   initialSelectedAbstract = null,
   initialSelectedId = null,
   initialChanging = false,
+  initialStatusFilter = ABSTRACT_STATUS_ALL,
   total = abstracts.length,
   hasMore = false,
   decisionSummary,
@@ -102,13 +90,19 @@ export function AbstractsTable({
   initialSelectedAbstract?: AbstractRow | null;
   initialSelectedId?: string | null;
   initialChanging?: boolean;
+  /**
+   * The chip `?status=` named, already resolved server-side. Initial state
+   * only: clicking a chip afterwards is local, exactly as before, so the
+   * filter never fights the URL.
+   */
+  initialStatusFilter?: AbstractStatusFilter;
   total?: number;
   hasMore?: boolean;
   decisionSummary: AdminDecisionSummary;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [tab, setTab] = useState("ALL");
+  const [tab, setTab] = useState<AbstractStatusFilter>(initialStatusFilter);
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   // ABS-10. Null until the organizer clicks, so the table opens on the server's
