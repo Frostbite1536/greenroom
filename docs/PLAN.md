@@ -86,7 +86,9 @@ part of the current release promise.
    incremental-sync cursor contract.
 3. Introduce hashed, revocable per-event credentials and scoped demo access in a
    reviewed schema/authorization change. Only then add the approved bounded read
-   models and their contract tests.
+   models and their contract tests. That same later window must introduce
+   per-event deck pointers or associations: `SpeakerProfile.slideDeckUrl` is
+   global and cannot itself provide per-event-private deck access.
 4. Add generic webhook delivery and any narrow agent writes last. Writes require
    idempotency, per-token rate limits, audit records, and reuse of the existing
    abstract and schedule lock-protected service paths.

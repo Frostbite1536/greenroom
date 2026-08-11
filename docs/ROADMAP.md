@@ -56,7 +56,9 @@ and deployed golden-path verification are complete.
 3. **Scoped credentials.** Add hashed, revocable per-event tokens and a safely
    scoped demo-access mechanism before any public data demonstration. This is a
    schema and authorization change, so it requires its own reviewed database
-   window and migration plan.
+   window and migration plan. The global `SpeakerProfile.slideDeckUrl` also
+   needs a later per-event deck pointer or association in that reviewed window;
+   one global profile URL cannot provide per-event-private deck access.
 4. **Additional read models.** Add only the reads justified by the preceding
    scope contract, with bounded pagination, stable ordering, event authorization,
    and contract tests on every response.
