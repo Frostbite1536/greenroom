@@ -10,7 +10,8 @@ import { assertDisposableDatabase, assertLoopbackTarget, loadRepoEnv } from "./e
  * so parallelism and retries would only make the evidence less legible.
  *
  * Ports 3200-3299 belong to the sprint's other lanes; this harness stays out of
- * that range. Override its owned server's port with `E2E_PORT`.
+ * that range. Override its owned servers with `E2E_PORT` and
+ * `E2E_ASSISTANT_PORT`.
  */
 loadRepoEnv();
 assertDisposableDatabase();
@@ -23,7 +24,19 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
 const baseURL = `http://127.0.0.1:${PORT}`;
 const validatedDatabaseUrl = process.env.DATABASE_URL!;
 
+const rawAssistantPort = process.env.E2E_ASSISTANT_PORT?.trim() || "3413";
+const ASSISTANT_PORT = Number(rawAssistantPort);
+if (!Number.isInteger(ASSISTANT_PORT) || ASSISTANT_PORT < 1 || ASSISTANT_PORT > 65_535) {
+  throw new Error("E2E_ASSISTANT_PORT must be an integer from 1 through 65535.");
+}
+if (ASSISTANT_PORT === PORT) {
+  throw new Error("E2E_ASSISTANT_PORT must differ from E2E_PORT.");
+}
+const assistantBaseURL = `http://127.0.0.1:${ASSISTANT_PORT}`;
+const assistantEndpoint = `${assistantBaseURL}/v1/responses`;
+
 assertLoopbackTarget(baseURL);
+assertLoopbackTarget(assistantBaseURL);
 
 /**
  * `next start` runs with NODE_ENV=production, where `getServerSigningSecret()`
@@ -49,7 +62,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
     video: "off",
-    // The whole point is a real journey, so nothing is stubbed.
+    // The app and database are real. Only the paid assistant provider is the
+    // deterministic, owned loopback process declared below.
     serviceWorkers: "block",
   },
   projects: [
@@ -58,20 +72,33 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],
-  webServer: {
-    // A production server, not `next dev`: the judged application is the built
-    // one. Requires `npm run build` first — see e2e/README.md.
-    command: `npx next start -p ${PORT}`,
-    url: baseURL,
-    // Browser writes must reach this owned process, whose validated DB URL is
-    // inherited below. A listener already on the URL is a hard failure.
-    reuseExistingServer: false,
-    timeout: 180_000,
-    stdout: "ignore",
-    stderr: "pipe",
-    env: {
-      DATABASE_URL: validatedDatabaseUrl,
-      SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
+  webServer: [
+    {
+      command: `node e2e/assistant-provider-mock.mjs ${ASSISTANT_PORT}`,
+      url: `${assistantBaseURL}/health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "ignore",
+      stderr: "pipe",
     },
-  },
+    {
+      // A production server, not `next dev`: the judged application is the
+      // built one. Requires `npm run build` first — see e2e/README.md.
+      command: `npx next start -p ${PORT}`,
+      url: baseURL,
+      // Browser writes must reach this owned process, whose validated DB URL
+      // is inherited below. Existing listeners are hard failures.
+      reuseExistingServer: false,
+      timeout: 180_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        DATABASE_URL: validatedDatabaseUrl,
+        SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
+        MOCK_EXTERNAL_APIS: "true",
+        OPENAI_API_KEY: "greenroom-e2e-owned-provider-key-not-a-secret",
+        ASSISTANT_ENDPOINT_OVERRIDE: assistantEndpoint,
+      },
+    },
+  ],
 });
