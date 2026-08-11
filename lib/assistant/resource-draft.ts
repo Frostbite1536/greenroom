@@ -182,10 +182,13 @@ export function parseResourceDraftSuggestion(
   if (!parsed.success) return null;
   if (parsed.data.grounding.templateKey !== input.templateKey) return null;
   if (!exactSectionOrder(input, parsed.data.grounding.sectionsUsed)) return null;
-  if (!placeholdersAreVisible(parsed.data.html, parsed.data.grounding.placeholders)) return null;
 
   const decision = prepareResourceHtml(parsed.data.html);
   if (!decision.allowed || decision.html.length > RESOURCE_DRAFT_HTML_MAX_CHARS) return null;
+  // Grounding is a claim made by an untrusted provider. Check it against the
+  // HTML that survived sanitization, not the raw source where a placeholder
+  // could exist only inside a stripped script/style/iframe.
+  if (!placeholdersAreVisible(decision.html, parsed.data.grounding.placeholders)) return null;
   return {
     html: decision.html,
     templateKey: parsed.data.grounding.templateKey,

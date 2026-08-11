@@ -167,12 +167,19 @@ test("mismatched templates, reordered sections, hidden placeholders and malforme
   wrongOrder.grounding.sectionsUsed = [...sections].reverse();
   const hiddenPlaceholder = JSON.parse(result());
   hiddenPlaceholder.grounding.placeholders = ["[Add an address]"];
+  const strippedPlaceholder = JSON.parse(
+    result(
+      "<h2>Welcome, speakers</h2><p>Slides are due Friday.</p>" +
+        "<script>[Add speaker check-in time]</script>",
+    ),
+  );
 
   for (const raw of [
     "not json",
     JSON.stringify(wrongTemplate),
     JSON.stringify(wrongOrder),
     JSON.stringify(hiddenPlaceholder),
+    JSON.stringify(strippedPlaceholder),
     result("<script>only unsafe content</script>"),
   ]) {
     assert.equal(parseResourceDraftSuggestion(request, raw), null);
