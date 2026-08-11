@@ -9,6 +9,8 @@ import {
   bulkDecisionPromptBody,
   bulkDecisionPromptSkipNotice,
   bulkDecisionPromptTitle,
+  bulkDecisionRequestBody,
+  bulkDecisionSkipGroups,
   bulkDecisionSummary,
   proposalCount,
 } from "@/lib/bulk-decision-confirmation";
@@ -56,12 +58,17 @@ const DECISIONS: { decision: AbstractDecision; label: string; className: string 
 ];
 
 /**
- * Which of the selection the server will actually write.
+ * Which of the selection looks like it will be written, for the prompt's copy.
  *
  * The same predicate the route runs, so the prompt's arithmetic matches the
- * result's. It is a preview, never an authorization: the server re-reads every
- * status under that abstract's own lock and is free to skip more than this
- * counted — which is exactly what the per-item report is for.
+ * result's in the ordinary case. It is a preview and only a preview: the server
+ * re-reads every status under that abstract's own lock and is free to skip more
+ * than this counted — which is exactly what the per-item report is for.
+ *
+ * It therefore sizes the heading and raises the skip notice, and it does not
+ * touch the request body. `bulkDecisionRequestBody` sends every selected id;
+ * filtering here would leave the operator with a receipt that omits rows they
+ * ticked, which is the whole thing the per-item report exists to prevent.
  */
 function splitSelection(selected: readonly BulkSelectableAbstract[]) {
   const eligible: BulkSelectableAbstract[] = [];
@@ -126,10 +133,12 @@ export function BulkDecisionBar({
   async function run(target: AbstractDecision) {
     setBusy(true);
     setError(null);
-    const res = await apiPost<BulkDecisionReport>("/api/evaluations/decisions/bulk", {
-      abstractIds: eligible.map((row) => row.id),
-      decision: target,
-    });
+    // The whole selection, unfiltered. The server is the authority on what each
+    // row's status is, and it answers for every id it was given.
+    const res = await apiPost<BulkDecisionReport>(
+      "/api/evaluations/decisions/bulk",
+      bulkDecisionRequestBody(target, selected),
+    );
     setBusy(false);
     if (!res.ok) {
       setError(res.error.message);
@@ -235,13 +244,12 @@ export function BulkDecisionBar({
 }
 
 /**
- * Every skipped proposal, grouped by the server's own reason.
+ * Every skipped proposal, named with the server's own reason.
  *
- * Grouped rather than listed one per row because a hundred-item batch would
- * otherwise print a hundred lines, and because the reason is the actionable
- * part: "already decided" tells an operator to open those proposals, "not found
- * in this event" tells them their selection was stale. Titles are named up to a
- * readable number so a small skip is still specific.
+ * The grouping is `bulkDecisionSkipGroups`, so the promise that no skipped row
+ * goes unnamed is a unit test rather than an eyeball over this JSX. Titles are
+ * listed up to a readable number, so a small skip is still specific about which
+ * proposals an operator has to go and open.
  */
 function BulkDecisionSkips({
   report,
@@ -250,27 +258,17 @@ function BulkDecisionSkips({
   report: BulkDecisionReport;
   titles: Map<string, string>;
 }) {
-  const skipped = report.results.filter((item) => item.outcome === "SKIPPED");
-  if (skipped.length === 0) return null;
-
-  const groups = new Map<string, { reason: string; ids: string[] }>();
-  for (const item of skipped) {
-    if (item.outcome !== "SKIPPED") continue;
-    const group = groups.get(item.reasonCode) ?? { reason: item.reason, ids: [] };
-    group.ids.push(item.abstractId);
-    groups.set(item.reasonCode, group);
-  }
+  const groups = bulkDecisionSkipGroups(report, titles);
+  if (groups.length === 0) return null;
 
   return (
     <section aria-label="Skipped proposals" className="bulk-decision-skips">
       <ul>
-        {[...groups.entries()].map(([code, group]) => (
-          <li key={code}>
+        {groups.map((group) => (
+          <li key={group.reasonCode}>
             <strong>{proposalCount(group.ids.length)}</strong> — {group.reason}
             {group.ids.length <= 5 ? (
-              <div className="cell-sub">
-                {group.ids.map((id) => titles.get(id) ?? id).join(", ")}
-              </div>
+              <div className="cell-sub">{group.labels.join(", ")}</div>
             ) : null}
           </li>
         ))}

@@ -7,11 +7,22 @@ import {
   bulkDecisionPromptBody,
   bulkDecisionPromptSkipNotice,
   bulkDecisionPromptTitle,
+  bulkDecisionRequestBody,
+  bulkDecisionSkipGroups,
   bulkDecisionSummary,
   confirmedSessionCount,
   proposalCount,
 } from "@/lib/bulk-decision-confirmation";
+import { bulkDecisionEligibility } from "@/lib/services/abstract-decision";
+import type { AbstractStatus } from "@prisma/client";
+import {
+  BULK_DECISION_SKIP_REASONS,
+  runBulkAbstractDecision,
+} from "@/lib/services/bulk-abstract-decision";
 import type { BulkDecisionReport } from "@/lib/services/bulk-abstract-decision";
+import type { AbstractDecisionWriteResult } from "@/lib/services/abstract-decision-write";
+import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { BULK_ABSTRACT_DECISION_LIMIT } from "@/types/api";
 
 const report = (over: Partial<BulkDecisionReport> = {}): BulkDecisionReport => ({
   decision: "ACCEPTED",
@@ -124,6 +135,153 @@ test("maybe and decline results never claim a session or a task", () => {
   }
   assert.match(bulkDecisionSummary(report({ decision: "MAYBE", decided: 6 })), /^Marked as maybe 6 proposals\./);
   assert.match(bulkDecisionSummary(report({ decision: "REJECTED", decided: 1 })), /^Declined 1 proposal\./);
+});
+
+/**
+ * A selection as the table hands it to the bar, and the batch it produces.
+ *
+ * `decideOne` refuses exactly what the server refuses — `bulkDecisionEligibility`
+ * is the same predicate `writeAbstractDecision` runs under the row's lock — so
+ * driving the real `runBulkAbstractDecision` over the real request body proves
+ * the round trip an operator actually gets, rather than a hand-built report.
+ */
+const selection = (rows: readonly [string, AbstractStatus][]) =>
+  rows.map(([id, status]) => ({ id, status, title: `Proposal ${id}` }));
+
+async function runSelection(
+  decision: "ACCEPTED" | "MAYBE" | "REJECTED",
+  rows: readonly { id: string; status: AbstractStatus }[],
+) {
+  const body = bulkDecisionRequestBody(decision, rows);
+  const statuses = new Map(rows.map((row) => [row.id, row.status]));
+  const report = await runBulkAbstractDecision(decision, body.abstractIds, async (abstractId) => {
+    const status = statuses.get(abstractId);
+    const verdict = status ? bulkDecisionEligibility(status) : "ABSTRACT_NOT_FOUND";
+    if (verdict !== "ELIGIBLE") return { decided: false, refusal: verdict };
+    return {
+      decided: true,
+      decision,
+      sessionId: `session-${abstractId}`,
+      sessionCreated: decision === "ACCEPTED",
+      tasksAssigned: decision === "ACCEPTED" ? 2 : 0,
+      topicReconciled: false,
+      summaryReconciled: false,
+    } satisfies AbstractDecisionWriteResult;
+  });
+  return { body, report };
+}
+
+test("a mixed selection posts every ticked id, not just the eligible ones", async () => {
+  // The defect this pins: filtering to ELIGIBLE before the POST. It looks
+  // harmless — the server would have skipped those rows anyway — but it turns a
+  // named skip into no answer at all, and an operator who ticked six rows and
+  // reads five outcomes cannot tell the sixth from a silent failure.
+  const rows = selection([
+    ["a", "SUBMITTED"],
+    ["b", "ACCEPTED"],
+    ["c", "UNDER_REVIEW"],
+    ["d", "WITHDRAWN"],
+    ["e", "DRAFT"],
+    ["f", "SUBMITTED"],
+  ]);
+  const { body, report } = await runSelection("ACCEPTED", rows);
+
+  // The outbound list IS the selection: same ids, same order, nothing dropped.
+  assert.deepEqual(body.abstractIds, ["a", "b", "c", "d", "e", "f"]);
+  assert.deepEqual(body.abstractIds, rows.map((row) => row.id));
+  const eligibleOnly = rows.filter((row) => bulkDecisionEligibility(row.status) === "ELIGIBLE");
+  assert.equal(eligibleOnly.length, 3);
+  assert.notDeepEqual(body.abstractIds, eligibleOnly.map((row) => row.id));
+
+  // And the server answers for all six, exactly once each.
+  assert.equal(report.requested, 6);
+  assert.deepEqual(report.results.map((item) => item.abstractId), body.abstractIds);
+  assert.equal(report.decided, 3);
+  assert.equal(report.skipped, 3);
+
+  // Every skipped row is named, with its own reason — not one bucket of "other".
+  const groups = bulkDecisionSkipGroups(report, new Map(rows.map((r) => [r.id, r.title])));
+  assert.deepEqual(
+    groups.map((group) => [group.reasonCode, group.ids, group.reason]),
+    [
+      ["ABSTRACT_ALREADY_DECIDED", ["b"], BULK_DECISION_SKIP_REASONS.ABSTRACT_ALREADY_DECIDED],
+      ["ABSTRACT_WITHDRAWN", ["d"], BULK_DECISION_SKIP_REASONS.ABSTRACT_WITHDRAWN],
+      ["ABSTRACT_NOT_SUBMITTED", ["e"], BULK_DECISION_SKIP_REASONS.ABSTRACT_NOT_SUBMITTED],
+    ],
+  );
+  // Named by the title the operator ticked, where the selection knows it.
+  assert.deepEqual(groups.flatMap((group) => group.labels), ["Proposal b", "Proposal d", "Proposal e"]);
+  // The summary counts the writes and points at that list.
+  assert.match(bulkDecisionSummary(report), /^Accepted 3 proposals\./);
+  assert.match(bulkDecisionSummary(report), /3 proposals skipped — see the list below\./);
+});
+
+test("an all-ineligible selection still posts every id, and every row comes back named", async () => {
+  const rows = selection([
+    ["a", "ACCEPTED"],
+    ["b", "REJECTED"],
+    ["c", "WITHDRAWN"],
+  ]);
+  const { body, report } = await runSelection("MAYBE", rows);
+
+  // Nothing to write is not nothing to send: an empty body would be refused by
+  // the schema's own `.min(1)` and the operator would get an error where they
+  // should get three named reasons.
+  assert.deepEqual(body.abstractIds, ["a", "b", "c"]);
+  assert.equal(body.decision, "MAYBE");
+  assert.equal(report.decided, 0);
+  assert.equal(report.skipped, 3);
+
+  const groups = bulkDecisionSkipGroups(report, new Map(rows.map((r) => [r.id, r.title])));
+  assert.deepEqual(groups.flatMap((group) => group.ids).sort(), ["a", "b", "c"]);
+  for (const group of groups) {
+    assert.equal(group.reason, BULK_DECISION_SKIP_REASONS[group.reasonCode]);
+    assert.notEqual(group.reason, "");
+  }
+  assert.deepEqual(
+    groups.map((group) => group.reasonCode),
+    ["ABSTRACT_ALREADY_DECIDED", "ABSTRACT_WITHDRAWN"],
+  );
+  // And the receipt must not read as success on a batch that wrote nothing.
+  const summary = bulkDecisionSummary(report);
+  assert.match(summary, /^Nothing was changed\. 3 proposals skipped/);
+  assert.ok(summary.includes(BULK_DECISION_NO_EMAIL_SENTENCE_PAST));
+});
+
+test("the request body is the selection verbatim, whatever the client thinks of it", () => {
+  // Order preserved (the report is returned in request order), duplicates left
+  // for the schema's own `uniqueIds` to collapse server-side, and no status
+  // anywhere in the shape: this function cannot filter what it never reads.
+  const rows = selection([["z", "WITHDRAWN"], ["y", "SUBMITTED"], ["x", "MAYBE"]]);
+  assert.deepEqual(bulkDecisionRequestBody("REJECTED", rows), {
+    abstractIds: ["z", "y", "x"],
+    decision: "REJECTED",
+  });
+  assert.deepEqual(bulkDecisionRequestBody("ACCEPTED", []).abstractIds, []);
+});
+
+test("a full page of selected rows still fits one batch", () => {
+  // The bar posts the whole selection, so the cap has to cover everything the
+  // table can put on screen. If either constant moves without the other, an
+  // operator's select-all starts 422-ing instead of reporting per-item.
+  assert.ok(
+    BULK_ABSTRACT_DECISION_LIMIT >= OPERATOR_QUERY_LIMITS.adminAbstracts,
+    `bulk cap ${BULK_ABSTRACT_DECISION_LIMIT} < page size ${OPERATOR_QUERY_LIMITS.adminAbstracts}`,
+  );
+});
+
+test("the skip list is empty when the server wrote everything", () => {
+  assert.deepEqual(bulkDecisionSkipGroups(report({ results: [], skipped: 0 })), []);
+  assert.deepEqual(
+    bulkDecisionSkipGroups(
+      report({
+        results: [
+          { abstractId: "a", outcome: "DECIDED", decision: "ACCEPTED", sessionCreated: true, tasksAssigned: 1 },
+        ],
+      }),
+    ),
+    [],
+  );
 });
 
 test("counting is singular at one and never negative", () => {

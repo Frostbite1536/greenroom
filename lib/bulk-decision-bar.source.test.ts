@@ -81,15 +81,18 @@ test("the dialog states the consequence before the click and the real numbers af
   assert.equal(/creates \d+ confirmed session/.test(component), false);
 
   // Skips are named individually, so a skipped proposal is never a silent one.
-  assert.match(component, /item\.outcome === "SKIPPED"/);
+  // The grouping itself is `bulkDecisionSkipGroups`, so "no skipped row goes
+  // unnamed" is a unit test rather than an eyeball over this JSX.
+  assert.match(component, /bulkDecisionSkipGroups\(report, titles\)/);
   assert.match(component, /\{group\.reason\}/);
+  assert.equal(/outcome === "SKIPPED"/.test(component), false);
   // The dialog does not close on success — it becomes the receipt, and only
   // "Done" clears the selection.
   assert.match(component, /onClick=\{dismiss\}/);
   assert.match(component, /onClearSelection\(\);/);
 });
 
-test("the toolbar appears only with a selection, and only offers what the server will write", () => {
+test("the toolbar appears only with a selection, and its eligibility read is preview only", () => {
   const component = bar();
   assert.match(component, /if \(selected\.length === 0\) return null;/);
   assert.match(component, /proposalCount\(selected\.length\)\} selected/);
@@ -97,13 +100,37 @@ test("the toolbar appears only with a selection, and only offers what the server
   // prompt's arithmetic matches the result's — but it is a preview, never an
   // authorization: the server re-reads every status under that abstract's lock.
   assert.match(component, /bulkDecisionEligibility\(row\.status/);
-  assert.match(component, /abstractIds: eligible\.map\(\(row\) => row\.id\),/);
   assert.match(component, /disabled=\{eligible\.length === 0\}/);
   // One endpoint, and it is the bulk one.
-  assert.match(component, /apiPost<BulkDecisionReport>\("\/api\/evaluations\/decisions\/bulk"/);
+  assert.match(component, /apiPost<BulkDecisionReport>\(/);
+  assert.match(component, /"\/api\/evaluations\/decisions\/bulk"/);
   assert.equal([...component.matchAll(/apiPost</g)].length, 1);
   // The table's own data is re-read after a batch, so the rows reflect it.
   assert.match(component, /startTransition\(\(\) => router\.refresh\(\)\);/);
+});
+
+test("the POST carries every selected id, never the eligible subset", () => {
+  const component = bar();
+  // The request body is built by the tested helper, from `selected` — the whole
+  // ticked selection, in order. The report has one entry per requested id, so an
+  // id withheld here is a row the operator ticked and gets no answer about.
+  assert.match(component, /bulkDecisionRequestBody\(target, selected\),?\r?$/m);
+  // By absence: nothing in this file may derive a request from the eligible
+  // split. Any of these shapes would silently shrink the receipt.
+  assert.equal(/abstractIds:\s*eligible\b/.test(component), false);
+  assert.equal(/abstractIds:\s*[^\n]*\.filter\(/.test(component), false);
+  assert.equal(/eligible\.map\(/.test(component), false);
+  assert.equal(/bulkDecisionRequestBody\([^)]*eligible/.test(component), false);
+  // `eligible` survives only as copy and as the disabled gate: it counts, it
+  // never feeds the wire.
+  const uses = [...component.matchAll(/\beligible\b[^\n]*/g)].map((m) => m[0]);
+  for (const use of uses) {
+    assert.equal(
+      /\.map\(|abstractIds|apiPost|bulkDecisionRequestBody/.test(use),
+      false,
+      `eligible must not reach the request: ${use}`,
+    );
+  }
 });
 
 test("select-all means all VISIBLE, and the selection survives a filter change", () => {
