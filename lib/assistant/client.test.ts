@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   ASSISTANT_DEFAULT_MAX_OUTPUT_CHARS,
   ASSISTANT_ENDPOINT,
+  ASSISTANT_ENDPOINT_OVERRIDE_VAR,
   ASSISTANT_FAILURE_REASONS,
   ASSISTANT_MAX_ATTEMPTS,
   ASSISTANT_MAX_INSTRUCTION_CHARS,
@@ -16,6 +17,8 @@ import {
   boundAssistantInput,
   boundAssistantOutputChars,
   isAssistantConfigured,
+  isLoopbackAssistantEndpoint,
+  resolveAssistantEndpoint,
   runAssistant,
   type AssistantResult,
 } from "./client";
@@ -518,6 +521,225 @@ test("nothing sensitive is logged on any path: only model, outcome, and token co
     withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
   );
   assert.equal(logs[0], `[assistant] model=${ASSISTANT_MODEL} outcome=ok in=321 out=123`);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Test-only endpoint override                                                */
+/* -------------------------------------------------------------------------- */
+
+/** Run `fn` with exactly these variables set, restoring all of them after. */
+async function withProcessEnv<T>(patch: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
+  const names = [
+    ...Object.keys(patch),
+    ASSISTANT_ENDPOINT_OVERRIDE_VAR,
+    "MOCK_EXTERNAL_APIS",
+    "NODE_ENV",
+    "VERCEL_ENV",
+    "OPENAI_API_KEY",
+  ];
+  const saved = new Map(names.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of names) delete process.env[name];
+    for (const [name, value] of Object.entries(patch)) {
+      if (value !== undefined) process.env[name] = value;
+    }
+    return await fn();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+const LOOPBACK = "http://127.0.0.1:4599/v1/responses";
+
+test("with no override, the one fixed official endpoint is used", () => {
+  assert.deepEqual(resolveAssistantEndpoint({ MOCK_EXTERNAL_APIS: "true" }), {
+    ok: true,
+    endpoint: ASSISTANT_ENDPOINT,
+  });
+  // Absent, empty, and whitespace-only all mean "no override" rather than "an
+  // override that failed to parse".
+  for (const value of [undefined, "", "   "]) {
+    assert.deepEqual(
+      resolveAssistantEndpoint({ MOCK_EXTERNAL_APIS: "true", [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: value }),
+      { ok: true, endpoint: ASSISTANT_ENDPOINT },
+    );
+  }
+  // And in production with no override, nothing about today's behaviour changes.
+  assert.deepEqual(resolveAssistantEndpoint({ NODE_ENV: "production" }), {
+    ok: true,
+    endpoint: ASSISTANT_ENDPOINT,
+  });
+});
+
+test("a loopback override is honored, and the outbound request really goes there", async () => {
+  assert.deepEqual(
+    resolveAssistantEndpoint({ MOCK_EXTERNAL_APIS: "true", [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK }),
+    { ok: true, endpoint: LOOPBACK },
+  );
+  for (const accepted of ["http://127.0.0.1:3000", "http://localhost:8080", "http://localhost:1/v1/responses"]) {
+    assert.equal(isLoopbackAssistantEndpoint(accepted), true, `${accepted} must be accepted`);
+  }
+
+  const { calls, fetcher } = recordingFetcher([async () => completedResponse("From the stub.")]);
+  const { value } = await withProcessEnv(
+    { OPENAI_API_KEY: KEY, MOCK_EXTERNAL_APIS: "true", [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+
+  assert.deepEqual(value, { ok: true, text: "From the stub." });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.url, LOOPBACK, "the request must go to the override, not the official endpoint");
+  assert.equal(calls[0]!.url.includes("api.openai.com"), false);
+});
+
+test("every non-loopback override is refused, before any fetch", async () => {
+  const hostile = [
+    "https://127.0.0.1:4599",                   // https reaches anything with a cert
+    "https://api.openai.com/v1/responses",      // the real provider, smuggled back in
+    "http://evil.example.com:4599",             // a hostname
+    "http://127.0.0.1.evil.example.com:4599",   // a prefix that only looks loopback
+    "http://localhost.evil.example.com:4599",
+    "http://localhost@evil.example.com:4599",   // credentials pointing elsewhere
+    "http://127.0.0.1",                         // no explicit port
+    "http://localhost",
+    "http://[::1]:4599",                        // not one of the two named hosts
+    "http://169.254.169.254:80",                // cloud metadata
+    "http://127.0.0.1:4599?to=evil",            // a query string
+    "file:///etc/passwd",
+    "ftp://127.0.0.1:4599",
+    "not a url at all",
+    "//127.0.0.1:4599",
+  ];
+
+  for (const value of hostile) {
+    assert.equal(isLoopbackAssistantEndpoint(value), false, `${value} must not be treated as loopback`);
+    assert.deepEqual(
+      resolveAssistantEndpoint({ MOCK_EXTERNAL_APIS: "true", [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: value }),
+      { ok: false, reason: "disabled" },
+      `${value} must be refused`,
+    );
+  }
+
+  // End to end: a hostile value refuses before the network is touched.
+  const { calls, fetcher } = recordingFetcher([
+    async () => {
+      throw new Error("a refused override must never reach fetch");
+    },
+  ]);
+  const { value } = await withProcessEnv(
+    {
+      OPENAI_API_KEY: KEY,
+      MOCK_EXTERNAL_APIS: "true",
+      [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: "https://api.openai.com/v1/responses",
+    },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+  assert.deepEqual(value, { ok: false, reason: "disabled" });
+  assert.equal(calls.length, 0);
+});
+
+test("in production the override fails CLOSED, and is never ignored or fallen through", async () => {
+  // A VALID loopback value, so the only thing under test is the deployed-
+  // production gate itself.
+  assert.deepEqual(
+    resolveAssistantEndpoint({
+      VERCEL_ENV: "production",
+      MOCK_EXTERNAL_APIS: "true",
+      [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK,
+    }),
+    { ok: false, reason: "disabled" },
+    "a present override must be refused on deployed production",
+  );
+  // Preview and development deployments are not production and keep the seam.
+  for (const vercelEnv of ["preview", "development"]) {
+    assert.deepEqual(
+      resolveAssistantEndpoint({
+        VERCEL_ENV: vercelEnv,
+        MOCK_EXTERNAL_APIS: "true",
+        [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK,
+      }),
+      { ok: true, endpoint: LOOPBACK },
+      `VERCEL_ENV=${vercelEnv} must not be treated as production`,
+    );
+  }
+  // NODE_ENV alone must NOT block: `next start` sets it to production for every
+  // local run, so gating on it would refuse the seam in the only place it is
+  // used and leave this check vacuous. The deployed fence is VERCEL_ENV plus
+  // the mock flag, which no production deployment sets.
+  assert.deepEqual(
+    resolveAssistantEndpoint({
+      NODE_ENV: "production",
+      MOCK_EXTERNAL_APIS: "true",
+      [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK,
+    }),
+    { ok: true, endpoint: LOOPBACK },
+    "a local `next start` must still be able to use the seam",
+  );
+
+  const { calls, fetcher } = recordingFetcher([
+    async () => {
+      throw new Error("production must not reach any provider while the override is set");
+    },
+  ]);
+  const { value, logs } = await withProcessEnv(
+    {
+      OPENAI_API_KEY: KEY,
+      VERCEL_ENV: "production",
+      MOCK_EXTERNAL_APIS: "true",
+      [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK,
+    },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+
+  assert.deepEqual(value, { ok: false, reason: "disabled" });
+  // The property that matters is NOT "it refused" but "it did not quietly call
+  // the real provider instead". Zero fetches is what proves the difference.
+  assert.equal(calls.length, 0, "fail-closed means no request at all, not one to the official endpoint");
+  // And the refusal never echoes the rejected URL.
+  assert.equal(logs.join(" ").includes("127.0.0.1"), false);
+  assert.equal(logs.join(" ").includes("4599"), false);
+});
+
+test('without MOCK_EXTERNAL_APIS exactly "true", the override is refused', async () => {
+  // Stricter than `useMockIntegrations()` on purpose: that helper treats an
+  // absent value as mocked, which would let an unset variable enable the seam.
+  for (const value of [undefined, "false", "TRUE", "1", "yes", ""]) {
+    assert.deepEqual(
+      resolveAssistantEndpoint({ MOCK_EXTERNAL_APIS: value, [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK }),
+      { ok: false, reason: "disabled" },
+      `MOCK_EXTERNAL_APIS=${JSON.stringify(value)} must not enable the override`,
+    );
+  }
+
+  const { calls, fetcher } = recordingFetcher([
+    async () => {
+      throw new Error("the override must not be honored without the mock flag");
+    },
+  ]);
+  const { value } = await withProcessEnv(
+    { OPENAI_API_KEY: KEY, [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+  assert.deepEqual(value, { ok: false, reason: "disabled" });
+  assert.equal(calls.length, 0);
+});
+
+test("the override is read at request time, not captured at module load", async () => {
+  const { calls, fetcher } = recordingFetcher([async () => completedResponse("ok")]);
+  // The same already-imported module, two environments, two destinations. A
+  // module-load read would have frozen the first answer for the process.
+  await withProcessEnv(
+    { OPENAI_API_KEY: KEY, MOCK_EXTERNAL_APIS: "true", [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: LOOPBACK },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+  await withProcessEnv(
+    { OPENAI_API_KEY: KEY, MOCK_EXTERNAL_APIS: "true" },
+    async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+  assert.deepEqual(calls.map((call) => call.url), [LOOPBACK, ASSISTANT_ENDPOINT]);
 });
 
 /* -------------------------------------------------------------------------- */

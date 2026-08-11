@@ -25,6 +25,110 @@ import { getOpenAiApiKey } from "@/lib/env";
 export const ASSISTANT_ENDPOINT = "https://api.openai.com/v1/responses";
 
 /**
+ * Test-only endpoint override, shared by both tracks' browser suites.
+ *
+ * A browser test cannot mock this provider: the call happens in the server
+ * process, so request interception in the page cannot reach it. The only way to
+ * exercise a *successful* generation end-to-end is to point the server at a
+ * loopback stub. That is a real hole in a security boundary, so it is fenced
+ * three ways and every fence fails closed.
+ *
+ * Deliberately NOT declared in `lib/env.ts`. Every variable there is validated
+ * at boot and a bad value fails the deployment; this one must instead be
+ * *ignored-by-refusing* at request time, and having two validators that could
+ * disagree about the same string is worse than having one. Its rules live in
+ * `resolveAssistantEndpoint` alone.
+ */
+export const ASSISTANT_ENDPOINT_OVERRIDE_VAR = "ASSISTANT_ENDPOINT_OVERRIDE";
+
+/**
+ * The subset of the environment this resolver reads.
+ *
+ * Deliberately looser than `NodeJS.ProcessEnv`, which Next's types make
+ * `NODE_ENV`-required: a caller must be able to hand this function three
+ * strings and ask what it would decide, without constructing a whole
+ * environment it does not care about.
+ */
+export type AssistantEnv = Record<string, string | undefined>;
+
+/** Only these two hosts, only over plain http, only with an explicit port. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost"]);
+
+/**
+ * True when this process is a *deployed* production runtime.
+ *
+ * `VERCEL_ENV`, deliberately NOT `NODE_ENV`. The rest of this repository gates
+ * on `NODE_ENV` (`arePersonaLoginsEnabled`, `getServerSigningSecret`) and that
+ * is right for those, but it would be wrong — and quietly vacuous — here:
+ * `next start` sets `NODE_ENV=production` for every local run, including the
+ * browser suites this seam exists to serve. A `NODE_ENV` gate would therefore
+ * refuse the override in the only place it is ever legitimately used, and the
+ * production check would never have been exercised at all.
+ *
+ * The deployed fence is this flag plus the `MOCK_EXTERNAL_APIS === "true"`
+ * requirement below, which a production deployment never sets: it is the flag
+ * that means "make no third-party calls".
+ */
+function isProductionRuntime(env: AssistantEnv): boolean {
+  return env.VERCEL_ENV === "production";
+}
+
+/** `http://127.0.0.1:<port>` or `http://localhost:<port>`, and nothing else. */
+export function isLoopbackAssistantEndpoint(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  // `http:` only — an https override would be a covert channel to any host
+  // that can obtain a certificate, which is the whole internet.
+  if (url.protocol !== "http:") return false;
+  if (!LOOPBACK_HOSTS.has(url.hostname)) return false;
+  // An explicit port is required: it is what makes the target a stub someone
+  // started on purpose rather than whatever answers on port 80.
+  if (!url.port) return false;
+  // Credentials and a query string have no legitimate use here and are the
+  // two shapes most likely to be smuggling something.
+  if (url.username || url.password || url.search || url.hash) return false;
+  return true;
+}
+
+export type AssistantEndpointResolution =
+  | { ok: true; endpoint: string }
+  | { ok: false; reason: AssistantFailureReason };
+
+/**
+ * Decide which URL this request may call. Read at REQUEST time, never at module
+ * load, so a process cannot be started clean and later be pointed elsewhere by
+ * something that mutated the environment after import.
+ *
+ * The refusal reuses `disabled` rather than adding a code. The closed set is
+ * consumed by other tracks whose `Record<AssistantFailureReason, …>` maps are
+ * exhaustive, so widening it would be a breaking change to a published
+ * contract — and "this configuration cannot serve the assistant" is exactly
+ * what `disabled` already means.
+ */
+export function resolveAssistantEndpoint(env: AssistantEnv = process.env): AssistantEndpointResolution {
+  const override = env[ASSISTANT_ENDPOINT_OVERRIDE_VAR]?.trim();
+  if (!override) return { ok: true, endpoint: ASSISTANT_ENDPOINT };
+
+  // Present in production: refuse, before any fetch. Silently ignoring it and
+  // calling the real provider would be worse than refusing — an operator who
+  // set this believes traffic is going to a stub, and the one outcome they
+  // must never get is real prompts on the wire because their variable was
+  // quietly discarded.
+  if (isProductionRuntime(env)) return { ok: false, reason: "disabled" };
+
+  // Exact string, deliberately stricter than `useMockIntegrations()`, which
+  // treats an absent value as mocked. Here absence must not enable anything.
+  if (env.MOCK_EXTERNAL_APIS !== "true") return { ok: false, reason: "disabled" };
+
+  if (!isLoopbackAssistantEndpoint(override)) return { ok: false, reason: "disabled" };
+  return { ok: true, endpoint: override };
+}
+
+/**
  * The single place to change the model.
  *
  * `gpt-5-mini` is the small text model this was written against. If the account
@@ -242,6 +346,7 @@ function reportOutcome(outcome: string, inputTokens: number, outputTokens: numbe
  */
 async function attemptGeneration(config: {
   apiKey: string;
+  endpoint: string;
   fetcher: AssistantFetcher;
   body: string;
   budgetMs: number;
@@ -254,7 +359,7 @@ async function attemptGeneration(config: {
   }, config.budgetMs);
 
   try {
-    const response = await config.fetcher(ASSISTANT_ENDPOINT, {
+    const response = await config.fetcher(config.endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${config.apiKey}`,
@@ -315,6 +420,14 @@ async function attemptGeneration(config: {
  * route open.
  */
 export async function runAssistant(request: AssistantRequest): Promise<AssistantResult> {
+  // Resolved first, and before any credential work: a production process
+  // carrying the override must refuse without so much as reading a key, and
+  // certainly without reaching the network.
+  const endpoint = resolveAssistantEndpoint();
+  // Silent, like the no-key path below. The only detail worth reporting is the
+  // rejected URL, and that is precisely what must never reach a log line.
+  if (!endpoint.ok) return { ok: false, reason: endpoint.reason };
+
   const apiKey = getOpenAiApiKey();
   // No credential means no assistant. Returning before the fetch *and* before
   // the log keeps an unconfigured deployment silent and free rather than
@@ -349,7 +462,7 @@ export async function runAssistant(request: AssistantRequest): Promise<Assistant
       outcome = { kind: "fail", reason: "timeout", retryable: false };
       break;
     }
-    outcome = await attemptGeneration({ apiKey, fetcher, body, budgetMs });
+    outcome = await attemptGeneration({ apiKey, endpoint: endpoint.endpoint, fetcher, body, budgetMs });
     if (outcome.kind === "text" || !outcome.retryable) break;
   }
 
