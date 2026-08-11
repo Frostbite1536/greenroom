@@ -38,6 +38,7 @@ const resetPage = read("app/reset/page.tsx");
 const welcomePage = read("app/welcome/page.tsx");
 const loginPage = read("app/login/page.tsx");
 const smoke = read("scripts/_smoke.mjs");
+const frontendSmoke = read("scripts/_frontend-smoke.mjs");
 
 const SESSION_CHANGING = [
   ["signup", signup],
@@ -209,6 +210,11 @@ test("a new account is issued the pending variant, never a session it has no mem
     assert.match(route, /pickCredentialMembership\(/);
     assert.match(route, /homeForRole\(membership\.role\)/);
   }
+});
+
+test("the frontend smoke checks an empty composite EventMember projection", () => {
+  assert.match(frontendSmoke, /memberships: \{ select: \{ eventId: true, userId: true \} \}/);
+  assert.doesNotMatch(frontendSmoke, /memberships: \{ select: \{ id: true \} \}/);
 });
 
 test("the taken-address 409 is deliberate, documented, and the only one", () => {

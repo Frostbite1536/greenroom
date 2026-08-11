@@ -647,7 +647,7 @@ async function runSelfServiceAuthChecks() {
     `${signup.status} ${JSON.stringify(signup.data?.data ?? signup.data?.error?.code ?? null)} cookie=${Boolean(signupCookie)}`);
   const newcomer = await prisma.user.findUnique({
     where: { email: SIGNUP_EMAIL },
-    select: { id: true, passwordHash: true, memberships: { select: { id: true } } },
+    select: { id: true, passwordHash: true, memberships: { select: { eventId: true, userId: true } } },
   });
   check("D-C5-16 the new account has a scrypt credential and belongs to nothing",
     Boolean(newcomer) && typeof newcomer.passwordHash === "string"
@@ -1252,7 +1252,10 @@ try {
 
   async function getAs(path, cookieValue) {
     const res = await fetch(BASE + path, { headers: { cookie: cookieValue }, redirect: "manual" });
-    return { status: res.status, location: res.headers.get("location") ?? "", text: await res.text() };
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, location: res.headers.get("location") ?? "", text, data };
   }
 
   // The switcher is presentation over the caller's own memberships, so it only
@@ -1356,14 +1359,20 @@ try {
 
   const switchedBack = await switchEvent(EVENT_ID, { cookieValue: switchedCookie });
   const agendaBack = await getAs("/admin/agenda", switchedBack.issued ?? "");
+  const agendaDataBack = await getAs("/api/agenda", switchedBack.issued ?? "");
+  const switchedBackPredicates = {
+    redirect: switchedBack.status === 303 && switchedBack.location.endsWith("/admin"),
+    issued: Boolean(switchedBack.issued),
+    page: agendaBack.status === 200,
+    currentEvent: agendaBack.text.includes("<strong>Scratch Frontend</strong>"),
+    restoredSession: agendaDataBack.status === 200 && agendaDataBack.data?.data?.sessions?.some(
+      (session) => session.id === fx.sessionA.id && session.title === "Scratch Session A",
+    ),
+    createdEventAbsent: !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
+  };
   check("D-C5-16 switching back restores the first event and its data",
-    switchedBack.status === 303
-    && switchedBack.location.endsWith("/admin")
-    && agendaBack.status === 200
-    && agendaBack.text.includes("<strong>Scratch Frontend</strong>")
-    && agendaBack.text.includes("Scratch Session A")
-    && !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
-    `${switchedBack.status} ${switchedBack.location} agenda ${agendaBack.status}`);
+    Object.values(switchedBackPredicates).every(Boolean),
+    JSON.stringify(switchedBackPredicates));
 
   // The obsoleted copy is gone from the surfaces a judge actually reads. (The
   // create dialog's own switch offer renders only after a successful create, so

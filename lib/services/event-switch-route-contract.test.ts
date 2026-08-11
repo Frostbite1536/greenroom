@@ -20,6 +20,7 @@ const route = code("app/api/auth/switch-event/route.ts");
 const shell = code("components/app-shell.tsx");
 const layout = code("app/(app)/layout.tsx");
 const dialog = code("components/new-event-dialog.tsx");
+const frontendSmoke = source("scripts/_frontend-smoke.mjs");
 
 test("the switch route reuses the login session mechanics instead of forking them", () => {
   // Every piece of cookie identity comes from lib/auth. A second signing path
@@ -77,6 +78,16 @@ test("the switch lands on the role-correct home for the event switched INTO", ()
   // event's role rather than the one the caller arrived with.
   assert.match(route, /const next = await resolveEventSwitch\(/);
   assert.match(route, /return establish\(req, formEncoded, next\)/);
+});
+
+test("the frontend smoke proves switch-back restoration through the scoped API, not view-dependent markup", () => {
+  assert.match(frontendSmoke, /const agendaDataBack = await getAs\("\/api\/agenda", switchedBack\.issued \?\? ""\);/);
+  assert.match(frontendSmoke, /redirect: switchedBack\.status === 303 && switchedBack\.location\.endsWith\("\/admin"\)/);
+  assert.match(frontendSmoke, /issued: Boolean\(switchedBack\.issued\)/);
+  assert.match(frontendSmoke, /currentEvent: agendaBack\.text\.includes\("<strong>Scratch Frontend<\/strong>"\)/);
+  assert.match(frontendSmoke, /session\.id === fx\.sessionA\.id && session\.title === "Scratch Session A"/);
+  assert.match(frontendSmoke, /createdEventAbsent: !agendaBack\.text\.includes\("<strong>Scratch Created Event<\/strong>"\)/);
+  assert.match(frontendSmoke, /Object\.values\(switchedBackPredicates\)\.every\(Boolean\)/);
 });
 
 test("the shell renders no switcher for a single membership", () => {
