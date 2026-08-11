@@ -212,6 +212,104 @@ export async function provisionSessionForAbstract(
   return { sessionId: created.id, created: true, topicReconciled: false, summaryReconciled: false };
 }
 
+/** What a directly authored talk carries, before any database work. */
+export type GuaranteedSessionFields = {
+  title: string;
+  description?: string | null;
+  format?: string | null;
+  durationMinutes: number;
+  speakers: readonly { userId: string; isPrimary: boolean }[];
+};
+
+/**
+ * Everything a `Session` authored directly on the programme is created with.
+ *
+ * Pure and exported for the same reason `newSessionData` is: what a keynote or
+ * a sponsor slot starts life as is a product rule, and the two fields that make
+ * this row *different* from an accepted proposal's are both easy to lose in a
+ * refactor and invisible until an organizer notices.
+ *
+ *  - **`sourceAbstractId` is null**, which is what makes this a guaranteed
+ *    session at all (INV-DOMAIN-001: at most one session per abstract; a talk
+ *    with no abstract consumes none of that budget). It is stated explicitly
+ *    rather than omitted so the intent survives a reader who is looking for it.
+ *  - **`contentStatus` is `DRAFT`**, overriding the column's `PUBLISHED`
+ *    default. That default exists because every *scheduled* session was already
+ *    public when the column was added; a talk being typed into a dialog is not,
+ *    and announcing it on the public programme mid-keystroke is not a default
+ *    anyone asked for. The admin publishes it with the existing PATCH.
+ *
+ * `categoryId` is absent, not null-by-accident: a directly authored talk has no
+ * proposal to inherit a topic from, which is exactly the case
+ * `AgendaSession.category` already documents as "null for a directly authored
+ * session".
+ */
+export function newGuaranteedSessionData(
+  eventId: string,
+  input: GuaranteedSessionFields,
+): {
+  eventId: string;
+  sourceAbstractId: null;
+  title: string;
+  description: string | null;
+  format: string | null;
+  durationMinutes: number;
+  contentStatus: "DRAFT";
+} {
+  return {
+    eventId,
+    sourceAbstractId: null,
+    title: input.title,
+    // Trimmed-to-absent becomes an explicit null rather than an empty string, so
+    // the public programme's "has a summary" test stays a null check everywhere.
+    description: input.description?.trim() || null,
+    format: input.format?.trim() || null,
+    durationMinutes: input.durationMinutes,
+    contentStatus: "DRAFT",
+  };
+}
+
+/**
+ * Create a talk that has no source proposal, with its speakers and their
+ * onboarding checklist — the same "make it real" step acceptance takes, minus
+ * the abstract.
+ *
+ * This is deliberately the *only* way `POST /api/agenda/sessions` reaches
+ * `Session`/`SessionSpeaker`. Acceptance's provisioning already owns two rules
+ * that a second writer would drift from within a release: the roster is
+ * snapshotted onto `SessionSpeaker` in one statement, and every speaker on a
+ * confirmed session gets the event's onboarding checklist (INV-TASK-001). A
+ * keynote speaker is a confirmed speaker, so the checklist is not optional for
+ * them either — `assignOnboardingTasks` is the same call, idempotent as ever.
+ *
+ * Expects to run inside a transaction that has already authorized the event and
+ * confirmed every `userId` is on this event's roster; it takes no lock of its
+ * own, exactly as `provisionSessionForAbstract` takes none.
+ */
+export async function provisionGuaranteedSession(
+  tx: Prisma.TransactionClient,
+  eventId: string,
+  input: GuaranteedSessionFields,
+): Promise<{ sessionId: string; speakersAdded: number; tasksAssigned: number }> {
+  const created = await tx.session.create({ data: newGuaranteedSessionData(eventId, input) });
+
+  if (input.speakers.length > 0) {
+    await tx.sessionSpeaker.createMany({
+      data: input.speakers.map((speaker) => ({
+        sessionId: created.id,
+        userId: speaker.userId,
+        isPrimary: speaker.isPrimary,
+      })),
+    });
+  }
+
+  // Reads the rows just written, never the request, so a talk created with no
+  // speakers assigns nothing rather than fanning a checklist out to no one.
+  const tasksAssigned = await assignOnboardingTasks(tx, eventId, created.id);
+
+  return { sessionId: created.id, speakersAdded: input.speakers.length, tasksAssigned };
+}
+
 /**
  * Give every speaker on a confirmed session the event's onboarding checklist.
  *

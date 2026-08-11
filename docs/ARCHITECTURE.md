@@ -55,9 +55,15 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
 - `/admin/forms` and `/admin/forms/[formId]` — form list, create-form dialog, form builder
 - `/admin/abstracts` — submission pipeline, custom answers, and accept/decline decisions
 - `/admin/evaluations` — evaluator scoring workspace
-- `/admin/agenda` — agenda builder: List / Day / Week / Tracks / Conflicts views.
-  Drag-and-drop moves are offered in the **Day** view only (`onMove` is passed for
-  `view === "day"`); Week is a read-only multi-day overview.
+- `/admin/agenda` — agenda builder: List / Day (rooms) / Week / Track grid /
+  Tracks / Conflicts views. Drag-and-drop moves are offered in the **Day
+  (rooms)** view only (`onMove` is passed for `view === "day"`); Week is a
+  read-only multi-day overview, Track grid is one day laid out in track columns
+  (its view id is still the legacy `"rooms"`), and Tracks is a read-only
+  programme-wide grouping by track. Both track surfaces route through
+  `lib/agenda-track-view.ts`, which is what keeps a slot with no track — or one
+  whose track was deleted — rendered in a "No track" column or bucket rather
+  than matching nothing and vanishing from the view.
 - `/admin/speakers` — speaker onboarding status dashboard (read-only, filterable)
 - `/admin/embeds` — copy-paste `<iframe>`/link snippets for the public embeds
 - `/admin/settings` — event identity/dates/timezone, rooms, categories, and the
@@ -72,8 +78,10 @@ Public routes (no shell, must render with a null session): `/` (landing),
 resolves exact published IDs and unambiguous slugs only), `/embed/schedule`,
 `/embed/speakers`, the canonical public programme pages `/schedule` and
 `/speakers` (server-rendered from the same agenda read as the embeds),
-`/reviewer-invite`, `/login`, and the alias redirects `/agenda` and `/sessions`
-(both into `/schedule`).
+`/reviewer-invite`, `/login`, `/signup`, `/forgot`, and `/reset`, plus the alias
+redirects `/agenda` and `/sessions` (both into `/schedule`). The shell-free
+`/welcome` onboarding route instead requires a signed pending identity with no
+active event membership.
 
 Backend ownership routes:
 
@@ -83,6 +91,10 @@ Backend ownership routes:
 - `/api/evaluations/*`: plans, assignments, scores, decisions with automatic provisioning,
   and legacy abstract-to-session backfill
 - `/api/agenda/*`: sessions, slots, conflict checks
+- `/api/auth/*`: credential/persona login, signup, password recovery, reviewer-invite
+  acceptance, continuation, and active-event switching
+- `/api/admin/*`: event/settings administration, bounded exports, speakers/tasks, and
+  the environment-gated demo reset
 - `/api/integrations/*`: Accelevents webhook and CSV/JSON import
 - `/api/v1/*`: read-only, API-key-gated server-to-server surface (see [`API.md`](API.md))
 
@@ -91,7 +103,6 @@ Ops ownership routes:
 - `/api/portal/*`: profile and task updates
 - `/api/comms/*`: audited submission/decision/reminder email dispatch, calendar downloads,
   Airtable one-way mirror
-- `/api/admin/reset`: environment-gated demo reset (refused in production)
 
 Request schemas and API envelope types are locked in `types/api.ts`. Workers must request shared changes through coordination rather than redefining contracts.
 
@@ -151,27 +162,28 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
 - The v1 API authenticates before any database work and compares fixed-size key hashes.
 - Keep interactive client islands narrow and avoid serial data waterfalls.
 
-## Environment and deployment status
+## Environment and deployment contract
 
-The app is deployed and live on **Vercel + Neon Postgres**; pushes to `main` auto-deploy.
-The schema is applied with `prisma db push` against the Neon database and the deterministic
-demo seed (`lib/demo/seed.ts`) has been run against it.
+The reference deployment uses **Vercel + Neon Postgres** and deploys `main`. Exact live
+status, commit provenance, and production verification belong in `docs/judging/` and the
+sprint coordination receipts; repository architecture cannot prove a mutable provider
+configuration. Schema application uses the reviewed `prisma db push` workflow, and
+`lib/demo/seed.ts` supplies the deterministic demo dataset.
 
 - Local setup needs `DATABASE_URL` only; everything else defaults safely (external
   integrations mocked, demo reset disabled, v1 API disabled). See the README Quickstart and
   [`DEPLOY.md`](DEPLOY.md) for the full variable table.
-- `SESSION_SECRET` is required in production (see Security above) and is configured
-  separately for Preview and Production.
-- `GREENROOM_API_KEY` is configured, so `/api/v1/*` is live; unset it and those routes return
+- `SESSION_SECRET` is required in production (see Security above) and must be configured
+  separately for every deployment environment that serves authenticated traffic.
+- Configure `GREENROOM_API_KEY` to enable `/api/v1/*`; when it is absent, those routes return
   `503 API_KEY_NOT_CONFIGURED`.
-- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` refuses every
+- Unless an operator explicitly sets `ALLOW_DEMO_RESET=true`, `/api/admin/reset` refuses every
   caller (INV-RESET-001). The refusal body depends on who asks, by design (S-18):
   anyone who has not proved they are an admin gets `403 FORBIDDEN` — the same
   body a deployment with the flag *set* returns them, so the refusal cannot be
   used to read the flag. An authenticated admin gets `403 RESET_DISABLED`, which
   names the variable to set.
-- Airtable mirror credentials (`AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`,
-  `MOCK_EXTERNAL_APIS=false`) are configured in production and a live one-way mirror run has
-  completed.
-- **Vercel bakes environment variables at deploy time**: after editing any variable you must
-  redeploy before it takes effect.
+- Airtable live mode requires `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, and
+  `MOCK_EXTERNAL_APIS=false`; otherwise the integration stays on its safe mock/default path.
+- Treat provider environment-variable changes as requiring a redeploy, then verify the exact
+  deployment by behavior before recording a live claim.

@@ -233,7 +233,7 @@ test("the sidebar entry is ADMIN-only and sits directly after the dashboard", ()
   const nav = shell();
   const start = nav.indexOf("const navigation:");
   const list = nav.slice(start, nav.indexOf("];", start));
-  assert.match(list, /\{ href: "\/admin\/reports", label: "Reports", icon: BarChart3, roles: \["ADMIN"\] \}/);
+  assert.match(list, /\{ href: "\/admin\/reports", label: "Reports", icon: BarChart3, roles: \["ADMIN"\], group: "overview" \}/);
   const entries = list.match(/href: "[^"]+"/g) ?? [];
   assert.equal(entries[0], 'href: "/admin"');
   assert.equal(entries[1], 'href: "/admin/reports"');

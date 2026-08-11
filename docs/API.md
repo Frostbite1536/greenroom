@@ -113,7 +113,7 @@ touches the linked `Session` (INV-DOMAIN-001).
 
 **Self-withdraw (W1).** The same `PATCH` accepts `{ "status": "WITHDRAWN" }` — the only status
 a speaker may set, and it must be sent on its own (any other key alongside it is `422`).
-Allowed from `DRAFT`, `SUBMITTED`, and `UNDER_REVIEW`; `ACCEPTED` or any abstract with a
+Allowed from `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, and `MAYBE`; `ACCEPTED` or any abstract with a
 linked `Session` is refused with `409 WITHDRAW_NOT_ALLOWED`. `decidedAt` stays null.
 
 Status codes:

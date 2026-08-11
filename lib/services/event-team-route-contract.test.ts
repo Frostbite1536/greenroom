@@ -187,5 +187,5 @@ test("the members page is server-rendered, ADMIN-only, and marks the caller", ()
 });
 
 test("the nav entry exists, is ADMIN-only, and points at the page that enforces it", () => {
-  assert.match(shell, /\{ href: "\/admin\/team", label: "Event team", icon: \w+, roles: \["ADMIN"\] \}/);
+  assert.match(shell, /\{ href: "\/admin\/team", label: "Event team", icon: \w+, roles: \["ADMIN"\], group: "configure" \}/);
 });

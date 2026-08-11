@@ -1,14 +1,18 @@
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { AgendaBuilder } from "@/components/agenda-builder";
-import { getAgendaData } from "@/lib/data/reads";
+import { NewSessionDialog } from "@/components/new-session-dialog";
+import { getAgendaData, readAgendaSpeakerOptions } from "@/lib/data/reads";
 import { boundedCount } from "@/lib/bounded-count";
 
 export const metadata = { title: "Agenda" };
 export const dynamic = "force-dynamic";
 
 export default async function AgendaPage() {
+  // `getAgendaData()` resolves the ADMIN page context; the roster read is
+  // addressed by the event id it returns, so it cannot run any earlier.
   const data = await getAgendaData();
+  const speakerOptions = await readAgendaSpeakerOptions(data.eventId);
   const scheduled = data.sessions.filter((s) => s.slot !== null).length;
 
   return (
@@ -17,6 +21,7 @@ export default async function AgendaPage() {
         eyebrow="Program"
         title="Agenda"
         description="Build the schedule across rooms and tracks with live room and speaker conflict detection."
+        actions={<NewSessionDialog eventId={data.eventId} speakerOptions={speakerOptions} />}
       />
       <div className="metric-grid">
         {/* Both session figures are counted off the capped read, so past the cap
