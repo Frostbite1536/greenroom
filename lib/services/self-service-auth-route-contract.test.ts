@@ -39,6 +39,7 @@ const welcomePage = read("app/welcome/page.tsx");
 const loginPage = read("app/login/page.tsx");
 const smoke = read("scripts/_smoke.mjs");
 const frontendSmoke = read("scripts/_frontend-smoke.mjs");
+const screenshots = read("e2e/screenshots.spec.ts");
 
 const SESSION_CHANGING = [
   ["signup", signup],
@@ -413,6 +414,9 @@ test("login and the runtime smoke both advertise the shipped self-service doors"
   assert.ok(smoke.includes(`loginHtml.includes('href="/signup"') && /Create one/.test(loginHtml)`));
   assert.ok(smoke.includes(`loginHtml.includes('href="/forgot"') && /Reset it/.test(loginHtml)`));
   assert.doesNotMatch(smoke, /Self-service sign-up is on the roadmap|for now organizers provision accounts/);
+  assert.match(screenshots, /getByRole\("link", \{ name: "Create one" \}\)/);
+  assert.match(screenshots, /getByRole\("link", \{ name: "Reset it" \}\)/);
+  assert.doesNotMatch(screenshots, /Self-service sign-up is on the roadmap/);
 });
 
 test("the welcome page is the membership-less landing, and it offers both ways out", () => {
