@@ -778,14 +778,64 @@ export const speakerTaskUpdateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+/**
+ * Address of one resource page inside the portal (`/portal/resources/<slug>`).
+ * The same shape and bound as `eventSlugSchema` — this one stays editable, but
+ * it is the same kind of value: a unique, lowercase URL path segment. It was
+ * previously unbounded and untrimmed, which an authored `@@unique([eventId,
+ * slug])` column should never be.
+ */
+const resourceSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, "A web address is required.")
+  .max(60, "Use 60 characters or fewer.")
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Use lowercase letters, numbers and single dashes.");
+
+const resourceTitleSchema = z.string().trim().min(1).max(180);
+const resourceSummarySchema = z.string().trim().max(500);
+/**
+ * The authored body. Bounded here, and sanitized server-side at write time by
+ * `prepareResourceHtml` (INV-HTML-001) before it is ever stored — in addition
+ * to the portal reader's own sanitize-on-render, which stays.
+ */
+const resourceHtmlSchema = z.string().min(1).max(200_000);
+
 export const resourceWikiInputSchema = z.object({
   eventId: idSchema,
-  slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  title: z.string().min(1).max(180),
-  summary: z.string().max(500).optional(),
-  htmlContent: z.string().min(1),
+  slug: resourceSlugSchema,
+  title: resourceTitleSchema,
+  summary: resourceSummarySchema.optional(),
+  htmlContent: resourceHtmlSchema,
   published: z.boolean(),
 });
+
+/**
+ * Edit one stored resource. No `eventId`: scope comes from the stored row read
+ * under its own write lock (the S1 event-owned pattern), never from the body.
+ * `summary` is nullable so an organizer can actually clear it, and every field
+ * is optional so the publish toggle is a one-field PATCH.
+ */
+export const resourceWikiUpdateSchema = z
+  .object({
+    id: idSchema,
+    slug: resourceSlugSchema.optional(),
+    title: resourceTitleSchema.optional(),
+    summary: resourceSummarySchema.nullable().optional(),
+    htmlContent: resourceHtmlSchema.optional(),
+    published: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.slug !== undefined ||
+      value.title !== undefined ||
+      value.summary !== undefined ||
+      value.htmlContent !== undefined ||
+      value.published !== undefined,
+    { message: "Provide at least one resource field to update." },
+  );
 
 export const importRequestSchema = z.object({
   eventId: idSchema,
@@ -826,6 +876,8 @@ export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;
 export type SpeakerProfileUpdate = z.infer<typeof speakerProfileUpdateSchema>;
 export type OnboardingTaskCreate = z.infer<typeof onboardingTaskCreateSchema>;
 export type OnboardingTaskUpdate = z.infer<typeof onboardingTaskUpdateSchema>;
+export type ResourceWikiInput = z.infer<typeof resourceWikiInputSchema>;
+export type ResourceWikiUpdate = z.infer<typeof resourceWikiUpdateSchema>;
 export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
 export type SignupInput = z.infer<typeof signupSchema>;

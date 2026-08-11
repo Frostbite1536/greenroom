@@ -1,6 +1,7 @@
 import Link from "next/link";
 import {
   BarChart3,
+  BookOpen,
   CalendarDays,
   ClipboardCheck,
   Code2,
@@ -87,6 +88,10 @@ const navigation: NavItem[] = [
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"], group: "cfp" },
   { href: "/admin/agenda", label: "Agenda builder", icon: LayoutDashboard, roles: ["ADMIN"], group: "programme" },
   { href: "/admin/speakers", label: "Speaker onboarding", icon: UserCheck, roles: ["ADMIN"], group: "programme" },
+  // Beside speaker onboarding, because both author what a speaker meets in the
+  // portal: the checklist they must finish, and the pages that tell them how.
+  // ADMIN-only, mirroring the page's own `ctx.role !== "ADMIN"` redirect.
+  { href: "/admin/resources", label: "Resources & wiki", icon: BookOpen, roles: ["ADMIN"], group: "programme" },
   { href: "/admin/operations", label: "Operations", icon: Settings2, roles: ["ADMIN"], group: "communications" },
   { href: "/admin/emails", label: "Email history", icon: MailCheck, roles: ["ADMIN"], group: "communications" },
   // What an attendee or a speaker sees, gathered so an organizer checking their

@@ -10,6 +10,7 @@ import { resolveSessionUser } from "@/lib/portal/user";
 import { profileFormValues } from "@/lib/portal/profile";
 import { profileCompletion } from "@/lib/speakers/status";
 import { submissionStatusView } from "@/lib/portal/submission-status";
+import { portalResourceWhere } from "@/lib/services/resource-wiki";
 import { getOpenCfpEntry } from "@/lib/data/open-cfp";
 import { OpenCfpEntryPanel } from "@/components/open-cfp-entry";
 import { ProfileForm } from "./profile-form";
@@ -66,7 +67,9 @@ export default async function PortalPage() {
       orderBy: { createdAt: "desc" },
     }),
     prisma.resourceWiki.findMany({
-      where: { eventId, published: true },
+      // Shared with the single-resource reader, so an organizer's draft cannot
+      // be listed here while being unreachable there, or the reverse.
+      where: portalResourceWhere(eventId),
       select: { id: true, slug: true, title: true, summary: true },
       orderBy: { title: "asc" },
     }),
