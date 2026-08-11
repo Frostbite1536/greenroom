@@ -66,3 +66,26 @@ export function findConflicts(
 export function conflictedSessionIds(conflicts: DisplayConflict[]): Set<string> {
   return new Set(conflicts.flatMap((c) => [c.sessionId, c.otherSessionId]));
 }
+
+/**
+ * What a SCHEDULE_CONFLICT refusal should actually print.
+ *
+ * `POST /api/agenda/slots` refuses with two parallel lists. `conflictDetails`
+ * is the one written for a human — it names the room, the occupying talk, the
+ * event-local time range and the double-booked speaker (built server-side by
+ * `lib/services/schedule-conflict-copy`). `conflicts` is the older
+ * `TYPE: generic message` list, kept byte-identical for existing consumers.
+ *
+ * Preferring the named list and falling back to the coded one means a refusal
+ * whose conflicting slots could not be re-read still says something true
+ * rather than nothing. Shared by both refusal surfaces (the schedule dialog and
+ * the drag-and-drop banner) so they can never word the same refusal
+ * differently.
+ */
+export function conflictSentences(
+  fieldErrors: Record<string, string[]> | undefined,
+): string[] {
+  const named = fieldErrors?.conflictDetails ?? [];
+  if (named.length > 0) return named;
+  return fieldErrors?.conflicts ?? [];
+}

@@ -66,6 +66,9 @@ export function detectConflicts(
         slotId: candidate.slotId,
         conflictingSlotId: slot.slotId,
         message: "A speaker is already scheduled for an overlapping time.",
+        // Additive: the id this branch already matched on, carried out so the
+        // refusal can name the person instead of saying "a speaker".
+        speakerId: sharedSpeaker,
       });
     }
   }

@@ -5,6 +5,7 @@ import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
 import { detectConflicts, type SlotInterval } from "@/lib/services/schedule";
 import { lockScheduleWrite } from "@/lib/services/schedule-lock";
 import { resolveCandidateSlotId, unscheduleSessionSlot } from "@/lib/services/schedule-slot-write";
+import { describeScheduleConflict } from "@/lib/services/schedule-conflict-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +83,55 @@ export const POST = handle(async (req) => {
     );
 
     if (conflicts.length > 0 && !force) {
-      return { slot: null, conflicts };
+      // Only the refusal branch pays for the names. Widening the `existingSlots`
+      // read above would have added a room + speaker join to every successful
+      // placement to serve a message nobody reads; this second read is scoped to
+      // the handful of slots actually collided with, and still runs inside the
+      // same transaction and the same S3 lock, so what the refusal names is the
+      // state the refusal was decided against.
+      const conflictingSlotIds = [...new Set(conflicts.map((c) => c.conflictingSlotId))];
+      const [event, named] = await Promise.all([
+        tx.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+        tx.scheduleSlot.findMany({
+          where: { id: { in: conflictingSlotIds } },
+          select: {
+            id: true,
+            startsAt: true,
+            endsAt: true,
+            room: { select: { name: true } },
+            session: {
+              select: {
+                title: true,
+                speakers: { select: { userId: true, user: { select: { name: true } } } },
+              },
+            },
+          },
+        }),
+      ]);
+      const timeZone = event?.timezone ?? "UTC";
+      const bySlotId = new Map(named.map((slot) => [slot.id, slot]));
+
+      const conflictDetails = conflicts.flatMap((conflict) => {
+        const slot = bySlotId.get(conflict.conflictingSlotId);
+        // A slot that vanished between detection and this read has nothing
+        // truthful to say, so it is dropped rather than described from guesses
+        // — `conflicts` below still reports it.
+        if (!slot) return [];
+        return [
+          describeScheduleConflict({
+            type: conflict.type,
+            roomName: slot.room.name,
+            sessionTitle: slot.session.title,
+            startsAt: slot.startsAt.toISOString(),
+            endsAt: slot.endsAt.toISOString(),
+            speakerName:
+              slot.session.speakers.find((s) => s.userId === conflict.speakerId)?.user.name ?? null,
+            timeZone,
+          }),
+        ];
+      });
+
+      return { slot: null, conflicts, conflictDetails };
     }
 
     const slot = await tx.scheduleSlot.upsert({
@@ -102,12 +151,18 @@ export const POST = handle(async (req) => {
         endsAt,
       },
     });
-    return { slot, conflicts };
+    return { slot, conflicts, conflictDetails: [] as string[] };
   });
 
   if (!result.slot) {
     return fail(409, "SCHEDULE_CONFLICT", "This placement conflicts with an existing slot.", {
+      // `conflicts` is unchanged, byte for byte: existing consumers (and the
+      // smoke that pins this shape) keep reading exactly what they read before.
       conflicts: result.conflicts.map((c) => `${c.type}: ${c.message}`),
+      // Additive: the same collisions with the room, talk, time and speaker
+      // named. Empty only when nothing could be resolved, so a client that
+      // prefers it must still fall back to `conflicts`.
+      ...(result.conflictDetails.length > 0 ? { conflictDetails: result.conflictDetails } : {}),
     });
   }
 

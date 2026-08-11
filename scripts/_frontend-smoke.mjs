@@ -2248,6 +2248,29 @@ try {
   check("overlapping placement refused → 409", conflicting.status === 409, `got ${conflicting.status}`);
   check("409 lists the conflicts", (conflicting.data?.error?.fieldErrors?.conflicts ?? []).length > 0);
 
+  // The refusal must NAME the collision, not just classify it. sessionB shares
+  // room A's 17:00–17:30Z slot with sessionA AND shares Sofia Marques with it,
+  // so this one request exercises both named branches at once.
+  const conflictDetails = conflicting.data?.error?.fieldErrors?.conflictDetails ?? [];
+  const conflictText = conflictDetails.join(" | ");
+  check("409 names the room collision: room, occupying talk and time range",
+    conflictDetails.some((c) => c.startsWith("Room conflict:"))
+    && conflictText.includes("Hall A")
+    && conflictText.includes("Scratch Session A")
+    // Event-timezone clock, not UTC and not the server's locale: 17:00Z is
+    // 10:00 AM in the scratch event's America/Los_Angeles.
+    && /10:00\s?AM.10:30\s?AM P[DS]T/.test(conflictText),
+    conflictText);
+  check("409 names the double-booked speaker",
+    conflictDetails.some((c) => c.startsWith("Speaker conflict:"))
+    && conflictText.includes("Sofia Marques"),
+    conflictText);
+  // The pre-existing coded list is unchanged, so any consumer still reading it
+  // sees exactly what it saw before this became human-readable.
+  check("409 keeps the original coded conflicts list intact",
+    (conflicting.data?.error?.fieldErrors?.conflicts ?? []).some((c) => c.startsWith("ROOM_OVERLAP: "))
+    && (conflicting.data?.error?.fieldErrors?.conflicts ?? []).some((c) => c.startsWith("SPEAKER_OVERLAP: ")));
+
   const clean = await req("POST", "/api/agenda/slots", {
     eventId: EVENT_ID,
     sessionId: fx.sessionB.id,

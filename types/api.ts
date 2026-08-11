@@ -583,6 +583,13 @@ export const scheduleConflictSchema = z.object({
   slotId: idSchema.optional(),
   conflictingSlotId: idSchema,
   message: z.string(),
+  /**
+   * Additive: which speaker is double-booked, for `SPEAKER_OVERLAP` only.
+   * Detection always knew this — it is the id it matched on — and dropping it
+   * was what forced the refusal to say "a speaker" instead of naming them.
+   * Absent on `ROOM_OVERLAP`, so it stays optional.
+   */
+  speakerId: idSchema.optional(),
 });
 
 const nullableProfileText = (maxLength: number) => z.preprocess(
