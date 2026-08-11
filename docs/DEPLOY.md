@@ -219,8 +219,9 @@ harnesses are unaffected and need no flag.
 
 `/login` offers these three one-click persona buttons alongside an
 email/password form (the seeded personas and harness fixtures have credentials;
-there is deliberately no self-service registration — new accounts are on the
-post-hackathon roadmap). Either path yields the same kind of session, and a
+self-service registration at `/signup` and password reset at `/forgot` are also
+public, and a new account holds no membership until it creates an event or an
+organizer adds it). Either path yields the same kind of session, and a
 session grants no authority by itself: the role is resolved from the
 `EventMember` row for the signed-in email on every request. Shell users created
 by a public CFP submission (co-speakers keyed by email) have no membership and

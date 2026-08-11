@@ -1,4 +1,4 @@
-# Judging index
+# Evaluation index
 
 > Greenroom is an open-source, self-hostable conference programme platform that
 > takes an organizer from an open CFP through structured review, atomic
@@ -89,7 +89,7 @@ The frontend smoke creates and removes only its own `scratch-frontend` event.
 [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) are the same kind of receipt,
 recorded on earlier commits and labeled as such.
 
-## Enforced rules a judge can check
+## Enforced rules you can check
 
 These are server-enforced, not UI conventions. The walkthrough video captures the
 first one on camera; the rest are covered by the automated suites and the
@@ -113,11 +113,13 @@ invariant references in [`../INVARIANTS.md`](../INVARIANTS.md).
 
 ## Current limitations
 
-Stated plainly, because a judge should not have to discover them.
+Stated plainly, because an evaluator should not have to discover them.
 
-- **No self-service sign-up.** Organizers provision accounts; the login page says
-  so. Public sign-up is roadmap, not shipped.
-- **No password reset.** An organizer re-provisions access.
+- **A new self-service account starts outside every event.** Sign-up (`/signup`)
+  and password reset (`/forgot`, a signed single-use link that expires in 30
+  minutes) are both public. What sign-up does not do is grant membership: a new
+  account holds no `EventMember` row, so it lands on `/welcome` to create its own
+  event or wait for an organizer to add its address.
 - **Event switching is bounded by your own memberships.** An admin can create a new
   event from **Event settings** and switch straight into it from the success notice.
   The sidebar switcher lists every event you hold an `EventMember` row on, and your
@@ -145,13 +147,14 @@ Stated plainly, because a judge should not have to discover them.
 - **The Greenroom Assistant is not in the product.** It is not in the merged
   tree and is deliberately not described anywhere in this package.
 - **The demo deployment intentionally hands out admin.** The one-click personas
-  are the judging entry point, so any visitor can become the seeded event's
+  are the evaluation entry point, so any visitor can become the seeded event's
   admin — including its operations console, whose live-send buttons work when
   real provider credentials are configured. Every identity and address in the
   deployment is a fixture (`@greenroom-hq.com` routes to the operator), so the
-  blast radius is the demo itself; a fail-closed persona switch for non-demo
-  deployments is on the roadmap.
-- **Two external code audits were commissioned and triaged during the sprint.**
+  blast radius is the demo itself. Any other production deployment is fail-closed:
+  the personas require `DEMO_PERSONA_LOGIN_ENABLED=true` exactly, and the refusal
+  lives in the server action rather than in whether the buttons render.
+- **Two external code audits were commissioned and triaged.**
   Confirmed defects were fixed and regression-tested (conflict-identity forgery,
   unlocked unschedule, far-east timezone day labels, unpublished-session leaks
   into integrations, cross-event reset authority, missing route boundaries,
@@ -192,9 +195,13 @@ placeholders, not planned work.
   pass that previews conflict-free placements and writes nothing until applied;
   and per-session publication control, so a confirmed talk can be held back from
   the public programme without losing its slot, speakers, or tasks. The
-  deterministic demo also includes a source-less guaranteed keynote and one
-  deliberate seeded room conflict, so the conflict view is populated; direct UI
-  creation of that special keynote is not claimed here.
+  deterministic demo also includes a source-less guaranteed keynote — the
+  opening keynote, Grand Ballroom, 09:00 on 12 May — which the schema supports
+  but no route creates, so direct UI creation of that special case is not
+  claimed here. The seeded programme itself is conflict-free across all three
+  event days and the Conflicts view reads zero: the walkthrough demonstrates a
+  refusal live, which is stronger proof than shipping a standing mistake to
+  point at.
 - **Integration surfaces.** The key-gated, read-only v1 API exposes submissions,
   speakers, and schedule data. The Airtable mirror projects confirmed programme
   data into upserted Sessions, Speakers, and Schedule tables, with per-table

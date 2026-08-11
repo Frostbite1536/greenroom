@@ -9,8 +9,10 @@ An alternative to closed CFP/speaker-ops SaaS: CFP forms, abstract evaluation,
 speaker onboarding, and a conflict-aware agenda, with public embeds for your
 event site.
 
-Evaluating this project? Start at the
-[judging index](docs/judging/README.md).
+The repository includes reproducible demo data, deployment instructions,
+verification scripts, and role-based walkthroughs so contributors and evaluators
+can validate the complete programme workflow. Evaluating this project? Start at
+the [evaluation index](docs/judging/README.md).
 
 ## Features (the golden path)
 
@@ -56,8 +58,10 @@ npm run dev
 ```
 
 Then open http://localhost:3000/login. Sign in with an email and password, or
-use the one-click demo personas (Admin / Evaluator / Speaker). There is no
-self-service sign-up and no password reset — organizers provision accounts.
+use the one-click demo personas (Admin / Evaluator / Speaker). You can also
+create an account at `/signup` and recover one at `/forgot`. A brand-new account
+belongs to no event yet, so it lands on `/welcome` to create its first event or
+wait for an organizer to add it.
 
 Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
 `sofia@greenroom-hq.com` (speaker).
@@ -145,10 +149,12 @@ from any static host or localhost.
 ## Current limitations
 
 Stated up front rather than left to be discovered. The fuller list, with
-context, is in the [judging index](docs/judging/README.md#current-limitations).
+context, is in the [evaluation index](docs/judging/README.md#current-limitations).
 
-- **No self-service sign-up** and **no password reset** — organizers provision
-  accounts. Public sign-up is roadmap, not shipped.
+- **A new self-service account starts outside every event.** Sign-up (`/signup`)
+  and password reset (`/forgot`) are both public, but signing up joins you to
+  nothing: a new account holds no membership, so it must create its own event or
+  wait for an organizer to add its address.
 - **Event switching is bounded by your own memberships.** The sidebar switcher
   lists every event you hold a membership on, and your role is re-resolved per
   event. You cannot join an event you were not added to, and no screen shows
@@ -177,7 +183,7 @@ no UI framework. See `docs/ARCHITECTURE.md`.
 
 | Document | What it covers |
 | --- | --- |
-| [`docs/judging/`](docs/judging/README.md) | Judging index: walkthrough script, screenshot index, verification receipts, limitations |
+| [`docs/judging/`](docs/judging/README.md) | Evaluation index: walkthrough script, screenshot index, verification receipts, limitations |
 | [`docs/guides/`](docs/guides/) | Plain-language how-tos for admins, evaluators, and speakers |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Product boundary, domain model, routes, security |
 | [`docs/LIFECYCLE.md`](docs/LIFECYCLE.md) | Abstract / Session / ScheduleSlot / SpeakerTask state machines |
@@ -185,10 +191,16 @@ no UI framework. See `docs/ARCHITECTURE.md`.
 | [`docs/API.md`](docs/API.md) | Read-only `/api/v1` REST surface and the in-app speaker endpoints |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | Vercel + Neon setup, environment variables, demo operations |
 
-## Contributing / sprint history
+## Contributing
 
-This codebase was built during a 48-hour replication sprint; the multi-agent
-workflow that produced it is documented in `docs/SPRINT_WORKFLOW.md`.
+Greenroom is developed in the open. The engineering rules a change is held to
+are in [`AGENTS.md`](AGENTS.md) — `main` stays deployable, changes stay focused
+and reviewable, and secrets never enter the tree. The boundaries a change must
+respect are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+[`docs/INVARIANTS.md`](docs/INVARIANTS.md), and
+[`docs/LIFECYCLE.md`](docs/LIFECYCLE.md); design rationale is recorded in
+[`docs/DECISIONS.md`](docs/DECISIONS.md). Run the verification commands above
+before opening a pull request.
 
 ## License
 
