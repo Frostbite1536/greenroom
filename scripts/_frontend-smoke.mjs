@@ -3048,7 +3048,9 @@ try {
   const landingSignedIn = await fetch(`${BASE}/`, { headers: { cookie: cookie(admin) }, redirect: "manual" });
   check("signed-in visitors keep their workspace redirect from /",
     landingSignedIn.status === 307
-    && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
+    // B7: organizers land on the dashboard now. Match the exact path so a
+    // regression to /admin/forms (or a redirect loop to /) fails loudly.
+    && new URL(landingSignedIn.headers.get("location") ?? "/none", BASE).pathname === "/admin",
     `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
 
   // --- §5-5: the programme is SERVED at /schedule and /speakers -------------
