@@ -17,15 +17,10 @@ import {
 import {
   SPEAKER_CONFIRMATION_LABELS,
   SPEAKER_STATUS_FILTERS,
-  buildSpeakerRosterRows,
-  completeUserBoundary,
   filterSpeakerStatusRows,
   parseSpeakerStatusFilter,
-  summarizeSpeakerStatus,
-  type SpeakerAssignment,
-  type SpeakerRosterMember,
-  type SpeakerTaskAssignment,
 } from "@/lib/speakers/status";
+import { readSpeakerRoster } from "@/lib/speakers/roster-read";
 import {
   SPEAKER_SEARCH_MAX_LENGTH,
   filterSpeakerRosterRows,
@@ -36,20 +31,15 @@ import {
 export const metadata = { title: "Speaker onboarding" };
 export const dynamic = "force-dynamic";
 
-/** Same bounded-read discipline as the operator API routes (INV-EVENT-001). */
+/**
+ * Same bounded-read discipline as the operator API routes (INV-EVENT-001). The
+ * roster's own three bounds moved to `SPEAKER_ROSTER_LIMITS` with the read; only
+ * this page's authoring surfaces are bounded here.
+ */
 const LIMITS = {
-  assignments: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
-  // Named speakers are people, not sessions, so the same per-event speaker cap
-  // is the right bound; it is read and truncated exactly like the session list.
-  members: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
-  taskAssignments: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers * 10,
   templates: OPERATOR_QUERY_LIMITS.onboardingTasks,
   forms: OPERATOR_QUERY_LIMITS.importForms,
 };
-
-const profileSelect = {
-  bio: true, company: true, jobTitle: true, headshotUrl: true, status: true,
-} as const;
 
 export default async function AdminSpeakersPage({
   searchParams,
@@ -66,47 +56,11 @@ export default async function AdminSpeakersPage({
   const query = parseSpeakerQuery(params.q);
   const eventId = ctx.eventId;
 
-  // The roster is a union of two independent truths, because neither alone is
-  // the event's speaker list. `SessionSpeaker` is the confirmed programme — a
-  // Session exists exactly when an abstract was accepted or a talk was
-  // guaranteed. `EventMember(role=SPEAKER)` is everyone the organizer has named
-  // a speaker, including those still waiting on a session. All reads are
-  // event-scoped, bounded, and userId-ordered so truncation stays describable.
-  const [event, sessionSpeakers, memberSpeakers, speakerTasks, templates, forms] = await Promise.all([
-    prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
-    prisma.sessionSpeaker.findMany({
-      where: { session: { eventId } },
-      select: {
-        userId: true,
-        user: {
-          select: { name: true, email: true, speakerProfile: { select: profileSelect } },
-        },
-        session: { select: { id: true, title: true, scheduleSlot: { select: { id: true } } } },
-      },
-      orderBy: [{ userId: "asc" }, { sessionId: "asc" }],
-      take: LIMITS.assignments + 1,
-    }),
-    prisma.eventMember.findMany({
-      where: { eventId, role: "SPEAKER" },
-      select: {
-        userId: true,
-        user: {
-          select: { name: true, email: true, speakerProfile: { select: profileSelect } },
-        },
-      },
-      orderBy: { userId: "asc" },
-      take: LIMITS.members + 1,
-    }),
-    prisma.speakerTask.findMany({
-      where: { task: { eventId } },
-      select: {
-        userId: true,
-        status: true,
-        task: { select: { id: true, title: true, required: true, sortOrder: true, dueAt: true } },
-      },
-      orderBy: [{ userId: "asc" }, { task: { sortOrder: "asc" } }],
-      take: LIMITS.taskAssignments + 1,
-    }),
+  // The roster read is shared with the `/admin` dashboard card that links here,
+  // so the two surfaces cannot report different speaker numbers. It runs its own
+  // batch, concurrently with this page's two authoring reads.
+  const [roster, templates, forms] = await Promise.all([
+    readSpeakerRoster(eventId),
     // The authoring surface reads the templates themselves, independently of
     // whether anyone has been assigned them yet.
     prisma.onboardingTask.findMany({
@@ -122,7 +76,10 @@ export default async function AdminSpeakersPage({
       select: { id: true, name: true },
     }),
   ]);
-  if (!event) redirect("/login");
+  // A missing timezone means the event id names no event; redirect rather than
+  // render a roster against a row that is not there.
+  if (roster.timezone === null) redirect("/login");
+  const timezone = roster.timezone;
 
   // Same bounded-read discipline as the operator API routes: read one extra row
   // and say so rather than silently authoring against a partial checklist.
@@ -153,63 +110,14 @@ export default async function AdminSpeakersPage({
   const settledByTask = new Map(settledCounts.map((row) => [row.taskId, row._count._all]));
   const taskTemplates = pagedTemplates
     .map((template) =>
-      serializeOnboardingTask(template, event.timezone, {
+      serializeOnboardingTask(template, timezone, {
         assigned: assignedByTask.get(template.id) ?? 0,
         settled: settledByTask.get(template.id) ?? 0,
       }),
     )
     .sort(compareOnboardingTasks);
 
-  const truncated = sessionSpeakers.length > LIMITS.assignments
-    || memberSpeakers.length > LIMITS.members
-    || speakerTasks.length > LIMITS.taskAssignments;
-
-  // Every read is userId-ordered, so a truncated list is only guaranteed
-  // complete for userIds strictly below the last one it contains. Deriving a
-  // status from partially loaded rows would show "Ready" for a speaker whose
-  // open tasks were cut off — exclude those speakers instead of guessing.
-  const sessionSlice = sessionSpeakers.slice(0, LIMITS.assignments);
-  const memberSlice = memberSpeakers.slice(0, LIMITS.members);
-  const taskSlice = speakerTasks.slice(0, LIMITS.taskAssignments);
-  const boundary = completeUserBoundary([
-    { truncated: sessionSpeakers.length > LIMITS.assignments, lastUserId: sessionSlice.at(-1)?.userId ?? null },
-    { truncated: memberSpeakers.length > LIMITS.members, lastUserId: memberSlice.at(-1)?.userId ?? null },
-    { truncated: speakerTasks.length > LIMITS.taskAssignments, lastUserId: taskSlice.at(-1)?.userId ?? null },
-  ]);
-  const isComplete = (userId: string) => boundary === null || userId < boundary;
-
-  const members: SpeakerRosterMember[] = memberSlice.filter((row) => isComplete(row.userId)).map((row) => ({
-    userId: row.userId,
-    name: row.user.name,
-    email: row.user.email,
-    profile: row.user.speakerProfile,
-  }));
-  const assignments: SpeakerAssignment[] = sessionSlice.filter((row) => isComplete(row.userId)).map((row) => ({
-    userId: row.userId,
-    name: row.user.name,
-    email: row.user.email,
-    profile: row.user.speakerProfile,
-    sessionId: row.session.id,
-    sessionTitle: row.session.title,
-    scheduled: row.session.scheduleSlot !== null,
-  }));
-  const taskAssignments: SpeakerTaskAssignment[] = taskSlice.filter((row) => isComplete(row.userId)).map((row) => ({
-    userId: row.userId,
-    taskId: row.task.id,
-    taskTitle: row.task.title,
-    status: row.status,
-    required: row.task.required,
-    dueAt: row.task.dueAt ? row.task.dueAt.toISOString() : null,
-  }));
-
-  const rows = buildSpeakerRosterRows(members, assignments, taskAssignments);
-  // The five headline metrics stay the confirmed-session cohort they have always
-  // described, and `confirmedSpeakers` below is what the checklist actually fans
-  // out to (C33) — widening the roster must not silently restate either number.
-  // Speakers not yet on a session are reported as their own, separate count.
-  const confirmed = rows.filter((row) => row.sessionCount > 0);
-  const summary = summarizeSpeakerStatus(confirmed);
-  const awaitingSession = rows.length - confirmed.length;
+  const { rows, summary, awaitingSession, truncated } = roster;
   const searched = filterSpeakerRosterRows(rows, query);
   const visible = filterSpeakerStatusRows(searched, filter);
 
@@ -241,7 +149,7 @@ export default async function AdminSpeakersPage({
       <OnboardingTaskManager
         tasks={taskTemplates}
         forms={forms.slice(0, LIMITS.forms)}
-        timezone={event.timezone}
+        timezone={timezone}
         confirmedSpeakers={summary.speakers}
       />
 
@@ -408,7 +316,7 @@ export default async function AdminSpeakersPage({
                             zone so it matches what the speaker sees in the
                             portal (C12). */}
                         {row.nextRequiredDueAt
-                          ? formatEventDateTime(row.nextRequiredDueAt, event.timezone)
+                          ? formatEventDateTime(row.nextRequiredDueAt, timezone)
                           : <span className="muted">{row.requiredOutstanding.length > 0 ? "No deadline" : "Nothing owed"}</span>}
                         {row.overdueRequired > 0 ? (
                           <div className="cell-sub">
