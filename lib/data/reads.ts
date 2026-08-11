@@ -75,6 +75,7 @@ import {
   type PublicSpeakers,
 } from "@/lib/public-speakers";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
 import { publicSessionDescription } from "@/lib/public-session-copy";
 import { findConflicts } from "@/lib/agenda-conflicts";
 import { abstractPermalink } from "@/lib/abstract-permalink";
@@ -698,14 +699,22 @@ export async function getAgendaData(): Promise<AgendaData> {
   const ctx = await pageContext(["ADMIN"]);
   const [event, rooms, tracks, sessions] = await Promise.all([
     prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
+    // P-01: the grid's axes were the only unbounded reads left in this builder
+    // while the sessions laid out on them were capped, so a room or track list
+    // that outgrew the page had no bound at all. Same caps and the same
+    // fail-closed shape as `getEventSettings`, which owns these two resources:
+    // an operator gets a precise refusal rather than a silently partial grid
+    // whose missing column makes a real conflict invisible.
     prisma.room.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsRooms + 1,
       select: { id: true, name: true, capacity: true },
     }),
     prisma.track.findMany({
       where: { eventId: ctx.eventId },
       orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsTracks + 1,
       select: { id: true, name: true, color: true },
     }),
     prisma.session.findMany({
@@ -730,6 +739,8 @@ export async function getAgendaData(): Promise<AgendaData> {
       },
     }),
   ]);
+  assertEventQueryBound(rooms, OPERATOR_QUERY_LIMITS.settingsRooms, "rooms in the agenda builder");
+  assertEventQueryBound(tracks, OPERATOR_QUERY_LIMITS.settingsTracks, "tracks in the agenda builder");
 
   return {
     eventId: ctx.eventId,
@@ -1017,7 +1028,9 @@ export type PublicAgenda = {
   truncated: boolean;
 };
 
-export const getPublicAgenda = cache(async function getPublicAgenda(eventParam = "forward-2026"): Promise<PublicAgenda | null> {
+export const getPublicAgenda = cache(async function getPublicAgenda(
+  eventParam = DEFAULT_PUBLIC_EVENT,
+): Promise<PublicAgenda | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },
     select: { id: true, name: true, slug: true, timezone: true, startsAt: true, endsAt: true },
@@ -1089,7 +1102,7 @@ export const getPublicAgenda = cache(async function getPublicAgenda(eventParam =
 });
 
 export const getPublicSpeakers = cache(async function getPublicSpeakers(
-  eventParam = "forward-2026",
+  eventParam = DEFAULT_PUBLIC_EVENT,
 ): Promise<PublicSpeakers | null> {
   const event = await prisma.event.findFirst({
     where: { OR: [{ id: eventParam }, { slug: eventParam }] },

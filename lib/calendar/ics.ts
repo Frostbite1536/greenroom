@@ -113,9 +113,20 @@ function buildEvent(event: IcsEvent, stamp: Date): string[] {
  */
 export function buildIcsCalendar(
   events: IcsEvent[],
-  options: { method?: "PUBLISH" | "REQUEST"; calendarName?: string; now?: Date } = {},
+  options: {
+    method?: "PUBLISH" | "REQUEST";
+    calendarName?: string;
+    /**
+     * X-WR-CALDESC — the companion of X-WR-CALNAME that calendar clients show
+     * as the calendar's description. This is where a bounded export tells its
+     * reader it is incomplete: a downloaded `.ics` keeps speaking long after
+     * the page is closed, so a response header or JSON field cannot reach it.
+     */
+    calendarDescription?: string;
+    now?: Date;
+  } = {},
 ): string {
-  const { method = "PUBLISH", calendarName, now = new Date() } = options;
+  const { method = "PUBLISH", calendarName, calendarDescription, now = new Date() } = options;
 
   const lines = [
     "BEGIN:VCALENDAR",
@@ -127,6 +138,10 @@ export function buildIcsCalendar(
 
   if (calendarName) {
     lines.push(line("X-WR-CALNAME", escapeIcsText(calendarName)));
+  }
+
+  if (calendarDescription) {
+    lines.push(line("X-WR-CALDESC", escapeIcsText(calendarDescription)));
   }
 
   for (const event of events) lines.push(...buildEvent(event, now));

@@ -113,6 +113,22 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   or score, admin decision, legacy conversion)
   first takes a per-abstract transaction-scoped advisory lock (`lib/services/abstract-lock.ts`,
   INV-ABSTRACT-001) and re-reads the row inside the transaction, closing the TOCTOU window.
+- The one global `SpeakerProfile` row per person has two request-path writers — the organizer's
+  roster editor and the speaker's own portal — and both take the same per-user advisory lock
+  (`speakerProfileLockKey`, `lib/services/speaker-roster.ts`) before writing. The roster dialog
+  additionally sends only the fields the operator actually changed, so an organizer saving a
+  status cannot write back a stale snapshot over a bio the speaker just edited (GRA-05).
+- The passwordless one-click `/login` personas are gated fail-closed in production: they require
+  `DEMO_PERSONA_LOGIN_ENABLED=true` exactly, and the refusal lives in the server action
+  (`app/login/actions.ts`), not merely in whether the buttons render. Outside production they are
+  unconditionally on, so development, tests and the smoke harnesses need no configuration
+  (GRA2-01, `arePersonaLoginsEnabled` in `lib/env.ts`).
+- Baseline security headers are set route-aware in `next.config.mjs`: `nosniff`, a
+  strict-origin-when-cross-origin referrer policy, an empty camera/microphone/geolocation
+  permissions policy, and a one-year HSTS everywhere; plus `Content-Security-Policy:
+  frame-ancestors 'none'` on everything EXCEPT `/embed/*`, which must stay frameable because
+  embedding it in someone else's page is the feature. Deliberately not a full CSP — `script-src`
+  needs a measured nonce migration and is a named follow-up (GRA2-08).
 - The v1 API authenticates before any database work and compares fixed-size key hashes.
 - Keep interactive client islands narrow and avoid serial data waterfalls.
 
@@ -129,8 +145,12 @@ demo seed (`lib/demo/seed.ts`) has been run against it.
   separately for Preview and Production.
 - `GREENROOM_API_KEY` is configured, so `/api/v1/*` is live; unset it and those routes return
   `503 API_KEY_NOT_CONFIGURED`.
-- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` answers
-  `403 RESET_DISABLED` (INV-RESET-001).
+- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` refuses every
+  caller (INV-RESET-001). The refusal body depends on who asks, by design (S-18):
+  anyone who has not proved they are an admin gets `403 FORBIDDEN` — the same
+  body a deployment with the flag *set* returns them, so the refusal cannot be
+  used to read the flag. An authenticated admin gets `403 RESET_DISABLED`, which
+  names the variable to set.
 - Airtable mirror credentials (`AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`,
   `MOCK_EXTERNAL_APIS=false`) are configured in production and a live one-way mirror run has
   completed.

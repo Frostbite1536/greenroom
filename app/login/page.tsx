@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ClipboardCheck, LogIn, Mic2, ShieldCheck, Users } from "lucide-react";
 import { DEMO_PERSONAS, getResolvedSession, homeForRole } from "@/lib/auth";
+import { arePersonaLoginsEnabled } from "@/lib/env";
 import { loginAsPersona } from "./actions";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -44,6 +45,12 @@ function signInError(error: string | undefined, retryAfter: string | undefined):
     return "Too many sign-in attempts. Try again shortly.";
   }
   if (error === "unavailable") return "Sign-in is temporarily unavailable. Try again shortly.";
+  // GRA2-01. Not a credential failure and not the visitor's mistake: the demo
+  // personas are switched off on this deployment, so the page says so plainly
+  // and points at the way in that does work.
+  if (error === "personas-disabled") {
+    return "One-click demo accounts are turned off on this deployment. Sign in with your email and password.";
+  }
   // The post did not come from this site. A real sign-in never lands here, so
   // the copy points at the cause rather than blaming the credentials.
   if (error === "blocked") return "That sign-in did not come from this site. Start again from this page.";
@@ -65,6 +72,9 @@ export default async function LoginPage({
   }
   const params = await searchParams;
   const error = signInError(firstParam(params.error), firstParam(params.retryAfter));
+  // GRA2-01: one source of truth with the server action that actually refuses.
+  // Hiding the buttons is courtesy — `loginAsPersona` is the boundary.
+  const personasEnabled = arePersonaLoginsEnabled();
 
   return (
     <div className="login-screen">
@@ -122,25 +132,29 @@ export default async function LoginPage({
           </p>
         </form>
 
-        <div className="login-divider" role="separator">
-          <span>or explore the demo</span>
-        </div>
+        {personasEnabled ? (
+          <>
+            <div className="login-divider" role="separator">
+              <span>or explore the demo</span>
+            </div>
 
-        <p className="login-hint">These demo accounts stay one-click. No password required.</p>
-        <div className="login-personas">
-          {personas.map(({ key, icon: Icon, label, detail }) => (
-            <form action={loginAsPersona} key={key}>
-              <input name="persona" type="hidden" value={key} />
-              <button className="persona-button" type="submit">
-                <Icon size={18} aria-hidden="true" />
-                <span className="persona-copy">
-                  <strong>{label}</strong>
-                  <span>{detail}</span>
-                </span>
-              </button>
-            </form>
-          ))}
-        </div>
+            <p className="login-hint">These demo accounts stay one-click. No password required.</p>
+            <div className="login-personas">
+              {personas.map(({ key, icon: Icon, label, detail }) => (
+                <form action={loginAsPersona} key={key}>
+                  <input name="persona" type="hidden" value={key} />
+                  <button className="persona-button" type="submit">
+                    <Icon size={18} aria-hidden="true" />
+                    <span className="persona-copy">
+                      <strong>{label}</strong>
+                      <span>{detail}</span>
+                    </span>
+                  </button>
+                </form>
+              ))}
+            </div>
+          </>
+        ) : null}
       </main>
     </div>
   );

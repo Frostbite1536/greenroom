@@ -407,7 +407,7 @@ function DecisionRoundControl({
 }) {
   const headingId = "decision-round-heading";
   const helpId = "decision-round-help";
-  const { plans, selectedPlan } = decisionSummary;
+  const { plans, selectedPlan, rubricUnreadable } = decisionSummary;
 
   if (plans.length === 0) {
     return (
@@ -419,28 +419,48 @@ function DecisionRoundControl({
   }
 
   return (
-    <section className="table-toolbar" aria-labelledby={headingId} style={{ margin: "8px 0 12px" }}>
-      <div>
-        <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>Decision round</h2>
-        <p className="hint" id={helpId} style={{ margin: 0 }}>
-          {plans.length > 1
-            ? "This event has several review rounds; the newest one is shown. Decision scores include only valid, completed reviews from the selected round."
-            : "Decision scores include only valid, completed reviews from this round."}
+    <>
+      <section className="table-toolbar" aria-labelledby={headingId} style={{ margin: "8px 0 12px" }}>
+        <div>
+          <h2 id={headingId} style={{ fontSize: 14, margin: "0 0 4px" }}>Decision round</h2>
+          <p className="hint" id={helpId} style={{ margin: 0 }}>
+            {plans.length > 1
+              ? "This event has several review rounds; the newest one is shown. Decision scores include only valid, completed reviews from the selected round."
+              : "Decision scores include only valid, completed reviews from this round."}
+          </p>
+        </div>
+        <label className="field-label" htmlFor="decision-round-select">
+          <span className="sr-only">Decision round</span>
+          <select
+            id="decision-round-select"
+            className="text-input"
+            value={selectedPlan?.id ?? ""}
+            onChange={(event) => onChange(event.target.value)}
+            aria-describedby={helpId}
+          >
+            {plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan)}</option>)}
+          </select>
+        </label>
+      </section>
+      {/*
+        B3. A round whose stored rubric will not parse blanks every score on
+        this board — which looks exactly like a round nobody has reviewed yet.
+        Only the operator can tell those apart, and only if the page says so.
+        `role="alert"`, matching the programme warning above: this is not a
+        state the reader chose, and it arrives while they are reading numbers
+        that silently mean nothing.
+      */}
+      {rubricUnreadable ? (
+        <p className="conflict-banner" role="alert" style={{ margin: "0 0 12px" }}>
+          <AlertTriangle size={17} aria-hidden="true" />
+          <span>
+            <strong>Scores can’t be computed: this round’s rubric is invalid.</strong>{" "}
+            Every decision score below is blank for that reason, not because the reviews are
+            missing. Fix the round’s rubric in evaluation setup and the scores will return.
+          </span>
         </p>
-      </div>
-      <label className="field-label" htmlFor="decision-round-select">
-        <span className="sr-only">Decision round</span>
-        <select
-          id="decision-round-select"
-          className="text-input"
-          value={selectedPlan?.id ?? ""}
-          onChange={(event) => onChange(event.target.value)}
-          aria-describedby={helpId}
-        >
-          {plans.map((plan) => <option key={plan.id} value={plan.id}>{planLabel(plan)}</option>)}
-        </select>
-      </label>
-    </section>
+      ) : null}
+    </>
   );
 }
 

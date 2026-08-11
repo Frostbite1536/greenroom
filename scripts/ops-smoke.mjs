@@ -125,18 +125,27 @@ await withServer(PORT_CLOSED, { ALLOW_DEMO_RESET: "" }, async (base) => {
   const embed = await fetch(`${base}/embed/schedule`);
   check("/embed/schedule public (null session)", embed.status === 200, `status ${embed.status}`);
 
+  // S-18: an anonymous caller is answered by authorization, never by
+  // configuration. This run has ALLOW_DEMO_RESET unset and Run B has it set;
+  // both must produce the identical FORBIDDEN body, or the refusal itself
+  // discloses the flag's value to someone who has proved nothing. Run B's
+  // "reset requires a session when gate open" check is the other half of this
+  // pair — the two together are the assertion; neither alone proves it.
   const noAuth = await fetch(`${base}/api/admin/reset`, { method: "POST" });
   const noAuthBody = await json(noAuth);
   check(
-    "reset refused when gate closed (anonymous)",
-    noAuth.status === 403 && noAuthBody?.error?.code === "RESET_DISABLED",
+    "reset refused when gate closed (anonymous) — same body as when it is open",
+    noAuth.status === 403 && noAuthBody?.error?.code === "FORBIDDEN",
     `status ${noAuth.status} code ${noAuthBody?.error?.code}`,
   );
 
+  // The configuration refusal survives, and is reachable exactly where it
+  // should be: by a caller who has already proved they administer this
+  // deployment and is entitled to be told which flag to set.
   const asAdmin = await fetch(`${base}/api/admin/reset`, { method: "POST", headers: { cookie: cookieFor("ADMIN") } });
   const asAdminBody = await json(asAdmin);
   check(
-    "reset refused when gate closed (even as ADMIN)",
+    "reset refused when gate closed (even as ADMIN), and says which flag",
     asAdmin.status === 403 && asAdminBody?.error?.code === "RESET_DISABLED",
     `status ${asAdmin.status} code ${asAdminBody?.error?.code}`,
   );

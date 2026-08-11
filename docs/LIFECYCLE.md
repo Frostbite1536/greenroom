@@ -29,9 +29,14 @@ stateDiagram-v2
     UNDER_REVIEW --> REJECTED: POST /api/evaluations/decisions
     ACCEPTED --> REJECTED: decision reversal
     REJECTED --> ACCEPTED: decision reversal
+    SUBMITTED --> MAYBE: POST /api/evaluations/decisions
+    UNDER_REVIEW --> MAYBE: POST /api/evaluations/decisions
+    MAYBE --> ACCEPTED: POST /api/evaluations/decisions
+    MAYBE --> REJECTED: POST /api/evaluations/decisions
     DRAFT --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
     SUBMITTED --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
     UNDER_REVIEW --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
+    MAYBE --> WITHDRAWN: PATCH /api/cfp/submissions/{id} status WITHDRAWN
     ACCEPTED --> [*]: decision has provisioned a Session
     WITHDRAWN --> [*]: terminal; no route leaves this state
 ```
@@ -46,7 +51,8 @@ stateDiagram-v2
 | `DRAFT` | `SUBMITTED` | `POST /api/cfp/submissions` with `abstractId` | The same handler refuses any non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`. That check is what stops an anonymous caller rewriting a submitted proposal, so it is deliberately *not* relaxed for R1. |
 | `SUBMITTED` | `UNDER_REVIEW` | `POST /api/evaluations/assignments`, `app/api/evaluations/assignments/route.ts` | Only when the abstract is currently `SUBMITTED`; assigning an already `UNDER_REVIEW`/decided abstract creates the assignment without touching status. Admin only. |
 | any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`; acceptance atomically provisions the Session, roster, and task assignments. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
-| `DRAFT`, `SUBMITTED`, `UNDER_REVIEW` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the programme team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a programme decision. |
+| any except `WITHDRAWN` | `MAYBE` | same route, `decision: "MAYBE"` | Admin only, and **not** a final decision: `decidedAt` stays null, the proposal keeps being scoreable and re-decidable, and nothing is provisioned. Refused with `409 MAYBE_NOT_AVAILABLE` once a confirmed `Session` exists, because moving a scheduled talk back into review would split public programme truth. |
+| `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `MAYBE` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the programme team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a programme decision. |
 
 **The portal exposes withdrawal only before a terminal decision.** A speaker can choose **Withdraw
 proposal** for a Draft, Submitted, In review, or Maybe abstract and must confirm it first. The
@@ -78,6 +84,7 @@ Speakers edit through the session-authenticated routes in
 | `DRAFT` | yes — content rules are skipped, exactly like a public draft save |
 | `SUBMITTED` | yes |
 | `UNDER_REVIEW` | yes |
+| `MAYBE` | yes — a shortlisted proposal is still under consideration, so it stays editable |
 | `ACCEPTED` | yes — this is the requirement from the competition lead |
 | `REJECTED` | no → `409 ABSTRACT_LOCKED` |
 | `WITHDRAWN` | no → `409 ABSTRACT_LOCKED` |

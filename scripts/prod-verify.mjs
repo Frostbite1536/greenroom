@@ -78,12 +78,18 @@ if (formId) {
 }
 
 // 3. Demo reset must be REFUSED in production (ALLOW_DEMO_RESET unset).
+// S-18: this probe is anonymous, so authorization answers it first and the
+// body is FORBIDDEN — deliberately the same body a deployment with the reset
+// flag ON would give an anonymous caller, so this refusal discloses nothing
+// about the production configuration. The configuration refusal
+// (403 RESET_DISABLED) is still what an authenticated admin gets, and
+// scripts/ops-smoke.mjs asserts that branch across both flag states.
 {
   const res = await fetch(`${BASE}/api/admin/reset`, { method: "POST" });
   const body = await res.json().catch(() => null);
   check(
     "/api/admin/reset is refused in production",
-    res.status === 403 && body?.error?.code === "RESET_DISABLED",
+    res.status === 403 && body?.error?.code === "FORBIDDEN",
     `status ${res.status} code ${body?.error?.code}`,
   );
 }

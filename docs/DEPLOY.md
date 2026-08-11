@@ -21,6 +21,7 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `DATABASE_URL` | ✅ | Neon **pooled** URL (contains `-pooler`), `sslmode=require`. |
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
+   | `DEMO_PERSONA_LOGIN_ENABLED` | **production required for the demo** | Must be exactly `true` for the one-click `/login` personas to work in production (GRA2-01). Anything else — unset, `false`, `TRUE`, `1` — refuses them and hides the buttons; the email/password form still works. The gate keys on `NODE_ENV=production`, which `next start` also sets — so the smoke harnesses (which run a production build) pass the flag explicitly, while `next dev` and unit tests need nothing. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`; production should use the canonical `https://greenroom-hq.com`. |
    | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a sender verified for the deployment's domain and keep mocks on otherwise. Submission, decision, and reminder mail share the same audited delivery path—see "Email status" below. |
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
@@ -30,7 +31,9 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `SESSION_SECRET` | production required | Server-only random value (minimum 32 characters) used to sign and expire auth cookies. The app fails closed without it in production. |
 
 4. First deploy checklist:
-   - `/login` renders and the three persona buttons work.
+   - `/login` renders and the three persona buttons work. If the buttons are
+     missing, `DEMO_PERSONA_LOGIN_ENABLED` is not exactly `true` in this
+     environment — set it and redeploy.
    - After login, the shell (`/admin/*`, `/portal`) loads.
    - `/cfp/[formId]`, `/embed/schedule`, and `/embed/speakers` render without a session.
 
@@ -38,7 +41,15 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
 - Schema is applied with `prisma db push` (see architect). Do not run destructive
   migrations against the shared Neon DB without coordination.
 - Env validation lives in `lib/env.ts` (`getServerEnv`, `useMockIntegrations`,
-  `isDemoResetAllowed`, `getV1ApiKey`, `getResendFrom`).
+  `isDemoResetAllowed`, `getV1ApiKey`, `getResendFrom`) and **runs at boot**:
+  `instrumentation.ts` calls `getServerEnv()` from Next's `register()` hook, which
+  must complete before the server handles requests (D-02). A deployment with a
+  malformed variable therefore fails immediately and visibly — the boot log names
+  the offending variables (never their values) and **every request answers 500**,
+  including the health check — instead of booting green and failing at whatever
+  request first touched the broken thing. Verified against Next 16.3.0 with
+  `next start`: the process itself does not exit, so gate a deploy on a 200, not
+  on the process staying alive.
 - API-key REST setup, endpoint contracts, and curl examples are in
   [`docs/API.md`](API.md). Do not expose `GREENROOM_API_KEY` to browser code.
 
@@ -199,6 +210,12 @@ One-click personas on `/login`:
 - **Admin** — Maya Chen (`maya@greenroom-hq.com`)
 - **Evaluator** — Ravi Patel (`ravi@greenroom-hq.com`)
 - **Speaker** — Sofia Marques (`sofia@greenroom-hq.com`)
+
+These buttons are passwordless by design and are therefore gated in production
+(GRA2-01): they work only where `DEMO_PERSONA_LOGIN_ENABLED=true`, and the
+server action refuses the POST — not merely the button — anywhere else, sending
+the visitor to `/login?error=personas-disabled`. Development, test and the smoke
+harnesses are unaffected and need no flag.
 
 `/login` offers these three one-click persona buttons alongside an
 email/password form (the seeded personas and harness fixtures have credentials;
