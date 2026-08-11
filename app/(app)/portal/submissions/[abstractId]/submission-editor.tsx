@@ -15,6 +15,7 @@ import {
   withdrawalSuccessNotice,
   withdrawalUnavailableNotice,
 } from "@/lib/portal/submission-status";
+import { ProposalAttachments } from "./proposal-attachments";
 import styles from "../../portal.module.css";
 
 /**
@@ -410,6 +411,13 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
           </>
         )}
       </div>
+
+      {/* Its own island with its own reads and writes: a supporting document is
+          stored the moment it is uploaded and linked the moment it is attached,
+          so it is deliberately NOT part of this form's save. Nothing here is
+          lost by navigating away without pressing Save, and the save payload
+          above is unchanged — the PATCH contract gained no attachment field. */}
+      <ProposalAttachments abstractId={abstractId} />
 
       {saveError ? <p className={styles.saveError} role="alert">{saveError}</p> : null}
       {saved ? <p className={styles.saveNote} role="status"><Check size={14} aria-hidden="true" /> {editSavedNotice(submission.speakersLocked)}</p> : null}
