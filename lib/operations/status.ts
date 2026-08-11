@@ -111,6 +111,46 @@ export function describeReminderResult(result: { recipientCount: number; sent: n
   return { tone: "good", headline: `${who} emailed.` };
 }
 
+/**
+ * What a calendar-invite run actually did.
+ *
+ * `mocked` is a count of recipients whose invitation was recorded and never
+ * delivered, so it is stated as its own outcome rather than folded into "sent".
+ * The session total rides along because one email can carry several sessions,
+ * and an operator reading "4 speakers" needs to know it covered nine talks.
+ */
+export function describeCalendarInviteResult(result: {
+  recipientCount: number;
+  sessionCount: number;
+  sent: number;
+  mocked: number;
+  failed: number;
+}): { tone: "good" | "warn" | "bad"; headline: string } {
+  if (result.recipientCount === 0) {
+    return { tone: "warn", headline: "Nobody is scheduled yet — no calendar invites were sent." };
+  }
+  const speakers = `${result.recipientCount} speaker${result.recipientCount === 1 ? "" : "s"}`;
+  const sessions = `${result.sessionCount} session${result.sessionCount === 1 ? "" : "s"}`;
+
+  if (result.mocked > 0) {
+    const note = result.failed > 0 ? ` ${result.failed} could not even be recorded.` : "";
+    return {
+      tone: "warn",
+      headline: `Demo mode: ${speakers} would have received a calendar invite covering ${sessions}. Nothing was actually sent.${note}`,
+    };
+  }
+  if (result.sent === 0) {
+    return { tone: "bad", headline: `No calendar invite reached any of the ${speakers}. ${result.failed} failed.` };
+  }
+  if (result.failed > 0) {
+    return {
+      tone: "warn",
+      headline: `${result.sent} of ${speakers} received a calendar invite. ${result.failed} could not be delivered.`,
+    };
+  }
+  return { tone: "good", headline: `${result.sent} of ${speakers} received a calendar invite covering ${sessions}.` };
+}
+
 export function describeImportSummary(summary: { rows: number; created: number; updated: number; skipped: number }): string {
   const parts = [`${summary.rows} row${summary.rows === 1 ? "" : "s"} read`];
   if (summary.created) parts.push(`${summary.created} added`);

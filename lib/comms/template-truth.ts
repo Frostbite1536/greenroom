@@ -92,6 +92,7 @@ const STORED_SUMMARIES: Readonly<Record<string, string>> = {
   "task-reminder": "Sent when you trigger a speaker reminder.",
   "session-scheduled": "Sent when you trigger a scheduled-session reminder, with the calendar invite attached.",
   "reviewer-invite": "Sent when you invite a reviewer.",
+  "calendar-invite": "Sent when you send calendar invites, carrying the invitation each speaker accepts in their own calendar.",
 };
 
 const DEFAULT_STORED_SUMMARY = "Sent when you trigger a speaker reminder with this template.";

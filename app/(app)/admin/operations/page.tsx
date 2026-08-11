@@ -6,6 +6,7 @@ import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-li
 import { getResendFrom, useMockIntegrations } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { integrationStatus } from "@/lib/operations/status";
+import { CalendarInvitesPanel } from "./calendar-invites-panel";
 import { DecisionsPanel } from "./decisions-panel";
 import { RemindersPanel } from "./reminders-panel";
 import { ImportPanel } from "./import-panel";
@@ -32,7 +33,7 @@ export default async function AdminOperationsPage() {
   if (ctx.role !== "ADMIN") redirect("/portal");
   const eventId = ctx.eventId;
 
-  const [event, templates, forms, speakerRows, decidedAbstracts] = await Promise.all([
+  const [event, templates, forms, speakerRows, scheduledSpeakerRows, decidedAbstracts] = await Promise.all([
     prisma.event.findUnique({ where: { id: eventId }, select: { timezone: true } }),
     prisma.emailTemplate.findMany({
       where: { eventId },
@@ -54,6 +55,15 @@ export default async function AdminOperationsPage() {
         session: { select: { title: true } },
       },
       orderBy: { user: { email: "asc" } },
+      take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
+    }),
+    // The calendar-invite panel must state the number the send will really
+    // attempt, so this repeats the route's predicate rather than filtering the
+    // reminder roster above — that one deliberately includes speakers with no
+    // slot, who cannot be invited to anything.
+    prisma.sessionSpeaker.findMany({
+      where: { session: { eventId, contentStatus: "PUBLISHED", scheduleSlot: { isNot: null } } },
+      select: { userId: true, sessionId: true },
       take: OPERATOR_QUERY_LIMITS.reminderSessionSpeakers,
     }),
     // Decided proposals are the only ones a speaker should hear about by email.
@@ -87,6 +97,11 @@ export default async function AdminOperationsPage() {
     email: row.user.email,
   }])).values()];
 
+  // One row per (session, speaker) pair: the speaker total is how many emails
+  // go out, the row total is how many VEVENTs they carry between them.
+  const scheduledSpeakerCount = new Set(scheduledSpeakerRows.map((row) => row.userId)).size;
+  const scheduledSessionCount = scheduledSpeakerRows.length;
+
   const mocked = useMockIntegrations();
   const airtable = integrationStatus({
     name: "Airtable",
@@ -114,7 +129,7 @@ export default async function AdminOperationsPage() {
       <PageHeader
         eyebrow="Operations"
         title="Operations"
-        description="Send speaker reminders, bring proposals in from a spreadsheet, and keep your other tools in step with the programme."
+        description="Send speaker reminders and calendar invites, bring proposals in from a spreadsheet, and keep your other tools in step with the programme."
       />
 
       <div className={styles.grid}>
@@ -123,6 +138,12 @@ export default async function AdminOperationsPage() {
           timezone={event?.timezone ?? "UTC"}
           templates={templates.map((template) => ({ key: template.key, subject: template.subject, trigger: template.trigger }))}
           speakers={speakers}
+          email={email}
+        />
+        <CalendarInvitesPanel
+          eventId={eventId}
+          speakerCount={scheduledSpeakerCount}
+          sessionCount={scheduledSessionCount}
           email={email}
         />
         <ImportPanel eventId={eventId} forms={forms} />
