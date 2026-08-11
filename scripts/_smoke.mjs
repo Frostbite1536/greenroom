@@ -3084,6 +3084,30 @@ try {
   }, admin);
   check("room conflict refused (409)", roomClash.status === 409 && /ROOM_OVERLAP/.test(JSON.stringify(roomClash.data)), roomClash.data?.error?.code);
 
+  // 14b. GRA-01 — a forged slot id cannot buy a clean conflict answer.
+  // `detectConflicts` skips the slot whose id matches the candidate's, and the
+  // route used to take `input.id` from the request. Sending session 1's slot id
+  // on session 2's placement therefore excluded the very slot it collides with,
+  // and the identical request that was just refused above came back 200.
+  const foreignSlotId = place.data?.data?.slot?.id;
+  const forged = await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id, id: foreignSlotId, sessionId: sessionId2,
+    roomId: roomA, startsAt: start, endsAt: end,
+  }, admin);
+  const forgedRow = await prisma.scheduleSlot.findUnique({ where: { sessionId: sessionId2 } });
+  const foreignSlotStillThere = await prisma.scheduleSlot.findUnique({
+    where: { id: foreignSlotId }, select: { id: true },
+  });
+  check(
+    "GRA-01 forged foreign slot id refused 422, and nothing is written",
+    !!foreignSlotId &&
+      forged.status === 422 &&
+      forged.data?.error?.code === "SLOT_IDENTITY_MISMATCH" &&
+      forgedRow === null &&
+      foreignSlotStillThere?.id === foreignSlotId,
+    `${forged.status}/${forged.data?.error?.code}/row=${forgedRow === null ? "none" : "written"}`,
+  );
+
   // 15. Speaker conflict: same speaker, different room, overlapping time
   const sub3 = await j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: "Third talk", abstract: "Even more",
@@ -3112,6 +3136,26 @@ try {
     startsAt: iso(t0.getTime() + 65 * 60000), endsAt: iso(t0.getTime() + 110 * 60000),
   }, admin);
   check("move own slot without self-conflict", move.status === 200, move.status);
+
+  // 17b. GRA-01, the other half: a request that names the session's OWN slot id
+  // is still accepted, so the refusal is a truth check and not a blanket ban on
+  // the field. (The shipped client never sends `id`; every other placement call
+  // in this script omits it, which is the unchanged-behaviour case.)
+  // Deliberately the exact coordinates §17 just wrote, so this assertion adds
+  // no state change for the auto-placement section below to trip over.
+  const ownSlotId = move.data?.data?.slot?.id;
+  const ownId = await j("POST", "/api/agenda/slots", {
+    eventId: SCRATCH_EVENT.id, id: ownSlotId, sessionId: sessionId2, roomId: roomA,
+    startsAt: iso(t0.getTime() + 65 * 60000), endsAt: iso(t0.getTime() + 110 * 60000),
+  }, admin);
+  check(
+    "GRA-01 a session's own slot id is still accepted",
+    !!ownSlotId &&
+      ownId.status === 200 &&
+      ownId.data?.data?.slot?.id === ownSlotId &&
+      (ownId.data?.data?.conflicts ?? []).length === 0,
+    `${ownId.status}/${ownId.data?.error?.code ?? "ok"}`,
+  );
 
   // 18. Public embed shows placed sessions with a null session
   const pubAgenda = await j("GET", `/api/agenda/public?event=${SCRATCH_EVENT.slug}`);
@@ -3451,8 +3495,34 @@ try {
   check("anonymous blocked from admin agenda", anon.status === 401, anon.status);
 
   // 20. Unschedule path still works (data itself is dropped by the next reset)
+  // GRA-02: the handler now runs in one transaction under the S3 event lock.
+  // The lock is not observable from a single-threaded client, so what this
+  // proves is the part that would break if the rewrite were wrong — the row is
+  // really gone, the response shapes are byte-identical to the pre-fix ones,
+  // and a repeat still 404s under the same code rather than throwing.
+  const slotBeforeUnschedule = await prisma.scheduleSlot.findUnique({
+    where: { sessionId }, select: { id: true },
+  });
   const unschedule = await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
+  const slotAfterUnschedule = await prisma.scheduleSlot.findUnique({ where: { sessionId } });
   check("unschedule session", unschedule.status === 200 && unschedule.data?.data?.unscheduled === true, unschedule.status);
+  check(
+    "GRA-02 locked unschedule deletes the row and returns the unchanged shape",
+    !!slotBeforeUnschedule &&
+      slotAfterUnschedule === null &&
+      unschedule.data?.ok === true &&
+      unschedule.data?.data?.sessionId === sessionId &&
+      Object.keys(unschedule.data?.data ?? {}).sort().join(",") === "sessionId,unscheduled",
+    `before=${slotBeforeUnschedule ? "placed" : "missing"}/after=${slotAfterUnschedule === null ? "gone" : "present"}`,
+  );
+  const unscheduleAgain = await j("DELETE", `/api/agenda/slots?sessionId=${sessionId}`, null, admin);
+  check(
+    "GRA-02 a repeated unschedule is the same 404 as before",
+    unscheduleAgain.status === 404 &&
+      unscheduleAgain.data?.error?.code === "SLOT_NOT_FOUND" &&
+      unscheduleAgain.data?.error?.message === "No schedule slot for this session.",
+    `${unscheduleAgain.status}/${unscheduleAgain.data?.error?.code}`,
+  );
 
   // ---------------------------------------------------------------------------
   // 20b. AIA-08 — "Fill open slots": preview → transactional apply (addendum §4).
@@ -4615,6 +4685,48 @@ try {
   check("T3 the rejected talk is left off the public programme",
     unpublishAgain.status === 200 && unpublishAgain.data?.data?.contentStatus === "DRAFT",
     unpublishAgain.status);
+
+  // 23a-bis. GRA2-02 — the live integrations may not export what the public
+  // site withholds. Both projections used to include a session on acceptance
+  // alone, so an unpublished talk and its speakers' names, bios and email
+  // addresses went to a third party anyway. Runs here because the scratch event
+  // now holds at least one unpublished programme session (the one just
+  // unpublished above), and `dryRun` keeps both calls preview-only — nothing
+  // leaves Greenroom.
+  const integrationSessions = await prisma.session.findMany({
+    where: { eventId: SCRATCH_EVENT.id },
+    select: { id: true, contentStatus: true, sourceAbstractId: true, sourceAbstract: { select: { status: true } } },
+  });
+  const isProgrammeSession = (s) => !s.sourceAbstractId || s.sourceAbstract?.status === "ACCEPTED";
+  const expectedExported = integrationSessions.filter((s) => isProgrammeSession(s) && s.contentStatus === "PUBLISHED").length;
+  const expectedWithheld = integrationSessions.filter((s) => isProgrammeSession(s) && s.contentStatus !== "PUBLISHED").length;
+  // Non-vacuity: with nothing unpublished, every assertion below would pass
+  // against the old code too.
+  check(
+    "GRA2-02 the scratch event really does hold an unpublished programme session",
+    expectedWithheld >= 1 && expectedExported >= 1,
+    `exported=${expectedExported} withheld=${expectedWithheld}`,
+  );
+
+  const mirrorPreview = await j("POST", "/api/comms/airtable/mirror", { eventId: SCRATCH_EVENT.id, dryRun: true }, admin);
+  check(
+    "GRA2-02 the Airtable preview excludes unpublished sessions and says how many",
+    mirrorPreview.status === 200 &&
+      mirrorPreview.data?.data?.mode === "preview" &&
+      mirrorPreview.data?.data?.counts?.Sessions === expectedExported &&
+      mirrorPreview.data?.data?.excluded?.unpublishedSessions === expectedWithheld,
+    `${mirrorPreview.status}/sessions=${mirrorPreview.data?.data?.counts?.Sessions}/excluded=${mirrorPreview.data?.data?.excluded?.unpublishedSessions}`,
+  );
+
+  const pushPreview = await j("POST", "/api/integrations/accelevents/push", { eventId: SCRATCH_EVENT.id, dryRun: true }, admin);
+  check(
+    "GRA2-02 the Accelevents preview excludes unpublished sessions and says how many",
+    pushPreview.status === 200 &&
+      pushPreview.data?.data?.mode === "preview" &&
+      pushPreview.data?.data?.summary?.sessions === expectedExported &&
+      pushPreview.data?.data?.excluded?.unpublishedSessions === expectedWithheld,
+    `${pushPreview.status}/sessions=${pushPreview.data?.data?.summary?.sessions}/excluded=${pushPreview.data?.data?.excluded?.unpublishedSessions}`,
+  );
 
   // 23b. ABS-13 — ADMIN-only CSV export of review results. Runs last so the
   // event already holds real plans, completed reviews, scores, and decisions.
