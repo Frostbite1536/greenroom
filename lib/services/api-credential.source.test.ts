@@ -27,8 +27,10 @@ const CRYPTO = "lib/services/api-credential.ts";
 const STORE = "lib/services/api-credential-store.ts";
 const V1 = "lib/api/v1.ts";
 const ADMIN_ROUTE = "app/api/admin/api-keys/route.ts";
+const HANDLERS = "lib/services/api-credential-handlers.ts";
 const PANEL = "components/api-credentials.tsx";
 const SPEC = "lib/api/openapi.ts";
+const DOCS = ["docs/API.md", "docs/ARCHITECTURE.md"];
 const V1_ROUTES = [
   "app/api/v1/submissions/route.ts",
   "app/api/v1/speakers/route.ts",
@@ -92,22 +94,23 @@ test("only the authentication query ever reads the stored secret digest", () => 
   // fails.
   assert.match(code(STORE), /select: \{ id: true, eventId: true, secretHash: true \}/);
 
-  // The admin route is allowed exactly one mention of the digest: writing it at
-  // creation. It may never project one back out.
-  const adminRoute = code(ADMIN_ROUTE);
-  assert.match(adminRoute, /secretHash: issued\.secretHash,/, "the create path must persist the digest");
-  assert.doesNotMatch(adminRoute, /secretHash: true/, "the admin route must never project the digest");
-  // With that one write removed, the word does not occur anywhere else on this
-  // route: no projection, no response field, no log line.
-  const withoutTheWrite = adminRoute.replace("secretHash: issued.secretHash,", "");
+  // The handlers WRITE the digest at creation and never read it back. Stated as
+  // three properties rather than a mention count, so declaring the column's
+  // type stays legal while reading a stored digest does not.
+  const handlers = code(HANDLERS);
+  assert.match(handlers, /secretHash: issued\.secretHash,/, "the create path must persist the digest");
+  assert.doesNotMatch(handlers, /secretHash: true/, "the handlers must never project the digest");
   assert.doesNotMatch(
-    withoutTheWrite,
-    /secretHash/,
-    "the admin route may name the secret digest only where it writes it",
+    handlers,
+    /\.secretHash\b(?!,)/,
+    "the handlers must never read a stored digest off a row",
   );
+  // The one property access that IS allowed is on the freshly issued value,
+  // never on anything that came back from the database.
+  assert.doesNotMatch(handlers, /row\.secretHash|credential\.secretHash/);
 
-  // Everywhere else the digest is simply absent.
-  for (const path of [PANEL, "lib/data/reads.ts", ...V1_ROUTES]) {
+  // Everywhere else the digest is simply absent -- including the wiring file.
+  for (const path of [ADMIN_ROUTE, PANEL, "lib/data/reads.ts", ...V1_ROUTES]) {
     assert.doesNotMatch(code(path), /secretHash/, `${path} must never touch the stored secret digest`);
   }
   // The panel is a client component; not one word of the secret's shape or its
@@ -116,8 +119,8 @@ test("only the authentication query ever reads the stored secret digest", () => 
 });
 
 test("the admin projection cannot emit a secret, and the shown value is derived", () => {
-  const route = code(ADMIN_ROUTE);
-  // One projection, used by every read on the route.
+  const route = code(HANDLERS);
+  // One projection, used by every read on the surface.
   assert.match(route, /^const credentialSelect = \{$/m);
   assert.match(route, /^\s*lookupId: true,$/m);
   assert.match(route, /select: credentialSelect,/);
@@ -133,14 +136,14 @@ test("the admin projection cannot emit a secret, and the shown value is derived"
 });
 
 test("no credential material can reach a URL, a log, or browser storage", () => {
-  const route = code(ADMIN_ROUTE);
+  const route = code(HANDLERS);
   // Revocation addresses the credential by its row id. The token is never a
   // route parameter, so it can never land in an access log or a Referer header.
   assert.match(route, /searchParams\.get\("id"\)/);
   assert.doesNotMatch(route, /searchParams\.get\("token"\)/);
   assert.doesNotMatch(route, /searchParams\.get\("lookupId"\)/);
   // Nothing on the server logs any part of a credential.
-  for (const path of [route, code(STORE), code(CRYPTO), code(V1)]) {
+  for (const path of [route, code(ADMIN_ROUTE), code(STORE), code(CRYPTO), code(V1)]) {
     assert.doesNotMatch(path, /console\.[a-z]+\([^)]*\b(?:token|secret|secretHash|requestKey)\b/);
   }
 
@@ -220,11 +223,12 @@ test("a per-event credential narrows the event query rather than filtering its r
 // ---------------------------------------------------------------------------
 
 test("every admin verb is ADMIN-only and scoped to the session's own event", () => {
-  const route = code(ADMIN_ROUTE);
+  const route = code(HANDLERS);
   const admin = [...route.matchAll(/requireContext\(\["ADMIN"\]\)/g)];
   assert.equal(admin.length, 3, "list, create and revoke must each require ADMIN");
+  const wiring = code(ADMIN_ROUTE);
   for (const verb of ["export const GET", "export const POST", "export const DELETE"]) {
-    assert.ok(route.includes(verb), `${verb} must exist`);
+    assert.ok(wiring.includes(verb), `${verb} must be exported by the route`);
   }
   // Nothing here accepts an event id from the caller: the scope is the signed
   // session's active event, every time.
@@ -236,19 +240,19 @@ test("every admin verb is ADMIN-only and scoped to the session's own event", () 
 });
 
 test("issuance is bounded under a lock, and revocation is idempotent and scoped", () => {
-  const route = code(ADMIN_ROUTE);
+  const route = code(HANDLERS);
   // Count and insert are atomic with respect to each other.
-  assert.match(route, /await lockEventApiCredentialIssuance\(tx, ctx\.eventId\);/);
+  assert.match(route, /await deps\.lockIssuance\(tx, ctx\.eventId\);/);
   assert.match(route, /const active = await tx\.apiCredential\.count\(\{/);
   assert.match(route, /if \(active >= MAX_ACTIVE_API_CREDENTIALS_PER_EVENT\) \{/);
   assert.match(route, /"API_KEY_LIMIT_REACHED",/);
-  const lockAt = route.indexOf("lockEventApiCredentialIssuance");
+  const lockAt = route.indexOf("deps.lockIssuance");
   const countAt = route.indexOf("apiCredential.count");
   const createAt = route.indexOf("tx.apiCredential.create");
   assert.ok(lockAt < countAt && countAt < createAt, "the bound must be counted under the lock, before the insert");
 
   // Revoke sets a tombstone; it never deletes the row.
-  assert.match(route, /data: \{ revokedAt: new Date\(\) \}/);
+  assert.match(route, /data: \{ revokedAt: clock\(\) \}/);
   assert.doesNotMatch(route, /apiCredential\.delete/);
   assert.doesNotMatch(route, /apiCredential\.deleteMany/);
   // Idempotent: an already-revoked credential is not an error.
@@ -330,4 +334,29 @@ test("the published spec documents both key kinds, the scoped refusal, and the o
   // lib/api/openapi-purity.test.ts proves the graph; this is the local guard.
   assert.doesNotMatch(spec, /from "@\/lib\/services\//);
   assert.doesNotMatch(spec, /from "@\/lib\/prisma"/);
+});
+
+test("nothing published still claims this surface can report itself unconfigured", () => {
+  // Once an event can hold its own credentials, a deployment with no
+  // GREENROOM_API_KEY is not "unconfigured" — it may be serving per-event keys
+  // perfectly. Every surface that used to say otherwise had to change together,
+  // so none of them can drift back on its own.
+  for (const path of [SPEC, V1, "lib/api/v1-contract.ts", "lib/api/openapi-view.ts", ...DOCS]) {
+    assert.doesNotMatch(
+      code(path),
+      /API_KEY_NOT_CONFIGURED/,
+      `${path} must not name the superseded unconfigured refusal`,
+    );
+    assert.doesNotMatch(code(path), /503/, `${path} must not advertise 503 on this surface`);
+  }
+
+  // What each of them says instead.
+  assert.match(read(SPEC), /every request without an accepted one is/, "the spec must state the 401 rule");
+  assert.match(read(V1), /every missing-or-invalid credential on this surface is now 401/);
+  for (const path of DOCS) {
+    assert.match(read(path), /401 UNAUTHORIZED/, `${path} must document the refusal that replaced it`);
+  }
+  // The docs describe both credential kinds, not just the deployment-wide one.
+  assert.match(read("docs/API.md"), /grk_<id>_<secret>/);
+  assert.match(read("docs/ARCHITECTURE.md"), /per-event `ApiCredential` keys/);
 });
