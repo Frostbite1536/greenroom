@@ -129,8 +129,12 @@ demo seed (`lib/demo/seed.ts`) has been run against it.
   separately for Preview and Production.
 - `GREENROOM_API_KEY` is configured, so `/api/v1/*` is live; unset it and those routes return
   `503 API_KEY_NOT_CONFIGURED`.
-- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` answers
-  `403 RESET_DISABLED` (INV-RESET-001).
+- `ALLOW_DEMO_RESET` is unset in production, so `/api/admin/reset` refuses every
+  caller (INV-RESET-001). The refusal body depends on who asks, by design (S-18):
+  anyone who has not proved they are an admin gets `403 FORBIDDEN` — the same
+  body a deployment with the flag *set* returns them, so the refusal cannot be
+  used to read the flag. An authenticated admin gets `403 RESET_DISABLED`, which
+  names the variable to set.
 - Airtable mirror credentials (`AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`,
   `MOCK_EXTERNAL_APIS=false`) are configured in production and a live one-way mirror run has
   completed.
