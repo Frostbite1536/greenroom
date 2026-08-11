@@ -108,14 +108,49 @@ export const coSpeakerInputSchema = z
   .min(1)
   .max(20);
 
+const categoryNameSchema = z.string().trim().min(1).max(120);
+const categoryDescriptionSchema = z.string().trim().max(500);
+const categoryTeamKeySchema = z.string().trim().max(120);
+const categorySortOrderSchema = z.number().int().nonnegative();
+
 export const categoryInputSchema = z.object({
   eventId: idSchema,
   id: idSchema.optional(),
-  name: z.string().trim().min(1).max(120),
-  description: z.string().trim().max(500).optional(),
-  defaultTeamKey: z.string().trim().max(120).optional(),
-  sortOrder: z.number().int().nonnegative().default(0),
+  name: categoryNameSchema,
+  description: categoryDescriptionSchema.optional(),
+  defaultTeamKey: categoryTeamKeySchema.optional(),
+  sortOrder: categorySortOrderSchema.default(0),
 });
+
+/**
+ * Partial category edit, the same shape as `roomUpdateSchema`.
+ *
+ * `categoryInputSchema` is whole-row: an update through it rewrites
+ * `description`, `defaultTeamKey` and `sortOrder` from the body every time. A
+ * rename sent through that contract would therefore silently clear the
+ * category's `defaultTeamKey` — the value that routes its proposals to a
+ * review team (`app/api/evaluations/assignments/route.ts`). This contract names
+ * the row and only the fields the operator actually changed, so renaming can
+ * never drop routing. `null` clears an optional column; omitting it leaves the
+ * stored value alone.
+ */
+export const categoryUpdateSchema = z
+  .object({
+    id: idSchema,
+    name: categoryNameSchema.optional(),
+    description: categoryDescriptionSchema.nullable().optional(),
+    defaultTeamKey: categoryTeamKeySchema.nullable().optional(),
+    sortOrder: categorySortOrderSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.name !== undefined
+      || value.description !== undefined
+      || value.defaultTeamKey !== undefined
+      || value.sortOrder !== undefined,
+    { message: "Provide at least one category field to update." },
+  );
 
 const eventDateKeySchema = z
   .string()
@@ -222,6 +257,44 @@ export const roomUpdateSchema = z
   .strict()
   .refine((value) => value.name !== undefined || value.capacity !== undefined || value.sortOrder !== undefined, {
     message: "Provide at least one room field to update.",
+  });
+
+/**
+ * Programme tracks — the schedule's swimlanes, authored alongside rooms.
+ *
+ * `Track.color` is a required, operator-chosen column that the agenda chip and
+ * the public schedule render as a background, so it is bounded here to exactly
+ * the hex forms `parseHex` in `lib/color-contrast.ts` can read. An unparseable
+ * value would not fail loudly; it would silently render every affected slot in
+ * the grey `FALLBACK_BACKGROUND`, so the boundary is the right place to refuse
+ * it. The other two fields mirror `roomNameSchema`/`roomSortOrderSchema`
+ * because a track and a room are authored on the same settings surface.
+ */
+const trackNameSchema = z.string().trim().min(1).max(120);
+const trackColorSchema = z
+  .string()
+  .trim()
+  .regex(/^#?(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "Use a hex colour such as #6366f1.");
+const trackSortOrderSchema = z.number().int().nonnegative().max(100_000);
+
+export const trackCreateSchema = z
+  .object({
+    name: trackNameSchema,
+    color: trackColorSchema,
+    sortOrder: trackSortOrderSchema.optional(),
+  })
+  .strict();
+
+export const trackUpdateSchema = z
+  .object({
+    id: idSchema,
+    name: trackNameSchema.optional(),
+    color: trackColorSchema.optional(),
+    sortOrder: trackSortOrderSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.name !== undefined || value.color !== undefined || value.sortOrder !== undefined, {
+    message: "Provide at least one track field to update.",
   });
 
 /**

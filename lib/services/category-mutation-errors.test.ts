@@ -8,6 +8,13 @@ test("category uniqueness races have an actionable stable classification", () =>
     code: "P2002",
     clientVersion: "test",
   });
+  const missing = new Prisma.PrismaClientKnownRequestError("record vanished", {
+    code: "P2025",
+    clientVersion: "test",
+  });
   assert.equal(classifyCategoryMutationError(duplicate), "CATEGORY_NAME_TAKEN");
+  // A concurrent delete invalidating the scoped preflight must read the same as
+  // an unknown or cross-event id, not as a 500.
+  assert.equal(classifyCategoryMutationError(missing), "CATEGORY_NOT_FOUND");
   assert.equal(classifyCategoryMutationError(new Error("database offline")), null);
 });

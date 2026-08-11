@@ -49,6 +49,17 @@ function toHex({ r, g, b }: Rgb): string {
   return `#${part(r)}${part(g)}${part(b)}`;
 }
 
+/**
+ * Expand any stored track colour to the `#rrggbb` form an `<input type="color">`
+ * will actually display. The column accepts `#rgb` and the bare forms too, and
+ * a colour input silently shows black for anything else — so the settings
+ * editor would misreport a perfectly valid stored colour as black without this.
+ */
+export function normalizeHex(value: string | null | undefined, fallback: string): string {
+  const rgb = parseHex(value);
+  return rgb ? toHex(rgb) : fallback;
+}
+
 /** WCAG relative luminance of an sRGB channel triple, 0 (black) to 1 (white). */
 export function relativeLuminance(rgb: Rgb): number {
   const channel = (value: number) => {

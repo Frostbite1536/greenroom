@@ -603,10 +603,19 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .settings-list .settings-track-colour + span { flex: 1; }
 .settings-category-form { display: grid; gap: 12px; padding-top: 18px; border-top: 1px solid var(--line); }
 .settings-category-form .ghost-button { justify-self: start; }
+/* Track and category rows carry per-row actions and swap to an inline editor.
+   The actions stay pinned right on a read-only row; an editing row hands the
+   form its whole width instead of squeezing it beside the read-only cells. */
+.settings-list li > .settings-row-actions { flex: 0 0 auto; margin-left: auto; }
+.settings-taxonomy-editor { flex: 1 1 100%; display: grid; gap: 10px; }
+.settings-taxonomy-editor .settings-row-actions { justify-content: flex-start; }
+/* Half-width column: the colour swatch and the button take only what they need. */
+.settings-track-form { grid-template-columns: minmax(120px, 1fr) auto auto; }
+.colour-input { width: 46px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
 .settings-card button:focus-visible, .settings-card input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 @media (max-width: 640px) {
-  .settings-form, .settings-inline-form, .settings-room-editor, .settings-structure-grid { grid-template-columns: 1fr; }
+  .settings-form, .settings-inline-form, .settings-room-editor, .settings-track-form, .settings-structure-grid { grid-template-columns: 1fr; }
   .settings-inline-form .primary-button, .settings-row-actions { justify-self: stretch; }
   .settings-inline-form .primary-button { justify-content: center; }
   .settings-row-actions { justify-content: flex-start; }
