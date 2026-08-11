@@ -794,6 +794,27 @@ export const speakerProfileUpdateSchema = z.object({
   socialLinks: nullableSocialLinks,
 });
 
+/**
+ * The portal's own PATCH body: the global profile fields above, plus one deck
+ * for the caller's CURRENT event.
+ *
+ * A separate schema rather than a sixth key on `speakerProfileUpdateSchema`,
+ * because that schema's keys are `SpeakerProfile` COLUMNS — the organizer
+ * roster editor `.pick()`s from it, `lib/services/speaker-roster` maps it
+ * straight onto a Prisma write, and the v1 API's published `SpeakerProfile`
+ * object describes exactly those. `eventSlideDeckUrl` is not a column on that
+ * row and never becomes one: it addresses an `EventSpeakerDeck` association.
+ *
+ * Same validator as the global column it falls back to (`nullableProfileUrl`),
+ * so the two hold the same kind of value: an absolute URL, or this app's own
+ * `/api/files/<id>` path. Same semantics too — an omitted key preserves, and an
+ * explicit `null` clears, which deletes the association and lets the global
+ * deck become the fallback again.
+ */
+export const portalProfileUpdateSchema = speakerProfileUpdateSchema.extend({
+  eventSlideDeckUrl: nullableProfileUrl,
+});
+
 export const speakerTaskUpdateSchema = z.object({
   taskId: idSchema,
   // Waivers are an organiser decision. A speaker may work on or complete an

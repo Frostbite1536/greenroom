@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { FileUploadField } from "@/components/file-upload-field";
+import { resolveSpeakerDeck } from "@/lib/speakers/event-deck";
 import {
   profileFormValues,
   profilePatch,
@@ -15,7 +16,14 @@ export type { PortalProfile } from "@/lib/portal/profile";
 
 const MAX_BIO = 3000;
 
-export function ProfileForm({ profile }: { profile: PortalProfile }) {
+export function ProfileForm({
+  profile,
+  eventName,
+}: {
+  profile: PortalProfile;
+  /** The event this session is on. Named in the deck copy so "this event" is never a guess. */
+  eventName: string;
+}) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [baseline, setBaseline] = useState(profile);
@@ -81,6 +89,21 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
 
   const dirty = Object.keys(profilePatch(baseline, form)).length > 0;
 
+  // Describes what is STORED, not what is being typed: the point of the line is
+  // to say which deck this event resolves to right now, and a half-typed URL is
+  // not yet an answer to that. Resolved by the one shared function every
+  // organizer surface also uses, so the speaker and the program team can never
+  // be told two different things about the same deck.
+  const storedDeck = resolveSpeakerDeck({
+    eventDeckUrl: baseline.eventSlideDeckUrl,
+    profileDeckUrl: baseline.slideDeckUrl,
+  });
+  const deckNotice = storedDeck.source === "event"
+    ? "The organizers see this deck for this event."
+    : storedDeck.source === "profile"
+      ? "You have not set one yet, so your global deck below is used for this event."
+      : "You have no deck stored for this event or globally.";
+
   return (
     <form onSubmit={onSubmit}>
       <p className={styles.taskMeta}>Clear a field, then save, to remove its value. Unchanged fields are preserved.</p>
@@ -122,8 +145,32 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
         hint="PNG, JPEG or WebP."
         onUploaded={(url) => update("headshotUrl", url)}
       />
+      {/* The deck a speaker hands over is per EVENT, not per person: one global
+          URL cannot be a different deck for two conferences and cannot be
+          private to one event's organizers. So the primary control writes this
+          event's association, and the global field below it is kept, still
+          editable, and labelled as what it now is — the fallback. */}
       <label className={styles.field}>
-        <span>Slide deck URL</span>
+        <span>Slide deck URL for {eventName}</span>
+        <input
+          value={form.eventSlideDeckUrl}
+          onChange={(e) => update("eventSlideDeckUrl", e.target.value)}
+          placeholder="https://…"
+          inputMode="url"
+        />
+      </label>
+      <FileUploadField
+        kind="SLIDE_DECK"
+        label={`…or upload a slide deck for ${eventName}`}
+        hint="PDF. Only you and this event's organizers can open it."
+        onUploaded={(url) => update("eventSlideDeckUrl", url)}
+      />
+      <p className={styles.taskMeta}>
+        This deck is used for {eventName} only. {deckNotice}
+      </p>
+
+      <label className={styles.field}>
+        <span>Global slide deck URL (fallback)</span>
         <input
           value={form.slideDeckUrl}
           onChange={(e) => update("slideDeckUrl", e.target.value)}
@@ -131,12 +178,10 @@ export function ProfileForm({ profile }: { profile: PortalProfile }) {
           inputMode="url"
         />
       </label>
-      <FileUploadField
-        kind="SLIDE_DECK"
-        label="…or upload a slide deck"
-        hint="PDF. Only you and the organizers can open it."
-        onUploaded={(url) => update("slideDeckUrl", url)}
-      />
+      <p className={styles.taskMeta}>
+        Used by any event you speak at that has no deck of its own. Clearing the field above removes
+        {" "}{eventName}&rsquo;s deck and this one applies again.
+      </p>
 
       <div className={styles.formActions}>
         <button className="primary-button" type="submit" disabled={saving || !dirty}>
