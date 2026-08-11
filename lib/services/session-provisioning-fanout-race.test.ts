@@ -132,29 +132,32 @@ type Blocked = { seen: boolean; polls: number; wait: string | null };
  * Ask the server whether the second writer is held up by the first, and by what
  * kind of wait. Both pids are published from inside their own transactions, so
  * they name the backends actually running the racers even through a pooler.
+ *
+ * Both are already known when this is called — the caller awaits the second
+ * writer's pid barrier first. An earlier revision passed getters and burned a
+ * `SELECT 1` round trip whenever a pid was still unpublished, which on a fast
+ * loopback server exhausted every poll before the second transaction had opened:
+ * a scheduler race in the instrumentation that reported the product as broken.
+ * Waiting on the barrier is the fix; polling harder would only have hidden it.
  */
 async function observeBlocked(
   observer: PrismaClient,
-  pids: { first: () => number; second: () => number },
+  first: number,
+  second: number,
   done: () => boolean,
 ): Promise<Blocked> {
+  let wait: string | null = null;
   for (let polls = 1; polls <= MAX_POLLS; polls++) {
-    const first = pids.first();
-    const second = pids.second();
-    if (first > 0 && second > 0) {
-      const rows = await observer.$queryRaw<{ blocked: boolean; wait: string | null }[]>`
-        SELECT (${first}::int = ANY(pg_blocking_pids(${second}::int))) AS blocked,
-               (SELECT wait_event_type || ':' || wait_event
-                  FROM pg_stat_activity WHERE pid = ${second}::int) AS wait
-      `;
-      if (rows[0].blocked) return { seen: true, polls, wait: rows[0].wait };
-    } else {
-      // A pid is not published yet. Burn a round trip rather than spin the loop.
-      await observer.$queryRaw`SELECT 1`;
-    }
-    if (done()) return { seen: false, polls, wait: null };
+    const rows = await observer.$queryRaw<{ blocked: boolean; wait: string | null }[]>`
+      SELECT (${first}::int = ANY(pg_blocking_pids(${second}::int))) AS blocked,
+             (SELECT wait_event_type || ':' || wait_event
+                FROM pg_stat_activity WHERE pid = ${second}::int) AS wait
+    `;
+    wait = rows[0].wait;
+    if (rows[0].blocked) return { seen: true, polls, wait };
+    if (done()) return { seen: false, polls, wait };
   }
-  return { seen: false, polls: MAX_POLLS, wait: null };
+  return { seen: false, polls: MAX_POLLS, wait };
 }
 
 /**
@@ -171,6 +174,25 @@ function barrier() {
   let open!: () => void;
   const held = new Promise<void>((resolve) => { open = resolve; });
   return { signal, reached, open, held };
+}
+
+/**
+ * A value one side of the test hands the other, with its arrival observable.
+ *
+ * `done` is what lets a caller tell "the pid never arrived" from "the pid
+ * arrived and then the racer finished", which are opposite verdicts: the first
+ * means the writer never even opened its transaction, the second is the normal
+ * path.
+ */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const value = new Promise<T>((settle) => { resolve = settle; });
+  const state = { done: false };
+  return {
+    value,
+    resolve: (published: T) => { state.done = true; resolve(published); },
+    isDone: () => state.done,
+  };
 }
 
 /** How a racer reports itself while it is still inside its transaction. */
@@ -441,8 +463,8 @@ async function runCell(config: CellConfig): Promise<{ observed: Observed; blocke
 
   const hold = barrier();
   const started: Promise<unknown>[] = [];
-  let firstPid = 0;
-  let secondPid = 0;
+  const firstPid = deferred<number>();
+  const secondPid = deferred<number>();
 
   try {
     await createFixture(observer, fixture, mode);
@@ -450,7 +472,7 @@ async function runCell(config: CellConfig): Promise<{ observed: Observed; blocke
     // The first writer runs its whole locked body, then signals from inside its
     // own still-open transaction. No polling, no timer: when `reached` resolves,
     // the lock is held and the work under it is done.
-    const firstProbe: Probe = { onPid: (pid) => { firstPid = pid; }, hold };
+    const firstProbe: Probe = { onPid: firstPid.resolve, hold };
     const firstRun = settled<TaskWritten | Provisioned>(
       order === "task-writer-first"
         ? requiredTaskWriter(writerClient, fixture, firstProbe)
@@ -460,6 +482,10 @@ async function runCell(config: CellConfig): Promise<{ observed: Observed; blocke
     // Raced against the run itself, so a first writer that throws before
     // signalling fails the test rather than hanging it.
     await Promise.race([hold.reached, firstRun.result]);
+    if (!firstPid.isDone()) {
+      unwrap(await firstRun.result, "first writer (settled before publishing its pid)");
+      throw new Error("the first writer settled before publishing its backend pid");
+    }
 
     // Everything from here to `hold.open()` is the stranding window: a throw
     // here leaves a parked transaction, which is exactly what the outer
@@ -468,16 +494,35 @@ async function runCell(config: CellConfig): Promise<{ observed: Observed; blocke
 
     // Only now is the second writer issued. It must queue on the fan-out lock
     // rather than read a snapshot taken before the first one commits.
-    const secondProbe: Probe = { onPid: (pid) => { secondPid = pid; } };
+    const secondProbe: Probe = { onPid: secondPid.resolve };
     const secondRun = settled<TaskWritten | Provisioned>(
       order === "task-writer-first"
         ? provision(provisionerClient, fixture, secondProbe)
         : requiredTaskWriter(writerClient, fixture, secondProbe),
     );
     started.push(secondRun.result);
+
+    // Wait for the second writer to be *in* its transaction before observing it.
+    // Its pid is the first statement it runs, so this resolves the moment the
+    // transaction opens — and on a fast loopback server that is later than the
+    // observer's first poll would be, which is precisely the scheduler race that
+    // made a correct product look unblocked. No sleep, no bigger poll budget:
+    // the barrier is the synchronization.
+    await Promise.race([secondPid.value, secondRun.result]);
+    if (!secondPid.isDone()) {
+      // Settling before it published a pid means it never opened a transaction
+      // on the lock at all, so it cannot have been blocked. That is the red the
+      // observer should report — not a poll timeout that reads like flakiness.
+      unwrap(await secondRun.result, "second writer (settled before publishing its pid)");
+      throw new Error(
+        "the second writer settled before publishing its backend pid, so it never blocked on the fan-out lock",
+      );
+    }
+
     const blocked = await observeBlocked(
       observer,
-      { first: () => firstPid, second: () => secondPid },
+      await firstPid.value,
+      await secondPid.value,
       secondRun.isDone,
     );
 
