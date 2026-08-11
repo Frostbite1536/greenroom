@@ -8,8 +8,10 @@ import {
   AcceleventsPushError,
   acceleventsPushSummary,
   buildAcceleventsPushPayload,
+  countUnpublishedExclusions,
   postAcceleventsPush,
   resolveAcceleventsPushMode,
+  type AcceleventsSourceSession,
 } from "@/lib/accelevents/push";
 
 const pushRequestSchema = z.object({
@@ -33,6 +35,8 @@ export const POST = handle(async (req) => {
       where: { eventId: ctx.eventId },
       select: {
         id: true, sourceAbstractId: true, title: true, description: true, format: true, durationMinutes: true,
+        // GRA2-02: the push may not export what the public site withholds.
+        contentStatus: true,
         sourceAbstract: { select: { status: true } },
         speakers: {
           select: { user: { select: {
@@ -60,10 +64,11 @@ export const POST = handle(async (req) => {
     );
   }
 
-  const payload = buildAcceleventsPushPayload(event, sessions.map((session) => ({
+  const pushSessions: AcceleventsSourceSession[] = sessions.map((session) => ({
     id: session.id,
     sourceAbstractId: session.sourceAbstractId,
     sourceAbstractStatus: session.sourceAbstract?.status ?? null,
+    contentStatus: session.contentStatus,
     title: session.title,
     description: session.description,
     format: session.format,
@@ -78,22 +83,28 @@ export const POST = handle(async (req) => {
       roomName: session.scheduleSlot.room.name,
       trackName: session.scheduleSlot.track?.name ?? null,
     } : null,
-  })));
+  }));
+
+  const payload = buildAcceleventsPushPayload(event, pushSessions);
   const summary = acceleventsPushSummary(payload);
+  // Additive sibling, the same shape the Airtable mirror returns: `summary`
+  // keeps its exact fields, and this states why `sessions` may be smaller than
+  // the programme an operator sees in the workspace.
+  const excluded = { unpublishedSessions: countUnpublishedExclusions(pushSessions) };
   const decision = resolveAcceleventsPushMode({
     dryRun: input.dryRun,
     mockExternalApis: useMockIntegrations(),
     endpoint: process.env.ACCELEVENTS_BASE_URL,
   });
 
-  if (decision.mode !== "live") return ok({ ...decision, summary });
+  if (decision.mode !== "live") return ok({ ...decision, summary, excluded });
 
   try {
     await postAcceleventsPush(fetch, {
       endpoint: process.env.ACCELEVENTS_BASE_URL!,
       apiKey: process.env.ACCELEVENTS_API_KEY,
     }, payload);
-    return ok({ mode: "live" as const, summary });
+    return ok({ mode: "live" as const, summary, excluded });
   } catch (error) {
     if (error instanceof AcceleventsPushError) {
       console.error(`[accelevents] configured endpoint returned ${error.status}`);
