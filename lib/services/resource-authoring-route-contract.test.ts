@@ -163,7 +163,7 @@ test("the sidebar advertises the page, ADMIN-only, matching what the page enforc
   const shell = source("components/app-shell.tsx");
   assert.match(
     shell,
-    /\{ href: "\/admin\/resources", label: "Resources & wiki", icon: BookOpen, roles: \["ADMIN"\] \}/,
+    /\{ href: "\/admin\/resources", label: "Resources & wiki", icon: BookOpen, roles: \["ADMIN"\], group: "programme" \}/,
   );
   assert.match(shell, /^\s*BookOpen,$/m);
 });
