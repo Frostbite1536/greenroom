@@ -24,6 +24,11 @@ export const OPERATOR_QUERY_LIMITS = {
   agendaSessions: 2_000,
   // Onboarding-task templates are authored by hand, one checklist per event.
   onboardingTasks: 250,
+  // Review rounds are authored by hand too — a handful per event. The
+  // dashboard's cards read them all; the cap is a ceiling, not a page size.
+  dashboardPlans: 100,
+  // Withdrawn ids feed one funnel count; bounded like every dashboard read.
+  dashboardWithdrawn: 2_000,
   settingsTracks: 250,
   settingsCategories: 1_000,
   adminAbstracts: 100,

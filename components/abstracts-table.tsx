@@ -612,12 +612,18 @@ function AbstractDrawer({
       aria-labelledby={`${ids}-title`}
       open={serverOpen || undefined}
       onClose={onClose}
-      onCancel={onClose}
+      // Escape must not discard the drawer while a decision or conversion is in
+      // flight — the mutation would continue with its error surface unmounted.
+      // Same rule the agenda dialogs enforce.
+      onCancel={(event) => {
+        if (busy !== null || pending) event.preventDefault();
+        else onClose();
+      }}
       // The dialog element carries no padding, so a mousedown that lands on it
       // rather than on the body is a backdrop click — the same dismissal the
-      // old overlay div offered.
+      // old overlay div offered. Also gated while a write is in flight.
       onMouseDown={(event) => {
-        if (event.target === dialogRef.current) onClose();
+        if (event.target === dialogRef.current && busy === null && !pending) onClose();
       }}
     >
       <div className="abstract-drawer-body">

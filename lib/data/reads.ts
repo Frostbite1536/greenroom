@@ -1682,6 +1682,7 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
       where: { eventId },
       orderBy: { ordinal: "asc" },
       select: { id: true, name: true, ordinal: true },
+      take: OPERATOR_QUERY_LIMITS.dashboardPlans,
     }),
     prisma.reviewAssignment.groupBy({
       by: ["planId", "abstractId", "status"],
@@ -1691,6 +1692,7 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
     prisma.abstract.findMany({
       where: { eventId, status: "WITHDRAWN" },
       select: { id: true },
+      take: OPERATOR_QUERY_LIMITS.dashboardWithdrawn,
     }),
     // "Decided but not on the programme": accepted, and either no talk was
     // created from it or the talk holds no slot. INV-DOMAIN-001 keeps the two

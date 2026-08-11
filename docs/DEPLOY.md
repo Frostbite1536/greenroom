@@ -75,6 +75,10 @@ upsert merge key. Other fields may be single-line text unless noted.
 
 The mirror uses `PATCH /v0/{base}/{table}` with Airtable `performUpsert` on
 `External ID`, sends at most 10 records per request, and never deletes records.
+Because it never deletes, **unpublishing a session does not retract it from a
+base it was already mirrored to** — new runs exclude unpublished sessions, but
+previously mirrored rows must be removed in Airtable if that matters. The
+operator console states this beside the held-back count.
 
 ### Partial-write recovery
 

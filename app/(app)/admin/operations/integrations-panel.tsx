@@ -54,8 +54,10 @@ export function IntegrationsPanel({
       const withheld = typeof data.excluded?.unpublishedSessions === "number"
         ? data.excluded.unpublishedSessions
         : 0;
+      // The mirror is upsert-only by contract (resume safety, no deletes), so a
+      // talk mirrored while published is NOT retracted by unpublishing it here.
       const withheldNote = withheld > 0
-        ? `${withheld} unpublished ${withheld === 1 ? "session is" : "sessions are"} held back — publish ${withheld === 1 ? "it" : "them"} to include ${withheld === 1 ? "it" : "them"}.`
+        ? `${withheld} unpublished ${withheld === 1 ? "session is" : "sessions are"} held back — publish ${withheld === 1 ? "it" : "them"} to include ${withheld === 1 ? "it" : "them"}. Already-mirrored records are not retracted: remove them in the external base if a talk was mirrored before being unpublished.`
         : undefined;
 
       if (data.report) {
