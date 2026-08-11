@@ -38,7 +38,15 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
 - Schema is applied with `prisma db push` (see architect). Do not run destructive
   migrations against the shared Neon DB without coordination.
 - Env validation lives in `lib/env.ts` (`getServerEnv`, `useMockIntegrations`,
-  `isDemoResetAllowed`, `getV1ApiKey`, `getResendFrom`).
+  `isDemoResetAllowed`, `getV1ApiKey`, `getResendFrom`) and **runs at boot**:
+  `instrumentation.ts` calls `getServerEnv()` from Next's `register()` hook, which
+  must complete before the server handles requests (D-02). A deployment with a
+  malformed variable therefore fails immediately and visibly — the boot log names
+  the offending variables (never their values) and **every request answers 500**,
+  including the health check — instead of booting green and failing at whatever
+  request first touched the broken thing. Verified against Next 16.3.0 with
+  `next start`: the process itself does not exit, so gate a deploy on a 200, not
+  on the process staying alive.
 - API-key REST setup, endpoint contracts, and curl examples are in
   [`docs/API.md`](API.md). Do not expose `GREENROOM_API_KEY` to browser code.
 

@@ -37,8 +37,93 @@ const envSchema = z.object({
 
 export type ServerEnv = z.infer<typeof envSchema>;
 
+/**
+ * Thrown by `getServerEnv` instead of the raw `ZodError`.
+ *
+ * A `ZodError`'s own message is a JSON dump of its issues, and two of zod's
+ * issue codes carry the REJECTED VALUE in them: `invalid_enum_value` renders
+ * `received: "<value>"` and repeats it in `message`. `getServerEnv` is called
+ * from the boot hook, so that string lands in a deploy log — the one place a
+ * misconfigured secret must never be echoed. The variable's NAME is what an
+ * operator needs; its value is what they already have.
+ */
+export class ServerEnvError extends Error {
+  /** The offending variable names, in schema order. */
+  readonly variables: readonly string[];
+  constructor(variables: readonly string[], detail: string) {
+    super(
+      `Invalid server environment. Fix ${variables.length === 1 ? "this variable" : "these variables"} ` +
+        `and redeploy: ${detail}`,
+    );
+    this.name = "ServerEnvError";
+    this.variables = variables;
+  }
+}
+
+/**
+ * A value-free description of one issue.
+ *
+ * Built from the issue's CODE rather than its `message`, because `message` is
+ * where zod interpolates the rejected value. Everything interpolated below
+ * comes from the schema in this file (allowed enum options, a minimum length,
+ * a required prefix) — never from `process.env`.
+ */
+function describeIssue(issue: z.ZodIssue): string {
+  switch (issue.code) {
+    case "invalid_type":
+      // `received` here is a TYPE name ("undefined", "number"), not a value.
+      return issue.received === "undefined" ? "is required but not set" : "is not a string";
+    case "invalid_enum_value":
+      return `must be one of ${issue.options.map((option) => JSON.stringify(option)).join(" | ")}`;
+    case "too_small":
+      return `must be at least ${issue.minimum} characters`;
+    case "too_big":
+      return `must be at most ${issue.maximum} characters`;
+    case "invalid_string": {
+      if (issue.validation === "url") return "must be a valid URL";
+      if (issue.validation === "email") return "must be an email address";
+      if (typeof issue.validation === "object" && "startsWith" in issue.validation) {
+        return `must start with ${JSON.stringify(issue.validation.startsWith)}`;
+      }
+      return "is not in the expected format";
+    }
+    case "custom":
+      // Authored in this file (see `resendFromSchema`) and value-free by
+      // construction; anything else falls through to the generic below.
+      return issue.message;
+    default:
+      return "is not valid";
+  }
+}
+
 export function getServerEnv(): ServerEnv {
-  return envSchema.parse({
+  const parsed = envSchema.safeParse(readServerEnv());
+  if (parsed.success) return parsed.data;
+
+  // De-duplicated per variable: `DATABASE_URL` alone can raise two issues (not
+  // a URL, and not postgresql://) and an operator does not need it twice.
+  const byVariable = new Map<string, string[]>();
+  for (const issue of parsed.error.issues) {
+    const name = issue.path.map(String).join(".") || "(unknown variable)";
+    const reasons = byVariable.get(name) ?? [];
+    const reason = describeIssue(issue);
+    if (!reasons.includes(reason)) reasons.push(reason);
+    byVariable.set(name, reasons);
+  }
+  const variables = [...byVariable.keys()];
+  const detail = variables
+    .map((name) => {
+      const reasons = byVariable.get(name)!.join("; ");
+      // A custom refine message may already name its own variable (RESEND_FROM
+      // does), and "RESEND_FROM RESEND_FROM must be…" helps nobody.
+      return reasons.startsWith(name) ? reasons : `${name} ${reasons}`;
+    })
+    .join(" | ");
+  throw new ServerEnvError(variables, detail);
+}
+
+function readServerEnv(): Record<string, string | undefined> {
+  return {
     DATABASE_URL: process.env.DATABASE_URL,
     MOCK_EXTERNAL_APIS: process.env.MOCK_EXTERNAL_APIS,
     ALLOW_DEMO_RESET: process.env.ALLOW_DEMO_RESET,
@@ -51,7 +136,7 @@ export function getServerEnv(): ServerEnv {
     GREENROOM_API_KEY: process.env.GREENROOM_API_KEY,
     SESSION_SECRET: process.env.SESSION_SECRET,
     APP_URL: process.env.APP_URL,
-  });
+  };
 }
 
 /** True when external integrations should be mocked (default in the demo). */
