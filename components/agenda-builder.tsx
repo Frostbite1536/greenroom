@@ -151,8 +151,8 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
     }
     setNotice(
       control.next === "PUBLISHED"
-        ? `“${session.title}” is now published — it appears on the public programme.`
-        : `“${session.title}” is now unpublished — it is withheld from the public programme.`,
+        ? `“${session.title}” is now published — it appears on the public program.`
+        : `“${session.title}” is now unpublished — it is withheld from the public program.`,
     );
     startTransition(() => router.refresh());
   }
@@ -385,7 +385,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         <div style={{ padding: "12px 12px 0" }}>
           <p className="hint" role="status">
             This event has more sessions than this page loads at once. The grid, the backlog and the conflict
-            count below cover only the sessions listed here — reduce the event data to see the whole programme.
+            count below cover only the sessions listed here — reduce the event data to see the whole program.
           </p>
         </div>
       ) : null}
@@ -912,7 +912,7 @@ function TracksView({
       {tracks.length === 0 ? (
         <p className="hint" role="status" style={{ padding: "12px 16px 0" }}>
           This event has no tracks, so every scheduled talk is listed under “No track”. Add tracks in event
-          settings to group the programme.
+          settings to group the program.
         </p>
       ) : null}
       {groups.map((group) => {

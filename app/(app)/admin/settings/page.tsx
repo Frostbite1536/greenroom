@@ -17,7 +17,7 @@ export default async function SettingsPage() {
       <PageHeader
         eyebrow="Event setup"
         title="Event settings"
-        description="Keep the essentials current: event dates and time zone, rooms, and the programme groupings your team already uses."
+        description="Keep the essentials current: event dates and time zone, rooms, and the program groupings your team already uses."
         actions={<NewEventDialog currentEventName={view.event.name} />}
       />
       <EventSettings view={view} />

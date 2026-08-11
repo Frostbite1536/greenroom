@@ -331,7 +331,7 @@ test("the day chart names its day and its span in the summary", () => {
   const label = scheduleUtilizationChart(oneDay(), "Thursday 4 June")!.ariaLabel;
   assert.match(label, /Thursday 4 June/);
   assert.match(label, /2 rooms/);
-  assert.match(label, /6h booked across a 4h programme span/);
+  assert.match(label, /6h booked across a 4h program span/);
 });
 
 // ---- 4. Speaker readiness --------------------------------------------------

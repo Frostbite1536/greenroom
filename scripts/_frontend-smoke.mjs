@@ -2014,12 +2014,12 @@ try {
     JSON.stringify(reconvertAgain.data?.data ?? {}));
 
   const afterSchedule = await req("GET", "/admin/abstracts", null, admin);
-  check("abstracts table shows a scheduled talk as 'On the programme'",
-    afterSchedule.text.includes("On the programme"));
+  check("abstracts table shows a scheduled talk as 'On the program'",
+    afterSchedule.text.includes("On the program"));
   // Non-vacuity guard: the warning must be absent while the decision still
   // matches the programme, otherwise the assertion below proves nothing.
-  check("no 'Still on the programme' warning while the talk is accepted",
-    !afterSchedule.text.includes("Still on the programme"));
+  check("no 'Still on the program' warning while the talk is accepted",
+    !afterSchedule.text.includes("Still on the program"));
 
   // M4: MAYBE is a pre-confirmation review state. It never provisions a
   // Session, but it remains available for an unconfirmed proposal.
@@ -2058,7 +2058,7 @@ try {
   check("Maybe status filter exposes its pressed state",
     /aria-pressed="false"[^>]*>Maybe(?:<!-- -->)? <span class="count">2<\/span>/.test(afterMaybe.text));
   check("unconfirmed maybe is not presented as a programme mismatch",
-    !afterMaybe.text.includes("Still on the programme"));
+    !afterMaybe.text.includes("Still on the program"));
 
   // A confirmed Session is programme truth: the API blocks MAYBE and the UI
   // exposes the same unavailable action state to assistive technology.
@@ -2106,8 +2106,8 @@ try {
     (await prisma.session.count({ where: { id: convertedSessionId } })) === 1);
 
   const afterReverse = await req("GET", "/admin/abstracts", null, admin);
-  check("declined-but-scheduled abstract is flagged 'Still on the programme'",
-    afterReverse.text.includes("Still on the programme"));
+  check("declined-but-scheduled abstract is flagged 'Still on the program'",
+    afterReverse.text.includes("Still on the program"));
 
   // T3: the flag is the admin's safeguard; the publication column is the
   // public one. A declined talk keeps its slot and stops being announced.
@@ -3791,7 +3791,7 @@ try {
   const defaultMainText = renderedText(defaultMain) ?? "";
   check("landing page renders a default programme with no event parameter",
     landingDefault.status === 200 && defaultMain !== null
-    && !defaultMainText.includes("No public programme is published yet."),
+    && !defaultMainText.includes("No public program is published yet."),
     `${landingDefault.status} ${defaultMain === null ? "no <main>" : "ok"}`);
   check("an unknown ?event= falls back to the default programme on every surface",
     landingUnknown.status === 200 && unknownMain !== null && unknownMain === defaultMain,
@@ -3803,7 +3803,7 @@ try {
   // the rendered content matches the no-parameter render exactly.
   check("an unknown ?event= never pairs one event's links with another's CFP panel",
     !(renderedText(unknownMain) ?? "").includes("no-such-event-slug")
-    && !(renderedText(unknownMain) ?? "").includes("No public programme is published yet."));
+    && !(renderedText(unknownMain) ?? "").includes("No public program is published yet."));
 
   // --- embed enrichment (eval EMB-01 / defects 12, 13, 18) ------------------
   // The judged failure was that descriptions and formats existed in the data
@@ -4874,8 +4874,8 @@ try {
     dashboardRow(dashHtml, "Not yet placed") === `${dashSessions - dashScheduled}`,
     `page "${dashboardRow(dashHtml, "Not yet placed")}" vs db ${dashSessions - dashScheduled}`);
   check("B7 publication is counted independently of placement",
-    dashboardRow(dashHtml, "Published to the public programme") === `${dashPublished} / ${dashSessions}`,
-    `page "${dashboardRow(dashHtml, "Published to the public programme")}" vs db ${dashPublished} / ${dashSessions}`);
+    dashboardRow(dashHtml, "Published to the public program") === `${dashPublished} / ${dashSessions}`,
+    `page "${dashboardRow(dashHtml, "Published to the public program")}" vs db ${dashPublished} / ${dashSessions}`);
   check("B7 rooms in use are the distinct rooms holding a slot",
     dashboardRow(dashHtml, "Rooms in use") === `${dashRoomsInUse} / ${dashRooms}`,
     `page "${dashboardRow(dashHtml, "Rooms in use")}" vs db ${dashRoomsInUse} / ${dashRooms}`);
@@ -4907,7 +4907,7 @@ try {
   });
   check("B7 the accepted-but-unplaced note agrees with the database",
     dashUnplacedAccepted === 0
-      ? dashHtml.includes("Every accepted proposal is on the programme.")
+      ? dashHtml.includes("Every accepted proposal is on the program.")
       : new RegExp(`<strong>${dashUnplacedAccepted}</strong> accepted proposal`).test(dashHtml),
     `db says ${dashUnplacedAccepted}`);
 
@@ -5179,8 +5179,8 @@ try {
   check("C5-REPORTS the utilization section is not vacuous",
     repSlots.length > 0 && repRooms.length > 0, `${repSlots.length} slots, ${repRooms.length} rooms`);
   check("C5-REPORTS booked programme time is the sum of the placed slot intervals",
-    reportMetric("Programme time booked") === fmtMinutes(repBookedTotal),
-    `page "${reportMetric("Programme time booked")}" vs db ${fmtMinutes(repBookedTotal)}`);
+    reportMetric("Program time booked") === fmtMinutes(repBookedTotal),
+    `page "${reportMetric("Program time booked")}" vs db ${fmtMinutes(repBookedTotal)}`);
 
   const repPerRoomDay = new Map();
   for (const slot of repSlots) {

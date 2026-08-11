@@ -83,7 +83,7 @@ test("maybe and decline each state plainly that nothing was created", () => {
   });
   assert.match(declined, /^Declined\./);
   assert.match(declined, /No session was created/);
-  assert.match(declined, /out of the programme/);
+  assert.match(declined, /out of the program/);
 });
 
 test("every branch is one or more complete sentences, never a bare verdict", () => {

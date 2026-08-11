@@ -209,7 +209,7 @@ export function AbstractsTable({
           <div className="conflict-banner" role="alert">
             <AlertTriangle size={17} aria-hidden="true" />
             <div>
-              <strong>“{warning.title}” is still on the programme.</strong>{" "}
+              <strong>“{warning.title}” is still on the program.</strong>{" "}
               {warning.state === "scheduled"
                 ? "Declining the proposal does not take the talk off the schedule. Open the agenda builder to remove it."
                 : "A talk had already been created from this proposal. Declining does not delete it — remove it in the agenda builder if it should not run."}
@@ -334,10 +334,10 @@ export function AbstractsTable({
                       <Pill tone={meta.tone}>{meta.label}</Pill>
                       {isProgrammeMismatch(a) ? (
                         <div className="cell-sub programme-alert">
-                          <AlertTriangle size={11} aria-hidden="true" /> Still on the programme
+                          <AlertTriangle size={11} aria-hidden="true" /> Still on the program
                         </div>
                       ) : a.sessionScheduled ? (
-                        <div className="cell-sub">On the programme</div>
+                        <div className="cell-sub">On the program</div>
                       ) : a.hasSession ? (
                         <div className="cell-sub">Talk created</div>
                       ) : null}
@@ -639,7 +639,7 @@ function AbstractDrawer({
   const PROGRAMME_LABEL: Record<ProgrammeState, string> = {
     none: "No talk created yet",
     created: "Talk created, not scheduled",
-    scheduled: "On the programme",
+    scheduled: "On the program",
   };
 
   async function decide(decision: Decision) {
@@ -762,11 +762,11 @@ function AbstractDrawer({
           </div>
           <div className="kv"><span>Submitted</span><span>{abstract.submittedAt ? new Date(abstract.submittedAt).toLocaleString() : "—"}</span></div>
           <div className="kv">
-            <span>Programme</span>
+            <span>Program</span>
             <span className={isProgrammeMismatch(abstract) ? "programme-alert" : undefined}>
               {isProgrammeMismatch(abstract) ? (
                 <>
-                  <AlertTriangle size={12} aria-hidden="true" /> Still on the programme
+                  <AlertTriangle size={12} aria-hidden="true" /> Still on the program
                 </>
               ) : (
                 PROGRAMME_LABEL[state]
@@ -787,8 +787,8 @@ function AbstractDrawer({
         {isProgrammeMismatch(abstract) ? (
           <p className="hint" style={{ marginTop: 10 }}>
             {status === "WITHDRAWN"
-              ? "This proposal was withdrawn, but its talk is still on the programme. "
-              : "This proposal was declined, but its talk is still on the programme. "}
+              ? "This proposal was withdrawn, but its talk is still on the program. "
+              : "This proposal was declined, but its talk is still on the program. "}
             <Link href="/admin/agenda">Open the agenda builder</Link> to take it off the schedule
             {status === "REJECTED"
               ? ", or change the decision back to accepted if it should run after all."

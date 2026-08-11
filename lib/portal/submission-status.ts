@@ -37,7 +37,7 @@ const VIEWS: Record<SubmissionStatus, SubmissionStatusView> = {
   },
   MAYBE: {
     label: "Maybe",
-    detail: "The programme team is still deciding. You can keep editing or withdraw this proposal.",
+    detail: "The program team is still deciding. You can keep editing or withdraw this proposal.",
     tone: "info",
     editable: true,
   },
@@ -94,7 +94,7 @@ export function submissionStatusView(status: string): SubmissionStatusView {
  */
 export function editScopeNotice(converted: boolean): string {
   return converted
-    ? "Your talk is already on the programme. This page is your proposal record — changes here don't update the public schedule listing, so the programme team will apply anything that matters."
+    ? "Your talk is already on the program. This page is your proposal record — changes here don't update the public schedule listing, so the program team will apply anything that matters."
     : "Changes here update your proposal directly.";
 }
 
@@ -102,7 +102,7 @@ export function editScopeNotice(converted: boolean): string {
 export function editSavedNotice(converted: boolean): string {
   return converted
     ? "Saved to your proposal. The public schedule listing has not changed."
-    : "Saved. The programme team can see your updated proposal.";
+    : "Saved. The program team can see your updated proposal.";
 }
 
 /**
@@ -117,7 +117,7 @@ export function canRequestWithdrawal(status: string, speakersLocked: boolean): b
 /** Explain the accepted/session boundary instead of rendering a dead control. */
 export function withdrawalUnavailableNotice(status: string, speakersLocked: boolean): string | null {
   if (status === "ACCEPTED" || speakersLocked) {
-    return "Your talk is already confirmed on the programme. Contact the programme team if it needs to be removed.";
+    return "Your talk is already confirmed on the program. Contact the program team if it needs to be removed.";
   }
   return null;
 }
@@ -150,7 +150,7 @@ export function submissionErrorMessage(code: string, serverMessage?: string): st
       // stopped — so this must not read like a rejection.
       return "The call for proposals has closed, so this proposal can no longer be edited. Contact the program team if something still needs to change.";
     case "WITHDRAW_NOT_ALLOWED":
-      return "This talk is already on the programme, so it can't be withdrawn here. Contact the program team to remove it.";
+      return "This talk is already on the program, so it can't be withdrawn here. Contact the program team to remove it.";
     case "SPEAKERS_LOCKED":
       return "Your talk is already on the program, so the speaker list is fixed. Contact the program team to change who's presenting.";
     case "TOO_FEW_SPEAKERS":

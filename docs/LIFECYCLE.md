@@ -51,14 +51,14 @@ stateDiagram-v2
 | `DRAFT` | `SUBMITTED` | `POST /api/cfp/submissions` with `abstractId` | The same handler refuses any non-`DRAFT` `abstractId` with `409 ABSTRACT_LOCKED`. That check is what stops an anonymous caller rewriting a submitted proposal, so it is deliberately *not* relaxed for R1. |
 | `SUBMITTED` | `UNDER_REVIEW` | `POST /api/evaluations/assignments`, `app/api/evaluations/assignments/route.ts` | Only when the abstract is currently `SUBMITTED`; assigning an already `UNDER_REVIEW`/decided abstract creates the assignment without touching status. Admin only. |
 | any except `WITHDRAWN` | `ACCEPTED` or `REJECTED` | `POST /api/evaluations/decisions`, `app/api/evaluations/decisions/route.ts` | Admin only. Sets `decidedAt`; acceptance atomically provisions the Session, roster, and task assignments. `WITHDRAWN` is refused with `409 ABSTRACT_WITHDRAWN`. A decision may be reversed by posting the other decision. |
-| any except `WITHDRAWN` | `MAYBE` | same route, `decision: "MAYBE"` | Admin only, and **not** a final decision: `decidedAt` stays null, the proposal keeps being scoreable and re-decidable, and nothing is provisioned. Refused with `409 MAYBE_NOT_AVAILABLE` once a confirmed `Session` exists, because moving a scheduled talk back into review would split public programme truth. |
-| `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `MAYBE` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the programme team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a programme decision. |
+| any except `WITHDRAWN` | `MAYBE` | same route, `decision: "MAYBE"` | Admin only, and **not** a final decision: `decidedAt` stays null, the proposal keeps being scoreable and re-decidable, and nothing is provisioned. Refused with `409 MAYBE_NOT_AVAILABLE` once a confirmed `Session` exists, because moving a scheduled talk back into review would split public program truth. |
+| `DRAFT`, `SUBMITTED`, `UNDER_REVIEW`, `MAYBE` | `WITHDRAWN` | `PATCH /api/cfp/submissions/{abstractId}` with `{ "status": "WITHDRAWN" }` (W1) | The one status transition a **speaker** owns. Status-only: bundling it with any other key is `422`, and `"WITHDRAWN"` is a zod literal so no other status parses. `ACCEPTED` (or any abstract with a `Session`) is refused with `409 WITHDRAW_NOT_ALLOWED` — a confirmed talk is the program team's to remove. Terminal statuses still return `409 ABSTRACT_LOCKED`. `decidedAt` stays null: withdrawing is not a program decision. |
 
 **The portal exposes withdrawal only before a terminal decision.** A speaker can choose **Withdraw
 proposal** for a Draft, Submitted, In review, or Maybe abstract and must confirm it first. The
 browser sends the existing status-only PATCH; the server still re-checks ownership, status,
 and Session presence under the abstract lock. Accepted or Session-linked talks show a contact
-the programme-team message instead of a dead control.
+the program-team message instead of a dead control.
 
 **Two honest caveats**, both visible in the code:
 
@@ -66,10 +66,10 @@ the programme-team message instead of a dead control.
   `SUBMITTED` (or even `DRAFT`) to `ACCEPTED`; evaluation is a workflow, not a gate.
 - Declining an accepted abstract does **not** remove the `Session` that acceptance provisioned
   (`app/api/evaluations/decisions/route.ts` deliberately removes nothing) —
-  since a scheduled talk must not vanish from the programme on a status change
+  since a scheduled talk must not vanish from the program on a status change
   (INV-DOMAIN-001). Since W2 the decision response carries the linked session
   (`session: { id, title, isScheduled, scheduledAt, roomName } | null`) and `/admin/abstracts`
-  shows a **"Still on the programme"** warning with a link to the agenda builder
+  shows a **"Still on the program"** warning with a link to the agenda builder
   (`components/abstracts-table.tsx`). Un-programming remains a schedule action: unschedule the
   slot (below).
 
@@ -215,7 +215,7 @@ stateDiagram-v2
 
 - **Creation.** Accepting a proposal (and the legacy convert/backfill path) idempotently assigns
   every event onboarding task to every confirmed session speaker. The deterministic seed does
-  the same for its prebuilt programme.
+  the same for its prebuilt program.
 - **Updates.** `PATCH /api/portal/tasks` (`app/api/portal/tasks/route.ts`) accepts `TODO`,
   `IN_PROGRESS`, or `COMPLETED`, plus optional `artifactUrl`/`notes` and task-form `responses`.
   It is reversible: `completedAt` is set for `COMPLETED` and cleared otherwise. `WAIVED` may

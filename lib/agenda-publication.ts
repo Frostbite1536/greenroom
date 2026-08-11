@@ -28,7 +28,7 @@ export function publicationControl(status: SessionContentStatus): PublicationCon
     return {
       next: "DRAFT",
       label: "Unpublish",
-      actionLabel: (title) => `Unpublish ${title} from the public programme`,
+      actionLabel: (title) => `Unpublish ${title} from the public program`,
       confirm: (title) =>
         `Unpublish “${title}”? It stays on the schedule here and keeps its speakers and tasks, `
         + "but it stops appearing on the public agenda and speaker pages.",
@@ -37,7 +37,7 @@ export function publicationControl(status: SessionContentStatus): PublicationCon
   return {
     next: "PUBLISHED",
     label: "Publish",
-    actionLabel: (title) => `Publish ${title} to the public programme`,
+    actionLabel: (title) => `Publish ${title} to the public program`,
     confirm: null,
   };
 }
@@ -62,7 +62,7 @@ export function unpublishedNotice(
   if (held === 0) return null;
   if (truncated) {
     return `At least ${held} ${held === 1 ? "talk is" : "talks are"} unpublished and ${held === 1 ? "does" : "do"} `
-      + "not appear on the public agenda; this page does not hold the whole programme. "
+      + "not appear on the public agenda; this page does not hold the whole program. "
       + `Open the List view to publish ${held === 1 ? "it" : "them"}.`;
   }
   return held === 1

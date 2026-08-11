@@ -35,13 +35,13 @@ export const DEMO_TASK_SCHEDULE = [
   { title: "Tell us about your hotel stay", form: "hotel", required: true, dueDate: "2026-04-24", description: "We book speaker rooms as a block — tell us which nights you need." },
   { title: "Claim your flight reimbursement", form: "flight", required: true, dueDate: "2026-05-01", description: "Send us your travel costs and where to pay them." },
   { title: "Submit A/V & logistics form", form: "av", required: true, dueDate: "2026-05-04", description: "Shirt size, A/V needs and arrival details for the stage crew." },
-  { title: "Confirm your session details", form: "none", required: true, dueDate: "2026-05-06", description: "Review the public schedule and tell the programme team about any corrections." },
+  { title: "Confirm your session details", form: "none", required: true, dueDate: "2026-05-06", description: "Review the public schedule and tell the program team about any corrections." },
   { title: "Upload your slide deck", form: "none", required: false, dueDate: "2026-05-11", description: "Optional, but it helps the crew test your slides in advance." },
 ] as const;
 
 export const DEMO_EMAIL_TEMPLATES = [
   { key: CFP_SUBMITTED_TEMPLATE_KEY, subject: "We received your proposal for Forward 2026", trigger: "abstract.submitted",
-    htmlBody: "<p>Hi {{speakerName}},</p><p>Thanks for submitting <strong>{{talkTitle}}</strong> to {{eventName}}. The programme team will be in touch by email.</p>" },
+    htmlBody: "<p>Hi {{speakerName}},</p><p>Thanks for submitting <strong>{{talkTitle}}</strong> to {{eventName}}. The program team will be in touch by email.</p>" },
   { key: "cfp-accepted", subject: "Your talk was accepted for Forward 2026 🎉", trigger: "abstract.accepted",
     htmlBody: "<p>Hi {{speakerName}},</p><p>Great news — <strong>{{talkTitle}}</strong> was accepted! Please complete your onboarding tasks in the speaker portal.</p>" },
   { key: "cfp-rejected", subject: "Update on your Forward 2026 submission", trigger: "abstract.rejected",

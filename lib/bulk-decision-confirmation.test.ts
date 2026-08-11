@@ -60,7 +60,7 @@ test("only accepting claims to build anything", () => {
   assert.match(decline, /^Decline 5 proposals — no sessions are created/);
   // Nothing is ever deleted by a decision (INV-DOMAIN-001), so a decline must
   // not imply the batch removed anything from the programme.
-  assert.match(decline, /nothing is removed from the programme/);
+  assert.match(decline, /nothing is removed from the program/);
 });
 
 test("a selection with ineligible rows says so before the click, not only after", () => {

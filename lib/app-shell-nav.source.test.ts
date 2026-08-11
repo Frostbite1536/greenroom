@@ -67,7 +67,7 @@ const DESTINATIONS = [
 const GROUPS = [
   { key: "overview", label: "Overview" },
   { key: "cfp", label: "Call for proposals" },
-  { key: "programme", label: "Programme" },
+  { key: "programme", label: "Program" },
   { key: "communications", label: "Communications" },
   { key: "public", label: "Public site" },
   { key: "configure", label: "Configure" },

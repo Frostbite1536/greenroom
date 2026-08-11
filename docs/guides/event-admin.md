@@ -1,13 +1,13 @@
-# Guide: running your event's programme
+# Guide: running your event's program
 
-For the person who opens the call for speakers, decides what makes the programme, and builds
+For the person who opens the call for speakers, decides what makes the program, and builds
 the schedule. Signed in as **Maya Chen**, event admin for **Forward 2026**.
 
 Everything below happens in the left-hand menu, roughly top to bottom. You can stop and come
 back at any point; nothing is lost.
 
 Your event itself lives under **Event settings**: its name, dates and time zone, the rooms
-talks can be placed in, and the tracks and topics the programme is grouped by. **New event**
+talks can be placed in, and the tracks and topics the program is grouped by. **New event**
 there creates another event from scratch — it starts genuinely empty, and you can move into
 it from the workspace switcher in the sidebar, which lists every event you belong to.
 
@@ -180,7 +180,7 @@ audited delivery log; the page identifies mock mode before an operator sends.
 
 ---
 
-## 7. Put the programme on your website
+## 7. Put the program on your website
 
 **Website embeds** gives you ready-made snippets:
 
@@ -189,7 +189,7 @@ audited delivery log; the page identifies mock mode before an operator sends.
 - a direct link to each, if you would rather link than embed.
 
 The public schedule itself carries **calendar (.ics)** buttons — "Add all to calendar" for
-the whole programme and one per session — so attendees can add talks to their own calendar.
+the whole program and one per session — so attendees can add talks to their own calendar.
 Each entry carries the room once a room has been assigned.
 
 Copy a snippet, paste it into your site, and you are done. The embeds are public — visitors
@@ -203,15 +203,15 @@ do not need an account — and they update themselves as you change the schedule
 as a proposal is submitted. Scoring is a workflow, not a gate.
 
 **I declined a talk that was already on the schedule — is it off?** No, and Greenroom says so:
-the proposal shows a **"Still on the programme"** warning with a link to the Agenda builder.
+the proposal shows a **"Still on the program"** warning with a link to the Agenda builder.
 Nothing is deleted behind your back — take it off the schedule there, or change the decision
 back if it should run after all.
 
 **Someone wants to withdraw a proposal.** Speakers can withdraw their own Draft, Submitted,
 In review, or Maybe proposal from its portal after a clear confirmation. That transition is status-only:
-it removes the proposal from consideration but does not create a programme decision or erase
+it removes the proposal from consideration but does not create a program decision or erase
 the record. Once you have accepted a talk, the speaker must contact your team; make any
-programme/scheduling change through the admin workflow. A withdrawn proposal cannot receive
+program/scheduling change through the admin workflow. A withdrawn proposal cannot receive
 new assignments or scores; existing review coverage stays visible as archived history.
 
 **Can two talks share a room deliberately?** The schedule refuses overlaps by design. If you

@@ -97,7 +97,7 @@ export function IntegrationsPanel({
     <section className={styles.panel} aria-labelledby="ops-integrations">
       <div className={styles.panelHead}>
         <h2 id="ops-integrations">Keep other tools in step</h2>
-        <p>Send the confirmed programme out to the tools your team already uses. Nothing is ever deleted at the other end.</p>
+        <p>Send the confirmed program out to the tools your team already uses. Nothing is ever deleted at the other end.</p>
       </div>
 
       <Integration
@@ -113,7 +113,7 @@ export function IntegrationsPanel({
 
       <Integration
         title="Accelevents"
-        description="Sends the confirmed programme to your configured Accelevents endpoint."
+        description="Sends the confirmed program to your configured Accelevents endpoint."
         status={accelevents}
         busy={busy === "accelevents-check" || busy === "accelevents-run"}
         onCheck={() => run("/api/integrations/accelevents/push", true, setPush, "accelevents-check")}

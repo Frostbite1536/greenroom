@@ -226,7 +226,7 @@ export function PATCH(req: Request, ctx: Params) {
         throw new ApiError(
           409,
           "SPEAKERS_LOCKED",
-          "This talk is already confirmed on the programme, so the speaker list is fixed. Contact the program team to change speakers.",
+          "This talk is already confirmed on the program, so the speaker list is fixed. Contact the program team to change speakers.",
         );
       }
       const primary = patch.speakers

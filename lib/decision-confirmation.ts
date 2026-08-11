@@ -81,6 +81,6 @@ export function decisionConfirmation(outcome: DecisionOutcome): string {
       // The declined-with-a-live-talk case never reaches here: it raises the
       // programme-mismatch warning instead, which is a stronger surface than a
       // notice inside a drawer that is about to close.
-      return "Declined. No session was created and this proposal is out of the programme; it can still be accepted later if it should run after all.";
+      return "Declined. No session was created and this proposal is out of the program; it can still be accepted later if it should run after all.";
   }
 }

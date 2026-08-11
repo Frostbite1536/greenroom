@@ -43,7 +43,7 @@ export default async function AdminDashboardPage() {
       <PageHeader
         eyebrow="Event overview"
         title="Dashboard"
-        description={`Where ${view.eventName} stands right now — the call, the reviewing, the programme and your speakers, each linking to the workspace that owns it.`}
+        description={`Where ${view.eventName} stands right now — the call, the reviewing, the program and your speakers, each linking to the workspace that owns it.`}
       />
 
       <div className="metric-grid">
@@ -146,11 +146,11 @@ export default async function AdminDashboardPage() {
           {funnel.segments.find((segment) => segment.status === "ACCEPTED")?.count ? (
             <p className="dashboard-note">
               {review.acceptedUnscheduled === 0 ? (
-                <>Every accepted proposal is on the programme.</>
+                <>Every accepted proposal is on the program.</>
               ) : (
                 <>
                   <strong>{review.acceptedUnscheduled}</strong> accepted proposal
-                  {review.acceptedUnscheduled === 1 ? " is" : "s are"} not on the programme yet —{" "}
+                  {review.acceptedUnscheduled === 1 ? " is" : "s are"} not on the program yet —{" "}
                   <Link href="/admin/agenda">place them in the agenda builder</Link>.
                 </>
               )}
@@ -162,7 +162,7 @@ export default async function AdminDashboardPage() {
         <section className="work-panel dashboard-panel" aria-labelledby="dashboard-programme">
           <div className="panel-heading">
             <div>
-              <h2 id="dashboard-programme">Programme</h2>
+              <h2 id="dashboard-programme">Program</h2>
               <p>Talks, placement and publication. &ldquo;Scheduled&rdquo; means the talk holds a slot.</p>
             </div>
             <Link className="ghost-button" href="/admin/agenda">Agenda builder</Link>
@@ -191,7 +191,7 @@ export default async function AdminDashboardPage() {
                 </li>
                 <li>
                   <Link href="/admin/agenda">
-                    <span className="dashboard-row-label">Published to the public programme</span>
+                    <span className="dashboard-row-label">Published to the public program</span>
                     <strong>
                       {boundedCount(programme.published, programme.truncated)} / {boundedCount(programme.sessions, programme.truncated)}
                     </strong>
@@ -217,7 +217,7 @@ export default async function AdminDashboardPage() {
               </p>
               {programme.truncated ? (
                 <p className="hint dashboard-note" role="status">
-                  This event holds more talks than one read loads, so every programme figure above is a floor and
+                  This event holds more talks than one read loads, so every program figure above is a floor and
                   conflicts among the talks that were not loaded could not be detected.
                 </p>
               ) : null}

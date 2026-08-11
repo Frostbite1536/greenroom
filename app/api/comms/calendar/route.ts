@@ -125,7 +125,7 @@ export async function GET(request: Request) {
       ? {
           calendarDescription:
             `This file holds the first ${PUBLIC_AGENDA_LIMITS.sessions} sessions of ` +
-            `${event.name} in start-time order. The programme has more; see the full schedule online.`,
+            `${event.name} in start-time order. The program has more; see the full schedule online.`,
         }
       : {}),
   });

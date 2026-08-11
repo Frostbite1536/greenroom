@@ -63,7 +63,7 @@ type NavItem = { href: string; label: string; icon: typeof FileText; roles: Role
 const NAV_GROUPS: { key: NavGroup; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "cfp", label: "Call for proposals" },
-  { key: "programme", label: "Programme" },
+  { key: "programme", label: "Program" },
   { key: "communications", label: "Communications" },
   { key: "public", label: "Public site" },
   { key: "configure", label: "Configure" },
