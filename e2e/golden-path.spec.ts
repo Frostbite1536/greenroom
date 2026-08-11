@@ -128,10 +128,15 @@ test.describe("golden path", () => {
       expect(body.data?.tasksAssigned ?? 0, "acceptance assigned onboarding tasks").toBeGreaterThan(0);
       expect(body.data?.session?.title).toBe(TITLE);
 
-      // And what the organizer is actually shown afterwards.
-      await expect(drawer.getByText("Accepted.", { exact: true })).toBeVisible();
+      // And what the organizer is actually shown afterwards: the consequence
+      // sentence the UX-consequence lane ships (lib/decision-confirmation.ts).
+      // N is data-dependent (tasksAssigned), so match the template.
+      await expect(
+        drawer.getByText(
+          /Accepted\. One confirmed session and \d+ speaker onboarding tasks? were created\. The session still needs a schedule placement\./,
+        ),
+      ).toBeVisible();
       await expect(drawer.getByText("Talk created, not scheduled")).toBeVisible();
-      await expect(drawer.getByText("Talk created — schedule it in the agenda builder.")).toBeVisible();
 
       await drawer.getByRole("button", { name: "Close" }).click();
     });
