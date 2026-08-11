@@ -164,9 +164,15 @@ test("no self-registration or password-reset surface was added", () => {
     }
   };
   walk("app/api/auth");
+  // The inventory is pinned so a new auth surface has to be argued for here.
+  // `switch-event` (D-C5-16) qualifies and is deliberately NOT a registration
+  // surface: it requires an already-authenticated session, creates no identity
+  // and no membership, and only ever re-issues a cookie for an `EventMember`
+  // row the caller already holds.
   assert.deepEqual(authRoutes.sort(), [
     "app/api/auth/login/route.ts",
     "app/api/auth/reviewer-invites/accept/route.ts",
+    "app/api/auth/switch-event/route.ts",
   ]);
   // Route-shaped names, not bare words: the point is that no such surface
   // exists, and a prose comment that happens to contain "forgot" is not one.
