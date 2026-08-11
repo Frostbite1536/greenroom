@@ -21,8 +21,8 @@ import { E2E_ASSISTANT_STUB_PORT } from "../playwright.config";
  * BUDGET, and why the generation count here is deliberately small: every one of
  * these clicks is charged against the real durable throttle, which allows FIVE
  * per admin per minute (`ASSISTANT_RATE_LIMITS.assistantAdminMinute`). All three
- * tests share one persona, so the suite has four generations in total and a
- * fifth would start refusing with "Too many draft requests" — which is the
+ * tests share one persona, so the suite has exactly five generations and a
+ * sixth would start refusing with "Too many draft requests" — which is the
  * throttle working, but would read as a flake. Add coverage as unit tests, not
  * as more clicks.
  */
@@ -32,17 +32,49 @@ const MOBILE = { width: 390, height: 664 } as const;
 const OPERATIONS = "/admin/operations";
 const DRAFT_BUTTON = "Draft note from feedback";
 const STUB_DRAFT =
-  "Your session stood out for how concretely it treats the day-to-day of running a large event, and the programme team is glad to have it.";
+  "Your session stood out for how concretely it treats the day-to-day of running a large event, and the program team is glad to have it.";
 const MANUAL_NOTE = "A note I wrote myself before asking for any help.";
 const EDITED_NOTE = "A note I wrote myself, then edited by hand.";
 
 /** What the stub should do next. Swapped per test. */
-type StubMode = "success" | "server-error";
+type StubMode = "success" | "server-error" | "slow";
 let stubMode: StubMode = "success";
 /** Every request body the server actually sent, newest last. */
 let stubRequests: Array<Record<string, unknown>> = [];
 let stubAuthorizations: string[] = [];
 let stub: Server;
+
+/** Long enough to switch proposals before the answer lands, short enough to wait on. */
+const SLOW_RESPONSE_MS = 2_000;
+
+/**
+ * A Responses answer carrying this feature's strict `{draft}` schema.
+ *
+ * The contract an external loopback fixture has to satisfy is exactly this:
+ * dispatch on the strict schema name in the request's `text.format`, answer
+ * with one `output_text` part whose content is `{"draft": "..."}`. Kept
+ * deliberately minimal so swapping this listener for a shared owned provider is
+ * a change of transport, not of contract.
+ */
+function successPayload(): Record<string, unknown> {
+  return {
+    id: "resp_e2e",
+    status: "completed",
+    model: "gpt-5-mini-e2e",
+    output: [
+      // A reasoning item first, exactly as a reasoning model answers, so the
+      // extractor is exercised rather than handed output[0].
+      { id: "rs_e2e", type: "reasoning", summary: [] },
+      {
+        id: "msg_e2e",
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: JSON.stringify({ draft: STUB_DRAFT }), annotations: [] }],
+      },
+    ],
+    usage: { input_tokens: 210, output_tokens: 48 },
+  };
+}
 
 function stubBody(): Record<string, unknown> {
   expect(stubRequests.length, "the server must have called the provider").toBeGreaterThan(0);
@@ -75,26 +107,18 @@ test.describe("decision-note drafting", () => {
           res.end("stub failure");
           return;
         }
+        // Held open long enough for the organizer to move to another proposal
+        // before this answer lands. The point of the race test is that it DOES
+        // land, and is thrown away.
+        if (stubMode === "slow") {
+          setTimeout(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(successPayload()));
+          }, SLOW_RESPONSE_MS);
+          return;
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            id: "resp_e2e",
-            status: "completed",
-            model: "gpt-5-mini-e2e",
-            output: [
-              // A reasoning item first, exactly as a reasoning model answers, so
-              // the extractor is exercised rather than handed output[0].
-              { id: "rs_e2e", type: "reasoning", summary: [] },
-              {
-                id: "msg_e2e",
-                type: "message",
-                role: "assistant",
-                content: [{ type: "output_text", text: STUB_DRAFT, annotations: [] }],
-              },
-            ],
-            usage: { input_tokens: 210, output_tokens: 48 },
-          }),
-        );
+        res.end(JSON.stringify(successPayload()));
       });
     });
     await new Promise<void>((resolve) => stub.listen(E2E_ASSISTANT_STUB_PORT, "127.0.0.1", resolve));
@@ -140,7 +164,7 @@ test.describe("decision-note drafting", () => {
       expect(box!.x + box!.width).toBeLessThanOrEqual(MOBILE.width + 1);
       expect(box!.height).toBeGreaterThanOrEqual(24);
 
-      // Generation 1 of 4. The full generate -> apply path at this width.
+      // Generation 1 of 5. The full generate -> apply path at this width.
       await button.click();
       await expect(panel.getByText("Suggested draft")).toBeVisible();
       await expect(panel.getByText(STUB_DRAFT)).toBeVisible();
@@ -168,12 +192,20 @@ test.describe("decision-note drafting", () => {
       await expect(panel().getByRole("button", { name: DRAFT_BUTTON })).toBeVisible();
       // The disclosure is readable before anything is sent.
       await expect(panel().getByText(/to the configured AI provider/)).toBeVisible();
-      await expect(panel().getByText(/email addresses, and scores are never sent/)).toBeVisible();
+      // The truthful disclosure, both halves: what is never added as a field,
+      // and that comment text itself travels word for word.
+      await expect(panel().getByText(/is looked up or added as a separate field/)).toBeVisible();
+      await expect(panel().getByText(/Reviewer comments are sent word for word/)).toBeVisible();
     });
 
     await journeyStep(page, "b. generating produces a labelled suggestion, not a filled field", async () => {
-      // Generation 2 of 4.
+      // Generation 2 of 5.
+      const seen = page.waitForResponse((res) => res.url().includes("/api/assistant/decision-note"));
       await panel().getByRole("button", { name: DRAFT_BUTTON }).click();
+      const response = await seen;
+      // A generated note is per-organizer and derived from reviewer comments,
+      // so nothing between the server and the page may keep a copy.
+      expect(response.headers()["cache-control"]).toBe("no-store");
       await expect(panel().getByText("Suggested draft")).toBeVisible();
       await expect(panel().getByText("Generated by AI — read it before you use it.")).toBeVisible();
       await expect(panel().getByText(STUB_DRAFT)).toBeVisible();
@@ -191,26 +223,43 @@ test.describe("decision-note drafting", () => {
       expect(prompt).toMatch(/^proposal_title: .+$/m);
       expect(prompt).toMatch(/^decision: (accepted|declined)$/m);
 
-      // Negative: nothing adjacent in the schema travelled with it. No address
-      // can be present at all, which is what the bare `@` check means.
-      expect(prompt).not.toMatch(/@/);
-      expect(prompt.toLowerCase()).not.toContain("score");
-      expect(prompt.toLowerCase()).not.toContain("rubric");
-      // The field vocabulary is closed.
+      // The CLOSED projection: exactly these field names, nothing else, ever.
+      // This is the real guarantee. An earlier version asserted the prompt held
+      // no "@" — which passed only because this seed's comments happen to
+      // contain no address, and would have gone green while leaking one the day
+      // a reviewer typed it. The honest claim is about the field set, not about
+      // what the seed's free text happens to say.
       const keys = [...prompt.matchAll(/^([a-z_0-9]+):/gm)].map(([, key]) => key);
       expect(keys.length).toBeGreaterThan(2);
       for (const key of keys) {
         expect(key).toMatch(/^(event_name|proposal_title|decision|reviewer_comment_\d+)$/);
       }
+      // No identifier the handler had in scope reached the wire.
+      expect(prompt).not.toMatch(/\bcm[a-z0-9]{20,}\b/);
 
-      // Non-retention and no tools, asserted on the wire the server really sent.
+      // Non-retention, no tools, and the code-owned strict schema, asserted on
+      // the body the server really sent.
       const body = stubBody();
       expect(body.store).toBe(false);
       expect(body).not.toHaveProperty("tools");
       expect(body).not.toHaveProperty("stream");
+      expect(body.text).toEqual({
+        format: {
+          type: "json_schema",
+          name: "greenroom_decision_note",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["draft"],
+            properties: { draft: { type: "string" } },
+          },
+        },
+      });
       // The fake key went to the stub; a real credential never left the config.
       expect(stubAuthorizations[0]).toContain("sk-e2e-local-only");
     });
+
 
     await journeyStep(page, "d. applying is explicit, and consumes the suggestion", async () => {
       await panel().getByRole("button", { name: "Use this note" }).click();
@@ -239,7 +288,7 @@ test.describe("decision-note drafting", () => {
     });
 
     await journeyStep(page, "g. a suggestion never overwrites written text without consent", async () => {
-      // Generation 3 of 4.
+      // Generation 3 of 5.
       await panel().getByRole("button", { name: DRAFT_BUTTON }).click();
       await expect(panel().getByText("Suggested draft")).toBeVisible();
       // The organizer's edited text is untouched by the arrival of a suggestion.
@@ -264,6 +313,53 @@ test.describe("decision-note drafting", () => {
     });
   });
 
+  test("a draft for an abandoned proposal never installs under the newly-selected one", async ({ page }) => {
+    const panel = () => panelOf(page);
+    const note = () => panel().getByLabel("Add a personal note (optional)");
+
+    await signInAs(page, "admin");
+    await page.goto(OPERATIONS);
+
+    const select = panel().getByLabel("Proposal");
+    const options = await select.locator("option").all();
+    expect(options.length, "the race needs two proposals to switch between").toBeGreaterThan(1);
+    const firstValue = await options[0]!.getAttribute("value");
+    const secondValue = await options[1]!.getAttribute("value");
+
+    await journeyStep(page, "the abandoned response lands and is thrown away", async () => {
+      await select.selectOption(firstValue!);
+      await note().fill(MANUAL_NOTE);
+
+      stubMode = "slow";
+      const landed = page.waitForResponse((res) => res.url().includes("/api/assistant/decision-note"));
+      // Generation 4 of 5.
+      await panel().getByRole("button", { name: DRAFT_BUTTON }).click();
+
+      // Switch proposals while the first request is still open.
+      await select.selectOption(secondValue!);
+      await expect(panel().getByText("Suggested draft")).toHaveCount(0);
+
+      // The response for the ABANDONED proposal really does arrive — this is
+      // not a test that the request was cancelled, but that its answer was
+      // refused installation.
+      const response = await landed;
+      expect(response.status()).toBe(200);
+      expect(stubRequests.length).toBe(1);
+
+      // Nothing installed, and nothing is appliable. Give the panel a real
+      // window to get it wrong before concluding it did not.
+      await page.waitForTimeout(1_000);
+      await expect(panel().getByText("Suggested draft")).toHaveCount(0);
+      await expect(panel().getByText(STUB_DRAFT)).toHaveCount(0);
+      await expect(panel().getByRole("button", { name: "Use this note" })).toHaveCount(0);
+      await expect(panel().getByRole("button", { name: "Replace my note" })).toHaveCount(0);
+      // And it did not surface as an error either — the organizer abandoned it.
+      await expect(panel().getByText("Drafting unavailable")).toHaveCount(0);
+      // The organizer's own text is untouched throughout.
+      await expect(note()).toHaveValue(MANUAL_NOTE);
+    });
+  });
+
   test("a failing provider refuses honestly and leaves the organizer's note alone", async ({ page }) => {
     const panel = () => panelOf(page);
     const note = () => panel().getByLabel("Add a personal note (optional)");
@@ -277,7 +373,7 @@ test.describe("decision-note drafting", () => {
       const refusal = page.waitForResponse(
         (res) => res.url().includes("/api/assistant/decision-note") && res.request().method() === "POST",
       );
-      // Generation 4 of 4.
+      // Generation 5 of 5.
       await panel().getByRole("button", { name: DRAFT_BUTTON }).click();
       const response = await refusal;
 
