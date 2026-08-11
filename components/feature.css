@@ -226,6 +226,18 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .agenda-list-item { display: flex; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items: center; }
 .agenda-list-item .track-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .agenda-list-item .time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; width: 130px; flex-shrink: 0; }
+/* Tracks view: one section per track, each row a button that opens the
+   scheduler. `.cell-title`/`.cell-sub` are spans inside that button (a button
+   takes phrasing content only), so they are re-blocked the way `.pick-row`
+   already does. */
+.agenda-track-head { display: flex; gap: 10px; align-items: center; padding: 12px 16px; background: #fbfcfb; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1; }
+.agenda-track-head h3 { margin: 0; font-size: 13px; }
+.agenda-track-head .track-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.agenda-track-empty { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.agenda-track-item { width: 100%; background: none; border: none; border-bottom: 1px solid var(--line); text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.agenda-track-item:hover { background: var(--soft); }
+.agenda-track-item:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.agenda-track-item .cell-title, .agenda-track-item .cell-sub { display: block; }
 .conflict-banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; background: #fbeeeb; border: 1px solid #eccabf; border-radius: 8px; color: #8a2f22; font-size: 13px; }
 /* The success counterpart of `.conflict-banner`, in the same box, so a write
    that changed the programme confirms itself where a refusal would have said

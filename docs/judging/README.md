@@ -191,7 +191,8 @@ placeholders, not planned work.
   and withdrawal is never blocked by the deadline.
 - **Speaker operations.** Resources and form-carrying onboarding tasks with per-
   task due dates, an overdue count, and a readiness chase list on the admin side.
-- **Programme tooling.** List, Day, Week, Tracks, and Conflicts agenda views;
+- **Programme tooling.** List, Day, Week, Track grid, Tracks, and Conflicts
+  agenda views — the schedule is readable by list, by day, by week and by track;
   drag-and-drop moves re-checked on the server; an assisted **Fill open slots**
   pass that previews conflict-free placements and writes nothing until applied;
   and per-session publication control, so a confirmed talk can be held back from
