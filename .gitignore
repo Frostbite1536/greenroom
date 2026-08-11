@@ -22,6 +22,14 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Browser-level test artifacts. The captured evidence PNGs under
+# docs/judging/screenshots/ ARE committed; failure screenshots, traces and the
+# HTML report are not — they are per-run debris, not evidence.
+/e2e/.artifacts/
+/playwright-report/
+/blob-report/
+/test-results/
+
 # Local agent state
 .claude.local.md
 .superdesign/
