@@ -123,3 +123,33 @@ The published-only rule both portal surfaces read by lives in one helper
 and reachable on the other. No new dependency: the conservative in-repo
 sanitizer stands, and swapping in `sanitize-html`/DOMPurify remains the recorded
 follow-up rather than something this surface forced.
+
+## Session provisioning joins the onboarding fan-out lock class (C33)
+Two writers maintain the onboarding-task x session-speaker cross-product
+(INV-TASK-001) from opposite ends: the template writers create a required task
+and fan it out across the event's confirmed sessions, and provisioning creates a
+confirmed session and fans the event's templates out across its speakers. Only
+the first half took `lockEventTaskFanOut`, so under READ COMMITTED an overlapping
+pair each read a snapshot without the other's row, both committed, and the new
+confirmed speaker was left without the new required task - an absence, so
+`skipDuplicates` could not catch it. Both entry points,
+`provisionGuaranteedSession` and `provisionAcceptedAbstract`, now take that same
+existing per-event lock as their first awaited operation.
+
+Placement was the decision. Not in the routes: four call sites would each have to
+remember, and a forgotten one is invisible until a speaker is silently missing a
+task. Not in `assignOnboardingTasks`: it is the low-level fan-out the C33
+backfill already calls once per session inside a transaction holding this lock,
+so acquiring there is re-entrant noise and would self-deadlock if the lock ever
+stopped being transaction-scoped. At the entry points it is taken before any row
+is written, so no writer in the class holds row locks while waiting for it.
+
+The graph gains an edge, not a cycle: the accept paths take the per-abstract lock
+before provisioning (abstract -> fan-out), and none of the four writers on the
+other side of the fan-out lock takes an abstract lock at all. Proved two ways -
+`session-provisioning-lock.source.test.ts` pins the placement and the absent
+reverse edge on every run, and `session-provisioning-fanout-race.test.ts` drives
+two PrismaClients through both interleavings against a real Postgres, gated
+behind `RACE_PROOF=1` plus a disposable `DATABASE_URL` so `npm test` needs no
+database. Pre-fix, both orders end with zero assignments; post-fix, both end with
+exactly one.
