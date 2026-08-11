@@ -4981,6 +4981,137 @@ try {
     leakedProjections.length === 0 && leakedPages.length === 0,
     [...leakedProjections, ...leakedPages].join(",") || "clean");
 
+  // 24b. D-C5-16 #4 — the three whole-dataset CSV exports.
+  //
+  // Every assertion here is about the served document, not about the module
+  // that built it: the header row byte-for-byte, the download headers, who is
+  // refused, that untrusted text is neutralized in the real response, and that
+  // nothing an export must not carry appears anywhere in it.
+  const csvExports = [
+    ["speakers", "/api/admin/speakers/export",
+      "name,email,company,job_title,confirmation_status,sessions_total,sessions_scheduled,session_titles,"
+      + "profile_percent,profile_missing,tasks_complete,tasks_total,required_tasks_open,next_required_due_at,"
+      + "overdue_required_tasks,onboarding_complete"],
+    ["sessions", "/api/admin/sessions/export",
+      "session_id,title,content_status,format,duration_minutes,category,track,room,starts_at,ends_at,scheduled,speakers"],
+    ["schedule", "/api/admin/schedule/export",
+      "day,starts_at_local,ends_at_local,room,track,session_title,speakers,duration_minutes,starts_at_utc,ends_at_utc"],
+  ];
+
+  // Untrusted text that would execute on open, planted in the two populations
+  // the exports read. Both ride the real reads, so a missing guard shows up in
+  // the served bytes rather than only in a unit test.
+  const formulaSpeaker = await prisma.user.upsert({
+    where: { email: "formula-export@scratch.test" },
+    update: { name: "=cmd|'/c calc'!A0" },
+    create: { email: "formula-export@scratch.test", name: "=cmd|'/c calc'!A0" },
+  });
+  await prisma.eventMember.upsert({
+    where: { eventId_userId: { eventId: SCRATCH_EVENT.id, userId: formulaSpeaker.id } },
+    update: { role: "SPEAKER" },
+    create: { eventId: SCRATCH_EVENT.id, userId: formulaSpeaker.id, role: "SPEAKER" },
+  });
+  await prisma.session.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "=SUM(A1:A9)",
+      durationMinutes: 30,
+      contentStatus: "DRAFT",
+    },
+    select: { id: true },
+  });
+
+  const csvDocuments = new Map();
+  for (const [name, path, header] of csvExports) {
+    const anon = await j("GET", path, null);
+    check(`C5-EXPORT ${name}: an unauthenticated export is refused → 401`,
+      anon.status === 401, `got ${anon.status}`);
+    const asSpeaker = await j("GET", path, null, speaker);
+    check(`C5-EXPORT ${name}: a speaker is refused → 403`,
+      asSpeaker.status === 403, `got ${asSpeaker.status}`);
+    const asEvaluator = await j("GET", path, null, evalr);
+    check(`C5-EXPORT ${name}: a reviewer is refused → 403`,
+      asEvaluator.status === 403, `got ${asEvaluator.status}`);
+    // The signed role claim is not authoritative: the persisted membership is.
+    const forged = await j("GET", path, null, { ...speaker, role: "ADMIN" });
+    check(`C5-EXPORT ${name}: a forged ADMIN claim in the cookie is still refused`,
+      forged.status === 403, `got ${forged.status}`);
+
+    const served = await j("GET", path, null, admin);
+    csvDocuments.set(name, typeof served.data === "string" ? served.data : "");
+    const today = new Date().toISOString().slice(0, 10);
+    check(`C5-EXPORT ${name}: ADMIN downloads a dated CSV attachment → 200`,
+      served.status === 200
+        && served.headers.get("content-type") === "text/csv; charset=utf-8"
+        && served.headers.get("content-disposition") === `attachment; filename="greenroom-${name}-${today}.csv"`
+        && served.headers.get("cache-control") === "no-store",
+      `${served.status} ${served.headers.get("content-type")} ${served.headers.get("content-disposition")}`);
+    const firstLine = (csvDocuments.get(name) ?? "").split("\r\n")[0];
+    check(`C5-EXPORT ${name}: the header row is the documented column contract`,
+      firstLine === header, `served "${firstLine}"`);
+    check(`C5-EXPORT ${name}: every record is CRLF-terminated`,
+      (csvDocuments.get(name) ?? "").endsWith("\r\n"), "missing trailing CRLF");
+    // Cell-level: nothing may start a cell with a spreadsheet formula lead.
+    check(`C5-EXPORT ${name}: no cell in the served document can execute on open`,
+      !/(^|\r\n|,)[=+@]/.test(csvDocuments.get(name) ?? ""), "an unguarded formula cell was served");
+  }
+
+  check("C5-EXPORT the speakers export neutralizes a formula-shaped speaker name",
+    (csvDocuments.get("speakers") ?? "").includes("'=cmd|"),
+    "the planted name is missing or unguarded");
+  check("C5-EXPORT the sessions export neutralizes a formula-shaped talk title",
+    (csvDocuments.get("sessions") ?? "").includes("'=SUM(A1:A9)"),
+    "the planted title is missing or unguarded");
+
+  // Non-vacuity: these documents must actually contain this event's data, or
+  // every exclusion assertion below would pass against an empty file.
+  const exportRowCounts = Object.fromEntries(
+    [...csvDocuments].map(([name, csv]) => [name, csv.split("\r\n").filter(Boolean).length - 1]),
+  );
+  check("C5-EXPORT every export carries real scratch rows, not just a header",
+    exportRowCounts.speakers > 0 && exportRowCounts.sessions > 0 && exportRowCounts.schedule > 0,
+    JSON.stringify(exportRowCounts));
+
+  // The blind-review boundary: an evaluator who really does hold assignments in
+  // this event must appear in NO export, by name or by address.
+  const evaluatorAssignments = await prisma.reviewAssignment.count({
+    where: { plan: { eventId: SCRATCH_EVENT.id }, evaluator: { email: evalr.user.email } },
+  });
+  check("C5-EXPORT the scratch reviewer really holds assignments in this event",
+    evaluatorAssignments > 0, `${evaluatorAssignments} assignments`);
+  // Only meaningful while this reviewer is not ALSO a speaker on this event —
+  // a reviewer who is genuinely on the roster belongs in the roster export, and
+  // asserting their absence then would be asserting a bug.
+  const evaluatorIsAlsoSpeaker =
+    (await prisma.eventMember.count({
+      where: { eventId: SCRATCH_EVENT.id, role: "SPEAKER", user: { email: evalr.user.email } },
+    }))
+    + (await prisma.sessionSpeaker.count({
+      where: { session: { eventId: SCRATCH_EVENT.id }, user: { email: evalr.user.email } },
+    }));
+  const evaluatorLeaks = evaluatorIsAlsoSpeaker > 0 ? [] : [...csvDocuments]
+    .filter(([, csv]) => csv.includes(evalr.user.email) || csv.includes(evalr.user.name))
+    .map(([name]) => name);
+  check("C5-EXPORT no export names the reviewer who holds this event's assignments",
+    evaluatorIsAlsoSpeaker === 0 && evaluatorLeaks.length === 0,
+    evaluatorIsAlsoSpeaker > 0 ? "reviewer is also a speaker here" : evaluatorLeaks.join(", "));
+  // The review vocabulary is excluded by the column contract, not by luck.
+  const scoreLeaks = [...csvDocuments]
+    .filter(([, csv]) => /evaluator|reviewer|score|rubric|comment/i.test(csv.split("\r\n")[0] ?? ""))
+    .map(([name]) => name);
+  check("C5-EXPORT no export header carries reviewer or score vocabulary",
+    scoreLeaks.length === 0, scoreLeaks.join(", "));
+
+  // Email exposure is decided per export: the roster prints it, the programme
+  // does not, and the exports mirror that exactly.
+  check("C5-EXPORT the speakers export carries the roster's own email column",
+    (csvDocuments.get("speakers") ?? "").includes("speaker@scratch.test"),
+    "the roster export lost its email column");
+  const emailLeaks = ["sessions", "schedule"]
+    .filter((name) => /@scratch\.test|@greenroom-hq\.com/.test(csvDocuments.get(name) ?? ""));
+  check("C5-EXPORT neither programme export carries a speaker email",
+    emailLeaks.length === 0, emailLeaks.join(", "));
+
   // 25. Guard: the run must not have touched the judged demo event.
   const demoTouch = await prisma.formConfig.count({
     where: { eventId: "demo-event", name: "Smoke CFP" },
