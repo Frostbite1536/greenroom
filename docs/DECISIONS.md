@@ -233,3 +233,37 @@ two PrismaClients through both interleavings against a real Postgres, gated
 behind `RACE_PROOF=1` plus a disposable `DATABASE_URL` so `npm test` needs no
 database. Pre-fix, both orders end with zero assignments; post-fix, both end with
 exactly one.
+
+## The email log filters in the database, and still states no total (EML-01)
+`/admin/emails` read the newest 100 dispatches with no filter, search or way
+past that cap. Four GET narrowings were added - status chips, a template
+select, a bounded recipient search and a 50-row page - and the decision was
+where they apply. In the query, not over an already-read page: a chip layered
+on a capped read would mean "failed among the newest 50", which is a different
+and quieter claim than the one the chip makes. That is also why the page size
+became its own limit (`adminEmailDispatchPage`) rather than a slice of the old
+`adminEmailDispatches` cap.
+
+The dropped `count()` stays dropped, and pagination did not smuggle a total
+back in as a page count. The pager offers newer/older from the page-plus-one
+probe and the copy states a position inside the current view; "page 3 of 9"
+would need a second, differently-snapshotted read - the exact contradiction
+this panel removed when it gave up its event-wide total.
+
+The chips deliberately carry no counts. The speaker roster counts its chips
+from rows it already loaded, which is free and consistent; here a count per
+chip is four more queries against four more snapshots, and numbers that can
+disagree with the rows underneath them are worse than no numbers.
+
+`EmailDispatch.status` is a `String`, not an enum, so nothing in the schema
+fails when a new outcome appears. The chip list is therefore derived from one
+`EMAIL_DISPATCH_STATUS_META` record and pinned by a source contract that reads
+`DeliveryMode` out of `send.ts` and the column default out of the schema. That
+gave `queued` the filter it never had - stored, rendered, and reachable by no
+chip, the same gap the abstracts chips closed for `WITHDRAWN`. A row carrying
+some other status is still rendered honestly under the unfiltered chip; a
+filter is an equality test, and there is no name to test against.
+
+Empty states are per combination because "no failed dispatches" and "no emails
+yet" are different facts and a filtered query cannot establish the second. Only
+the unfiltered first page may say the log itself is empty.
