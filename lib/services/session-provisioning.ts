@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { lockEventTaskFanOut } from "@/lib/services/onboarding-task-lock";
 
 /**
  * Turning an accepted proposal into a confirmed talk (WAVE1-B1).
@@ -12,6 +13,13 @@ import type { Prisma } from "@prisma/client";
  *
  * Every function here expects to run inside a transaction that already holds
  * the per-abstract advisory lock (`lockAbstractForWrite`).
+ *
+ * The two ENTRY points — `provisionAcceptedAbstract` and
+ * `provisionGuaranteedSession` — additionally take the per-event onboarding
+ * fan-out lock themselves, as their first act. See each for why; the short
+ * version is that provisioning maintains the same task × speaker cross-product
+ * the template writers maintain, from the other end, so it belongs to their
+ * lock class (LOCK-ORDER-v1, C33).
  */
 
 /** Fallback length for an auto-created session when the proposal never stated one. */
@@ -283,14 +291,28 @@ export function newGuaranteedSessionData(
  * them either — `assignOnboardingTasks` is the same call, idempotent as ever.
  *
  * Expects to run inside a transaction that has already authorized the event and
- * confirmed every `userId` is on this event's roster; it takes no lock of its
- * own, exactly as `provisionSessionForAbstract` takes none.
+ * confirmed every `userId` is on this event's roster.
+ *
+ * **The per-event fan-out lock is taken here, first, before the session exists**
+ * (LOCK-ORDER-v1, C33). Creating a confirmed talk is the other half of the
+ * cross-product `POST /api/admin/tasks` maintains: that route locks, creates a
+ * required template, and fans it out across the event's existing sessions, while
+ * this one creates a session and fans the event's existing templates across its
+ * speakers. Each reads exactly what the other is about to write, so without a
+ * shared lock two overlapping transactions each read a snapshot in which the
+ * other's row does not exist yet, both commit, and the new confirmed speaker is
+ * left without the new required task — INV-TASK-001 broken with no duplicate for
+ * `skipDuplicates` to catch, because the failure is an absence. Taking it before
+ * `session.create` rather than around the fan-out alone keeps every writer in
+ * this class acquiring it first and holding no row locks while it waits.
  */
 export async function provisionGuaranteedSession(
   tx: Prisma.TransactionClient,
   eventId: string,
   input: GuaranteedSessionFields,
 ): Promise<{ sessionId: string; speakersAdded: number; tasksAssigned: number }> {
+  await lockEventTaskFanOut(tx, eventId);
+
   const created = await tx.session.create({ data: newGuaranteedSessionData(eventId, input) });
 
   if (input.speakers.length > 0) {
@@ -371,6 +393,15 @@ export async function assignOnboardingTasks(
 /**
  * The whole "make it real" step: ensure the session exists, then ensure every
  * speaker on it has the checklist.
+ *
+ * Same C33 race, same first act: the per-event fan-out lock, before the session
+ * is created or reconciled. An acceptance and a concurrent "make this template
+ * required" would otherwise each miss the other's uncommitted row and leave a
+ * freshly confirmed speaker without a required task (INV-TASK-001). Its callers
+ * (`POST /api/evaluations/decisions`, `POST /api/evaluations/convert`) already
+ * hold the per-abstract lock when they get here, so the order is
+ * abstract → fan-out; the four writers on the other side of this lock take no
+ * abstract lock at all, so the graph gains no cycle.
  */
 export async function provisionAcceptedAbstract(
   tx: Prisma.TransactionClient,
@@ -383,6 +414,8 @@ export async function provisionAcceptedAbstract(
   summaryReconciled: boolean;
   tasksAssigned: number;
 }> {
+  await lockEventTaskFanOut(tx, abstract.eventId);
+
   const session = await provisionSessionForAbstract(tx, abstract, requestedDuration);
   const tasksAssigned = await assignOnboardingTasks(tx, abstract.eventId, session.sessionId);
   return { ...session, tasksAssigned };
