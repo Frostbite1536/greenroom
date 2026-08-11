@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import {
+  authorizeV1EventScope,
   authorizeV1Request,
   getV1PaginationMeta,
   handleV1,
   parseV1ListQuery,
+  v1EventWhere,
   v1Error,
   v1ListResponse,
 } from "@/lib/api/v1";
@@ -14,19 +16,23 @@ export const runtime = "nodejs";
 
 /** GET /api/v1/schedule?event=<slug|id>&limit=50&offset=0 */
 export const GET = handleV1(async (req: Request): Promise<Response> => {
-  const authorization = authorizeV1Request(req.headers);
+  const authorization = await authorizeV1Request(req.headers);
   if (!authorization.ok) return v1Error(authorization.error);
 
   const query = parseV1ListQuery(new URL(req.url).searchParams);
   if (!query.ok) return v1Error(query.error);
 
-  const event = await prisma.event.findFirst({
-    where: { OR: [{ id: query.value.event }, { slug: query.value.event }] },
+  // The credential's own scope is part of this predicate, not a check applied
+  // after the fact: a per-event key resolving somebody else's selector matches
+  // no row, so that event's data is never read and the refusal carries no
+  // signal about whether it exists.
+  const selected = await prisma.event.findFirst({
+    where: v1EventWhere(authorization.scope, query.value.event),
     select: { id: true, name: true, slug: true, timezone: true },
   });
-  if (!event) {
-    return v1Error({ status: 404, code: "EVENT_NOT_FOUND", message: "Event not found." });
-  }
+  const scoped = authorizeV1EventScope(authorization.scope, selected);
+  if (!scoped.ok) return v1Error(scoped.error);
+  const event = scoped.event;
 
   // ScheduleSlot is the placement record, so this cannot return backlog or
   // unplaced sessions. Every relation is reached through this event-scoped slot.
