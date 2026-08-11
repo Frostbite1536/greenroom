@@ -1,5 +1,31 @@
 # Clean-database installation rehearsal
 
+## Intermediate `ff78b1d` rerun — preserved after Track C authorization
+
+Jeremy authorized the Track C AI pass after this rehearsal, so this receipt is
+**intermediate**, not the final submitted-SHA receipt. It remains valid evidence
+for product tree `ff78b1d2dcdecd6eaa89b4348b0b247de1be280d` and the harness-only
+corrections at `56eddd5` / `988c812`; the final sequence must be repeated after
+both AI features merge. The disposable Neon target was retained for that later
+run and no credential is recorded here.
+
+| Step | Result |
+| --- | --- |
+| Fresh clone | 4.4 s, clean at `ff78b1d` |
+| Locked install | 32.5 s, 72 packages, **0 vulnerabilities** |
+| Empty-target proof | 0 tables and 0 enums; target distinct from production/shared databases |
+| `db:push` + post-diff | 17.7 s; schema created; post-diff empty |
+| Seed | 53.7 s; 51 users, 4 categories, 3 tracks, 4 rooms, 4 forms, 40 abstracts, 13 sessions, 11 slots, 6 onboarding tasks, 72 speaker tasks, 5 templates, 2 resources |
+| Product-tree unit | **1671 pass / 0 fail / 5 gated skips** |
+| Evidence-harness unit | **1672 pass / 0 fail / 5 gated skips** |
+| Type/build | app + E2E typechecks and fresh Next 16.3 build passed |
+| Install rehearsal | **20/20**, sentinel matched, owned server stopped and port released |
+| Screenshot capture | **5/5**, 27 files + 27 manifest rows, 2026-08-11T20:46:26.919Z–20:47:32.461Z |
+| Golden-path E2E | **1/1 twice**, fresh reseed each run, owned port released after both |
+
+The screenshots and manifest are preserved on this evidence branch and are
+explicitly labeled intermediate in `SCREENSHOT-INDEX.md`.
+
 Evidence that the README Quickstart works verbatim on a machine that has never
 seen this project. Performed by the Ops worker against a **separate, disposable
 Neon project** (its own host, never the shared demo database, never added to
