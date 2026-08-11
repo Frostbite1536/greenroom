@@ -33,6 +33,15 @@ demo data, and public schedule/speaker embeds. Every operator-facing screen
 carries populated, loading, empty, error, and responsive states — an empty state
 is part of the product, not a gap in it.
 
+The read-only v1 API's contract is published here too, in two public forms that
+need no key: the static OpenAPI 3.1.1 document at `/api/v1/openapi.json`, and
+its rendered page at `/docs/api`, which is generated from that same document
+rather than restating it. A drift test fails the suite when the document stops
+describing what the routes do, a purity test pins the document's whole import
+graph away from the environment, auth, and the database, and a workflow-to-route
+map ([judging/WORKFLOW-ROUTES.md](judging/WORKFLOW-ROUTES.md)) says which
+surface answers which question. Every example uses a placeholder credential.
+
 ## Operational hardening
 
 Deployment, authorized idempotent demo reset, review checkpoints, accessibility
@@ -45,29 +54,32 @@ This is a post-release sequence, not a claim that any item below is available
 today. It starts only after the clean-install rehearsal, final evidence capture,
 and deployed golden-path verification are complete.
 
-1. **Public API contract and safe examples.** Publish an unauthenticated static
-   OpenAPI document for the read-only v1 routes, backed by a drift test. Pair it
-   with a workflow-to-route map and static examples. Never publish the global
-   `GREENROOM_API_KEY`; it is deployment-wide rather than demo-event scoped.
-2. **Read scope before read breadth.** Define event discovery, resource
+The first item of this queue — the public API contract and its safe examples —
+has shipped and is described under "Integration and completeness" above. One
+constraint it established governs everything still listed here: **never publish
+the global `GREENROOM_API_KEY`.** It is deployment-wide rather than
+demo-event scoped, so exposing it would turn every event this API can address
+into public data. That is what item 2 below has to solve first.
+
+1. **Read scope before read breadth.** Define event discovery, resource
    visibility, and incremental-sync cursor semantics before adding filtered
    submissions, individual resources, or additional session reads. Held-back
    and unplaced talks stay private until an explicit contract says otherwise.
-3. **Scoped credentials.** Add hashed, revocable per-event tokens and a safely
+2. **Scoped credentials.** Add hashed, revocable per-event tokens and a safely
    scoped demo-access mechanism before any public data demonstration. This is a
    schema and authorization change, so it requires its own reviewed database
    window and migration plan. The global `SpeakerProfile.slideDeckUrl` also
    needs a later per-event deck pointer or association in that reviewed window;
    one global profile URL cannot provide per-event-private deck access.
-4. **Additional read models.** Add only the reads justified by the preceding
+3. **Additional read models.** Add only the reads justified by the preceding
    scope contract, with bounded pagination, stable ordering, event authorization,
    and contract tests on every response.
-5. **Integration and agent writes last.** Generic webhook delivery and any
+4. **Integration and agent writes last.** Generic webhook delivery and any
    narrow agent-writable operations come only after credentials, idempotency,
    rate limits, audit records, and failure handling exist. Every decision,
    placement, or task write must reuse the same locked service path as the UI;
    no adapter may bypass abstract or schedule locks.
-6. **Operator polish and evidence.** Consider paused-when-hidden speaker
+5. **Operator polish and evidence.** Consider paused-when-hidden speaker
    refresh, a `Day (rooms)` agenda label, preview-safe bulk decisions, and a
    submission-pacing view. Complete a documented manual assistive-technology
    pass before upgrading the accessibility claim.
