@@ -135,8 +135,14 @@ const RESOURCE_TEMPLATE_BY_KEY = new Map(
   RESOURCE_TEMPLATES.map((template) => [template.key, template] as const),
 );
 
+const RESOURCE_ASSISTANT_TEMPLATE_KEY_SET = new Set<string>(RESOURCE_ASSISTANT_TEMPLATE_KEYS);
+
 export function isResourceTemplateKey(value: string): value is ResourceTemplateKey {
   return RESOURCE_TEMPLATE_BY_KEY.has(value as ResourceTemplateKey);
+}
+
+export function isResourceAssistantTemplateKey(value: string): value is ResourceAssistantTemplateKey {
+  return RESOURCE_ASSISTANT_TEMPLATE_KEY_SET.has(value);
 }
 
 export function getResourceTemplate(key: ResourceTemplateKey): ResourceTemplate {
@@ -152,6 +158,11 @@ export function sanitizedResourceTemplateHtml(key: ResourceTemplateKey): string 
 export function resourceTemplateNeedsConfirmation(currentHtml: string, _key: ResourceTemplateKey): boolean {
   // Even re-applying the same template is an explicit replacement action. The
   // caller asks first whenever the editor already contains meaningful bytes.
+  return currentHtml.trim() !== "";
+}
+
+/** Every generated suggestion follows the same explicit-overwrite rule. */
+export function resourceHtmlNeedsReplacementConfirmation(currentHtml: string): boolean {
   return currentHtml.trim() !== "";
 }
 

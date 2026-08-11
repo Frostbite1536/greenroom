@@ -8,9 +8,12 @@ import { EmptyState, Pill } from "@/components/ui";
 import {
   RESOURCE_TEMPLATES,
   applyResourceTemplate,
+  isResourceAssistantTemplateKey,
   isResourceTemplateKey,
+  resourceHtmlNeedsReplacementConfirmation,
   resourceTemplateNeedsConfirmation,
 } from "@/lib/resources/resource-templates";
+import type { ResourceDraftSuggestion } from "@/lib/assistant/resource-draft";
 import {
   RESOURCE_SLUG_MAX_LENGTH,
   RESOURCE_SLUG_PATTERN,
@@ -337,6 +340,12 @@ function ResourceDialog({
   const open = editing !== null;
   const [activeContentTab, setActiveContentTab] = useState<"html" | "preview">("html");
   const [selectedTemplate, setSelectedTemplate] = useState("");
+  const [assistantNotes, setAssistantNotes] = useState("");
+  const [assistantSuggestion, setAssistantSuggestion] = useState<ResourceDraftSuggestion | null>(null);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -355,6 +364,7 @@ function ResourceDialog({
   const slug = effectiveSlug(draft);
   const selectedTemplateDetails = RESOURCE_TEMPLATES.find((template) => template.key === selectedTemplate);
   const previewDecision = draft.htmlContent.trim() === "" ? null : prepareResourceHtml(draft.htmlContent);
+  const suggestionPreview = assistantSuggestion === null ? null : prepareResourceHtml(assistantSuggestion.html);
 
   function selectContentTab(tab: "html" | "preview") {
     setActiveContentTab(tab);
@@ -385,6 +395,56 @@ function ResourceDialog({
     setActiveContentTab("html");
   }
 
+  async function generateAssistantDraft() {
+    if (!editing || editing.id !== null) return;
+    if (!isResourceAssistantTemplateKey(selectedTemplate)) {
+      setAssistantError("Choose one of the four guided templates before generating a draft.");
+      return;
+    }
+    if (draft.title.trim() === "") {
+      setAssistantError("Add a page title before generating a draft.");
+      return;
+    }
+    if (assistantNotes.trim() === "") {
+      setAssistantError("Add the facts and notes the draft may use.");
+      return;
+    }
+
+    setAssistantBusy(true);
+    setAssistantError(null);
+    setAssistantStatus(null);
+    const response = await apiPost<{ suggestion: ResourceDraftSuggestion }>("/api/assistant/resource-draft", {
+      templateKey: selectedTemplate,
+      title: draft.title.trim(),
+      ...(draft.summary.trim() === "" ? {} : { summary: draft.summary.trim() }),
+      notes: assistantNotes.trim(),
+    });
+    setAssistantBusy(false);
+    if (!response.ok) {
+      // Keep both the editor and any prior suggestion byte-for-byte intact: a
+      // failed retry cannot become an accidental destructive action.
+      setAssistantError(response.error.message);
+      return;
+    }
+    setAssistantSuggestion(response.data.suggestion);
+    setAssistantStatus("Draft suggestion ready. Review it before using it.");
+    requestAnimationFrame(() => suggestionRef.current?.focus());
+  }
+
+  function useAssistantDraft() {
+    if (!assistantSuggestion) return;
+    if (
+      resourceHtmlNeedsReplacementConfirmation(draft.htmlContent) &&
+      !window.confirm("Use this draft and replace the HTML currently in this editor? Page details and publish state stay unchanged.")
+    ) {
+      return;
+    }
+    onChange({ ...draft, htmlContent: assistantSuggestion.html });
+    setAssistantStatus("Draft applied to the HTML editor. Review and edit it before saving.");
+    setActiveContentTab("html");
+    requestAnimationFrame(() => htmlTabRef.current?.focus());
+  }
+
   return (
     <dialog
       ref={dialogRef}
@@ -402,6 +462,7 @@ function ResourceDialog({
         method="dialog"
         onSubmit={(event) => {
           event.preventDefault();
+          if (assistantBusy) return;
           onSubmit();
         }}
       >
@@ -425,6 +486,7 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.title}
             placeholder="Speaker Handbook"
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, title: event.target.value })}
           />
           {errors.title ? <span className="field-error">{errors.title}</span> : null}
@@ -440,6 +502,7 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.slug}
             aria-describedby={`${ids}-slug-hint`}
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, slug: event.target.value, slugTouched: true })}
           />
           <span className="hint" id={`${ids}-slug-hint`}>
@@ -458,6 +521,7 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.summary}
             placeholder="Everything you need before you present."
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, summary: event.target.value })}
           />
           <span className="hint">One line shown beside the page link in the portal.</span>
@@ -470,6 +534,7 @@ function ResourceDialog({
             id={`${ids}-template`}
             className="text-input"
             value={selectedTemplate}
+            disabled={assistantBusy}
             onChange={handleTemplateChange}
           >
             <option value="">Choose a template</option>
@@ -482,6 +547,79 @@ function ResourceDialog({
             Existing content is never replaced without confirmation.
           </span>
         </label>
+
+        {editing?.id === null ? (
+          <section className="resource-assistant" aria-labelledby={`${ids}-assistant-title`}>
+            <div className="stack">
+              <h3 id={`${ids}-assistant-title`}>Turn my notes into a resource page</h3>
+              <p className="hint">
+                Optional AI help for a new page. Only the selected template structure, page title, optional summary,
+                and notes below are sent to the configured provider. Greenroom does not send event records, save the
+                suggestion, or publish it for you.
+              </p>
+            </div>
+
+            <label className="stack" htmlFor={`${ids}-assistant-notes`}>
+              <span className="field-label">Facts and notes</span>
+              <textarea
+                id={`${ids}-assistant-notes`}
+                className="text-input"
+                rows={5}
+                maxLength={8000}
+                value={assistantNotes}
+                disabled={assistantBusy}
+                placeholder="Paste only the facts this page may use. Leave unknown details out so the draft marks them as [Add …]."
+                onChange={(event) => setAssistantNotes(event.target.value)}
+              />
+              <span className="hint">{assistantNotes.length.toLocaleString("en-US")} / 8,000 characters</span>
+            </label>
+
+            <div className="row wrap resource-assistant-actions">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={assistantBusy}
+                aria-describedby={`${ids}-assistant-provider-note`}
+                onClick={() => {
+                  void generateAssistantDraft();
+                }}
+              >
+                {assistantBusy ? "Generating…" : assistantSuggestion ? "Try again" : "Generate suggestion"}
+              </button>
+              <span className="hint" id={`${ids}-assistant-provider-note`}>
+                Templates, preview, manual HTML, save, and publish still work when AI is unavailable.
+              </span>
+            </div>
+
+            {assistantError ? <p className="field-error" role="alert">{assistantError}</p> : null}
+            {assistantStatus ? <p className="settings-notice" role="status" aria-live="polite">{assistantStatus}</p> : null}
+
+            {suggestionPreview?.allowed ? (
+              <div
+                className="resource-assistant-suggestion"
+                ref={suggestionRef}
+                tabIndex={-1}
+                aria-labelledby={`${ids}-assistant-suggestion-title`}
+              >
+                <div className="row wrap resource-assistant-suggestion-heading">
+                  <div>
+                    <h4 id={`${ids}-assistant-suggestion-title`}>Generated suggestion</h4>
+                    <p className="hint">Sanitized and separate from the HTML editor until you choose to use it.</p>
+                  </div>
+                  <button className="primary-button" type="button" disabled={assistantBusy} onClick={useAssistantDraft}>
+                    Use this draft
+                  </button>
+                </div>
+                <div className="prose resource-preview" dangerouslySetInnerHTML={{ __html: suggestionPreview.html }} />
+                {assistantSuggestion && assistantSuggestion.placeholders.length > 0 ? (
+                  <p className="hint">
+                    Check these visible placeholders: {assistantSuggestion.placeholders.join(" · ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         <div className="stack" style={{ marginTop: 14 }}>
           <div className="row" role="tablist" aria-label="Resource page content">
@@ -581,7 +719,7 @@ function ResourceDialog({
 
         <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 22 }}>
           <button className="ghost-button" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
-          <button className="primary-button" type="submit" disabled={submitting}>
+          <button className="primary-button" type="submit" disabled={submitting || assistantBusy}>
             {submitting ? "Saving…" : editing?.id === null ? "Create page" : "Save page"}
           </button>
         </div>

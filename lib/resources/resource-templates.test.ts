@@ -7,7 +7,9 @@ import {
   RESOURCE_TEMPLATES,
   applyResourceTemplate,
   getResourceTemplate,
+  isResourceAssistantTemplateKey,
   isResourceTemplateKey,
+  resourceHtmlNeedsReplacementConfirmation,
   resourceTemplateNeedsConfirmation,
   sanitizedResourceTemplateHtml,
 } from "./resource-templates";
@@ -50,6 +52,8 @@ test("the resource template catalogue is stable, allowlisted, and provider-indep
   }
   assert.equal(isResourceTemplateKey("speaker-handbook"), true);
   assert.equal(isResourceTemplateKey("not-allowlisted"), false);
+  assert.equal(isResourceAssistantTemplateKey("speaker-handbook"), true);
+  assert.equal(isResourceAssistantTemplateKey("blank"), false);
 });
 
 test("applying a template changes only HTML and cannot mutate metadata or publish state", () => {
@@ -88,4 +92,7 @@ test("only a real non-empty replacement requires confirmation", () => {
     true,
   );
   assert.equal(resourceTemplateNeedsConfirmation("<p>Custom notes</p>", "blank"), true);
+  assert.equal(resourceHtmlNeedsReplacementConfirmation(""), false);
+  assert.equal(resourceHtmlNeedsReplacementConfirmation("   "), false);
+  assert.equal(resourceHtmlNeedsReplacementConfirmation("<p>Custom notes</p>"), true);
 });

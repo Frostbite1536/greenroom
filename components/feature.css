@@ -516,6 +516,37 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .resource-dialog .resource-preview { max-width: 100%; overflow-wrap: anywhere; }
 .resource-dialog .resource-preview table { display: block; max-width: 100%; overflow-x: auto; }
 .resource-dialog .resource-preview pre { max-width: 100%; overflow-x: auto; }
+.resource-dialog .resource-assistant {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+}
+.resource-dialog .resource-assistant h3,
+.resource-dialog .resource-assistant h4 { margin: 0; }
+.resource-dialog .resource-assistant-actions { align-items: center; }
+.resource-dialog .resource-assistant-suggestion {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.resource-dialog .resource-assistant-suggestion:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.resource-dialog .resource-assistant-suggestion-heading { align-items: flex-start; justify-content: space-between; }
+
+@media (max-width: 520px) {
+  .resource-dialog .resource-assistant { padding: 12px; }
+  .resource-dialog .resource-assistant-actions,
+  .resource-dialog .resource-assistant-suggestion-heading { align-items: stretch; flex-direction: column; }
+  .resource-dialog .resource-assistant-actions > button,
+  .resource-dialog .resource-assistant-suggestion-heading > button { width: 100%; min-height: 40px; }
+}
 .app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
 .app-dialog .conflict-banner { font-size: 12.5px; }
 
