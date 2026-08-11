@@ -4689,10 +4689,21 @@ try {
   // 23a-bis. GRA2-02 — the live integrations may not export what the public
   // site withholds. Both projections used to include a session on acceptance
   // alone, so an unpublished talk and its speakers' names, bios and email
-  // addresses went to a third party anyway. Runs here because the scratch event
-  // now holds at least one unpublished programme session (the one just
-  // unpublished above), and `dryRun` keeps both calls preview-only — nothing
-  // leaves Greenroom.
+  // addresses went to a third party anyway. The block seeds its OWN withheld
+  // fixture: the talk unpublished just above belongs to a rejected abstract,
+  // which the programme predicate rightly excludes for a different reason —
+  // borrowing it made every assertion here vacuous. A source-less DRAFT
+  // (guaranteed-but-unannounced) session is the exact case the fix protects.
+  // `dryRun` keeps both calls preview-only — nothing leaves Greenroom.
+  const withheldFixture = await prisma.session.create({
+    data: {
+      eventId: SCRATCH_EVENT.id,
+      title: "GRA2-02 unannounced guaranteed session",
+      durationMinutes: 30,
+      contentStatus: "DRAFT",
+    },
+    select: { id: true },
+  });
   const integrationSessions = await prisma.session.findMany({
     where: { eventId: SCRATCH_EVENT.id },
     select: { id: true, contentStatus: true, sourceAbstractId: true, sourceAbstract: { select: { status: true } } },
@@ -4727,6 +4738,7 @@ try {
       pushPreview.data?.data?.excluded?.unpublishedSessions === expectedWithheld,
     `${pushPreview.status}/sessions=${pushPreview.data?.data?.summary?.sessions}/excluded=${pushPreview.data?.data?.excluded?.unpublishedSessions}`,
   );
+  await prisma.session.delete({ where: { id: withheldFixture.id } });
 
   // 23b. ABS-13 — ADMIN-only CSV export of review results. Runs last so the
   // event already holds real plans, completed reviews, scores, and decisions.
