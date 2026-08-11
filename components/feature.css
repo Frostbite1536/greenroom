@@ -513,6 +513,9 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .app-dialog.round-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .app-dialog.speaker-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .app-dialog.resource-dialog { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.resource-dialog .resource-preview { max-width: 100%; overflow-wrap: anywhere; }
+.resource-dialog .resource-preview table { display: block; max-width: 100%; overflow-x: auto; }
+.resource-dialog .resource-preview pre { max-width: 100%; overflow-x: auto; }
 .app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
 .app-dialog .conflict-banner { font-size: 12.5px; }
 

@@ -6,9 +6,16 @@ import { BookOpen, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
+  RESOURCE_TEMPLATES,
+  applyResourceTemplate,
+  isResourceTemplateKey,
+  resourceTemplateNeedsConfirmation,
+} from "@/lib/resources/resource-templates";
+import {
   RESOURCE_SLUG_MAX_LENGTH,
   RESOURCE_SLUG_PATTERN,
   portalResourceHref,
+  prepareResourceHtml,
   resourceSlugFromTitle,
   type ResourceView,
 } from "@/lib/services/resource-wiki";
@@ -286,6 +293,7 @@ export function ResourceManager({
       </div>
 
       <ResourceDialog
+        key={editing ? `resource:${editing.id ?? "new"}` : "resource:closed"}
         editing={editing}
         errors={errors}
         submitting={busy !== null}
@@ -323,8 +331,12 @@ function ResourceDialog({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const htmlTabRef = useRef<HTMLButtonElement>(null);
+  const previewTabRef = useRef<HTMLButtonElement>(null);
   const ids = useId();
   const open = editing !== null;
+  const [activeContentTab, setActiveContentTab] = useState<"html" | "preview">("html");
+  const [selectedTemplate, setSelectedTemplate] = useState("");
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -341,6 +353,37 @@ function ResourceDialog({
 
   const draft = editing?.draft ?? EMPTY_DRAFT;
   const slug = effectiveSlug(draft);
+  const selectedTemplateDetails = RESOURCE_TEMPLATES.find((template) => template.key === selectedTemplate);
+  const previewDecision = draft.htmlContent.trim() === "" ? null : prepareResourceHtml(draft.htmlContent);
+
+  function selectContentTab(tab: "html" | "preview") {
+    setActiveContentTab(tab);
+    if (tab === "html") htmlTabRef.current?.focus();
+    else previewTabRef.current?.focus();
+  }
+
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") selectContentTab("html");
+    else if (event.key === "End") selectContentTab("preview");
+    else selectContentTab(activeContentTab === "html" ? "preview" : "html");
+  }
+
+  function handleTemplateChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    if (!isResourceTemplateKey(event.target.value)) return;
+    const key = event.target.value;
+    if (
+      resourceTemplateNeedsConfirmation(draft.htmlContent, key) &&
+      !window.confirm("Apply this template and replace the HTML currently in this editor? Page details and publish state stay unchanged.")
+    ) {
+      event.target.value = selectedTemplate;
+      return;
+    }
+    onChange(applyResourceTemplate(draft, key));
+    setSelectedTemplate(key);
+    setActiveContentTab("html");
+  }
 
   return (
     <dialog
@@ -421,27 +464,110 @@ function ResourceDialog({
           {errors.summary ? <span className="field-error">{errors.summary}</span> : null}
         </label>
 
-        <label className="stack" style={{ marginTop: 14 }} htmlFor={`${ids}-html`}>
-          <span className="field-label">Page content (HTML)</span>
-          <textarea
-            id={`${ids}-html`}
+        <label className="stack" style={{ marginTop: 14 }} htmlFor={`${ids}-template`}>
+          <span className="field-label">Start from a template <span className="muted">(optional)</span></span>
+          <select
+            id={`${ids}-template`}
             className="text-input"
-            rows={12}
-            value={draft.htmlContent}
-            aria-invalid={!!errors.htmlContent}
-            aria-describedby={`${ids}-html-hint`}
-            placeholder="<h2>Welcome, speakers!</h2><p>This handbook covers arrival, A/V and stage logistics.</p>"
-            onChange={(event) => onChange({ ...draft, htmlContent: event.target.value })}
-          />
-          {/* An honest label, because the sanitizer is strict: an organizer who
-              pastes an embed needs to know it will not survive, before they
-              publish a page that silently lost half its content. */}
-          <span className="hint" id={`${ids}-html-hint`}>
-            HTML is supported and sanitized before it is saved. Headings, paragraphs, lists, tables, quotes, code and
-            links are kept; scripts, styles, iframes and other embeds are removed, and links open in a new tab.
+            value={selectedTemplate}
+            onChange={handleTemplateChange}
+          >
+            <option value="">Choose a template</option>
+            {RESOURCE_TEMPLATES.map((template) => (
+              <option key={template.key} value={template.key}>{template.label}</option>
+            ))}
+          </select>
+          <span className="hint">
+            {selectedTemplateDetails?.description ?? "Templates change only the HTML below."}{" "}
+            Existing content is never replaced without confirmation.
           </span>
-          {errors.htmlContent ? <span className="field-error">{errors.htmlContent}</span> : null}
         </label>
+
+        <div className="stack" style={{ marginTop: 14 }}>
+          <div className="row" role="tablist" aria-label="Resource page content">
+            <button
+              id={`${ids}-html-tab`}
+              ref={htmlTabRef}
+              className={activeContentTab === "html" ? "primary-button" : "ghost-button"}
+              type="button"
+              role="tab"
+              aria-selected={activeContentTab === "html"}
+              aria-controls={`${ids}-html-panel`}
+              tabIndex={activeContentTab === "html" ? 0 : -1}
+              onClick={() => selectContentTab("html")}
+              onKeyDown={handleTabKeyDown}
+            >
+              HTML
+            </button>
+            <button
+              id={`${ids}-preview-tab`}
+              ref={previewTabRef}
+              className={activeContentTab === "preview" ? "primary-button" : "ghost-button"}
+              type="button"
+              role="tab"
+              aria-selected={activeContentTab === "preview"}
+              aria-controls={`${ids}-preview-panel`}
+              tabIndex={activeContentTab === "preview" ? 0 : -1}
+              onClick={() => selectContentTab("preview")}
+              onKeyDown={handleTabKeyDown}
+            >
+              Preview
+            </button>
+          </div>
+
+          <div
+            id={`${ids}-html-panel`}
+            role="tabpanel"
+            aria-labelledby={`${ids}-html-tab`}
+            hidden={activeContentTab !== "html"}
+          >
+            <label className="stack" htmlFor={`${ids}-html`}>
+              <span className="field-label">Page content (HTML)</span>
+              <textarea
+                id={`${ids}-html`}
+                className="text-input"
+                rows={12}
+                value={draft.htmlContent}
+                aria-invalid={!!errors.htmlContent}
+                aria-describedby={`${ids}-html-hint`}
+                placeholder="<h2>Welcome, speakers!</h2><p>This handbook covers arrival, A/V and stage logistics.</p>"
+                onChange={(event) => onChange({ ...draft, htmlContent: event.target.value })}
+              />
+              {/* An honest label, because the sanitizer is strict: an organizer who
+                  pastes an embed needs to know it will not survive, before they
+                  publish a page that silently lost half its content. */}
+              <span className="hint" id={`${ids}-html-hint`}>
+                HTML is supported and sanitized before it is saved. Headings, paragraphs, lists, tables, quotes, code and
+                links are kept; scripts, styles, iframes and other embeds are removed, and links open in a new tab.
+              </span>
+            </label>
+          </div>
+
+          <div
+            id={`${ids}-preview-panel`}
+            role="tabpanel"
+            aria-labelledby={`${ids}-preview-tab`}
+            hidden={activeContentTab !== "preview"}
+          >
+            <p className="field-label">Sanitized preview</p>
+            <div
+              className="prose resource-preview"
+              style={{ minHeight: 180, marginTop: 8, padding: 16, border: "1px solid var(--line)", borderRadius: 10 }}
+            >
+              {previewDecision === null ? (
+                <p className="muted" role="status">Nothing to preview yet.</p>
+              ) : previewDecision.allowed ? (
+                <div dangerouslySetInnerHTML={{ __html: previewDecision.html }} />
+              ) : (
+                <p className="muted" role="status">{previewDecision.message}</p>
+              )}
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>
+              This preview uses the same sanitizer as saved resource pages. Disallowed markup is removed before rendering.
+            </p>
+          </div>
+          {errors.htmlContent ? <span className="field-error">{errors.htmlContent}</span> : null}
+        </div>
 
         <label className="row" style={{ marginTop: 16 }} htmlFor={`${ids}-published`}>
           <input
