@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { getServerEnv, ServerEnvError } from "./env";
+import { getOpenAiApiKey, getServerEnv, ServerEnvError } from "./env";
 
 /**
  * D-02. `lib/env.ts` carried a complete `envSchema` with ZERO call sites: the
@@ -30,6 +30,7 @@ const MANAGED = [
   "AIRTABLE_API_KEY",
   "AIRTABLE_BASE_ID",
   "GREENROOM_API_KEY",
+  "OPENAI_API_KEY",
   "SESSION_SECRET",
   "APP_URL",
 ] as const;
@@ -60,6 +61,21 @@ test("D-02: a well-formed environment parses, and the optional variables stay op
   assert.equal(env.ALLOW_DEMO_RESET, "false");
   assert.equal(env.SESSION_SECRET, undefined);
   assert.equal(env.GREENROOM_API_KEY, undefined);
+  // Absent is a supported configuration: it disables the assistant, and must
+  // never be an error that stops the application booting.
+  assert.equal(env.OPENAI_API_KEY, undefined);
+});
+
+test("an absent or unusable assistant credential reads as disabled, never as a throw", () => {
+  for (const value of [undefined, "", "   ", "sk-short"]) {
+    withEnv({ DATABASE_URL: "postgresql://user:pw@db.example.test:5432/greenroom", OPENAI_API_KEY: value }, () => {
+      assert.equal(getOpenAiApiKey(), undefined, `${JSON.stringify(value)} must read as absent`);
+    });
+  }
+  const key = "sk-proj-not-a-real-key-0000000000";
+  withEnv({ DATABASE_URL: "postgresql://user:pw@db.example.test:5432/greenroom", OPENAI_API_KEY: ` ${key} ` }, () => {
+    assert.equal(getOpenAiApiKey(), key, "a usable key is returned trimmed");
+  });
 });
 
 test("D-02: a malformed DATABASE_URL is refused, and the refusal names it", () => {
