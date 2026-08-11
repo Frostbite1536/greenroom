@@ -14,7 +14,18 @@ import { normalizeEmailSubject } from "@/lib/comms/subject";
  * mock branch is identical everywhere, and one idempotency key scheme covers
  * all of it.
  */
-export type EmailAttachment = { filename: string; content: string };
+export type EmailAttachment = {
+  filename: string;
+  content: string;
+  /**
+   * MIME type for this part. Resend derives one from the filename when this is
+   * absent, which is right for most attachments and wrong for exactly one: a
+   * calendar invitation has to arrive as `text/calendar; method=REQUEST` before
+   * Gmail or Outlook will treat it as an invitation rather than a file. Omitted
+   * by every existing caller, so their delivered bytes are unchanged.
+   */
+  contentType?: string;
+};
 
 export type EmailMessage = {
   to: string;
@@ -76,6 +87,11 @@ async function deliverNormalizedEmail(message: EmailMessage, config: DeliveryCon
               attachments: message.attachments.map((attachment) => ({
                 filename: attachment.filename,
                 content: Buffer.from(attachment.content, "utf8").toString("base64"),
+                // Resend's field is snake_case `content_type` (verified against
+                // its send-email API reference). Spread conditionally so an
+                // attachment without one produces the identical request body it
+                // produced before this field existed.
+                ...(attachment.contentType ? { content_type: attachment.contentType } : {}),
               })),
             }
           : {}),
