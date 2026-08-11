@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   PASSWORD_RESET_TOKEN_MAX_LENGTH,
@@ -121,12 +124,23 @@ test("structural parsing rejects hostile shapes before anything is hashed", () =
 
 test("the credential digest is keyed to the secret and never equals the stored hash", () => {
   const digest = passwordResetCredentialDigest(SECRET, HASH);
+  const expected = createHmac("sha256", SECRET)
+    .update(`greenroom:password-reset:credential:v1\0${HASH}`)
+    .digest("base64url");
+  assert.equal(digest, expected, "the textual escape must preserve the NUL-delimited HMAC domain");
   assert.notEqual(digest, HASH);
   assert.ok(!HASH.includes(digest));
   assert.notEqual(digest, passwordResetCredentialDigest(OTHER_SECRET, HASH), "a different secret must derive differently");
   assert.notEqual(digest, passwordResetCredentialDigest(SECRET, NEW_HASH), "a different hash must derive differently");
   // The token itself carries the digest nowhere: it is recomputed at verify time.
   assert.ok(!mint().includes(digest));
+});
+
+test("security-sensitive source stays reviewable text without literal NUL bytes", () => {
+  for (const relativePath of ["lib/services/password-reset-token.ts", "scripts/_smoke.mjs"]) {
+    const source = readFileSync(join(process.cwd(), relativePath));
+    assert.equal(source.includes(0), false, `${relativePath} must not be classified as a binary blob`);
+  }
 });
 
 test("the reset link points at the redemption page and escapes its token", () => {

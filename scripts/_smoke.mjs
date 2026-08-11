@@ -3469,7 +3469,7 @@ try {
     emailHistoryAdmin.status);
   check("C5 email history leaks no provider credential, bearer, or dispatch variable bag",
     !/RESEND_API_KEY|Bearer\s|Idempotency-Key|"providerId"|mock:/i.test(emailHistoryHtml) &&
-      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || " no-resend-key-configured"),
+      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || "\0no-resend-key-configured"),
     "credential appeared in /admin/emails");
 
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
