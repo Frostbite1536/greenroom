@@ -138,7 +138,16 @@ test("speaker numbers come from the roster read the roster page uses", () => {
   // The roster page must be on the same read, or the two can disagree.
   const roster = source("app/(app)/admin/speakers/page.tsx");
   assert.match(roster, /readSpeakerRoster\(eventId\),/);
-  assert.match(roster, /const \{ rows, summary, awaitingSession, truncated \} = roster;/);
+  // Matched by key rather than against the whole destructure, so the shared read
+  // may gain a field only one screen needs (`decks`) without this test having to
+  // be edited to keep passing. The property asserted is that these four are
+  // taken from the shared read and NOT re-derived on the page.
+  const destructure = roster.match(/const \{([^}]*)\} = roster;/);
+  assert.ok(destructure, "the roster page must destructure the shared read");
+  const keys = destructure[1].split(",").map((key) => key.trim());
+  for (const key of ["rows", "summary", "awaitingSession", "truncated"]) {
+    assert.ok(keys.includes(key), `${key} must come from the shared roster read`);
+  }
 });
 
 test("recent activity is bounded and deep-links through the canonical permalink", () => {

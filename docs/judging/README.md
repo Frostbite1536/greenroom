@@ -127,10 +127,25 @@ Stated plainly, because an evaluator should not have to discover them.
   role is re-resolved per event, so the same person can be an admin on one and a
   speaker on another. What is *not* there: no way to join an event you were not
   added to, and no cross-event view — every screen still shows exactly one event.
-- **No file upload on proposals.** Speaker profiles do take real uploads —
-  headshots and slide decks are stored in the database and served from
-  `/api/files/<id>`, with a URL field still offered as the alternative — but a
-  proposal itself still carries no attachment.
+- **Proposal attachments are portal-only, and private to their uploader.** A
+  signed-in speaker can attach up to three PDF supporting documents (≤5 MiB
+  each) to their own proposal while it is still editable, through the same
+  upload pipeline as headshots and decks. Two limits an evaluator should know:
+  the **anonymous public CFP form takes no attachment at all** — a document can
+  only be added afterwards, from the portal — and the bytes are readable by the
+  uploader and this event's organizers only, so a **co-speaker on a shared
+  proposal sees that a document exists but cannot open it**. Each row says so
+  rather than offering a link that would fail. Removing an attachment removes
+  the link, not the stored bytes; there is no reaper for orphaned uploads.
+- **A speaker's slide deck is now per event, with the old global one as the
+  fallback.** The portal writes a deck for the event you are signed in to, and
+  the organizer roster shows it with its source named ("This event" or "Global
+  profile (fallback)"). The global `SpeakerProfile.slideDeckUrl` is unchanged
+  and still editable — it is what every event without its own association
+  resolves to. What is **not** per-event yet: the read-only v1 API's
+  `profile.slideDeckUrl` still reports only the global value, because widening
+  that published contract belongs with the scoped-credential work it is
+  sequenced behind.
 - **One topic per submission, by design.** A CFP form can offer several topic
   options, but each submitted proposal stores exactly one selected topic, which
   is what routes it to a review team. The agenda `Track` is a separate placement
