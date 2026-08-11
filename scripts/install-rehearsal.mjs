@@ -9,8 +9,8 @@
  * the same value `npm run dev` uses for the one-click `/login` personas, and one
  * that fails closed in production (`getSessionSecret()`).
  *
- * ⚠️ THIS SCRIPT WRITES: it submits an abstract, accepts it, converts it to a
- * session, schedules it, and completes an onboarding task in `demo-event`. Point
+ * ⚠️ THIS SCRIPT WRITES: it submits an abstract, accepts it (which provisions a
+ * session and its onboarding tasks), schedules it, and completes an onboarding task in `demo-event`. Point
  * it ONLY at a disposable database. It refuses to run without an explicit opt-in
  * and refuses any non-loopback target, so it can never touch production.
  *
@@ -37,7 +37,7 @@ const EVENT = { id: "demo-event", name: "Forward 2026", slug: "forward-2026" };
 
 if (process.env.INSTALL_REHEARSAL_ALLOW_WRITES !== "1") {
   console.error(
-    "install-rehearsal writes demo-event data (submit, accept, convert, schedule,\n" +
+    "install-rehearsal writes demo-event data (submit, accept, schedule,\n" +
       "task completion) and is blocked by default.\n" +
       "Run it only against a DISPOSABLE database — never the shared demo DB — then set\n" +
       "  INSTALL_REHEARSAL_ALLOW_WRITES=1\n" +
@@ -148,8 +148,8 @@ try {
   const forms = await req("GET", "/api/cfp/forms?eventId=demo-event", null, admin);
   const form = (forms.data?.data ?? []).find((f) => f.slug === "call-for-speakers");
   check("1. seeded CFP form is published", !!form && form.published === true);
-  const publicCfp = await req("GET", "/cfp/call-for-speakers", null, null);
-  check("1. public CFP renders logged out", publicCfp.status === 200 && !publicCfp.text.includes("Submissions are closed"), `status ${publicCfp.status}`);
+  const publicCfp = await req("GET", "/cfp/forward-2026/call-for-speakers", null, null);
+  check("1. canonical public CFP renders logged out", publicCfp.status === 200 && !publicCfp.text.includes("Submissions are closed"), `status ${publicCfp.status}`);
 
   const cats = await req("GET", "/api/cfp/categories?eventId=demo-event", null, admin);
   const categoryId = (cats.data?.data ?? [])[0]?.id;
@@ -199,12 +199,11 @@ try {
     check("3. evaluator scores an assigned abstract", false, `plan=${!!plan} rubricKey=${rubricKey} assignment=${!!assignment}`);
   }
 
-  // Step 4 — admin accepts and converts to a Session.
+  // Step 4 — admin acceptance atomically provisions the Session and its tasks.
   const decide = await req("POST", "/api/evaluations/decisions", { abstractId, decision: "ACCEPTED" }, admin);
   check("4. admin accept → 200", decide.status === 200, `${decide.status} ${JSON.stringify(decide.data?.error ?? "")}`);
-  const convert = await req("POST", "/api/evaluations/convert", { abstractId, durationMinutes: 30 }, admin);
-  check("4. convert to session → 201", convert.status === 201, `${convert.status} ${JSON.stringify(convert.data?.error ?? "")}`);
-  const sessionId = convert.data?.data?.sessionId;
+  const sessionId = decide.data?.data?.session?.id;
+  check("4. acceptance provisions a Session", decide.data?.data?.sessionCreated === true && Boolean(sessionId));
 
   // Step 5 — speaker portal: task check-off persists.
   const portal = await req("GET", "/portal", null, speaker);
