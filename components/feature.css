@@ -450,6 +450,52 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .app-dialog h2 { margin: 0 0 6px; font-size: 17px; }
 .app-dialog .conflict-banner { font-size: 12.5px; }
 
+/* ---- GRA2-06: the abstract drawer and the two agenda dialogs ----
+   These were hand-rolled `role="dialog"` overlay divs with no focus handling.
+   They are native <dialog> elements now, so the geometry that used to live in
+   the overlay wrapper lives here instead. Both carry `.card`, so the surface,
+   border and shadow are unchanged; only layout is restated.
+   Padding sits on the body, never on the dialog, so `event.target === dialog`
+   identifies a backdrop click exactly. */
+.abstract-drawer {
+  /* `position: fixed` unconditionally rather than only via `:modal`: the
+     deep-linked drawer is server-rendered NON-modally (the server can write
+     only the `open` attribute), and a non-modal dialog is `position: absolute`
+     by default. Fixing both states keeps the pre-hydration frame in the same
+     place as the modal one. */
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  width: min(480px, 100%);
+  max-width: 100%;
+  height: 100%;
+  max-height: 100%;
+  /* An auto left margin against the UA's `inset-inline: 0` pins the panel to
+     the right edge, exactly as the old flex `justify-content: flex-end` did. */
+  margin: 0 0 0 auto;
+  border-radius: 0;
+  color: var(--ink);
+  padding: 0;
+  overflow: hidden;
+}
+.abstract-drawer::backdrop { background: rgba(20, 28, 30, 0.35); }
+.abstract-drawer-body { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
+
+.agenda-dialog {
+  /* `calc(100vw - 32px)` reproduces the 16px gutter the old overlay's padding
+     gave the centred card. */
+  width: min(520px, calc(100vw - 32px));
+  max-width: 100%;
+  max-height: calc(100vh - 32px);
+  color: var(--ink);
+  padding: 0;
+  overflow: hidden;
+}
+.agenda-dialog::backdrop { background: rgba(20, 28, 30, 0.35); }
+.agenda-dialog-body { max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
+.agenda-dialog.agenda-preview-dialog { width: min(640px, calc(100vw - 32px)); max-height: 85vh; }
+.agenda-dialog.agenda-preview-dialog .agenda-dialog-body { max-height: 85vh; }
+
 /* ---- Speaker roster (/admin/speakers) ---- */
 .roster-toolbar { justify-content: space-between; }
 .roster-search-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
