@@ -112,8 +112,12 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
   headshot, 5 MiB for a deck), sniffs the magic bytes and refuses anything whose real format is
   not accepted for that kind or does not match the claimed content type (`422`), then stores the
-  bytes in `StoredFile` keyed by `(uploader, kind, sha256)` so a re-upload returns the id that
-  already exists. The **stored, server-derived** mime — never the client's header — is what
+  bytes in `StoredFile` keyed by `(uploader, kind, fingerprint)` so a same-scope re-upload
+  returns the id that already exists. A public headshot's fingerprint is its raw content SHA;
+  a private slide deck uses a versioned, event-scoped SHA over the event id and raw content
+  digest, so identical bytes uploaded under another event cannot inherit the first event's
+  organizer access. Same-event legacy raw-digest deck rows remain reusable. The **stored,
+  server-derived** mime — never the client's header — is what
   `GET /api/files/:id` sets as `Content-Type`, which is what makes the deployment-wide `nosniff`
   binding. Reads mirror the exposure each column already had: a `HEADSHOT` is public because it
   renders on the anonymous speaker gallery and the speakers embed (`public, max-age=31536000,

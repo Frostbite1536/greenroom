@@ -126,21 +126,6 @@ export function verifyStoredFile(input: {
   return { ok: true, mime: actual };
 }
 
-/**
- * The dedupe identity: one uploader's same bytes, for the same purpose, are
- * one row. Kind is part of the key because it decides who may read the file
- * back — two rows differing only in kind are two different disclosures, and
- * collapsing them would let the second upload inherit the first one's
- * authorization.
- */
-export function storedFileDedupeKey(input: {
-  uploaderUserId: string;
-  kind: StoredFileKindValue;
-  sha256: string;
-}): { uploaderUserId: string; kind: StoredFileKindValue; sha256: string } {
-  return { uploaderUserId: input.uploaderUserId, kind: input.kind, sha256: input.sha256.toLowerCase() };
-}
-
 /** Where a stored file is served from. The value written into a profile URL column. */
 export const STORED_FILE_PATH_PREFIX = "/api/files/";
 

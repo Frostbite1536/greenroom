@@ -31,6 +31,8 @@ const admin = {
 };
 const speaker = { ...admin, user: { id: "scratch-speaker", name: "Scratch Speaker", email: "speaker@scratch.test" }, role: "SPEAKER" };
 const evalr = { ...admin, user: { id: "scratch-evaluator", name: "Scratch Evaluator", email: "evaluator@scratch.test" }, role: "EVALUATOR" };
+const SCRATCH_EVENT_IDS = [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id];
+const SCRATCH_IDENTITY_EMAILS = [admin.user.email, speaker.user.email, evalr.user.email];
 const cookie = cookieForSession;
 
 const PORT = process.env.SMOKE_PORT || "3212";
@@ -211,6 +213,35 @@ server.stderr.on("data", (d) => process.stderr.write(d));
 let cleanupFailed = false;
 let cleanupPromise;
 let fatalError = false;
+
+function assertScratchCleanupTargets() {
+  if (
+    SCRATCH_EVENT_IDS.includes("demo-event") ||
+    SCRATCH_EVENT.slug === "forward-2026" ||
+    OTHER_SCRATCH_EVENT.slug === "forward-2026" ||
+    SCRATCH_IDENTITY_EMAILS.some((email) => !email.endsWith("@scratch.test"))
+  ) {
+    throw new Error("Refusing to clean files outside the smoke's fixed scratch identities and events.");
+  }
+}
+
+async function deleteScratchStoredFiles() {
+  assertScratchCleanupTargets();
+  const scratchUsers = await prisma.user.findMany({
+    where: { email: { in: SCRATCH_IDENTITY_EMAILS } },
+    select: { id: true },
+  });
+  const scratchUserIds = scratchUsers.map((user) => user.id);
+  const scratchFileWhere = {
+    OR: [
+      { eventId: { in: SCRATCH_EVENT_IDS } },
+      ...(scratchUserIds.length > 0 ? [{ uploaderUserId: { in: scratchUserIds } }] : []),
+    ],
+  };
+  await prisma.storedFile.deleteMany({ where: scratchFileWhere });
+  return prisma.storedFile.count({ where: scratchFileWhere });
+}
+
 function stopServer() {
   if (!server.pid || server.exitCode !== null) return true;
   if (process.platform === "win32") {
@@ -234,8 +265,14 @@ function stopServer() {
 function cleanup() {
   cleanupPromise ??= (async () => {
     try {
+      const remainingStoredFiles = await deleteScratchStoredFiles();
+      check(
+        "scratch-owned stored files are cleared at final teardown",
+        remainingStoredFiles === 0,
+        remainingStoredFiles,
+      );
       await prisma.publicSubmissionRateBucket.deleteMany({
-        where: { eventId: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } },
+        where: { eventId: { in: SCRATCH_EVENT_IDS } },
       });
       await prisma.$executeRaw`
         DELETE FROM "ReviewerInvite" WHERE "eventId" IN (${SCRATCH_EVENT.id}, ${OTHER_SCRATCH_EVENT.id})
@@ -259,7 +296,7 @@ function cleanup() {
       );
     } catch (error) {
       cleanupFailed = true;
-      console.error("[smoke] scratch rate-bucket cleanup failed", error);
+      console.error("[smoke] scratch cleanup failed", error);
     }
     await prisma.$disconnect().catch((error) => {
       cleanupFailed = true;
@@ -299,10 +336,14 @@ check(
  * memberships. Guarded so this can never target the judged demo event.
  */
 async function resetScratchEvent() {
-  if (SCRATCH_EVENT.id === "demo-event" || SCRATCH_EVENT.slug === "forward-2026") {
-    throw new Error("Refusing to run: smoke must never target the demo event.");
-  }
-  await prisma.event.deleteMany({ where: { id: { in: [SCRATCH_EVENT.id, OTHER_SCRATCH_EVENT.id] } } });
+  assertScratchCleanupTargets();
+  const remainingStoredFiles = await deleteScratchStoredFiles();
+  check(
+    "scratch-owned stored files are cleared before event reset",
+    remainingStoredFiles === 0,
+    remainingStoredFiles,
+  );
+  await prisma.event.deleteMany({ where: { id: { in: SCRATCH_EVENT_IDS } } });
   await prisma.event.create({
     data: {
       ...SCRATCH_EVENT,
@@ -3469,7 +3510,7 @@ try {
     emailHistoryAdmin.status);
   check("C5 email history leaks no provider credential, bearer, or dispatch variable bag",
     !/RESEND_API_KEY|Bearer\s|Idempotency-Key|"providerId"|mock:/i.test(emailHistoryHtml) &&
-      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || " no-resend-key-configured"),
+      !emailHistoryHtml.includes(process.env.RESEND_API_KEY || "\0no-resend-key-configured"),
     "credential appeared in /admin/emails");
 
   // 19. Key-protected v1 reads remain explicitly event-scoped and return only
@@ -4968,9 +5009,9 @@ try {
       /autocomplete="username"/i.test(loginHtml) && /autocomplete="current-password"/i.test(loginHtml) &&
       (loginHtml.match(/name="persona"/g) || []).length === 3 &&
       /No password required\./.test(loginHtml) &&
-      // D-C5-9 roadmap copy: sign-up is named as roadmap, not merely absent.
-      /Self-service sign-up is on the roadmap/.test(loginHtml) &&
-      /for now organizers provision accounts\./.test(loginHtml),
+      // D-C5-16: the shipped self-service doors stay visible beside sign-in.
+      loginHtml.includes('href="/signup"') && /Create one/.test(loginHtml) &&
+      loginHtml.includes('href="/forgot"') && /Reset it/.test(loginHtml),
     loginPageResponse.status);
   const personaHome = await fetch(`${BASE}/portal`, { headers: { cookie: cookie(speaker) }, redirect: "manual" });
   check("C5-LOGIN the one-click persona session still reaches its home unchanged",
@@ -5208,6 +5249,39 @@ try {
       && deckOwner.headers.get("content-disposition") === "attachment"
       && deckOwner.bytes.equals(PDF_BYTES),
     `anon ${deckAnon.status}/eval ${deckEvaluator.status}/owner ${deckOwner.status}/admin ${deckAdmin.status}`);
+
+  // The same uploader can belong to two events. Identical private bytes must
+  // produce one id per event authority: public headshot dedupe is global, but a
+  // deck uploaded in B must never return A's row or retain A's admin claim.
+  const fileAdminUser = await prisma.user.findUniqueOrThrow({ where: { email: admin.user.email }, select: { id: true } });
+  const fileSpeakerUser = await prisma.user.findUniqueOrThrow({ where: { email: speaker.user.email }, select: { id: true } });
+  await prisma.eventMember.createMany({
+    data: [
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileAdminUser.id, role: "ADMIN" },
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileSpeakerUser.id, role: "SPEAKER" },
+    ],
+    skipDuplicates: true,
+  });
+  const otherSpeaker = { ...speaker, event: OTHER_SCRATCH_EVENT };
+  const otherAdmin = { ...admin, event: OTHER_SCRATCH_EVENT };
+  const deckOther = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  const deckOtherUrl = deckOther.data?.data?.url;
+  const deckOtherAgain = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  check("C5-FILES identical private bytes dedupe within an event but not across events",
+    deckOther.status === 201 && deckOther.data?.data?.deduped === false
+      && deckOtherUrl !== deckUrl
+      && deckOtherAgain.status === 200 && deckOtherAgain.data?.data?.deduped === true
+      && deckOtherAgain.data?.data?.url === deckOtherUrl,
+    `other ${deckOther.status}/again ${deckOtherAgain.status}/distinct ${deckOtherUrl !== deckUrl}`);
+
+  const deckAFromOtherAdmin = await uploadGet(deckUrl, otherAdmin);
+  const deckBFromAdmin = await uploadGet(deckOtherUrl, admin);
+  const deckBFromOtherAdmin = await uploadGet(deckOtherUrl, otherAdmin);
+  const deckBFromOwner = await uploadGet(deckOtherUrl, otherSpeaker);
+  check("C5-FILES each private deck id remains inside its upload event's admin authority",
+    deckAFromOtherAdmin.status === 404 && deckBFromAdmin.status === 404
+      && deckBFromOtherAdmin.status === 200 && deckBFromOwner.status === 200,
+    `A→B ${deckAFromOtherAdmin.status}/B→A ${deckBFromAdmin.status}/B ${deckBFromOtherAdmin.status}/owner ${deckBFromOwner.status}`);
 
   const missingFile = await uploadGet("/api/files/no-such-stored-file", admin);
   check("C5-FILES an unreadable deck and an id that does not exist are the same 404",

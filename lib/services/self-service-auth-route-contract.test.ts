@@ -36,6 +36,9 @@ const signupPage = read("app/signup/page.tsx");
 const forgotPage = read("app/forgot/page.tsx");
 const resetPage = read("app/reset/page.tsx");
 const welcomePage = read("app/welcome/page.tsx");
+const loginPage = read("app/login/page.tsx");
+const smoke = read("scripts/_smoke.mjs");
+const frontendSmoke = read("scripts/_frontend-smoke.mjs");
 
 const SESSION_CHANGING = [
   ["signup", signup],
@@ -153,15 +156,20 @@ test("/reset collapses every token failure into one message, shared with its pag
   // The resolver collapses them, and the page uses the same resolver, so it can
   // never render a form the route would refuse.
   assert.match(resetPage, /await resolvePasswordResetToken\(token\)/);
-  assert.equal(redeem.split("return null;").length - 1, 4, "malformed, no secret, unknown user, bad signature");
-  // The redeeming write is the credential and nothing else.
-  assert.match(reset, /prisma\.user\.update\(\{ where: \{ id: resolved\.user\.id \}, data: \{ passwordHash \} \}\)/);
+  assert.match(reset, /await consumePasswordResetToken\(parsed\.data\.token, policy\.password\)/);
+  // The redeeming write is a credential-only compare-and-swap. The observed
+  // hash stays in the service, and only the one-row winner can issue a session.
+  assert.match(redeem, /prisma\.user\.updateMany\(\{/);
+  assert.match(redeem, /where: \{ id: record\.user\.id, passwordHash: record\.passwordHash \}/);
+  assert.match(redeem, /data: \{ passwordHash: replacementHash \}/);
+  assert.match(redeem, /consumed\.count === 1 \? withoutCredential\(record\) : null/);
+  assert.doesNotMatch(reset, /prisma\.user\.(?:update|updateMany)/);
   // One write, and it is the credential. A reset must not grant a membership or
   // change a role — anything beyond the password makes a phished link more
   // valuable than it already is. (`role:` alone would false-positive on the
   // session the route issues afterwards from a membership it merely read.)
-  assert.equal(reset.split("prisma.user.update(").length - 1, 1);
-  assert.doesNotMatch(reset, /eventMember|\.create\(|data: \{ role/);
+  assert.equal(redeem.split("prisma.user.updateMany(").length - 1, 1);
+  assert.doesNotMatch(`${reset}\n${redeem}`, /eventMember|\.create\(|data: \{ role/);
 });
 
 test("use-once is enforced by construction: the signature is derived from the current hash", () => {
@@ -207,6 +215,24 @@ test("a new account is issued the pending variant, never a session it has no mem
     assert.match(route, /pickCredentialMembership\(/);
     assert.match(route, /homeForRole\(membership\.role\)/);
   }
+});
+
+test("the frontend smoke races one reset token and accepts exactly one password", () => {
+  assert.match(frontendSmoke, /const resetAttempts = await Promise\.all\(/);
+  assert.match(frontendSmoke, /successfulResets\.length === 1 && refusedResets\.length === 1/);
+  assert.match(frontendSmoke, /refusedResets\[0\]\?\.data\?\.error\?\.code === "RESET_TOKEN_INVALID"/);
+  assert.match(frontendSmoke, /successfulLogins\.length === 1 && refusedLogins\.length === 1/);
+});
+
+test("the frontend smoke checks an empty composite EventMember projection", () => {
+  assert.match(frontendSmoke, /memberships: \{ select: \{ eventId: true, userId: true \} \}/);
+  assert.doesNotMatch(frontendSmoke, /memberships: \{ select: \{ id: true \} \}/);
+});
+
+test("the frontend smoke reset mint uses the product credential delimiter without binary source", () => {
+  assert.match(frontendSmoke, /credential:v1\\0\$\{passwordHash\}/);
+  assert.doesNotMatch(frontendSmoke, /credential:v1 \$\{passwordHash\}/);
+  assert.equal(frontendSmoke.includes("\0"), false, "the source contains no literal NUL byte");
 });
 
 test("the taken-address 409 is deliberate, documented, and the only one", () => {
@@ -381,6 +407,14 @@ test("the public pages post plain forms, label every field, and link the other d
   assert.doesNotMatch(forgotPage, /we sent|we have sent|no account/i);
 });
 
+test("login and the runtime smoke both advertise the shipped self-service doors", () => {
+  assert.match(loginPage, /<Link href="\/signup">Create one<\/Link>/);
+  assert.match(loginPage, /<Link href="\/forgot">Reset it<\/Link>/);
+  assert.ok(smoke.includes(`loginHtml.includes('href="/signup"') && /Create one/.test(loginHtml)`));
+  assert.ok(smoke.includes(`loginHtml.includes('href="/forgot"') && /Reset it/.test(loginHtml)`));
+  assert.doesNotMatch(smoke, /Self-service sign-up is on the roadmap|for now organizers provision accounts/);
+});
+
 test("the welcome page is the membership-less landing, and it offers both ways out", () => {
   // A real session belongs somewhere else; an unsigned visitor belongs at login.
   assert.match(welcomePage, /if \(session\) redirect\(homeForRole\(session\.role\)\);/);
@@ -390,7 +424,6 @@ test("the welcome page is the membership-less landing, and it offers both ways o
   assert.match(welcomePage, /ask an organizer to/i);
   // And /login knows to send a pending identity here rather than showing it the
   // form it just came from.
-  const loginPage = read("app/login/page.tsx");
   assert.match(loginPage, /const pending = await getPendingIdentity\(\);/);
   assert.match(loginPage, /redirect\("\/welcome"\);/);
 });

@@ -113,6 +113,7 @@ const SELF_SERVICE_EMAILS = [SIGNUP_EMAIL, RESET_EMAIL, SIGNUP_REJECT_EMAIL, FOR
 const SIGNUP_PASSWORD = "scratch-signup-passphrase";
 const RESET_OLD_PASSWORD = "scratch-reset-old-passphrase";
 const RESET_NEW_PASSWORD = "scratch-reset-new-passphrase";
+const RESET_RACE_PASSWORD = "scratch-reset-race-passphrase";
 // The floor is 10 code points (`lib/services/password-policy.ts`); this is nine.
 const TOO_SHORT_PASSWORD = "shortpwd1";
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1_000;
@@ -601,7 +602,7 @@ async function getWith(path, cookie) {
  */
 function mintResetToken(userId, passwordHash, expiresAtMs) {
   const digest = createHmac("sha256", SMOKE_SESSION_SECRET)
-    .update(`greenroom:password-reset:credential:v1 ${passwordHash}`)
+    .update(`greenroom:password-reset:credential:v1\0${passwordHash}`)
     .digest("base64url");
   const exp = Math.floor(expiresAtMs / 1_000);
   const signature = createHmac("sha256", SMOKE_SESSION_SECRET)
@@ -647,7 +648,7 @@ async function runSelfServiceAuthChecks() {
     `${signup.status} ${JSON.stringify(signup.data?.data ?? signup.data?.error?.code ?? null)} cookie=${Boolean(signupCookie)}`);
   const newcomer = await prisma.user.findUnique({
     where: { email: SIGNUP_EMAIL },
-    select: { id: true, passwordHash: true, memberships: { select: { id: true } } },
+    select: { id: true, passwordHash: true, memberships: { select: { eventId: true, userId: true } } },
   });
   check("D-C5-16 the new account has a scrypt credential and belongs to nothing",
     Boolean(newcomer) && typeof newcomer.passwordHash === "string"
@@ -796,13 +797,23 @@ async function runSelfServiceAuthChecks() {
     shortReset.status === 422 && Array.isArray(shortReset.data?.error?.fieldErrors?.password),
     `${shortReset.status}`);
 
-  const resetOk = await authPost("/api/auth/reset",
-    { token: liveToken, password: RESET_NEW_PASSWORD, confirmPassword: RESET_NEW_PASSWORD });
-  check("D-C5-16 a real token sets the new password and signs the person in",
-    resetOk.status === 200 && resetOk.data?.data?.redirectTo === "/admin"
-    && resetOk.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk.setCookie)),
-    `${resetOk.status} ${JSON.stringify(resetOk.data?.data ?? resetOk.data?.error?.code ?? null)}`);
-  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk.setCookie));
+  const resetPasswords = [RESET_NEW_PASSWORD, RESET_RACE_PASSWORD];
+  const resetAttempts = await Promise.all(resetPasswords.map((password) => authPost(
+    "/api/auth/reset",
+    { token: liveToken, password, confirmPassword: password },
+  )));
+  const successfulResets = resetAttempts.filter((attempt) => attempt.status === 200);
+  const refusedResets = resetAttempts.filter((attempt) => attempt.status === 400);
+  const winningPasswordIndex = resetAttempts.findIndex((attempt) => attempt.status === 200);
+  const resetOk = successfulResets[0];
+  check("D-C5-16 one reset token has exactly one concurrent winner",
+    successfulResets.length === 1 && refusedResets.length === 1
+    && resetOk?.data?.data?.redirectTo === "/admin"
+    && resetOk?.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk?.setCookie))
+    && refusedResets[0]?.data?.error?.code === "RESET_TOKEN_INVALID"
+    && refusedResets[0]?.text === garbage.text,
+    resetAttempts.map((attempt) => `${attempt.status}:${attempt.data?.error?.code ?? "ok"}`).join(","));
+  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk?.setCookie));
   check("D-C5-16 the session the reset issued really opens the workspace",
     resetSessionAdmin.status === 200, `${resetSessionAdmin.status}`);
 
@@ -816,11 +827,16 @@ async function runSelfServiceAuthChecks() {
     `${replay.status} identical=${replay.text === garbage.text}`);
 
   const loginOldAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
-  const loginNewAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_NEW_PASSWORD });
-  check("D-C5-16 the old password is refused and the new one works",
+  const loginAttempts = await Promise.all(resetPasswords.map((password) =>
+    authPost("/api/auth/login", { email: RESET_EMAIL, password })));
+  const successfulLogins = loginAttempts.filter((attempt) => attempt.status === 200);
+  const refusedLogins = loginAttempts.filter((attempt) => attempt.status === 401);
+  check("D-C5-16 the old and losing passwords are refused and only the winner works",
     loginOldAfter.status === 401 && !loginOldAfter.setCookie
-    && loginNewAfter.status === 200 && Boolean(sessionCookieFrom(loginNewAfter.setCookie)),
-    `old ${loginOldAfter.status}, new ${loginNewAfter.status}`);
+    && successfulLogins.length === 1 && refusedLogins.length === 1
+    && loginAttempts[winningPasswordIndex]?.status === 200
+    && Boolean(sessionCookieFrom(loginAttempts[winningPasswordIndex]?.setCookie)),
+    `old ${loginOldAfter.status}, candidates ${loginAttempts.map((attempt) => attempt.status).join("/")}`);
 
   // --- the durable rate bucket actually refuses -----------------------------
   // The per-address /forgot bucket is 3 per hour. One request against the
@@ -1044,6 +1060,11 @@ try {
     && settingsDateUpdate.data?.data?.event?.endsOn === "2032-05-14",
     `${settingsDateUpdate.status} ${JSON.stringify(settingsDateUpdate.data?.error ?? "")}`);
 
+  // The forged smoke sessions mirror the event identity the product just
+  // persisted, so subsequent shell assertions name the current event rather
+  // than the fixture's pre-update value.
+  ev.name = "Scratch Frontend Settings";
+
   const settingsRoom = await req("POST", "/api/admin/settings/rooms", {
     name: "Settings Studio", capacity: 85,
   }, admin);
@@ -1252,7 +1273,10 @@ try {
 
   async function getAs(path, cookieValue) {
     const res = await fetch(BASE + path, { headers: { cookie: cookieValue }, redirect: "manual" });
-    return { status: res.status, location: res.headers.get("location") ?? "", text: await res.text() };
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); } catch { data = text; }
+    return { status: res.status, location: res.headers.get("location") ?? "", text, data };
   }
 
   // The switcher is presentation over the caller's own memberships, so it only
@@ -1276,7 +1300,7 @@ try {
     soloMemberships === 1
     && soloShell.status === 200
     && !/name="eventId"/.test(soloShell.text)
-    && soloShell.text.includes("<strong>Scratch Frontend</strong>"),
+    && soloShell.text.includes("<strong>Scratch Frontend Settings</strong>"),
     `memberships=${soloMemberships} status=${soloShell.status}`);
 
   const switched = await switchEvent(createdEventId ?? "missing");
@@ -1298,11 +1322,11 @@ try {
 
   // The S1 assertion this whole section exists for.
   check("D-C5-16 no first-event data survives the switch on any surface",
-    !dashboardAfter.text.includes("<strong>Scratch Frontend</strong>")
-    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    !dashboardAfter.text.includes("<strong>Scratch Frontend Settings</strong>")
+    && !agendaAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
     && !agendaAfterSwitch.text.includes("Scratch Session A")
     && !agendaAfterSwitch.text.includes("Scratch Session B")
-    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend</strong>")
+    && !abstractsAfterSwitch.text.includes("<strong>Scratch Frontend Settings</strong>")
     && !abstractsAfterSwitch.text.includes("Scratch: Agents in Production")
     && !abstractsAfterSwitch.text.includes("Scratch: Accepted Talk")
     && !dashboardAfter.text.includes("Scratch Session A"));
@@ -1356,14 +1380,20 @@ try {
 
   const switchedBack = await switchEvent(EVENT_ID, { cookieValue: switchedCookie });
   const agendaBack = await getAs("/admin/agenda", switchedBack.issued ?? "");
+  const agendaDataBack = await getAs("/api/agenda", switchedBack.issued ?? "");
+  const switchedBackPredicates = {
+    redirect: switchedBack.status === 303 && switchedBack.location.endsWith("/admin"),
+    issued: Boolean(switchedBack.issued),
+    page: agendaBack.status === 200,
+    currentEvent: agendaBack.text.includes("<strong>Scratch Frontend Settings</strong>"),
+    restoredSession: agendaDataBack.status === 200 && agendaDataBack.data?.data?.sessions?.some(
+      (session) => session.id === fx.sessionA.id && session.title === "Scratch Session A",
+    ),
+    createdEventAbsent: !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
+  };
   check("D-C5-16 switching back restores the first event and its data",
-    switchedBack.status === 303
-    && switchedBack.location.endsWith("/admin")
-    && agendaBack.status === 200
-    && agendaBack.text.includes("<strong>Scratch Frontend</strong>")
-    && agendaBack.text.includes("Scratch Session A")
-    && !agendaBack.text.includes("<strong>Scratch Created Event</strong>"),
-    `${switchedBack.status} ${switchedBack.location} agenda ${agendaBack.status}`);
+    Object.values(switchedBackPredicates).every(Boolean),
+    JSON.stringify(switchedBackPredicates));
 
   // The obsoleted copy is gone from the surfaces a judge actually reads. (The
   // create dialog's own switch offer renders only after a successful create, so

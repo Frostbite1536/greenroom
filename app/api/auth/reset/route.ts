@@ -1,15 +1,13 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { encodePendingSession, encodeSession, homeForRole } from "@/lib/auth";
 import { ApiError, fromZod } from "@/lib/api/http";
 import { diagnosticLabel } from "@/lib/diagnostic-label";
 import { passwordResetSchema } from "@/types/api";
-import { hashPassword } from "@/lib/password-credential";
 import { checkNewPassword } from "@/lib/services/password-policy";
 import { pickCredentialMembership } from "@/lib/services/credential-login";
 import { publicClientIp } from "@/lib/services/public-submission-rate";
 import { enforceSelfServiceAuthRateLimit } from "@/lib/services/self-service-auth-rate";
-import { resolvePasswordResetToken } from "@/lib/services/password-reset-redeem";
+import { consumePasswordResetToken } from "@/lib/services/password-reset-redeem";
 import { PASSWORD_RESET_INVALID_TOKEN_MESSAGE } from "@/lib/services/self-service-auth-copy";
 import {
   isFormEncoded,
@@ -39,8 +37,8 @@ import {
  *   or profile — it is a credential change, and anything else would make a
  *   phished link more valuable than it already is.
  * - Spending the token invalidates it by construction: the signature is derived
- *   from the stored hash, so writing a new hash makes this token, and every
- *   other token minted against the old one, stop verifying. No `usedAt` column.
+ *   from the stored hash, and a conditional compare-and-swap lets exactly one
+ *   concurrent redeemer replace that hash. No `usedAt` column.
  *
  * After a successful change the person is signed in the same way credential
  * login signs anyone in — `pickCredentialMembership` chooses the landing
@@ -108,11 +106,8 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
-    const resolved = await resolvePasswordResetToken(parsed.data.token);
+    const resolved = await consumePasswordResetToken(parsed.data.token, policy.password);
     if (!resolved) return refuseToken(req, formEncoded);
-
-    const passwordHash = await hashPassword(policy.password);
-    await prisma.user.update({ where: { id: resolved.user.id }, data: { passwordHash } });
 
     const membership = pickCredentialMembership(resolved.memberships);
     const home = membership ? homeForRole(membership.role) : "/welcome";
