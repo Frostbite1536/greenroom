@@ -4,6 +4,8 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { lockSpeakerProfile } from "@/lib/services/speaker-roster";
+import { assertOwnEventDeckFile } from "@/lib/services/speaker-deck";
+import { ApiError } from "@/lib/api/http";
 import { portalProfileUpdateSchema } from "@/types/api";
 import type { ApiResponse } from "@/types/api";
 
@@ -61,41 +63,75 @@ export async function PATCH(request: Request) {
   // so it cannot collide with the organizer's write — but a save that stored the
   // global deck and then failed to store this event's would leave the speaker
   // looking at a fallback they thought they had replaced.
-  const saved = await prisma.$transaction(async (tx) => {
-    await lockSpeakerProfile(tx, user.id);
-    const profile = await tx.speakerProfile.upsert({
-      where: { userId: user.id },
-      update: data,
-      create: { userId: user.id, ...data },
-      select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true, socialLinks: true },
-    });
+  let saved: {
+    bio: string | null;
+    company: string | null;
+    jobTitle: string | null;
+    headshotUrl: string | null;
+    slideDeckUrl: string | null;
+    socialLinks: Prisma.JsonValue;
+    eventSlideDeckUrl: string | null;
+  };
+  try {
+    saved = await prisma.$transaction(async (tx) => {
+      await lockSpeakerProfile(tx, user.id);
 
-    if (eventSlideDeckUrl !== undefined) {
-      if (eventSlideDeckUrl === null) {
-        // A deliberate clear removes THIS event's deck only. The global column
-        // is untouched and becomes the fallback again — which the form states
-        // in as many words, because silently re-showing the old value would
-        // read as a save that did not take.
-        await tx.eventSpeakerDeck.deleteMany({ where: { eventId, userId: user.id } });
-      } else {
-        await tx.eventSpeakerDeck.upsert({
-          where: { eventId_userId: { eventId, userId: user.id } },
-          update: { deckUrl: eventSlideDeckUrl },
-          create: { eventId, userId: user.id, deckUrl: eventSlideDeckUrl },
-          select: { id: true },
-        });
+      // BEFORE any write. A local `/api/files/<id>` deck pointer is a claim that
+      // the named file is this speaker's deck for this event, and the organizer
+      // roster labels it "This event" on that basis — so it is resolved and
+      // checked against the real `StoredFile` row here rather than trusted from
+      // the request. An absolute URL is the speaker's own asserted link to
+      // somewhere we do not own, and passes through unchecked as it always has.
+      //
+      // Refusing INSIDE the transaction is deliberate: the whole save rolls
+      // back, so a request carrying a bad deck pointer cannot half-succeed by
+      // storing the bio and silently dropping the deck. One save, one outcome.
+      if (eventSlideDeckUrl != null) {
+        await assertOwnEventDeckFile(tx, { deckUrl: eventSlideDeckUrl, userId: user.id, eventId });
       }
-    }
 
-    // Read back rather than echo the input: an omitted key must return what is
-    // stored, so the form's post-save reconciliation compares against truth.
-    const deck = await tx.eventSpeakerDeck.findUnique({
-      where: { eventId_userId: { eventId, userId: user.id } },
-      select: { deckUrl: true },
+      const profile = await tx.speakerProfile.upsert({
+        where: { userId: user.id },
+        update: data,
+        create: { userId: user.id, ...data },
+        select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true, socialLinks: true },
+      });
+
+      if (eventSlideDeckUrl !== undefined) {
+        if (eventSlideDeckUrl === null) {
+          // A deliberate clear removes THIS event's deck only. The global column
+          // is untouched and becomes the fallback again — which the form states
+          // in as many words, because silently re-showing the old value would
+          // read as a save that did not take.
+          await tx.eventSpeakerDeck.deleteMany({ where: { eventId, userId: user.id } });
+        } else {
+          await tx.eventSpeakerDeck.upsert({
+            where: { eventId_userId: { eventId, userId: user.id } },
+            update: { deckUrl: eventSlideDeckUrl },
+            create: { eventId, userId: user.id, deckUrl: eventSlideDeckUrl },
+            select: { id: true },
+          });
+        }
+      }
+
+      // Read back rather than echo the input: an omitted key must return what is
+      // stored, so the form's post-save reconciliation compares against truth.
+      const deck = await tx.eventSpeakerDeck.findUnique({
+        where: { eventId_userId: { eventId, userId: user.id } },
+        select: { deckUrl: true },
+      });
+
+      return { ...profile, eventSlideDeckUrl: deck?.deckUrl ?? null };
     });
-
-    return { ...profile, eventSlideDeckUrl: deck?.deckUrl ?? null };
-  });
+  } catch (error) {
+    // The deck-pointer refusal, in the envelope this route already speaks.
+    // Only `ApiError` is translated; anything else is a real fault and must keep
+    // propagating rather than being flattened into a 422 the client would act on.
+    if (error instanceof ApiError) {
+      return fail(error.code, error.message, error.status, error.fieldErrors);
+    }
+    throw error;
+  }
 
   return NextResponse.json<ApiResponse<typeof saved>>({ ok: true, data: saved });
 }
