@@ -171,12 +171,17 @@ configuration. Schema application uses the reviewed `prisma db push` workflow, a
 `lib/demo/seed.ts` supplies the deterministic demo dataset.
 
 - Local setup needs `DATABASE_URL` only; everything else defaults safely (external
-  integrations mocked, demo reset disabled, v1 API disabled). See the README Quickstart and
+  integrations mocked, demo reset disabled, and the v1 API holding no deployment-wide key, so
+  it accepts nothing until a credential of either kind exists). See the README Quickstart and
   [`DEPLOY.md`](DEPLOY.md) for the full variable table.
 - `SESSION_SECRET` is required in production (see Security above) and must be configured
   separately for every deployment environment that serves authenticated traffic.
-- Configure `GREENROOM_API_KEY` to enable `/api/v1/*`; when it is absent, those routes return
-  `503 API_KEY_NOT_CONFIGURED`.
+- `/api/v1/*` accepts two credentials: the deployment-wide `GREENROOM_API_KEY`, which reaches
+  any event, and per-event `ApiCredential` keys that an event ADMIN issues from Event
+  settings, which reach one event each. Because a deployment can be configured with per-event
+  keys alone, this surface reports no "unconfigured" state — any request without an accepted
+  credential is `401 UNAUTHORIZED`, and a deployment holding neither kind refuses every
+  request while exposing no program data.
 - Unless an operator explicitly sets `ALLOW_DEMO_RESET=true`, `/api/admin/reset` refuses every
   caller (INV-RESET-001). The refusal body depends on who asks, by design (S-18):
   anyone who has not proved they are an admin gets `403 FORBIDDEN` — the same

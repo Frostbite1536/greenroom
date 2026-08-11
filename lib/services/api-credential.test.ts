@@ -184,29 +184,44 @@ test("secret verification compares fixed-size digests and rejects everything els
 // The authorization truth table
 // ---------------------------------------------------------------------------
 
-test("503 only when nothing is presented AND nothing is configured", async () => {
+test("every missing or invalid credential is 401, and nothing on this path is ever 503", async () => {
   const { lookup, calls } = countingLookup();
 
-  // no global, no credential -> the surface reports itself unconfigured.
-  const unconfigured = await authorizeV1Request(new Headers(), undefined, lookup);
-  assert.equal(unconfigured.ok, false);
-  if (!unconfigured.ok) {
-    assert.equal(unconfigured.error.status, 503);
-    assert.equal(unconfigured.error.code, "API_KEY_NOT_CONFIGURED");
-  }
-  // Fail-closed costs no lookup: nothing was presented, so nothing is resolved.
-  assert.deepEqual(calls, [], "the unconfigured case must not consult the credential store");
+  // Nothing presented, nothing configured. This is the case that used to be
+  // 503 "not configured". It cannot be, now: a deployment may hold working
+  // per-event credentials and no GREENROOM_API_KEY at all, so declaring itself
+  // unconfigured would be a false statement about the server. The caller's
+  // credential is the problem, and 401 says exactly that.
+  assert.deepEqual(await authorizeV1Request(new Headers(), undefined, lookup), UNAUTHORIZED);
+  // Still costs no lookup: nothing was presented, so nothing can be resolved.
+  assert.deepEqual(calls, [], "a request with no credential must not consult the credential store");
 
-  // global configured, nothing presented -> a plain refusal, not 503.
+  // Global configured, nothing presented -> the same refusal.
   assert.deepEqual(
     await authorizeV1Request(new Headers(), "a-configured-deployment-wide-value", lookup),
     UNAUTHORIZED,
   );
 
-  // nothing configured, something presented -> resolved, then refused. NOT 503:
-  // per-event credentials must work on a deployment with no global key.
+  // Nothing configured, something presented -> resolved, then refused.
   assert.deepEqual(await authorizeV1Request(bearer(FAKE_TOKEN), undefined, lookup), UNAUTHORIZED);
   assert.deepEqual(calls, [FAKE_TOKEN], "a presented credential must be resolved even with no global key");
+
+  // Exhaustive: across every combination of configured/presented, this path
+  // returns exactly one failure status. A 503 anywhere here is a regression.
+  const everyRefusal = [
+    await authorizeV1Request(new Headers(), undefined, countingLookup().lookup),
+    await authorizeV1Request(new Headers(), "a-configured-deployment-wide-value", countingLookup().lookup),
+    await authorizeV1Request(bearer(FAKE_TOKEN), undefined, countingLookup().lookup),
+    await authorizeV1Request(bearer(FAKE_TOKEN), "a-configured-deployment-wide-value", countingLookup().lookup),
+    await authorizeV1Request(bearer("not-a-key"), undefined, countingLookup().lookup),
+  ];
+  for (const outcome of everyRefusal) {
+    assert.equal(outcome.ok, false);
+    if (!outcome.ok) {
+      assert.equal(outcome.error.status, 401, "this surface must not answer anything but 401 here");
+      assert.equal(outcome.error.code, "UNAUTHORIZED");
+    }
+  }
 });
 
 test("the deployment-wide key is accepted first, unchanged, and never reaches the credential store", async () => {

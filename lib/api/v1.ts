@@ -97,25 +97,17 @@ function v1Unauthorized(): V1Failure {
   return { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." };
 }
 
-function v1NotConfigured(): V1Failure {
-  return {
-    status: 503,
-    code: "API_KEY_NOT_CONFIGURED",
-    message: "The v1 API is not configured on this server.",
-  };
-}
-
 /**
  * Authenticates before the event selector is resolved and before any programme
  * data is read.
  *
  * Two credential mechanisms are accepted, and this table is the whole of it.
  * "presented" means the request carried a usable Bearer or `X-API-Key` value at
- * all; "global" means `GREENROOM_API_KEY` is set and long enough.
+ * all; "global" means `GREENROOM_API_KEY` is set and long enough to be usable.
  *
  *   global | presented | presented value        | result
- *   -------|-----------|------------------------|---------------------------------
- *   no     | no        | --                     | 503, the surface is unconfigured
+ *   -------|-----------|------------------------|------------------------------
+ *   no     | no        | --                     | 401
  *   yes    | no        | --                     | 401
  *   yes    | yes       | equals the global key  | authorized for any event
  *   yes    | yes       | anything else          | credential resolution, below
@@ -130,12 +122,33 @@ function v1NotConfigured(): V1Failure {
  * another event all end at the same 401 as a wrong global key — same status,
  * same body, no way to tell them apart.
  *
- * Four properties of that table are deliberate and worth naming:
+ * ## There is no 503 on this path, and that is the point
  *
- *   - 503 still means "this deployment has configured no way in". It is
- *     reported only when nothing was presented AND no global key exists, so a
- *     deployment that has never configured anything still fails closed, still
- *     says so to its operator, and still does so with no database work at all.
+ * This surface used to answer `503 API_KEY_NOT_CONFIGURED` when no
+ * `GREENROOM_API_KEY` was set. That was a true statement when the deployment-wide
+ * key was the ONLY way in: no key configured really did mean nothing was
+ * configured. It stopped being true the moment an event could hold its own
+ * credentials, because a deployment can now be fully configured — organizers
+ * issuing and revoking working keys all day — with `GREENROOM_API_KEY` unset. To
+ * such a deployment, answering "this server is not configured" to a caller who
+ * simply forgot their key is a false claim about the server's own state.
+ *
+ * So every missing-or-invalid credential on this surface is now 401. The surface
+ * is deployed and reachable, so it authenticates rather than declaring itself
+ * unconfigured, and the caller is told the true thing: their credential is the
+ * problem. Nothing here can return 503 any more, and the published contract no
+ * longer advertises it.
+ *
+ * Nothing else changes. 503 is reserved for an explicit auth-surface-disabled
+ * configuration, and no such flag exists today, so on this path it is simply
+ * gone. The unrelated fail-closed 503s elsewhere in the application — the
+ * reviewer-invite signing-secret case in
+ * `app/api/evaluations/reviewer-invites/link/route.ts`, which reports
+ * `INVITE_UNAVAILABLE` when no signing secret or app URL is configured — are a
+ * different surface with a different meaning and are deliberately untouched.
+ *
+ * Three further properties of the table are deliberate and worth naming:
+ *
  *   - A presented value is always resolved against stored credentials, even
  *     when no global key is configured. Per-event credentials are the point of
  *     this feature: requiring a deployment-wide key before they work would make
@@ -162,7 +175,9 @@ export async function authorizeV1Request(
   // presented credential before anything looks at what the value contains.
   const requestKey = getV1RequestKey(headers);
   if (!requestKey) {
-    return { ok: false, error: configuredKey ? v1Unauthorized() : v1NotConfigured() };
+    // No credential at all. An auth failure, never a claim about how this
+    // deployment is configured — it may be serving per-event keys perfectly.
+    return { ok: false, error: v1Unauthorized() };
   }
 
   // The deployment-wide key next, byte for byte as before: one fixed-size

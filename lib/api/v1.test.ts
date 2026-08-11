@@ -47,17 +47,18 @@ test("v1 auth accepts Bearer and X-API-Key without exposing key differences", as
     error: { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." },
   });
 
-  // Nothing presented and nothing configured: still the fail-closed 503 that
-  // tells an operator this surface was never switched on.
-  const unavailable = await authorizeV1Request(new Headers(), undefined, noCredentials);
-  assert.equal(unavailable.ok, false);
-  if (!unavailable.ok) assert.equal(unavailable.error.status, 503);
+  // Nothing presented against a deployment with nothing configured is an auth
+  // failure, not a claim about the server. A deployment can be fully set up
+  // with per-event credentials and no GREENROOM_API_KEY at all, so "not
+  // configured" would be false about this server. No 503 exists on this path.
+  const nothingAtAll = await authorizeV1Request(new Headers(), undefined, noCredentials);
+  assert.deepEqual(nothingAtAll, {
+    ok: false,
+    error: { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." },
+  });
 
-  // Presenting a credential against a deployment with no deployment-wide key is
-  // NOT the unconfigured case any more: per-event credentials have to work
-  // without one, so the presented value is resolved and an unresolvable one is
-  // a plain refusal. This is the one behaviour change scoped credentials make
-  // in the neighbourhood of the global path, and it is deliberate.
+  // And the same for a value presented to that deployment: resolved against
+  // stored credentials, then plainly refused.
   const rejected = await authorizeV1Request(
     new Headers({ authorization: "Bearer anything" }),
     undefined,
