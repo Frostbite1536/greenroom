@@ -4,7 +4,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, UserPlus } from "lucide-react";
 import { apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
-import { speakerDialogRecovery, speakerProvisionNotice } from "@/lib/speakers/roster";
+import {
+  speakerDialogRecovery,
+  speakerProfileDiff,
+  speakerProfileDiffIsEmpty,
+  speakerProfileValue,
+  speakerProvisionNotice,
+  type SpeakerProfileDraftValues,
+} from "@/lib/speakers/roster";
 import {
   SPEAKER_CONFIRMATION_LABELS,
   type SpeakerConfirmation,
@@ -19,17 +26,18 @@ import {
  * decides who may write — the route re-reads the caller's ADMIN membership under
  * its own lock.
  *
- * Blank means clear, everywhere. The edit dialog sends every field it renders,
- * including as `null`, because the API reads an omitted field as "leave it
- * alone" (C13) — emptying a bio has to be a real instruction, not an omission.
+ * Blank means clear, everywhere: a field the organizer emptied is sent as an
+ * explicit `null`, because the API reads an omitted field as "leave it alone"
+ * (C13) — emptying a bio has to be a real instruction, not an omission.
+ *
+ * GRA-05: the ADD dialog sends every field, because a new row has no prior
+ * value any of them could clobber. The EDIT dialog sends only what changed
+ * against the snapshot it opened on (`speakerProfileDiff`) — the `SpeakerProfile`
+ * row is global and the speaker may be editing it from their portal at the same
+ * time, so writing back the whole snapshot would revert their save with nothing
+ * shown to either of them.
  */
-export type SpeakerProfileDraft = {
-  jobTitle: string;
-  company: string;
-  bio: string;
-  headshotUrl: string;
-  status: SpeakerConfirmation;
-};
+export type SpeakerProfileDraft = SpeakerProfileDraftValues;
 
 export type EditableSpeaker = {
   userId: string;
@@ -60,17 +68,13 @@ function draftFromSpeaker(speaker: EditableSpeaker): SpeakerProfileDraft {
   };
 }
 
-/** Trim, then blank-to-null: the same normalization the server re-applies. */
-function nullable(value: string): string | null {
-  return value.trim() === "" ? null : value.trim();
-}
-
+/** The full body for a CREATE, where there is no prior value to preserve. */
 function profilePayload(draft: SpeakerProfileDraft) {
   return {
-    jobTitle: nullable(draft.jobTitle),
-    company: nullable(draft.company),
-    bio: nullable(draft.bio),
-    headshotUrl: nullable(draft.headshotUrl),
+    jobTitle: speakerProfileValue(draft.jobTitle),
+    company: speakerProfileValue(draft.company),
+    bio: speakerProfileValue(draft.bio),
+    headshotUrl: speakerProfileValue(draft.headshotUrl),
     // Always sent, never null: the column has a stored default and there is no
     // such thing as clearing where somebody is in accepting an invitation.
     status: draft.status,
@@ -211,6 +215,9 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<SpeakerProfileDraft>(() => draftFromSpeaker(speaker));
+  // The snapshot this dialog opened on. Every write is a diff against it, never
+  // a replacement of it (GRA-05).
+  const [baseline, setBaseline] = useState<SpeakerProfileDraft>(() => draftFromSpeaker(speaker));
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -221,11 +228,19 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
   }
 
   async function submit() {
+    const patch = speakerProfileDiff(baseline, draft);
+    // Nothing was touched. There is no write to make, and the PATCH schema
+    // refuses an all-omitted body outright (422) — so asking would produce a
+    // validation error for a no-op.
+    if (speakerProfileDiffIsEmpty(patch)) {
+      close();
+      return;
+    }
     setSubmitting(true);
     setErrors({});
     const res = await apiPatch<unknown>("/api/admin/speakers", {
       userId: speaker.userId,
-      ...profilePayload(draft),
+      ...patch,
     });
     setSubmitting(false);
     if (!res.ok) {
@@ -243,9 +258,10 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
         className="ghost-button"
         type="button"
         onClick={() => {
-          // Re-seed from the freshly rendered row, so reopening after a refresh
-          // never edits against a stale snapshot.
+          // Re-seed BOTH from the freshly rendered row, so reopening after a
+          // refresh neither edits nor diffs against a stale snapshot.
           setDraft(draftFromSpeaker(speaker));
+          setBaseline(draftFromSpeaker(speaker));
           setOpen(true);
         }}
       >
@@ -256,9 +272,12 @@ export function EditSpeakerDialog({ speaker }: { speaker: EditableSpeaker }) {
       {open ? (
         <SpeakerDialog
           title={`Edit ${speaker.name}`}
-          intro="Clearing a field removes what is stored. These details appear on the public speaker page."
+          intro="Only the fields you change are saved. Clearing a field removes what is stored. These details appear on the public speaker page."
           submitLabel={submitting ? "Saving…" : "Save profile"}
           submitting={submitting}
+          // Nothing changed means nothing to send: say so with the control
+          // rather than by refusing the request afterwards.
+          submitDisabled={speakerProfileDiffIsEmpty(speakerProfileDiff(baseline, draft))}
           rootError={errors._root}
           onClose={close}
           onSubmit={() => {
@@ -389,6 +408,7 @@ function SpeakerDialog({
   intro,
   submitLabel,
   submitting,
+  submitDisabled,
   rootError,
   onClose,
   onSubmit,
@@ -398,6 +418,8 @@ function SpeakerDialog({
   intro: string;
   submitLabel: string;
   submitting: boolean;
+  /** Optional: the add dialog always has something to send, the edit one may not. */
+  submitDisabled?: boolean;
   rootError?: string;
   onClose: () => void;
   onSubmit: () => void;
@@ -437,7 +459,7 @@ function SpeakerDialog({
         {rootError ? <p className="field-error" role="alert">{rootError}</p> : null}
 
         <div className="speaker-dialog-actions">
-          <button className="primary-button" type="submit" disabled={submitting}>{submitLabel}</button>
+          <button className="primary-button" type="submit" disabled={submitting || submitDisabled === true}>{submitLabel}</button>
           <button className="ghost-button" type="button" disabled={submitting} onClick={onClose}>Cancel</button>
         </div>
       </form>

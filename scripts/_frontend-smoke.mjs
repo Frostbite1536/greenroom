@@ -572,6 +572,52 @@ try {
     check(`${name} → 200`, r.status === 200, `got ${r.status}`);
   }
 
+  // --- GRA2-08 baseline security headers, on real responses -------------------
+  // `lib/security-headers.test.ts` pins the POLICY by importing next.config.mjs;
+  // only a live response proves Next DELIVERS it, and in particular that the
+  // negative-lookahead matcher really does exclude `/embed/*`. That exclusion is
+  // load-bearing: `docs/judging/embed-schedule-proof.html` frames
+  // `/embed/schedule` from another origin, so a blanket `frame-ancestors 'none'`
+  // would silently break the embed feature the product ships.
+  // NOTE: this asserts against a build of the current next.config.mjs — the
+  // smoke does not rebuild, so a stale `.next` will report the old policy.
+  const landingHeaders = (await req("GET", "/", null, null)).headers;
+  const adminHeaders = (await req("GET", "/admin/speakers", null, admin)).headers;
+  const embedHeaders = (await req("GET", `/embed/schedule?event=${EVENT_ID}`, null, null)).headers;
+
+  for (const [where, headers] of [
+    ["/", landingHeaders],
+    ["/admin/speakers", adminHeaders],
+    ["/embed/schedule", embedHeaders],
+  ]) {
+    check(`GRA2-08 ${where} sends nosniff`,
+      headers.get("x-content-type-options") === "nosniff",
+      headers.get("x-content-type-options") ?? "absent");
+    check(`GRA2-08 ${where} sends the referrer policy`,
+      headers.get("referrer-policy") === "strict-origin-when-cross-origin",
+      headers.get("referrer-policy") ?? "absent");
+  }
+  // The rest of the baseline rule, proven delivered once.
+  check("GRA2-08 / sends the permissions policy",
+    landingHeaders.get("permissions-policy") === "camera=(), microphone=(), geolocation=()",
+    landingHeaders.get("permissions-policy") ?? "absent");
+  check("GRA2-08 / sends HSTS for a year including subdomains",
+    landingHeaders.get("strict-transport-security") === "max-age=31536000; includeSubDomains",
+    landingHeaders.get("strict-transport-security") ?? "absent");
+
+  check("GRA2-08 the admin shell refuses to be framed",
+    (adminHeaders.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"),
+    adminHeaders.get("content-security-policy") ?? "absent");
+  check("GRA2-08 the landing page refuses to be framed",
+    (landingHeaders.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"),
+    landingHeaders.get("content-security-policy") ?? "absent");
+  // Absent is the intent; a permissive value would also be fine. A restrictive
+  // one is the regression this check exists to catch.
+  const embedCsp = embedHeaders.get("content-security-policy");
+  check("GRA2-08 /embed/schedule stays frameable",
+    embedCsp === null || /frame-ancestors\s+\*/.test(embedCsp),
+    embedCsp ?? "absent");
+
   // --- real data actually rendered ---
   const formsPage = await req("GET", "/admin/forms", null, admin);
   check("forms page shows scratch form name", formsPage.text.includes("Scratch CFP"));
