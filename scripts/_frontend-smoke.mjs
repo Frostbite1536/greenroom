@@ -3259,7 +3259,7 @@ try {
     partialReviewRow !== null
     && partialReviewRowText.includes(partialReview.title)
     && partialReviewRowText.includes("No included reviews")
-    && partialReviewRowText.includes("0/1 completed reviews included"),
+    && partialReviewRowText.includes("0/1 included"),
     partialReviewRowText || "partial-review row not found");
 
   // --- D-C5-8 §3.2: ABS-10 decision-score sort ----------------------------

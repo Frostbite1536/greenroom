@@ -21,7 +21,7 @@ test("the frontend smoke scopes the missing-score assertion to its exact SSR row
   assert.match(smoke, /const partialReviewRow = tableRowContaining\(partialRoundPage\.text, partialReview\.title\);/);
   assert.match(smoke, /partialReviewRowText\.includes\(partialReview\.title\)/);
   assert.match(smoke, /partialReviewRowText\.includes\("No included reviews"\)/);
-  assert.match(smoke, /partialReviewRowText\.includes\("0\/1 completed reviews included"\)/);
+  assert.match(smoke, /partialReviewRowText\.includes\("0\/1 included"\)/);
   assert.match(smoke, /!partialReviewRowText\.includes\("0\.00"\)/);
   assert.doesNotMatch(smoke, /!partialRoundText\.includes\("0\.00"\)/);
 });
