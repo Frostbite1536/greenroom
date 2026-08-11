@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildAirtableProjection,
+  countUnpublishedExclusions,
   mirrorAirtableTable,
   mirrorAirtableTables,
   projectionCounts,
@@ -31,6 +32,7 @@ const speaker = {
 
 const accepted: MirrorSession = {
   id: "session-1", sourceAbstractId: "abstract-1", sourceAbstractStatus: "ACCEPTED",
+  contentStatus: "PUBLISHED",
   title: "Analytical Engines", description: "A talk", format: "Talk", durationMinutes: 30,
   speakers: [{ user: speaker }],
   scheduleSlot: { id: "slot-1", startsAt: new Date("2026-05-12T09:00:00.000Z"), endsAt: new Date("2026-05-12T09:30:00.000Z"), roomName: "Hall A", trackName: "Engineering" },
@@ -45,6 +47,79 @@ test("projection keeps accepted and guaranteed sessions while deduplicating spea
   assert.equal(projection.tables.Sessions[0].fields["External ID"], "session:session-1");
   assert.equal(projection.tables.Speakers[0].fields.Email, "ada@example.test");
   assert.equal(projection.tables.Schedule[0].fields["Session ID"], "session:session-1");
+});
+
+/**
+ * GRA2-02. Every public read has filtered on `contentStatus: "PUBLISHED"` since
+ * the Tier-3 bundle; this projection did not, so a talk withheld from the public
+ * site — and its speakers' names, bios and email addresses — was still exported
+ * to a third-party base.
+ */
+test("an unpublished session is never mirrored, however it reached the programme", () => {
+  const unpublishedAccepted: MirrorSession = { ...accepted, id: "session-2", contentStatus: "DRAFT" };
+  const unpublishedGuaranteed: MirrorSession = {
+    ...accepted, id: "session-3", sourceAbstractId: null, sourceAbstractStatus: null,
+    contentStatus: "DRAFT", title: "Unannounced keynote",
+  };
+
+  const projection = buildAirtableProjection(
+    { id: "event-1", name: "Forward 2026" },
+    [accepted, unpublishedAccepted, unpublishedGuaranteed],
+  );
+
+  // Only the published one survives — in every table, not just Sessions.
+  assert.deepEqual(projectionCounts(projection), { Sessions: 1, Speakers: 1, Schedule: 1 });
+  assert.deepEqual(
+    projection.tables.Sessions.map((record) => record.fields["External ID"]),
+    ["session:session-1"],
+  );
+  assert.deepEqual(
+    projection.tables.Schedule.map((record) => record.fields["Session ID"]),
+    ["session:session-1"],
+  );
+  // The withheld titles are nowhere in the payload at all.
+  assert.doesNotMatch(JSON.stringify(projection), /Unannounced keynote/);
+  assert.doesNotMatch(JSON.stringify(projection), /session:session-2|session:session-3/);
+});
+
+test("a published session still flows, and the speaker survives its unpublished sibling", () => {
+  // The speaker table is deduplicated across sessions, so an unpublished
+  // session must not be the reason a speaker appears — nor the reason one
+  // disappears when they also hold a published talk.
+  const projection = buildAirtableProjection(
+    { id: "event-1", name: "Forward 2026" },
+    [accepted, { ...accepted, id: "session-2", contentStatus: "DRAFT" }],
+  );
+  assert.deepEqual(projectionCounts(projection), { Sessions: 1, Speakers: 1, Schedule: 1 });
+  assert.equal(projection.tables.Speakers[0].fields.Email, "ada@example.test");
+
+  // ...and a speaker who appears ONLY on an unpublished session is not exported.
+  const other = { ...speaker, id: "speaker-2", email: "grace@example.test" };
+  const draftOnly = buildAirtableProjection(
+    { id: "event-1", name: "Forward 2026" },
+    [accepted, { ...accepted, id: "session-2", contentStatus: "DRAFT", speakers: [{ user: other }] }],
+  );
+  assert.deepEqual(
+    draftOnly.tables.Speakers.map((record) => record.fields.Email),
+    ["ada@example.test"],
+  );
+});
+
+test("the preview count discloses exactly what publishing would release", () => {
+  const sessions: MirrorSession[] = [
+    accepted,
+    { ...accepted, id: "session-2", contentStatus: "DRAFT" },
+    { ...accepted, id: "session-3", sourceAbstractId: null, sourceAbstractStatus: null, contentStatus: "DRAFT" },
+    // Rejected: not something an operator can publish, so not counted here —
+    // counting it would turn an actionable number into noise.
+    { ...accepted, id: "session-4", sourceAbstractStatus: "REJECTED", contentStatus: "DRAFT" },
+  ];
+  assert.equal(countUnpublishedExclusions(sessions), 2);
+  // Non-vacuous the other way: an all-published programme reports zero.
+  assert.equal(countUnpublishedExclusions([accepted]), 0);
+  // And the count agrees with what the projection actually dropped.
+  const projection = buildAirtableProjection({ id: "event-1", name: "Forward 2026" }, sessions);
+  assert.equal(projectionCounts(projection).Sessions, 1);
 });
 
 test("Airtable writes require explicit live-mode configuration", () => {

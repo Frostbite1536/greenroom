@@ -4,6 +4,8 @@ export type AcceleventsSourceSession = {
   id: string;
   sourceAbstractId: string | null;
   sourceAbstractStatus: string | null;
+  /** The organizer's publish decision. Same column every public read filters on. */
+  contentStatus: "DRAFT" | "PUBLISHED";
   title: string;
   description: string | null;
   format: string | null;
@@ -69,9 +71,32 @@ export function resolveAcceleventsPushMode(input: {
   return { mode: "live" };
 }
 
-function isPushableSession(session: AcceleventsSourceSession): boolean {
-  // Source-less sessions are intentionally guaranteed program items.
+/** On the programme by acceptance: source-less sessions are guaranteed items. */
+function isProgramSession(session: AcceleventsSourceSession): boolean {
   return !session.sourceAbstractId || session.sourceAbstractStatus === "ACCEPTED";
+}
+
+/**
+ * On the programme *publicly* (GRA2-02).
+ *
+ * Every public read has filtered on `contentStatus: "PUBLISHED"` since the
+ * Tier-3 bundle; this push did not, so an unpublished talk and its speakers'
+ * contact details were shipped to the operator-configured endpoint anyway. A
+ * push is a publication and cannot be laxer than the pages it mirrors.
+ */
+function isPushableSession(session: AcceleventsSourceSession): boolean {
+  return isProgramSession(session) && session.contentStatus === "PUBLISHED";
+}
+
+/**
+ * Sessions held back *solely* because they are unpublished — accepted or
+ * guaranteed, and would ship the moment an organizer publishes them. A rejected
+ * proposal is not counted: it is not something an operator can act on.
+ */
+export function countUnpublishedExclusions(sessions: readonly AcceleventsSourceSession[]): number {
+  return sessions.filter(
+    (session) => isProgramSession(session) && session.contentStatus !== "PUBLISHED",
+  ).length;
 }
 
 /** Build a stable, vendor-neutral program-push envelope for the configured endpoint. */
@@ -124,6 +149,16 @@ export function buildAcceleventsPushPayload(
   };
 }
 
+/**
+ * The operator-facing count summary — unchanged.
+ *
+ * The unpublished-exclusion count is deliberately NOT folded in here: the
+ * operations panel renders every numeric field of this object as
+ * "<n> <fieldname>", so a fourth key would surface as
+ * "2 excludedunpublishedsessions" in the operator's own summary line. It ships
+ * as a sibling `excluded` field on the response instead, matching the Airtable
+ * route, and the panel states it in its own sentence.
+ */
 export function acceleventsPushSummary(payload: AcceleventsPushPayload) {
   return {
     sessions: payload.sessions.length,

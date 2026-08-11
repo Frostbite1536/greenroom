@@ -134,6 +134,15 @@ async function req(method, path, body, sess) {
  */
 const unfoldIcs = (text) => text.replace(/\r\n /g, "");
 
+/**
+ * GRA2-06: the admin overlays are native `<dialog>` elements now, so "a modal
+ * is present in this response" means the element. The retired hand-rolled
+ * `role="dialog"` pattern is still tested for, because every use of this helper
+ * is a NEGATIVE assertion somewhere — dropping the old pattern from the test
+ * would make those pass vacuously if any surface regressed back to it.
+ */
+const hasModal = (html) => /<dialog\b/i.test(html) || /role="dialog"/i.test(html);
+
 async function reqManual(path, sess) {
   const res = await fetch(BASE + path, {
     headers: sess ? { cookie: cookie(sess) } : undefined,
@@ -1433,7 +1442,8 @@ try {
   const confirmedDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}`, null, admin);
   const confirmedDecisionDrawer = await req("GET", `/admin/abstracts?abstractId=${encodeURIComponent(convertedAbstractId)}&mode=decide`, null, admin);
   const drawerButtons = (html) => {
-    const drawerIndex = html.indexOf('role="dialog"');
+    // The drawer is the only <dialog> on /admin/abstracts (GRA2-06).
+    const drawerIndex = html.search(/<dialog\b/i);
     if (drawerIndex === -1) return [];
     const drawer = html.slice(drawerIndex);
     return [...drawer.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)]
@@ -2081,26 +2091,48 @@ try {
   const boardPermalink = await req(
     "GET", `/admin/abstracts?abstract=${encodeURIComponent(fx.abstract.id)}`, null, admin,
   );
+  // GRA2-06: the drawer is a native <dialog>. Only the `open` attribute can be
+  // written by the server, so that attribute is what makes the deep-linked
+  // drawer readable before any JavaScript runs; `showModal()` upgrades it on
+  // hydration. Served JSX keeps camelCase attribute names, so every attribute
+  // here is matched case-insensitively.
+  const drawerTag = (html) => html.match(/<dialog\b[^>]*>/i)?.[0] ?? "";
+  /** The visible heading text `aria-labelledby` actually resolves to, or null. */
+  const drawerLabelText = (html) => {
+    const id = drawerTag(html).match(/aria-labelledby="([^"]+)"/i)?.[1];
+    if (!id) return null;
+    const heading = html.match(
+      new RegExp(`<h2[^>]*\\sid="${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[^>]*>([\\s\\S]*?)</h2>`, "i"),
+    );
+    return heading ? renderedText(heading[1]) : null;
+  };
   check("§4-4 ?abstract=<id> renders that proposal's drawer in the first response",
     boardPermalink.status === 200
-    && boardPermalink.text.includes('role="dialog"')
-    && boardPermalink.text.includes('aria-modal="true"')
-    // Served JSX keeps camelCase attribute names, so the label is matched
-    // case-insensitively rather than assuming a lowercased `aria-label`.
-    && new RegExp(`aria-label="${fx.abstract.title}"`, "i").test(boardPermalink.text),
-    `${boardPermalink.status}`);
+    && /\sopen(=""|[\s>])/i.test(drawerTag(boardPermalink.text)),
+    `${boardPermalink.status} ${drawerTag(boardPermalink.text) || "no <dialog> in the response"}`);
+  // Not merely present: the accessible name must resolve to this proposal's own
+  // visible heading, so a dangling aria-labelledby fails rather than passing.
+  check("§4-4 the drawer's aria-labelledby resolves to its visible heading",
+    drawerLabelText(boardPermalink.text) === fx.abstract.title,
+    `${JSON.stringify(drawerLabelText(boardPermalink.text))} vs ${JSON.stringify(fx.abstract.title)}`);
+  // The retired pattern must not come back alongside it: a native <dialog> is
+  // already a modal dialog to assistive technology.
+  check("§4-4 the drawer carries no hand-rolled dialog role or aria-modal",
+    !/role="dialog"/i.test(boardPermalink.text) && !/aria-modal/i.test(boardPermalink.text));
   // Control: the same page WITHOUT the parameter must not open a drawer, or
   // the check above proves nothing about the parameter.
   const boardNoParam = await req("GET", "/admin/abstracts", null, admin);
   check("§4-4 the drawer is absent without the parameter — the deep link is what opens it",
-    boardNoParam.status === 200 && !boardNoParam.text.includes('role="dialog"'),
+    boardNoParam.status === 200 && !hasModal(boardNoParam.text),
     `${boardNoParam.status}`);
   // The original parameter still works: existing links must not have broken.
   const boardLegacyParam = await req(
     "GET", `/admin/abstracts?abstractId=${encodeURIComponent(fx.abstract.id)}`, null, admin,
   );
   check("§4-4 the original ?abstractId= link still opens the same drawer",
-    boardLegacyParam.status === 200 && boardLegacyParam.text.includes('role="dialog"'),
+    boardLegacyParam.status === 200
+    && /\sopen(=""|[\s>])/i.test(drawerTag(boardLegacyParam.text))
+    && drawerLabelText(boardLegacyParam.text) === fx.abstract.title,
     `${boardLegacyParam.status}`);
   // Graceful degrade: a made-up id and a syntactically odd one both render the
   // page normally, with no drawer and no error. (The cross-event case needs a
@@ -2109,8 +2141,8 @@ try {
   const boardUnknown = await req("GET", "/admin/abstracts?abstract=no-such-proposal", null, admin);
   const boardOddId = await req("GET", "/admin/abstracts?abstract=%20%26planId%3Dx", null, admin);
   check("§4-4 an unknown or malformed id renders the page with no drawer and no error",
-    boardUnknown.status === 200 && !boardUnknown.text.includes('role="dialog"')
-    && boardOddId.status === 200 && !boardOddId.text.includes('role="dialog"'),
+    boardUnknown.status === 200 && !hasModal(boardUnknown.text)
+    && boardOddId.status === 200 && !hasModal(boardOddId.text),
     `unknown ${boardUnknown.status}, odd ${boardOddId.status}`);
   // The odd id above also proves the encoding holds: `%26planId%3Dx` decodes to
   // `&planId=x`, and it must stay INSIDE the abstract parameter rather than
@@ -2854,7 +2886,7 @@ try {
     s20OlderDrawer.status === 200
     && s20OlderDrawer.text.includes(`S20 draft ${String(S20_DRAFT_COUNT - 1).padStart(3, "0")}`)
     && (renderedText(s20OlderDrawer.text) ?? "").includes(`Showing first ${S20_CAP} of ${s20Total} proposals.`));
-  const hasSelectedDecisionControls = (html) => /role="dialog"/.test(html)
+  const hasSelectedDecisionControls = (html) => hasModal(html)
     || /<button[^>]*>Accept<\/button>/.test(html)
     || /<button[^>]*>Maybe<\/button>/.test(html)
     || /<button[^>]*>Decline<\/button>/.test(html);
@@ -3016,7 +3048,9 @@ try {
   const landingSignedIn = await fetch(`${BASE}/`, { headers: { cookie: cookie(admin) }, redirect: "manual" });
   check("signed-in visitors keep their workspace redirect from /",
     landingSignedIn.status === 307
-    && (landingSignedIn.headers.get("location") ?? "").includes("/admin/forms"),
+    // B7: organizers land on the dashboard now. Match the exact path so a
+    // regression to /admin/forms (or a redirect loop to /) fails loudly.
+    && new URL(landingSignedIn.headers.get("location") ?? "/none", BASE).pathname === "/admin",
     `${landingSignedIn.status} ${landingSignedIn.headers.get("location") ?? "none"}`);
 
   // --- §5-5: the programme is SERVED at /schedule and /speakers -------------
@@ -3152,7 +3186,7 @@ try {
     enriched.text.includes("Show more") && enriched.text.includes("embed-session-preview"));
   check("session detail expands with native details, not a JS-only modal",
     enriched.text.includes('<details class="embed-session-detail">')
-    && !enriched.text.includes('role="dialog"'));
+    && !hasModal(enriched.text));
 
   const chipText = (kind) => renderedText(
     enriched.text.match(new RegExp(`<li class="embed-chip embed-chip-${kind}"[^>]*>([\\s\\S]*?)</li>`))?.[1] ?? "",
@@ -3377,7 +3411,7 @@ try {
   check("speaker detail opens with native details, not a JS-only modal",
     speakersEmbed.text.includes('<details class="speaker-detail">')
     && speakersEmbed.text.includes("Full profile")
-    && !speakersEmbed.text.includes('role="dialog"'));
+    && !hasModal(speakersEmbed.text));
   // The derived-fallback case needs a speaker with genuinely no SpeakerProfile.
   // That cannot be one of the demo users: `lib/demo/seed.ts` upserts a global
   // profile (a distinct fictional title and company per speaker) for every demo
@@ -4078,6 +4112,239 @@ try {
     speakerRoster.status === 307, `got ${speakerRoster.status}`);
   const noSpeakerAdded = await prisma.user.count({ where: { email: { in: ["nope@scratch.test", "nope2@scratch.test", "nope3@scratch.test"] } } });
   check("no refused add created an account as a side effect", noSpeakerAdded === 0, `got ${noSpeakerAdded}`);
+
+  // --- B7: the /admin dashboard -------------------------------------------
+  // Every figure below is checked against a Prisma query written HERE, from a
+  // different angle than the page's own read (counts and set unions rather than
+  // groupBy folds), so a shared bug cannot make both sides agree. Nothing is
+  // hardcoded: the scratch fixture has been mutated by the whole run above, and
+  // these expectations are computed from the database as it now stands.
+  // `<strong>{a} / {b}</strong>` puts two adjacent text children in one element,
+  // and React separates those with an empty comment on the server. Stripping
+  // comments is what makes "3 / 5" readable as itself rather than as
+  // "3<!-- --> / <!-- -->5"; the whitespace collapse below covers formatting.
+  const stripComments = (html) => html.replace(/<!--[\s\S]*?-->/g, "");
+  const collapse = (value) => (value === null ? null : value.replace(/\s+/g, " ").trim());
+  const dashboardRow = (html, label) =>
+    collapse(html.match(new RegExp(`<span class="dashboard-row-label">${label}</span>\\s*<strong>([^<]*)</strong>`))?.[1] ?? null);
+  const dashboardFunnel = (html) => {
+    const counts = new Map();
+    for (const match of html.matchAll(/href="\/admin\/abstracts\?status=([A-Z_]+)"[\s\S]{0,400}?<strong>(\d+)<\/strong>/g)) {
+      counts.set(match[1], Number(match[2]));
+    }
+    return counts;
+  };
+
+  const dashPage = await req("GET", "/admin", null, admin);
+  check("B7 the admin dashboard renders → 200", dashPage.status === 200, `got ${dashPage.status}`);
+  const dashHtml = stripComments(dashPage.text);
+
+  // 1. CFP funnel — every segment against an independent groupBy.
+  const funnelExpected = new Map(
+    (await prisma.abstract.groupBy({
+      by: ["status"], where: { eventId: EVENT_ID }, _count: { _all: true },
+    })).map((row) => [row.status, row._count._all]),
+  );
+  const funnelRendered = dashboardFunnel(dashHtml);
+  const funnelTotal = [...funnelExpected.values()].reduce((sum, n) => sum + n, 0);
+  check("B7 the funnel is not vacuous — the scratch event really has proposals",
+    funnelTotal > 0 && funnelRendered.size === 7,
+    `db total ${funnelTotal}, rendered segments ${funnelRendered.size}`);
+  const funnelMismatch = [...funnelRendered.entries()]
+    .filter(([status, shown]) => shown !== (funnelExpected.get(status) ?? 0))
+    .map(([status, shown]) => `${status}: page ${shown} vs db ${funnelExpected.get(status) ?? 0}`);
+  check("B7 every funnel segment matches an independently counted status",
+    funnelMismatch.length === 0, funnelMismatch.join("; "));
+  const funnelMissing = [...funnelExpected.entries()]
+    .filter(([status, n]) => n > 0 && !funnelRendered.has(status))
+    .map(([status]) => status);
+  check("B7 no status with stored proposals is missing a funnel segment",
+    funnelMissing.length === 0, funnelMissing.join(", "));
+
+  // 2. The segment links land on the chip they counted, and that chip is
+  //    pressed in the FIRST response — not after client JavaScript runs.
+  // Attribute-order independent on purpose: the chip's accessible name already
+  // carries its label, and asserting on a fixed attribute order would make this
+  // check about React's serializer rather than about which chip is pressed.
+  const pressedChipName = (html) => {
+    for (const tag of stripComments(html).match(/<button[^>]*>/g) ?? []) {
+      if (!/\saria-pressed="true"/.test(tag)) continue;
+      const label = tag.match(/\saria-label="([^:"]+):/)?.[1];
+      if (label) return label;
+    }
+    return null;
+  };
+  const acceptedSegment = await req("GET", "/admin/abstracts?status=ACCEPTED", null, admin);
+  check("B7 a funnel link opens the abstracts table with its own chip preselected",
+    acceptedSegment.status === 200 && pressedChipName(acceptedSegment.text) === "Accepted",
+    `${acceptedSegment.status}, pressed ${pressedChipName(acceptedSegment.text) ?? "none"}`);
+  const withdrawnSegment = await req("GET", "/admin/abstracts?status=WITHDRAWN", null, admin);
+  check("B7 a second segment presses its own chip, not a fixed one",
+    withdrawnSegment.status === 200 && pressedChipName(withdrawnSegment.text) === "Withdrawn",
+    `pressed ${pressedChipName(withdrawnSegment.text) ?? "none"}`);
+  const unknownFilter = await req("GET", "/admin/abstracts?status=NOT_A_STATUS", null, admin);
+  check("B7 an unrecognized status falls back to the unfiltered table",
+    unknownFilter.status === 200 && pressedChipName(unknownFilter.text) === "All",
+    `pressed ${pressedChipName(unknownFilter.text) ?? "none"}`);
+
+  // 3. Programme health — counted off Session/ScheduleSlot/Room directly.
+  const [dashSessions, dashScheduled, dashPublished, dashRooms, dashSlotRooms] = await Promise.all([
+    prisma.session.count({ where: { eventId: EVENT_ID } }),
+    prisma.session.count({ where: { eventId: EVENT_ID, scheduleSlot: { isNot: null } } }),
+    prisma.session.count({ where: { eventId: EVENT_ID, contentStatus: "PUBLISHED" } }),
+    prisma.room.count({ where: { eventId: EVENT_ID } }),
+    prisma.scheduleSlot.findMany({ where: { eventId: EVENT_ID }, select: { roomId: true } }),
+  ]);
+  const dashRoomsInUse = new Set(dashSlotRooms.map((slot) => slot.roomId)).size;
+  check("B7 the programme card is not vacuous", dashSessions > 0 && dashRooms > 0,
+    `${dashSessions} sessions, ${dashRooms} rooms`);
+  check("B7 scheduled counts talks holding a ScheduleSlot",
+    dashboardRow(dashHtml, "Scheduled") === `${dashScheduled} / ${dashSessions}`,
+    `page "${dashboardRow(dashHtml, "Scheduled")}" vs db ${dashScheduled} / ${dashSessions}`);
+  check("B7 unplaced talks are the complement of the scheduled ones",
+    dashboardRow(dashHtml, "Not yet placed") === `${dashSessions - dashScheduled}`,
+    `page "${dashboardRow(dashHtml, "Not yet placed")}" vs db ${dashSessions - dashScheduled}`);
+  check("B7 publication is counted independently of placement",
+    dashboardRow(dashHtml, "Published to the public programme") === `${dashPublished} / ${dashSessions}`,
+    `page "${dashboardRow(dashHtml, "Published to the public programme")}" vs db ${dashPublished} / ${dashSessions}`);
+  check("B7 rooms in use are the distinct rooms holding a slot",
+    dashboardRow(dashHtml, "Rooms in use") === `${dashRoomsInUse} / ${dashRooms}`,
+    `page "${dashboardRow(dashHtml, "Rooms in use")}" vs db ${dashRoomsInUse} / ${dashRooms}`);
+
+  // 4. Review progress — the round card against its own assignment groupBy,
+  //    with withdrawn work excluded exactly as the evaluations screen does.
+  const dashRoundGroups = await prisma.reviewAssignment.groupBy({
+    by: ["planId", "status"],
+    where: { plan: { eventId: EVENT_ID }, abstract: { status: { not: "WITHDRAWN" } } },
+    _count: { _all: true },
+  });
+  const dashRoundRows = dashRoundGroups.filter((row) => row.planId === fx.plan.id);
+  const dashAssigned = dashRoundRows.reduce((sum, row) => sum + row._count._all, 0);
+  const dashCompleted = dashRoundRows
+    .filter((row) => row.status === "COMPLETED")
+    .reduce((sum, row) => sum + row._count._all, 0);
+  const renderedRound = collapse(dashHtml
+    .match(new RegExp(`href="/admin/evaluations\\?planId=${fx.plan.id}"[\\s\\S]{0,400}?<strong>([^<]*)</strong>`))?.[1] ?? null);
+  check("B7 the review card is not vacuous — the round really has assignments",
+    dashAssigned > 0, `${dashAssigned} assignments`);
+  check("B7 round progress matches an independently grouped assignment count",
+    renderedRound === `${dashCompleted} / ${dashAssigned}`,
+    `page "${renderedRound}" vs db ${dashCompleted} / ${dashAssigned}`);
+  const dashUnplacedAccepted = await prisma.abstract.count({
+    where: {
+      eventId: EVENT_ID, status: "ACCEPTED",
+      OR: [{ session: { is: null } }, { session: { scheduleSlot: { is: null } } }],
+    },
+  });
+  check("B7 the accepted-but-unplaced note agrees with the database",
+    dashUnplacedAccepted === 0
+      ? dashHtml.includes("Every accepted proposal is on the programme.")
+      : new RegExp(`<strong>${dashUnplacedAccepted}</strong> accepted proposal`).test(dashHtml),
+    `db says ${dashUnplacedAccepted}`);
+
+  // 5. Speakers — the roster total as an independent set union of the two
+  //    tables the roster page itself unions.
+  const [dashMemberSpeakers, dashSessionSpeakers] = await Promise.all([
+    prisma.eventMember.findMany({ where: { eventId: EVENT_ID, role: "SPEAKER" }, select: { userId: true } }),
+    prisma.sessionSpeaker.findMany({ where: { session: { eventId: EVENT_ID } }, select: { userId: true } }),
+  ]);
+  const dashSpeakerTotal = new Set([
+    ...dashMemberSpeakers.map((row) => row.userId),
+    ...dashSessionSpeakers.map((row) => row.userId),
+  ]).size;
+  check("B7 the speaker card is not vacuous", dashSpeakerTotal > 0, `${dashSpeakerTotal} speakers`);
+  check("B7 the speaker total is the union of named and session speakers",
+    dashboardRow(dashHtml, "Speakers") === `${dashSpeakerTotal}`,
+    `page "${dashboardRow(dashHtml, "Speakers")}" vs db ${dashSpeakerTotal}`);
+  // And the dashboard must not restate the roster page's own headline figure.
+  const dashRosterPage = stripComments((await req("GET", "/admin/speakers", null, admin)).text);
+  const dashRosterConfirmed = dashRosterPage.match(/<span>Confirmed speakers<\/span><strong>(\d+)<\/strong>/)?.[1] ?? null;
+  const dashOnboarded = dashboardRow(dashHtml, "Fully onboarded");
+  check("B7 onboarding is measured over the same cohort the roster page reports",
+    dashRosterConfirmed !== null && dashOnboarded?.endsWith(`/ ${dashRosterConfirmed}`) === true,
+    `dashboard "${dashOnboarded}" vs roster confirmed ${dashRosterConfirmed ?? "none"}`);
+
+  // 6. Recent activity — the five newest submissions, newest first, each
+  //    deep-linked through the canonical `?abstract=` permalink (PR #88).
+  const dashRecent = await prisma.abstract.findMany({
+    where: { eventId: EVENT_ID, submittedAt: { not: null } },
+    orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+    take: 5,
+    select: { id: true, title: true },
+  });
+  check("B7 the activity strip is not vacuous", dashRecent.length > 0, `${dashRecent.length} rows`);
+  const dashRecentPositions = dashRecent.map((row) => dashHtml.indexOf(`href="/admin/abstracts?abstract=${row.id}"`));
+  check("B7 every recent submission is deep-linked with ?abstract=",
+    dashRecentPositions.every((position) => position !== -1),
+    dashRecent.filter((_, i) => dashRecentPositions[i] === -1).map((row) => row.id).join(", "));
+  check("B7 recent submissions render newest first",
+    dashRecentPositions.every((position, i) => i === 0 || position > dashRecentPositions[i - 1]),
+    dashRecentPositions.join(" < "));
+  check("B7 the activity strip is bounded at five rows per column",
+    (dashHtml.match(/href="\/admin\/abstracts\?abstract=/g) ?? []).length <= 10,
+    `${(dashHtml.match(/href="\/admin\/abstracts\?abstract=/g) ?? []).length} deep links`);
+  check("B7 no activity link falls back to the legacy ?abstractId= form",
+    !dashHtml.includes("/admin/abstracts?abstractId="));
+
+  // 7. Authorization — identical to every sibling admin page.
+  const dashSpeakerSession = await reqManual("/admin", speaker);
+  check("B7 a speaker is redirected away from the dashboard → 307",
+    dashSpeakerSession.status === 307, `got ${dashSpeakerSession.status}`);
+  const dashForgedAdmin = await reqManual("/admin", { ...speaker, role: "ADMIN" });
+  check("B7 a forged ADMIN claim in the cookie does not open the dashboard → 307",
+    dashForgedAdmin.status === 307, `got ${dashForgedAdmin.status}`);
+  const dashEvaluatorSession = await reqManual("/admin", evaluator);
+  check("B7 a reviewer is redirected away from the dashboard → 307",
+    dashEvaluatorSession.status === 307, `got ${dashEvaluatorSession.status}`);
+  const dashAnon = await reqManual("/admin", null);
+  check("B7 an unauthenticated dashboard request → 307 /login",
+    dashAnon.status === 307 && dashAnon.location.includes("/login"),
+    `${dashAnon.status} ${dashAnon.location || "no location"}`);
+
+  // 8. Zero-state honesty — a card with nothing in it must offer the next step,
+  //    not a zero in a vacuum. Driven by what the fresh event actually holds at
+  //    this point in the run rather than by an assumed shape.
+  const dashFreshAdmin = { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } };
+  const freshDash = await req("GET", "/admin", null, dashFreshAdmin);
+  check("B7 the dashboard renders for a fresh event → 200", freshDash.status === 200, `got ${freshDash.status}`);
+  const freshDashHtml = stripComments(freshDash.text);
+  const [freshForms, freshAbstracts, freshSessions, freshRounds, freshNamedSpeakers, freshSessionSpeakers] =
+    await Promise.all([
+      prisma.formConfig.count({ where: { eventId: FRESH_EVENT_ID } }),
+      prisma.abstract.count({ where: { eventId: FRESH_EVENT_ID } }),
+      prisma.session.count({ where: { eventId: FRESH_EVENT_ID } }),
+      prisma.evaluationPlan.count({ where: { eventId: FRESH_EVENT_ID } }),
+      prisma.eventMember.count({ where: { eventId: FRESH_EVENT_ID, role: "SPEAKER" } }),
+      prisma.sessionSpeaker.count({ where: { session: { eventId: FRESH_EVENT_ID } } }),
+    ]);
+  check("B7 an event with no proposals says so and points at the call",
+    freshAbstracts > 0
+      ? true
+      : freshForms === 0
+        ? freshDashHtml.includes("No CFP form yet") && freshDashHtml.includes('href="/admin/forms"')
+        : freshDashHtml.includes("No proposals yet") && freshDashHtml.includes('href="/admin/forms"'),
+    `${freshForms} forms, ${freshAbstracts} proposals`);
+  check("B7 an event with no talks offers the agenda builder rather than a zero",
+    freshSessions > 0
+      ? true
+      : freshDashHtml.includes("No talks yet") && freshDashHtml.includes('href="/admin/agenda"'),
+    `${freshSessions} sessions`);
+  check("B7 an event with no speakers offers the roster rather than a zero",
+    freshNamedSpeakers + freshSessionSpeakers > 0
+      ? true
+      : freshDashHtml.includes("No speakers yet") && freshDashHtml.includes('href="/admin/speakers"'),
+    `${freshNamedSpeakers} named, ${freshSessionSpeakers} on sessions`);
+  check("B7 an event with no review round offers to create one",
+    freshRounds > 0
+      ? true
+      : freshDashHtml.includes("No review round yet") && freshDashHtml.includes("Create the first round"),
+    `${freshRounds} rounds`);
+  // At least one of the four zero states must actually have been exercised, or
+  // the block above proves nothing.
+  check("B7 the fresh event really exercised at least one zero state",
+    freshAbstracts === 0 || freshSessions === 0 || freshRounds === 0
+      || freshNamedSpeakers + freshSessionSpeakers === 0,
+    "the fresh scratch event is no longer empty in any dimension");
 
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data

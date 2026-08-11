@@ -5,6 +5,7 @@ import {
   Code2,
   FileStack,
   FileText,
+  Gauge,
   LayoutDashboard,
   LogOut,
   MailCheck,
@@ -46,6 +47,10 @@ const EVERYONE: Role[] = ["ADMIN", "EVALUATOR", "SPEAKER"];
  * back to `/login`. This is presentation only — authorization is unchanged.
  */
 const navigation: { href: string; label: string; icon: typeof FileText; roles: Role[] }[] = [
+  // First in the admin group: it is the organizer's landing view and every other
+  // admin entry below is one of the workspaces it links into. ADMIN-only,
+  // mirroring `pageContext(["ADMIN"])` in `getAdminDashboard()`.
+  { href: "/admin", label: "Dashboard", icon: Gauge, roles: ["ADMIN"] },
   { href: "/admin/forms", label: "CFP forms", icon: FileText, roles: ["ADMIN"] },
   { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN"] },
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"] },

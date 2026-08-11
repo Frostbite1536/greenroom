@@ -10,6 +10,8 @@ export type MirrorSession = {
   id: string;
   sourceAbstractId: string | null;
   sourceAbstractStatus: string | null;
+  /** The organizer's publish decision. Same column every public read filters on. */
+  contentStatus: "DRAFT" | "PUBLISHED";
   title: string;
   description: string | null;
   format: string | null;
@@ -56,9 +58,38 @@ function iso(value: Date | null | undefined): string {
   return value ? value.toISOString() : "";
 }
 
-function isMirrorableSession(session: MirrorSession): boolean {
-  // A Session without a source abstract is an intentionally guaranteed session.
+/** On the programme by acceptance: guaranteed sessions have no source abstract. */
+function isProgramSession(session: MirrorSession): boolean {
   return !session.sourceAbstractId || session.sourceAbstractStatus === "ACCEPTED";
+}
+
+/**
+ * On the programme *publicly* (GRA2-02).
+ *
+ * `contentStatus` is the organizer's publish decision, and every public read —
+ * the programme, the calendar feed, the speaker directory, `/api/v1/schedule` —
+ * has filtered on `PUBLISHED` since the Tier-3 bundle. This projection did not,
+ * so a talk withheld from the public site, and its speakers' names, bios and
+ * email addresses, were still exported live to a third-party base. A mirror is
+ * a publication; it cannot be laxer than the pages it mirrors.
+ */
+function isMirrorableSession(session: MirrorSession): boolean {
+  return isProgramSession(session) && session.contentStatus === "PUBLISHED";
+}
+
+/**
+ * Sessions held back *solely* because they are unpublished — accepted or
+ * guaranteed, and would ship the moment an organizer publishes them.
+ *
+ * Deliberately not "every unpublished row": a rejected proposal is not
+ * something an operator can act on, and counting it would turn a checklist into
+ * noise. Disclosed on the preview so a silent difference between what an
+ * operator sees here and what lands in Airtable is impossible.
+ */
+export function countUnpublishedExclusions(sessions: readonly MirrorSession[]): number {
+  return sessions.filter(
+    (session) => isProgramSession(session) && session.contentStatus !== "PUBLISHED",
+  ).length;
 }
 
 /**

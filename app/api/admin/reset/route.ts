@@ -4,6 +4,7 @@ import { ApiError } from "@/lib/api/http";
 import { isDemoResetAllowed } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { seedDemo } from "@/lib/demo/seed";
+import { demoResetTargetRefusal } from "@/lib/demo/reset-guard";
 import type { ApiResponse } from "@/types/api";
 
 export const runtime = "nodejs";
@@ -17,8 +18,9 @@ function fail(code: string, message: string, status: number) {
  * Demo reset — wipes and reseeds the demo event's data.
  *
  * Guardrails (INV-RESET-001): explicit (POST only), idempotent (seed rebuilds
- * deterministically), environment-gated (ALLOW_DEMO_RESET=true), and authorized
- * (ADMIN session required). Refused otherwise, so it is unauthorized in
+ * deterministically), environment-gated (ALLOW_DEMO_RESET=true), authorized
+ * (ADMIN session required), and *targeted* — the caller's active event must be
+ * the event the seed rebuilds. Refused otherwise, so it is unauthorized in
  * production unless an operator deliberately opts in.
  */
 export async function POST() {
@@ -26,8 +28,9 @@ export async function POST() {
     return fail("RESET_DISABLED", "Demo reset is disabled. Set ALLOW_DEMO_RESET=true to enable it.", 403);
   }
 
+  let ctx;
   try {
-    await requireContext(["ADMIN"]);
+    ctx = await requireContext(["ADMIN"]);
   } catch (error) {
     if (error instanceof ApiError) {
       return fail("FORBIDDEN", "An admin session is required to reset demo data.", 403);
@@ -36,6 +39,12 @@ export async function POST() {
     console.error("[reset] authorization unavailable", { errorType: error instanceof Error ? error.name : typeof error });
     return fail("AUTH_UNAVAILABLE", "Authorization could not be verified. Try again later.", 503);
   }
+
+  // GRA2-05: being an ADMIN is not enough — the seed rebuilds one hard-coded
+  // event, so an admin of any *other* event must not be able to run it. Checked
+  // before the seed is reached, so a refusal writes nothing.
+  const wrongEvent = demoResetTargetRefusal(ctx.eventId);
+  if (wrongEvent) return fail(wrongEvent.code, wrongEvent.message, wrongEvent.status);
 
   try {
     const summary = await seedDemo(prisma);

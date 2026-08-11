@@ -74,7 +74,16 @@ test("sorting is local to the loaded page and the overflow notice still says so"
 
 test("every submitted status has a filter chip, including Withdrawn", () => {
   const component = table();
-  const tabs = component.slice(component.indexOf("const TABS"), component.indexOf("export function AbstractsTable"));
+  // The chip vocabulary moved to `lib/abstract-status` when the `/admin`
+  // dashboard funnel began linking into these chips: one list, so a segment
+  // there cannot name a chip that does not exist here. The table must render
+  // that list rather than keep a second copy.
+  assert.match(component, /const TABS = ABSTRACT_STATUS_TABS;/);
+  const vocabulary = source("lib/abstract-status.ts");
+  const tabs = vocabulary.slice(
+    vocabulary.indexOf("export const ABSTRACT_STATUS_TABS"),
+    vocabulary.indexOf("export const ABSTRACT_FUNNEL_STATUSES"),
+  );
   // The gap this closes: a speaker withdrawing mid-review was loaded, rendered
   // under "All", and reachable by no filter at all.
   assert.match(tabs, /\{ key: "WITHDRAWN", label: "Withdrawn" \}/);
@@ -82,9 +91,15 @@ test("every submitted status has a filter chip, including Withdrawn", () => {
   // Every chip key must be a real status, because the filter is an equality
   // test against `a.status` — a key naming no status shows an empty table
   // rather than failing. `ALL` is the deliberate exception.
-  const statuses = component.slice(component.indexOf("const STATUS_META"), component.indexOf("type ProgrammeState"));
+  const statuses = vocabulary.slice(
+    vocabulary.indexOf("export const ABSTRACT_STATUS_META"),
+    vocabulary.indexOf("export const ABSTRACT_STATUS_ALL"),
+  );
+  // The unfiltered chip is the named `ABSTRACT_STATUS_ALL` constant, not a
+  // string literal, so it is asserted separately from the seven statuses.
+  assert.match(tabs, /\{ key: ABSTRACT_STATUS_ALL, label: "All" \}/);
   const chipKeys = [...tabs.matchAll(/key: "([A-Z_]+)"/g)].map((match) => match[1]);
-  assert.ok(chipKeys.length >= 8, `got ${chipKeys.length} chips`);
+  assert.ok(chipKeys.length >= 7, `got ${chipKeys.length} status chips`);
   for (const key of chipKeys) {
     if (key === "ALL") continue;
     assert.match(statuses, new RegExp(`^\\s*${key}: \\{`, "m"), `${key} is not a rendered status`);

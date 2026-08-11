@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, LayoutGrid, List, Wand2, X } from "lucide-react";
 import type { AgendaData, AgendaSession } from "@/lib/data/reads";
@@ -814,6 +814,58 @@ function ConflictsView({
 }
 
 /**
+ * GRA2-06 — the shared modal shell for this screen's two dialogs.
+ *
+ * `showModal()` gives the focus trap, Escape handling, an inert background and
+ * focus restoration to whatever opened it, the same pattern as the CFP
+ * "New form" and speaker dialogs, so nothing here hand-rolls a trap. Both
+ * dialogs mount only on a click, so there is no server-rendered open state to
+ * reconcile — the effect can open unconditionally.
+ *
+ * Padding lives on the body rather than the dialog so that a mousedown landing
+ * on the dialog element itself is unambiguously a backdrop click, and a write
+ * in flight blocks both dismissal routes rather than discarding it.
+ */
+function AgendaDialog({
+  className,
+  labelledBy,
+  busy,
+  onClose,
+  children,
+}: {
+  className: string;
+  /** Space-separated ids of the dialog's own visible heading text. */
+  labelledBy: string;
+  busy: boolean;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className={`card agenda-dialog ${className}`}
+      aria-labelledby={labelledBy}
+      onClose={onClose}
+      onCancel={(event) => {
+        if (busy) event.preventDefault();
+      }}
+      onMouseDown={(event) => {
+        if (event.target === dialogRef.current && !busy) onClose();
+      }}
+    >
+      <div className="agenda-dialog-body">{children}</div>
+    </dialog>
+  );
+}
+
+/**
  * The proposed plan, shown before anything is written (AIA-08, addendum §4.1).
  *
  * Every talk the server considered appears here exactly once — placed, with the
@@ -837,24 +889,22 @@ function FillOpenSlotsDialog({
   onDiscard: () => void;
 }) {
   const summary = fillOpenSlotsSummary(preview);
+  const ids = useId();
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Fill open slots"
-      style={{ position: "fixed", inset: 0, background: "rgba(20,28,30,0.35)", display: "grid", placeItems: "center", zIndex: 50, padding: 16 }}
-      onClick={onDiscard}
+    <AgendaDialog
+      className="agenda-preview-dialog"
+      // The eyebrow and the heading are the dialog's own visible title line;
+      // together they name it the way the screen reads.
+      labelledBy={`${ids}-eyebrow ${ids}-title`}
+      busy={busy}
+      onClose={onDiscard}
     >
-      <div
-        className="card"
-        style={{ width: "min(640px, 100%)", maxHeight: "85vh", overflowY: "auto", padding: 24 }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-          <p className="eyebrow">Fill open slots — nothing saved yet</p>
-          <button className="ghost-button" onClick={onDiscard} aria-label="Close"><X size={16} /></button>
+          <p className="eyebrow" id={`${ids}-eyebrow`}>Fill open slots — nothing saved yet</p>
+          <button type="button" className="ghost-button" onClick={onDiscard} aria-label="Close"><X size={16} /></button>
         </div>
-        <h2 style={{ margin: "0 0 4px" }}>{summary.title}</h2>
+        <h2 id={`${ids}-title`} style={{ margin: "0 0 4px" }}>{summary.title}</h2>
         {summary.detail ? <p className="hint">{summary.detail}</p> : null}
 
         {preview.placements.length > 0 && (
@@ -909,12 +959,12 @@ function FillOpenSlotsDialog({
             </button>
           ) : null}
           <span className="spacer" />
-          <button className="ghost-button" disabled={busy} onClick={onDiscard}>
+          <button type="button" className="ghost-button" disabled={busy} onClick={onDiscard}>
             {summary.canApply ? "Discard" : "Close"}
           </button>
         </div>
-      </div>
-    </div>
+      </>
+    </AgendaDialog>
   );
 }
 
@@ -947,6 +997,7 @@ function ScheduleDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflictDetail, setConflictDetail] = useState<string[]>([]);
+  const ids = useId();
 
   async function save(force: boolean) {
     setBusy(true);
@@ -973,19 +1024,21 @@ function ScheduleDialog({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={`Schedule ${session.title}`}
-      style={{ position: "fixed", inset: 0, background: "rgba(20,28,30,0.35)", display: "grid", placeItems: "center", zIndex: 50, padding: 16 }}
-      onClick={onClose}
+    <AgendaDialog
+      className="agenda-schedule-dialog"
+      // "Move session" / "Schedule session" plus the talk's title — the same
+      // two lines the previous aria-label spelled out, now taken from the
+      // visible text so the two cannot drift.
+      labelledBy={`${ids}-eyebrow ${ids}-title`}
+      busy={busy}
+      onClose={onClose}
     >
-      <div className="card" style={{ width: "min(520px, 100%)", padding: 24 }} onClick={(e) => e.stopPropagation()}>
+      <>
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-          <p className="eyebrow">{existing ? "Move session" : "Schedule session"}</p>
-          <button className="ghost-button" onClick={onClose} aria-label="Close"><X size={16} /></button>
+          <p className="eyebrow" id={`${ids}-eyebrow`}>{existing ? "Move session" : "Schedule session"}</p>
+          <button type="button" className="ghost-button" onClick={onClose} aria-label="Close"><X size={16} /></button>
         </div>
-        <h2 style={{ margin: "0 0 4px" }}>{session.title}</h2>
+        <h2 id={`${ids}-title`} style={{ margin: "0 0 4px" }}>{session.title}</h2>
         <p className="hint">{session.speakers.map((s) => s.name).join(", ") || "No speakers"}</p>
 
         <div className="grid-2" style={{ marginTop: 16 }}>
@@ -1042,9 +1095,9 @@ function ScheduleDialog({
             <button className="ghost-button" disabled={busy} onClick={onUnschedule}>Unschedule</button>
           ) : null}
           <span className="spacer" />
-          <button className="ghost-button" onClick={onClose}>Cancel</button>
+          <button type="button" className="ghost-button" onClick={onClose}>Cancel</button>
         </div>
-      </div>
-    </div>
+      </>
+    </AgendaDialog>
   );
 }

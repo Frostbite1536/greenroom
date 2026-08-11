@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown, CalendarPlus, Download, FileStack, Search, X } from "lucide-react";
@@ -23,17 +23,18 @@ import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
 import { roundLabel } from "@/lib/round-label";
 import { coSpeakerSummary, proposalRosterLine } from "@/lib/speakers/proposal-roster";
+import {
+  ABSTRACT_STATUS_ALL,
+  ABSTRACT_STATUS_META,
+  ABSTRACT_STATUS_TABS,
+  type AbstractStatusFilter,
+} from "@/lib/abstract-status";
 import { EmptyState, Pill } from "@/components/ui";
 
-const STATUS_META: Record<string, { label: string; tone: string }> = {
-  DRAFT: { label: "Draft", tone: "neutral" },
-  SUBMITTED: { label: "Submitted", tone: "info" },
-  UNDER_REVIEW: { label: "Under review", tone: "warn" },
-  MAYBE: { label: "Maybe", tone: "warn" },
-  ACCEPTED: { label: "Accepted", tone: "good" },
-  REJECTED: { label: "Declined", tone: "bad" },
-  WITHDRAWN: { label: "Withdrawn", tone: "neutral" },
-};
+// Widened to a string index on purpose: the drawer reads `String(status)` off a
+// row, so the lookup site is not statically an `AbstractStatus`. The map itself
+// stays the exhaustive one in `lib/abstract-status`.
+const STATUS_META: Record<string, { label: string; tone: string }> = ABSTRACT_STATUS_META;
 
 /**
  * How far a proposal has travelled towards the public programme. Deliberately
@@ -63,36 +64,23 @@ type ProgrammeWarning = { title: string; state: ProgrammeState; decision: "REJEC
 type Decision = "ACCEPTED" | "MAYBE" | "REJECTED";
 
 /**
- * The status filter chips.
+ * The status filter chips live in `lib/abstract-status` so the server surfaces
+ * that link *into* this filter (the `/admin` funnel) carry the same labels,
+ * the same order, and a parameter this page actually reads.
  *
- * Every key must be a real `AbstractStatus`, because the filter is an equality
- * test against `a.status` — a chip whose key names no status silently shows an
- * empty table rather than failing.
- *
- * `WITHDRAWN` was the one status with no chip. Withdrawn proposals were loaded
- * and rendered under "All", but there was no way to isolate them, so a speaker
- * pulling out mid-review was invisible unless an organizer already knew to
- * scroll for it — and the drawer's "still on the programme" warning for a
- * withdrawn talk was unreachable by filtering. It sits last, matching the tail
- * of `STATUS_META`: it is an outcome nobody decided, so it does not belong
- * among the decision chips.
+ * `WITHDRAWN` was once the one status with no chip. Withdrawn proposals were
+ * loaded and rendered under "All", but there was no way to isolate them, so a
+ * speaker pulling out mid-review was invisible unless an organizer already knew
+ * to scroll for it.
  */
-const TABS: { key: string; label: string }[] = [
-  { key: "ALL", label: "All" },
-  { key: "SUBMITTED", label: "Submitted" },
-  { key: "UNDER_REVIEW", label: "Under review" },
-  { key: "MAYBE", label: "Maybe" },
-  { key: "ACCEPTED", label: "Accepted" },
-  { key: "REJECTED", label: "Declined" },
-  { key: "DRAFT", label: "Drafts" },
-  { key: "WITHDRAWN", label: "Withdrawn" },
-];
+const TABS = ABSTRACT_STATUS_TABS;
 
 export function AbstractsTable({
   abstracts,
   initialSelectedAbstract = null,
   initialSelectedId = null,
   initialChanging = false,
+  initialStatusFilter = ABSTRACT_STATUS_ALL,
   total = abstracts.length,
   hasMore = false,
   decisionSummary,
@@ -102,13 +90,19 @@ export function AbstractsTable({
   initialSelectedAbstract?: AbstractRow | null;
   initialSelectedId?: string | null;
   initialChanging?: boolean;
+  /**
+   * The chip `?status=` named, already resolved server-side. Initial state
+   * only: clicking a chip afterwards is local, exactly as before, so the
+   * filter never fights the URL.
+   */
+  initialStatusFilter?: AbstractStatusFilter;
   total?: number;
   hasMore?: boolean;
   decisionSummary: AdminDecisionSummary;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [tab, setTab] = useState("ALL");
+  const [tab, setTab] = useState<AbstractStatusFilter>(initialStatusFilter);
   const [q, setQ] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   // ABS-10. Null until the organizer clicks, so the table opens on the server's
@@ -319,6 +313,10 @@ export function AbstractsTable({
       {selected ? (
         <AbstractDrawer
           abstract={selected}
+          // The deep-linked drawer — and only that one — is already on screen
+          // in the server's first response, so it renders with the `open`
+          // attribute and is upgraded to a modal on hydration.
+          initiallyOpen={initialSelectedId !== null && selectedId === initialSelectedId}
           initialChanging={selectedId === initialSelectedId && initialChanging}
           decisionSummary={selected.decisionSummary}
           selectedPlan={decisionSummary.selectedPlan}
@@ -475,8 +473,22 @@ function DecisionReviewCount({
   return <span>{summary?.includedReviews ?? 0}/{summary?.completedAssignments ?? 0} included</span>;
 }
 
+/**
+ * GRA2-06. A native `<dialog>`, not a hand-rolled `role="dialog"` overlay:
+ * `showModal()` is what gives initial focus, Tab containment, Escape, an inert
+ * background and focus restoration to the "View" button — none of which the
+ * previous `div` had.
+ *
+ * The deep link (`?abstract=<id>`) is the one case that arrives already open.
+ * The server can only write the `open` attribute, which is a NON-modal open, so
+ * the drawer is server-rendered readable and upgraded to a modal here. The
+ * tradeoff is one pre-hydration frame in which the background is not yet inert
+ * and the backdrop is not yet dimmed; `.abstract-drawer` is positioned `fixed`
+ * in both states so that frame sits exactly where the modal one does.
+ */
 function AbstractDrawer({
   abstract,
+  initiallyOpen,
   initialChanging,
   decisionSummary,
   selectedPlan,
@@ -484,6 +496,8 @@ function AbstractDrawer({
   onProgrammeWarning,
 }: {
   abstract: AbstractRow;
+  /** True only for a drawer the server already rendered open. */
+  initiallyOpen: boolean;
   initialChanging: boolean;
   decisionSummary: AdminDecisionAbstractSummary | null;
   selectedPlan: AdminDecisionSummary["selectedPlan"];
@@ -491,6 +505,23 @@ function AbstractDrawer({
   onProgrammeWarning: (warning: ProgrammeWarning) => void;
 }) {
   const router = useRouter();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const ids = useId();
+  // Frozen for the life of this drawer on purpose: React must never flip `open`
+  // on a live <dialog>, because writing the attribute behind the modal state's
+  // back would dismiss it.
+  const [serverOpen] = useState(initiallyOpen);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    // `removeAttribute` rather than `close()`: close() queues a `close` event
+    // that would unmount the drawer, and showModal() throws on a dialog that is
+    // already open. Nothing paints between these two lines.
+    if (dialog.open) dialog.removeAttribute("open");
+    if (!dialog.open) dialog.showModal();
+  }, []);
+
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<null | "accept" | "maybe" | "reject" | "convert">(null);
   const [error, setError] = useState<string | null>(null);
@@ -574,23 +605,33 @@ function AbstractDrawer({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={abstract.title}
-      style={{ position: "fixed", inset: 0, background: "rgba(20,28,30,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 50 }}
-      onClick={onClose}
+    <dialog
+      ref={dialogRef}
+      className="card abstract-drawer"
+      // The visible heading is the label; a bare aria-label would duplicate it.
+      aria-labelledby={`${ids}-title`}
+      open={serverOpen || undefined}
+      onClose={onClose}
+      // Escape must not discard the drawer while a decision or conversion is in
+      // flight — the mutation would continue with its error surface unmounted.
+      // Same rule the agenda dialogs enforce.
+      onCancel={(event) => {
+        if (busy !== null || pending) event.preventDefault();
+        else onClose();
+      }}
+      // The dialog element carries no padding, so a mousedown that lands on it
+      // rather than on the body is a backdrop click — the same dismissal the
+      // old overlay div offered. Also gated while a write is in flight.
+      onMouseDown={(event) => {
+        if (event.target === dialogRef.current && busy === null && !pending) onClose();
+      }}
     >
-      <div
-        className="card"
-        style={{ width: "min(480px, 100%)", height: "100%", borderRadius: 0, overflowY: "auto", padding: 24 }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="abstract-drawer-body">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
           <Pill tone={meta.tone}>{meta.label}</Pill>
-          <button className="ghost-button" onClick={onClose} aria-label="Close"><X size={16} /></button>
+          <button type="button" className="ghost-button" onClick={onClose} disabled={busy !== null || pending} aria-label="Close"><X size={16} /></button>
         </div>
-        <h2 style={{ marginTop: 0 }}>{abstract.title}</h2>
+        <h2 id={`${ids}-title`} style={{ marginTop: 0 }}>{abstract.title}</h2>
         {abstract.abstract ? <p style={{ lineHeight: 1.6 }}>{abstract.abstract}</p> : <p className="muted">No abstract body provided.</p>}
 
         <div className="detail-drawer">
@@ -679,7 +720,7 @@ function AbstractDrawer({
           ) : null}
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }
 

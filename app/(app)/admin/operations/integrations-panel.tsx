@@ -48,9 +48,25 @@ export function IntegrationsPanel({
         return;
       }
       const data = body.data;
+      // GRA2-02: both integrations now export published sessions only, so the
+      // number they send can be smaller than the programme on screen. Say why,
+      // in its own sentence — a count buried in the JSON is not a disclosure.
+      const withheld = typeof data.excluded?.unpublishedSessions === "number"
+        ? data.excluded.unpublishedSessions
+        : 0;
+      // The mirror is upsert-only by contract (resume safety, no deletes), so a
+      // talk mirrored while published is NOT retracted by unpublishing it here.
+      const withheldNote = withheld > 0
+        ? `${withheld} unpublished ${withheld === 1 ? "session is" : "sessions are"} held back — publish ${withheld === 1 ? "it" : "them"} to include ${withheld === 1 ? "it" : "them"}. Already-mirrored records are not retracted: remove them in the external base if a talk was mirrored before being unpublished.`
+        : undefined;
+
       if (data.report) {
         const described = describeMirrorReport(data.report as MirrorReport);
-        set({ ...described, report: data.report as MirrorReport });
+        set({
+          ...described,
+          advice: [described.advice, withheldNote].filter(Boolean).join(" ") || undefined,
+          report: data.report as MirrorReport,
+        });
         return;
       }
       const counts = data.counts ?? data.summary ?? {};
@@ -65,7 +81,10 @@ export function IntegrationsPanel({
           : data.mode === "live"
             ? `Sent${totals ? `: ${totals}` : ""}.`
             : `Nothing was sent${totals ? ` — ${totals} were prepared` : ""}.`,
-        advice: data.mode === "noop" ? "This deployment is not connected to that service, so the run was recorded but nothing left Greenroom." : undefined,
+        advice: [
+          data.mode === "noop" ? "This deployment is not connected to that service, so the run was recorded but nothing left Greenroom." : undefined,
+          withheldNote,
+        ].filter(Boolean).join(" ") || undefined,
       });
     } catch {
       set({ tone: "bad", headline: "We couldn't reach the server. Check your connection and try again." });

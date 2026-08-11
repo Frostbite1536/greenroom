@@ -153,10 +153,32 @@ export function formatEventDateRange(
   return formatter.formatRange(start, end);
 }
 
+/**
+ * Label one event-local calendar day: "Tue, May 12".
+ *
+ * `dateKey` is *already* an event-local calendar key — every caller derives it
+ * from `zonedParts(...).dateKey` or `eventDayKeys`, both of which have applied
+ * the event's zone. So there is nothing left to convert: the label must render
+ * the key's own year, month, day, and that date's weekday, unchanged.
+ *
+ * This used to build noon UTC and then read it back *in the event zone*, which
+ * applied the offset a second time. For every zone at UTC+12 or later that
+ * lands on the next calendar day — key `2026-05-12` rendered "Wed, May 13" in
+ * Pacific/Auckland (+12), Pacific/Chatham (+12:45) and Pacific/Kiritimati
+ * (+14). Reading noon UTC *as UTC* is the identity for every IANA zone, so the
+ * label is now the key's own date everywhere, and unchanged for the zones that
+ * were already right.
+ *
+ * `timeZone` stays in the signature — every call site passes it and `dayTabs`
+ * takes this function as its labeller — but it is deliberately not consulted:
+ * a calendar key has no instant left to interpret.
+ */
 export function formatDayLabel(dateKey: string, timeZone: string): string {
-  // Noon avoids any DST edge when labelling a whole day.
+  void timeZone;
+  // Noon keeps the value clear of both midnight boundaries; read as UTC it is
+  // exactly the key's own calendar day.
   return new Intl.DateTimeFormat("en-US", {
-    timeZone,
+    timeZone: "UTC",
     weekday: "short",
     month: "short",
     day: "numeric",

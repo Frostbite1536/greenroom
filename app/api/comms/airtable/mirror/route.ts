@@ -6,8 +6,10 @@ import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-li
 import { useMockIntegrations } from "@/lib/env";
 import {
   buildAirtableProjection,
+  countUnpublishedExclusions,
   mirrorAirtableTables,
   projectionCounts,
+  type MirrorSession,
   resolveAirtableMirrorMode,
   summarizeMirrorReport,
 } from "@/lib/airtable/mirror";
@@ -33,6 +35,8 @@ export const POST = handle(async (req) => {
       where: { eventId: ctx.eventId },
       select: {
         id: true, sourceAbstractId: true, title: true, description: true, format: true, durationMinutes: true,
+        // GRA2-02: the mirror may not export what the public site withholds.
+        contentStatus: true,
         sourceAbstract: { select: { status: true } },
         speakers: {
           select: { user: { select: {
@@ -60,10 +64,11 @@ export const POST = handle(async (req) => {
     );
   }
 
-  const projection = buildAirtableProjection(event, sessions.map((session) => ({
+  const mirrorSessions: MirrorSession[] = sessions.map((session) => ({
     id: session.id,
     sourceAbstractId: session.sourceAbstractId,
     sourceAbstractStatus: session.sourceAbstract?.status ?? null,
+    contentStatus: session.contentStatus,
     title: session.title,
     description: session.description,
     format: session.format,
@@ -83,8 +88,13 @@ export const POST = handle(async (req) => {
       roomName: session.scheduleSlot.room.name,
       trackName: session.scheduleSlot.track?.name ?? null,
     } : null,
-  })));
+  }));
+
+  const projection = buildAirtableProjection(event, mirrorSessions);
   const counts = projectionCounts(projection);
+  // Additive to the documented envelope: `counts` keeps its exact shape and
+  // meaning, and this states why it may be smaller than the workspace shows.
+  const excluded = { unpublishedSessions: countUnpublishedExclusions(mirrorSessions) };
   const decision = resolveAirtableMirrorMode({
     dryRun: input.dryRun,
     mockExternalApis: useMockIntegrations(),
@@ -93,7 +103,7 @@ export const POST = handle(async (req) => {
   });
 
   if (decision.mode !== "live") {
-    return ok({ ...decision, counts, report: null });
+    return ok({ ...decision, counts, excluded, report: null });
   }
 
   // Partial-write recovery lives in the mirror: rows that Airtable rejects are
@@ -110,5 +120,5 @@ export const POST = handle(async (req) => {
   if (report.status === "failed") {
     throw new ApiError(502, "AIRTABLE_SYNC_FAILED", `The Airtable mirror wrote nothing: ${summarizeMirrorReport(report)}`);
   }
-  return ok({ mode: "live" as const, counts, report });
+  return ok({ mode: "live" as const, counts, excluded, report });
 });

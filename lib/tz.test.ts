@@ -72,6 +72,59 @@ test("pins agenda and embed formatter output to en-US instead of the runtime def
   assert.deepEqual(seenLocales, ["en-US", "en-US"]);
 });
 
+/**
+ * GRA-04. A day label takes an event-local calendar key, so it must print that
+ * key's own date and weekday in every zone. The old implementation read noon
+ * UTC *in the event zone*, applying an offset the key already carried, so every
+ * zone at UTC+12 or later printed the next day.
+ */
+test("a day label prints the calendar key's own date, including east of UTC+12", () => {
+  // The zones the bug actually broke. May 12 2026 is a Tuesday.
+  assert.equal(formatDayLabel("2026-05-12", "Pacific/Auckland"), "Tue, May 12");
+  assert.equal(formatDayLabel("2026-05-12", "Pacific/Kiritimati"), "Tue, May 12");
+  // +12:45, the offset a whole-hour fix would still have missed.
+  assert.equal(formatDayLabel("2026-05-12", "Pacific/Chatham"), "Tue, May 12");
+  // Unchanged for every zone that was already correct.
+  assert.equal(formatDayLabel("2026-05-12", LOS_ANGELES), "Tue, May 12");
+  assert.equal(formatDayLabel("2026-05-12", "UTC"), "Tue, May 12");
+  assert.equal(formatDayLabel("2026-05-12", "Asia/Tokyo"), "Tue, May 12");
+  assert.equal(formatDayLabel("2026-05-12", "Pacific/Midway"), "Tue, May 12");
+});
+
+test("the weekday a day label prints is the key's own weekday, in every zone", () => {
+  // Asserted against the key itself rather than a hard-coded table, over a
+  // whole week (so a one-day slip cannot hide behind one lucky date) and the
+  // full span of IANA offsets from -11 to +14.
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const zones = [
+    "Pacific/Midway", "Pacific/Honolulu", LOS_ANGELES, "America/New_York",
+    "UTC", "Europe/Berlin", "Asia/Kolkata", "Asia/Tokyo",
+    "Australia/Sydney", "Pacific/Auckland", "Pacific/Chatham", "Pacific/Kiritimati",
+  ];
+  for (let day = 10; day <= 16; day += 1) {
+    const dateKey = `2026-05-${String(day).padStart(2, "0")}`;
+    // The key's own weekday, taken from the key and nothing else.
+    const expected = `${weekdays[new Date(`${dateKey}T00:00:00Z`).getUTCDay()]}, May ${day}`;
+    for (const zone of zones) {
+      assert.equal(formatDayLabel(dateKey, zone), expected, `${dateKey} in ${zone}`);
+    }
+  }
+});
+
+test("a day label is stable across a DST transition and across month and year ends", () => {
+  // Los Angeles springs forward on 8 Mar 2026 and falls back on 1 Nov 2026;
+  // Auckland's transitions run the other way. The label is a calendar fact and
+  // must not move on any of them.
+  for (const zone of [LOS_ANGELES, "Pacific/Auckland", "Pacific/Kiritimati"]) {
+    assert.equal(formatDayLabel("2026-03-08", zone), "Sun, Mar 8");
+    assert.equal(formatDayLabel("2026-11-01", zone), "Sun, Nov 1");
+    assert.equal(formatDayLabel("2026-04-05", zone), "Sun, Apr 5");
+    // Month and year boundaries, where an off-by-one day is most visible.
+    assert.equal(formatDayLabel("2026-01-01", zone), "Thu, Jan 1");
+    assert.equal(formatDayLabel("2026-12-31", zone), "Thu, Dec 31");
+  }
+});
+
 // Intl range output separates the parts with THIN SPACE (U+2009) around the en
 // dash. Normalising here keeps the assertions readable while still proving the
 // dates themselves; the smoke script normalises the same way.
