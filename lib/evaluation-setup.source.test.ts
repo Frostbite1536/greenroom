@@ -153,6 +153,76 @@ test("coverage sorting is local to the loaded rows and starts unsorted", () => {
   assert.equal(/router\.(refresh|push)|apiPost|fetch\(/.test(sortSection), false);
 });
 
+test("the round card shows the rubric itself, not just how many criteria it has", () => {
+  const component = setup();
+  // The gap: an organizer could read "4 criteria" and a score of 3.83, and had
+  // no way to see what those criteria were or how much each one counted.
+  assert.match(component, /const criteria = rubricCriterionLines\(p\.rubric\)/);
+  assert.match(component, /from "@\/lib\/rubric-display"/);
+  assert.match(component, /<span className="round-rubric-label">\{criterion\.label\}<\/span>/);
+  assert.match(component, /<span className="round-rubric-meta">\{criterion\.meta\}<\/span>/);
+  // An unreadable rubric says so rather than rendering an empty list that
+  // reads as "this round scores against nothing".
+  assert.match(component, /This round has no readable scoring criteria\./);
+
+  // Read-only: the card must not have become an editor, and must not touch
+  // scoring. `RoundDialog` below is the only place a rubric is authored.
+  const card = component.slice(
+    component.indexOf("const legacyWeights = legacyRubricWeightNote"),
+    component.indexOf("{/* ---- Assign"),
+  );
+  assert.equal(/apiPost|fetch\(|setCriteria|onChange/.test(card), false, card.slice(0, 200));
+
+  const css = source("components/feature.css");
+  assert.match(css, /\.round-rubric-list \{/);
+  assert.match(css, /\.round-rubric-meta \{/);
+});
+
+test("the round card prints the round number once, not once per part", () => {
+  const component = setup();
+  // "Round 1" as a heading over a stored name of "Round 1 — Program Committee"
+  // — which is what both the seed and this file's own dialog default to.
+  assert.match(component, /const nameSuffix = roundNameSuffix\(p\)/);
+  assert.match(component, /\{nameSuffix \? <div className="cell-sub">\{nameSuffix\}<\/div> : null\}/);
+  assert.match(component, /from "@\/lib\/round-label"/);
+  // The dialog's default name is unchanged: it is a real, editable name, and
+  // the fix is in composition rather than in renaming stored rounds.
+  assert.match(component, /useState\(`Round \$\{nextOrdinal\} — Program Committee`\)/);
+});
+
+test("a coverage row names its speaker and links into the proposal's drawer", () => {
+  const component = setup();
+  // A row identified by title alone could not be told apart from another
+  // proposal with the same title, and a coverage gap could not be acted on.
+  assert.match(component, /primarySpeakerName: a\.primarySpeakerName/);
+  assert.match(component, /\{a\.primarySpeakerName \?\? <span className="muted">No speaker on record<\/span>\}/);
+  // The link is the shared canonical permalink, so the parameter cannot drift
+  // from the one the abstracts page reads.
+  assert.match(component, /<Link className="cell-title" href=\{abstractPermalink\(a\.id\)\}>\{a\.title\}<\/Link>/);
+  assert.match(component, /from "@\/lib\/abstract-permalink"/);
+  // A real <Link>, not an onClick on the row: middle-click, copy-link and
+  // keyboard activation all have to work.
+  const coverageBody = component.slice(
+    component.indexOf("{coverageRows.map((a) => {"),
+    component.indexOf("</tbody>"),
+  );
+  assert.equal(/onClick/.test(coverageBody), false, coverageBody.slice(0, 200));
+
+  // The speaker must arrive with the projection, never through a per-row
+  // query (INV-EVENT-001 / no N+1).
+  const reads = source("lib/data/reads.ts");
+  const setupQuery = reads.slice(
+    reads.indexOf("export async function getEvaluationSetup"),
+    reads.indexOf("routingUnconfigured: categories.length > 0"),
+  );
+  assert.match(setupQuery, /speakers: \{\s*\r?\n\s*select: \{ user: \{ select: \{ name: true \} \} \},/);
+  assert.match(setupQuery, /orderBy: \[\{ isPrimary: "desc" \}, \{ userId: "asc" \}\],/);
+  assert.match(setupQuery, /primarySpeakerName: a\.speakers\[0\]\?\.user\.name \?\? null/);
+  // One `abstract.findMany` in this read, so the roster cannot have become a
+  // query per coverage row.
+  assert.equal((setupQuery.match(/prisma\.abstract\.find/g) ?? []).length, 1);
+});
+
 test("the different-ranges warning is mounted and non-blocking", () => {
   const component = setup();
   assert.match(component, /rubricRangeWarning\(criteria\)/);

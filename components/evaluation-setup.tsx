@@ -15,6 +15,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import type { EvaluationSetupView, SetupPlan } from "@/lib/data/reads";
+import { abstractPermalink } from "@/lib/abstract-permalink";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EVALUATION_SETUP_STATUS_LABELS } from "@/lib/evaluation-setup-status";
 import {
@@ -158,6 +159,7 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
     const rows = view.abstracts.map((a) => ({
       id: a.id,
       title: a.title,
+      primarySpeakerName: a.primarySpeakerName,
       categoryName: a.categoryName,
       status: a.status,
       assignable: a.assignable,
@@ -562,7 +564,21 @@ export function EvaluationSetup({ view }: { view: EvaluationSetupView }) {
                   const done = a.completed;
                   return (
                     <tr key={a.id}>
-                      <td className="cell-title">{a.title}</td>
+                      <td>
+                        {/* A coverage gap is only actionable if you can reach
+                            the submission it belongs to. The link opens that
+                            proposal's drawer directly on the abstracts screen
+                            (server-rendered from `?abstract=`), so an organizer
+                            goes from "no reviewers" to the actual submission in
+                            one click instead of hunting the pipeline table. */}
+                        <Link className="cell-title" href={abstractPermalink(a.id)}>{a.title}</Link>
+                        {/* Two proposals can carry the same title; the speaker
+                            is what tells them apart. Absent only when a
+                            proposal genuinely has no speaker on it. */}
+                        <div className="cell-sub">
+                          {a.primarySpeakerName ?? <span className="muted">No speaker on record</span>}
+                        </div>
+                      </td>
                       <td>{a.categoryName ?? <span className="muted">—</span>}</td>
                       <td>{EVALUATION_SETUP_STATUS_LABELS[a.status]}</td>
                       <td>

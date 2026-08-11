@@ -1325,6 +1325,15 @@ export type SetupEvaluator = {
 export type SetupAbstract = {
   id: string;
   title: string;
+  /**
+   * The proposal's primary speaker, for the coverage table.
+   *
+   * Two proposals can share a title, and a coverage row naming only a title
+   * left an organizer unable to tell which submission a gap belonged to.
+   * Falls back to the first stored speaker when no row is flagged primary,
+   * and is null only when a proposal genuinely has no speaker.
+   */
+  primarySpeakerName: string | null;
   status: AbstractStatus;
   /** Mirrors the S5 write contract; terminal proposals remain coverage-only. */
   assignable: boolean;
@@ -1387,6 +1396,20 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
         title: true,
         status: true,
         category: { select: { id: true, name: true, defaultTeamKey: true } },
+        // Extends the existing projection rather than adding a per-row query:
+        // one join for the whole coverage table, not one query per row
+        // (INV-EVENT-001 stays satisfied — the parent where is event-scoped).
+        // Email is not needed on this surface, so it never enters the payload.
+        // `take: 1` with the primary flag ordered first: this surface needs one
+        // name to disambiguate a row, not a roster, so it reads one row per
+        // proposal instead of a whole line-up. `userId` breaks the tie for a
+        // proposal with no primary flagged (AbstractSpeaker has a composite
+        // primary key and no `id` column).
+        speakers: {
+          select: { user: { select: { name: true } } },
+          orderBy: [{ isPrimary: "desc" }, { userId: "asc" }],
+          take: 1,
+        },
       },
     }),
     prisma.category.findMany({
@@ -1506,6 +1529,7 @@ export async function getEvaluationSetup(): Promise<EvaluationSetupView> {
     abstracts: abstracts.map((a) => ({
       id: a.id,
       title: a.title,
+      primarySpeakerName: a.speakers[0]?.user.name ?? null,
       status: a.status,
       assignable: isEvaluationSetupAssignable(a.status),
       categoryId: a.category?.id ?? null,
