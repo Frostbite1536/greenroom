@@ -1,0 +1,89 @@
+/**
+ * Client-safe logic for the decision-note suggestion.
+ *
+ * Deliberately in `lib/` rather than `lib/assistant/`, beside the other pure UI
+ * modules (`decision-confirmation.ts`, `abstract-decision-ui.ts`): everything
+ * under `lib/assistant/` is server-only and reads the provider credential, and
+ * `lib/assistant/client.test.ts` fails the build if a client component imports
+ * from there. This module is the seam that keeps that rail true.
+ *
+ * The rule the whole feature turns on lives here: a generated suggestion is
+ * never the organizer's text until they say so, and it never silently replaces
+ * text they wrote. Applying is therefore two different operations depending on
+ * whether the note is empty, and the difference is decided by a pure function
+ * rather than by a component remembering to check.
+ */
+
+export type DraftSuggestion = {
+  draft: string;
+  commentsAvailable: number;
+  commentIndexesUsed: number[];
+};
+
+/**
+ * What the suggestion was built from, shown beside it.
+ *
+ * Names the comments actually used, not the comments that existed, so an
+ * organizer can tell a draft grounded in five comments from one grounded in
+ * none — the CRM lesson about showing an insight's basis rather than implying
+ * unexplained intelligence.
+ */
+export function describeDraftGrounding(suggestion: DraftSuggestion): string {
+  const used = suggestion.commentIndexesUsed.length;
+  if (used === 0) {
+    return suggestion.commentsAvailable === 0
+      ? "Written from the proposal title and your decision — this proposal has no reviewer comments."
+      : "Written from the proposal title and your decision — no reviewer comments were included.";
+  }
+  const noun = `${used} reviewer comment${used === 1 ? "" : "s"}`;
+  return used === suggestion.commentsAvailable
+    ? `Based on ${noun}, plus the proposal title and your decision.`
+    : `Based on ${noun} of ${suggestion.commentsAvailable}, plus the proposal title and your decision.`;
+}
+
+export type ApplyDraftOutcome =
+  /** Written into the note. */
+  | { status: "applied"; note: string }
+  /** The note has organizer-authored text; nothing was changed. */
+  | { status: "needs-confirmation" }
+  /** Nothing to apply. */
+  | { status: "empty" };
+
+/**
+ * Apply a suggestion to the personal note.
+ *
+ * A blank note takes the draft immediately — there is nothing to lose. A note
+ * with anything in it is never overwritten without `confirmed`, which the panel
+ * only sets from a second, explicit click. This is the assessment's one hard
+ * UX requirement: generation must be suggestion-first, and no organizer should
+ * lose a paragraph they wrote because a button did more than it said.
+ */
+export function applyDraftToNote(input: {
+  note: string;
+  draft: string;
+  confirmed: boolean;
+}): ApplyDraftOutcome {
+  const draft = input.draft.trim();
+  if (!draft) return { status: "empty" };
+  if (input.note.trim() && !input.confirmed) return { status: "needs-confirmation" };
+  return { status: "applied", note: draft };
+}
+
+/** Label for the apply control, so the button says what the click will do. */
+export function describeApplyAction(note: string): string {
+  return note.trim() ? "Replace my note" : "Use this note";
+}
+
+/**
+ * Operator copy for a refusal from `POST /api/assistant/decision-note`.
+ *
+ * The server already sends a human message; this exists so the panel still says
+ * something honest and actionable when it cannot reach the server at all, and
+ * so "unavailable" never reads as "your note was lost".
+ */
+export function describeDraftFailure(message?: string | null): string {
+  const trimmed = message?.trim();
+  return trimmed && trimmed.length > 0
+    ? trimmed
+    : "We couldn't reach the drafting service. Your note is untouched — write it yourself, or try again.";
+}
