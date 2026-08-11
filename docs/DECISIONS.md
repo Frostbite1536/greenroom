@@ -84,3 +84,20 @@ Repository automation (GitHub workflows, issue templates, third-party Apps)
 requires the maintainer's approval. A developer CLI that created
 `.github/ISSUE_TEMPLATE/` as an install side effect was reverted under this
 rule.
+
+## Direct session creation names speakers by roster id, not by email
+`guaranteedSessionInputSchema` existed unused and reused `coSpeakerInputSchema`
+for its roster, so a guaranteed session (keynote, sponsor slot) would have been
+created from email/name pairs. `POST /api/agenda/sessions` changes that field to
+`{ userId, isPrimary }[]` drawn from this event's roster, and makes it optional.
+Two reasons. Minting a global `User` from an email is `POST /api/admin/speakers`'
+job and takes that route's C17 identity lock order; a programme surface that
+created accounts as a side effect of scheduling a keynote would be doing identity
+work under the wrong lock, and `User.email` uniqueness (S10) plus recipient
+derivation (C26) hang off it. And `coSpeakerInputSchema` is `.min(1)` because a
+proposal without a submitter does not exist — a sponsor slot blocked out before
+the line-up is known routinely does. The schema had no consumers when it changed,
+so nothing spoke the old contract. Adding a speaker who is not yet on the roster
+is therefore a trip to `/admin/speakers` first, which is where identity already
+lives; the alternative (accepting emails here and duplicating the C17 sequence)
+was declined as a second identity writer.

@@ -149,10 +149,28 @@ stateDiagram-v2
 ```
 
 - **Creation.** Acceptance is the normal way the running app creates a `Session`; the
-  conversion endpoint is an idempotent legacy/manual backfill. The schema
-  supports guaranteed/sponsor sessions with no source abstract (the seeded opening keynote is
-  one), and `types/api.ts` reserves `guaranteedSessionInputSchema`, but no route implements
-  direct creation yet.
+  conversion endpoint is an idempotent legacy/manual backfill.
+- **Direct creation** (guaranteed/sponsor sessions, no source abstract — the seeded opening
+  keynote is one). `POST /api/agenda/sessions` (`app/api/agenda/sessions/route.ts`, admin
+  only) takes `guaranteedSessionInputSchema` and creates the talk through the same
+  `lib/services/session-provisioning.ts` module acceptance uses, so the roster snapshot and
+  the onboarding-checklist fan-out (INV-TASK-001) have one implementation. Details:
+  - `sourceAbstractId` is `null`, so INV-DOMAIN-001's one-session-per-abstract bound is
+    untouched — a talk with no abstract consumes none of it.
+  - `contentStatus` is `DRAFT`, overriding the column's `PUBLISHED` default: creating and
+    announcing are separate acts, and the existing `PATCH /api/agenda/sessions` is the second.
+  - Speakers are **optional** and are named by `userId` from this event's roster
+    (`EventMember(role=SPEAKER)` ∪ this event's `SessionSpeaker` rows) — never by email. This
+    route mints no `User`; that is `POST /api/admin/speakers`' job under its own C17 identity
+    locks. A sponsor slot with no line-up yet is a valid, expected shape.
+  - Refusals: `422 VALIDATION_ERROR` for the contract (including a repeated speaker or two
+    primaries), `403 EVENT_SCOPE` for a body event id that is not the signed one,
+    `404 EVENT_NOT_FOUND`, and `404 SPEAKER_NOT_FOUND` for a user id not on this event's
+    roster — the same indistinguishable refusal `/api/admin/speakers` gives, so another
+    event's people cannot be enumerated through it.
+  - The organizer surface is the "Add session" dialog on `/admin/agenda`
+    (`components/new-session-dialog.tsx`); its confirmation names what was created
+    (`lib/guaranteed-session-confirmation.ts`), mirroring the acceptance confirmation.
 - **Placement.** `POST /api/agenda/slots` (`app/api/agenda/slots/route.ts`, admin only)
   validates that the session, room, and optional track all belong to the caller's event
   (`404 SESSION_NOT_FOUND` / `ROOM_NOT_FOUND` / `TRACK_NOT_FOUND`), then does detection and
