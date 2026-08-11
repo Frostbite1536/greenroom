@@ -20,6 +20,7 @@ export type ResourceTemplate = {
   key: ResourceTemplateKey;
   label: string;
   description: string;
+  sections: readonly { key: string; heading: string }[];
   htmlContent: string;
 };
 
@@ -37,6 +38,13 @@ export const RESOURCE_TEMPLATES: readonly ResourceTemplate[] = [
     key: "speaker-handbook",
     label: "Speaker handbook",
     description: "Arrival, preparation, presentation, and support guidance.",
+    sections: [
+      { key: "welcome", heading: "Welcome, speakers" },
+      { key: "key-dates", heading: "Key dates" },
+      { key: "before-arrival", heading: "Before you arrive" },
+      { key: "presentation", heading: "Presentation guidance" },
+      { key: "help", heading: "Need help?" },
+    ],
     htmlContent: [
       "<h2>Welcome, speakers</h2>",
       "<p>Use this handbook to prepare for your session and know what to expect on event day.</p>",
@@ -54,6 +62,12 @@ export const RESOURCE_TEMPLATES: readonly ResourceTemplate[] = [
     key: "venue-travel",
     label: "Venue and travel guide",
     description: "Venue access, transport, lodging, and arrival details.",
+    sections: [
+      { key: "venue", heading: "Venue" },
+      { key: "getting-there", heading: "Getting there" },
+      { key: "lodging", heading: "Lodging" },
+      { key: "accessibility", heading: "Accessibility" },
+    ],
     htmlContent: [
       "<h2>Venue and travel</h2>",
       "<h3>Venue</h3>",
@@ -71,6 +85,12 @@ export const RESOURCE_TEMPLATES: readonly ResourceTemplate[] = [
     key: "av-stage",
     label: "A/V and stage requirements",
     description: "Room setup, slide delivery, microphones, and technical checks.",
+    sections: [
+      { key: "slide-delivery", heading: "Slide delivery" },
+      { key: "on-stage", heading: "On stage" },
+      { key: "technical-check", heading: "Technical check" },
+      { key: "special-requirements", heading: "Special requirements" },
+    ],
     htmlContent: [
       "<h2>A/V and stage requirements</h2>",
       "<h3>Slide delivery</h3>",
@@ -87,6 +107,11 @@ export const RESOURCE_TEMPLATES: readonly ResourceTemplate[] = [
     key: "day-of",
     label: "Day-of schedule and contacts",
     description: "A concise run-of-show with check-in points and support contacts.",
+    sections: [
+      { key: "schedule", heading: "Schedule" },
+      { key: "contacts", heading: "Contacts" },
+      { key: "changes", heading: "If plans change" },
+    ],
     htmlContent: [
       "<h2>Day-of schedule and contacts</h2>",
       "<h3>Schedule</h3>",
@@ -101,6 +126,7 @@ export const RESOURCE_TEMPLATES: readonly ResourceTemplate[] = [
     key: "blank",
     label: "Blank page",
     description: "Start with an empty HTML editor.",
+    sections: [],
     htmlContent: "",
   },
 ] as const;

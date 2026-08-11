@@ -32,8 +32,22 @@ test("the resource template catalogue is stable, allowlisted, and provider-indep
     assert.equal(sanitizeHtml(template.htmlContent), template.htmlContent, template.key);
     assert.equal(sanitizedResourceTemplateHtml(template.key), template.htmlContent, template.key);
     assert.doesNotMatch(template.htmlContent, /<(?:script|style|iframe|svg)\b|\son\w+=|javascript:/i, template.key);
+    assert.equal(template.label.trim() !== "", true, `${template.key} label`);
+    assert.equal(template.description.trim() !== "", true, `${template.key} description`);
+    assert.equal(new Set(template.sections.map((section) => section.key)).size, template.sections.length, template.key);
+    for (const section of template.sections) {
+      assert.match(section.key, /^[a-z0-9]+(?:-[a-z0-9]+)*$/, `${template.key} section key`);
+      assert.equal(section.heading.trim() !== "", true, `${template.key}:${section.key} heading`);
+      assert.equal(template.htmlContent.includes(`>${section.heading}<`), true, `${template.key}:${section.key} HTML`);
+    }
   }
   assert.equal(getResourceTemplate("blank").htmlContent, "");
+  assert.deepEqual(getResourceTemplate("blank").sections, []);
+  for (const key of RESOURCE_ASSISTANT_TEMPLATE_KEYS) {
+    const template = getResourceTemplate(key);
+    assert.equal(template.sections.length > 0, true, `${key} sections`);
+    assert.match(template.htmlContent, /\[Add [^\]]+\]/, `${key} placeholders`);
+  }
   assert.equal(isResourceTemplateKey("speaker-handbook"), true);
   assert.equal(isResourceTemplateKey("not-allowlisted"), false);
 });
