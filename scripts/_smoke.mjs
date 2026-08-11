@@ -4665,6 +4665,23 @@ try {
   check("T3 the calendar export carries it again",
     icsRepublished.status === 200 && String(icsRepublished.data).includes("SUMMARY:My great talk"),
     icsRepublished.status);
+  // NEW-1. The .ics read used to have no `take` at all; it is now cap-plus-one
+  // at PUBLIC_AGENDA_LIMITS.sessions with the same predicate as the JSON twin.
+  // A fixture event is three orders of magnitude below the cap, so the cut
+  // itself is not observable here — what IS observable, and is the realistic
+  // regression, is that the newly bounded read still returns the WHOLE
+  // programme and makes no truncation claim about it. Counted against the JSON
+  // twin rather than a literal, so the two public views are compared to each
+  // other; the non-vacuity clause below stops an empty file passing both arms.
+  const icsVevents = (String(icsRepublished.data).match(/BEGIN:VEVENT/g) ?? []).length;
+  const publicSessionCount = pubAfterRepublish.data?.data?.sessions?.length ?? -1;
+  check("NEW-1 the bounded .ics still exports the whole published programme",
+    icsVevents > 0 && icsVevents === publicSessionCount,
+    `${icsVevents} VEVENT vs ${publicSessionCount} public sessions`);
+  check("NEW-1 an uncut export claims no truncation",
+    !String(icsRepublished.data).includes("X-WR-CALDESC")
+      && pubAfterRepublish.data?.data?.truncated === false,
+    String(icsRepublished.data).includes("X-WR-CALDESC") ? "X-WR-CALDESC present" : "absent");
   const v1ScheduleRepublished = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);
   check("T3 the v1 schedule carries it again",
     v1ScheduleRepublished.data?.data?.some((row) => row.session?.id === sessionId));
