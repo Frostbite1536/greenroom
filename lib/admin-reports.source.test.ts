@@ -159,7 +159,7 @@ test("the reports page is a different report, not a second dashboard", () => {
   const dashboard = source("app/(app)/admin/page.tsx");
   // Every card heading on the dashboard, none of which may reappear here.
   for (const heading of [
-    ">Call for proposals<", ">Review progress<", ">Programme<", ">Speakers<",
+    ">Call for proposals<", ">Review progress<", ">Program<", ">Speakers<",
     "Latest submissions", "Latest decisions",
   ]) {
     assert.ok(dashboard.includes(heading), `dashboard heading moved: ${heading}`);

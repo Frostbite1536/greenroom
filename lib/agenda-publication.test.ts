@@ -7,7 +7,7 @@ test("a published talk offers to unpublish, and says what that costs first", () 
   const control = publicationControl("PUBLISHED");
   assert.equal(control.next, "DRAFT");
   assert.equal(control.label, "Unpublish");
-  assert.equal(control.actionLabel("Scaling to 10M"), "Unpublish Scaling to 10M from the public programme");
+  assert.equal(control.actionLabel("Scaling to 10M"), "Unpublish Scaling to 10M from the public program");
   // The warning has to be honest in both directions: what stops, and what does not.
   const confirm = control.confirm?.("Scaling to 10M") ?? "";
   assert.match(confirm, /Scaling to 10M/);
@@ -20,7 +20,7 @@ test("an unpublished talk offers to publish, with nothing to warn about", () => 
   assert.equal(control.next, "PUBLISHED");
   assert.equal(control.label, "Publish");
   assert.equal(control.confirm, null);
-  assert.equal(control.actionLabel("Scaling to 10M"), "Publish Scaling to 10M to the public programme");
+  assert.equal(control.actionLabel("Scaling to 10M"), "Publish Scaling to 10M to the public program");
 });
 
 test("pressing the control twice returns a talk to where it started", () => {
@@ -213,7 +213,7 @@ test("a reversed decision unpublishes under the same lock that wrote the status"
 test("past the cap, the unpublished count is a floor and says the page is partial", () => {
   const notice = unpublishedNotice(["DRAFT", "PUBLISHED", "DRAFT"], true) ?? "";
   assert.match(notice, /At least 2 talks are unpublished/);
-  assert.match(notice, /does not hold the whole programme/);
+  assert.match(notice, /does not hold the whole program/);
   assert.match(notice, /List view/);
   // Singular still reads as English.
   assert.match(unpublishedNotice(["DRAFT"], true) ?? "", /At least 1 talk is unpublished/);

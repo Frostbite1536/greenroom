@@ -261,7 +261,7 @@ function programmeWorkRefusal(sessions: number, tasks: number): TeamRefusal {
     code: SPEAKER_HAS_PROGRAMME_WORK,
     message:
       `This speaker still has ${parts.join(" and ")} on this event. Removing them here would not take them `
-      + "off the programme — clear that work from Agenda builder and Speaker onboarding first.",
+      + "off the program — clear that work from Agenda builder and Speaker onboarding first.",
   };
 }
 

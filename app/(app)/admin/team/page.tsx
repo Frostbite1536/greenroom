@@ -140,7 +140,7 @@ export default async function AdminTeamPage() {
 
       <p className="hint">
         Speakers who arrived through an accepted proposal appear on{" "}
-        <strong>Speaker onboarding</strong>, not here: their sessions are recorded against the programme
+        <strong>Speaker onboarding</strong>, not here: their sessions are recorded against the program
         rather than against a membership. This screen lists only people who hold a role on the event.
       </p>
     </section>

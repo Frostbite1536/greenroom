@@ -92,8 +92,8 @@ test("only pre-decision, unconverted proposals offer a withdrawal request", () =
   for (const status of ["ACCEPTED", "REJECTED", "WITHDRAWN", "UNKNOWN"]) {
     assert.equal(canRequestWithdrawal(status, false), false, status);
   }
-  assert.match(withdrawalUnavailableNotice("ACCEPTED", false) ?? "", /programme team/i);
-  assert.match(withdrawalUnavailableNotice("SUBMITTED", true) ?? "", /programme team/i);
+  assert.match(withdrawalUnavailableNotice("ACCEPTED", false) ?? "", /program team/i);
+  assert.match(withdrawalUnavailableNotice("SUBMITTED", true) ?? "", /program team/i);
   assert.equal(withdrawalUnavailableNotice("REJECTED", false), null);
 });
 

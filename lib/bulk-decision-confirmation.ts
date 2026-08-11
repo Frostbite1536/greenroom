@@ -92,7 +92,7 @@ export function bulkDecisionPromptBody(prompt: BulkDecisionPrompt): string {
     case "MAYBE":
       return `Mark ${proposalCount(n)} as maybe — no sessions are created and no speaker onboarding tasks are assigned. ${BULK_DECISION_NO_EMAIL_SENTENCE}`;
     case "REJECTED":
-      return `Decline ${proposalCount(n)} — no sessions are created, and nothing is removed from the programme. ${BULK_DECISION_NO_EMAIL_SENTENCE}`;
+      return `Decline ${proposalCount(n)} — no sessions are created, and nothing is removed from the program. ${BULK_DECISION_NO_EMAIL_SENTENCE}`;
   }
 }
 

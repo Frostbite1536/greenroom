@@ -46,13 +46,13 @@ export function decideCategoryDeletion(usage: CategoryUsage): CategoryDeletionDe
 
 function categoryObstruction(usage: CategoryUsage): string | null {
   if (usage.hasAbstract && usage.hasSession) {
-    return "Proposals and scheduled sessions still use this category, and removing it would drop their review routing and their programme topic.";
+    return "Proposals and scheduled sessions still use this category, and removing it would drop their review routing and their program topic.";
   }
   if (usage.hasAbstract) {
     return "Proposals still use this category, and removing it would drop the review routing it gives them.";
   }
   if (usage.hasSession) {
-    return "Sessions on the programme still use this category as their topic.";
+    return "Sessions on the program still use this category as their topic.";
   }
   return null;
 }

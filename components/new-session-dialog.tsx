@@ -194,7 +194,7 @@ export function NewSessionDialog({
           <h2 id={`${ids}-title`}>Add session</h2>
           <p className="hint">
             For a talk with no proposal behind it — a keynote, an opening address, a sponsor
-            slot. It is created as a draft, so it stays off the public programme until you
+            slot. It is created as a draft, so it stays off the public program until you
             publish it, and it starts unscheduled.
           </p>
 
@@ -226,7 +226,7 @@ export function NewSessionDialog({
               value={description}
               maxLength={5000}
               aria-invalid={!!errors.description}
-              placeholder="What attendees will see on the public programme."
+              placeholder="What attendees will see on the public program."
               onChange={(event) => setDescription(event.target.value)}
             />
             {errors.description ? <span className="field-error">{errors.description}</span> : null}

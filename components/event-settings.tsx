@@ -577,7 +577,7 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
           <div className="settings-icon"><Tags size={18} aria-hidden="true" /></div>
           <div>
             <h2 id="programme-structure-heading">Tracks & Categories</h2>
-            <p>Keep the programme groupings your team uses current: tracks are the schedule's swimlanes, categories are the topics proposals are filed and routed under.</p>
+            <p>Keep the program groupings your team uses current: tracks are the schedule's swimlanes, categories are the topics proposals are filed and routed under.</p>
           </div>
         </div>
 

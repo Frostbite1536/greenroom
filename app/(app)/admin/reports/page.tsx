@@ -88,7 +88,7 @@ export default async function AdminReportsPage() {
           <strong>{review.assigned === 0 ? "—" : review.outstanding}</strong>
         </div>
         <div className="metric">
-          <span>Programme time booked</span>
+          <span>Program time booked</span>
           <strong>{formatMinutes(bookedMinutes)}</strong>
         </div>
       </div>
@@ -256,7 +256,7 @@ export default async function AdminReportsPage() {
           <div>
             <h2 id="reports-utilization">Room utilization</h2>
             <p>
-              Minutes booked per room against each day&rsquo;s programme span — first start to last end across
+              Minutes booked per room against each day&rsquo;s program span — first start to last end across
               all rooms, in {view.timezone}. Booked time is the placed slot&rsquo;s own length, so the room that
               defines a day&rsquo;s span reads 100% and an idle room reads zero.
             </p>
@@ -278,7 +278,7 @@ export default async function AdminReportsPage() {
             chart={entry.chart}
             heading={entry.heading}
             caption={index === 0
-              ? "Each bar is one room’s booked minutes against that day’s programme span, so the room that defines the span reads 100%."
+              ? "Each bar is one room’s booked minutes against that day’s program span, so the room that defines the span reads 100%."
               : undefined}
           />
         ))}

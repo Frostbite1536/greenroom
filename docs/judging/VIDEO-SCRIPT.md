@@ -41,7 +41,7 @@ artifact must name the same commit.
   verification run; ignore it, or reseed inside the window so the pipeline is
   the deterministic 40 proposals.
 - Speak to a non-technical event professional: say "submission", "reviewer",
-  "speaker", and "programme", not "endpoint", "schema", or "invariant".
+  "speaker", and "program", not "endpoint", "schema", or "invariant".
 
 Narration lines are written to be read aloud. Stage directions are in *italics*.
 
@@ -53,14 +53,14 @@ Narration lines are written to be read aloud. Stage directions are in *italics*.
 
 *Start logged out on* `/cfp/forward-2026/call-for-speakers`.
 
-> "This is Greenroom — an open-source conference programme platform. I'm on the
+> "This is Greenroom — an open-source conference program platform. I'm on the
 > real deployed application, completely logged out, exactly like a speaker
 > following a call-for-papers link."
 
 *Scroll through the core fields, the topic selector, the custom questions, one
 conditional question, and the co-speaker area with its role field.*
 
-> "The programme team controls the questions, the topics, the dates, the
+> "The program team controls the questions, the topics, the dates, the
 > speaker limit, and which questions appear only when an earlier answer makes
 > them relevant. One call can serve several topics, and each co-speaker can
 > carry their own role."
@@ -95,7 +95,7 @@ under it, then sign in with the one-click* **Event admin** *persona.*
 
 *Point at* **Export CSV** *without downloading, then open* **Evaluations**.
 
-> "Decisions and scores export to a spreadsheet whenever the programme team
+> "Decisions and scores export to a spreadsheet whenever the program team
 > wants them outside the app."
 
 *In* **Evaluations***, show the round list with its reviewing-opens/closes dates
@@ -178,14 +178,14 @@ new session in the* **Unscheduled backlog** *strip.*
 > scheduling decision starts here, in the unscheduled backlog."
 
 *Deliberate refusal — capture this.* *Schedule the new talk into an occupied
-room and time: **Hall A, 12 May 2026, 10:00** is taken in the seeded programme.
+room and time: **Hall A, 12 May 2026, 10:00** is taken in the seeded program.
 Pause on the refusal message and read what it collides with.*
 
 > "The server checks the room and every speaker inside the same transaction that
 > would write the slot. A collision is refused outright — it never becomes a
 > warning somebody can dismiss."
 
-*Now place it in a free slot. The seeded programme keeps **Grand Ballroom free
+*Now place it in a free slot. The seeded program keeps **Grand Ballroom free
 on 14 May 2026**, so put the talk there at **10:00** (one seeded session sits in
 Hall B that afternoon — the day is populated but the ballroom morning is open).*
 
@@ -200,7 +200,7 @@ then choose* **Discard**.
 
 *Optional: point at the* **Unpublish** *control on a List row.*
 
-> "A confirmed talk can also be held back from the public programme without
+> "A confirmed talk can also be held back from the public program without
 > losing its slot, its speakers, or its tasks."
 
 ## 7. Speaker onboarding (6:15–7:30)
@@ -210,7 +210,7 @@ portal.*
 
 > "Speakers see profile completeness, their confirmed sessions, their editable
 > proposals, the event's resources, and the exact onboarding checklist the
-> programme team is tracking — each item with its own deadline."
+> program team is tracking — each item with its own deadline."
 
 *Open a form-carrying task — **"Claim your flight reimbursement"** or
 **"Tell us about your hotel stay"**. Show a conditional question appearing, save
@@ -219,33 +219,33 @@ a partial response, then complete every visible required field and choose*
 
 > "Partial answers survive a closed tab. A form task cannot be checked off while
 > its required visible answers are empty or invalid — so 'done' means the
-> programme team actually has the information."
+> program team actually has the information."
 
 *Open Sofia's accepted proposal and show that the text and answers are still
 editable while the speaker list is locked.*
 
 > "Speakers keep correcting what attendees will read after acceptance. The
-> confirmed lineup is fixed — changing who presents is a programme decision."
+> confirmed lineup is fixed — changing who presents is a program decision."
 
 *Return as admin and open* **Speaker onboarding**.
 
-> "The programme team gets the other side of it: profile gaps, open tasks, the
+> "The program team gets the other side of it: profile gaps, open tasks, the
 > next deadline, who is overdue, and whose talk still has no slot — already
 > ordered as a chase list."
 
-## 8. Public programme and calendar export (7:30–8:30)
+## 8. Public program and calendar export (7:30–8:30)
 
 *Sign out. Open* `/` *(the public landing page), then follow* **View the
 schedule** *to* `/embed/schedule?event=forward-2026`.
 
-> "Everything the programme team just did is now public, with no login at all."
+> "Everything the program team just did is now public, with no login at all."
 
 *Use the day tabs, type a word into the search box and submit it, open a
 session's details, and point at the topic, track and room chips. Then download
 one* `.ics` *with* **Add to calendar***.*
 
-> "Attendees browse by day, search the whole programme, open a session for its
-> full description, and add any talk — or the whole programme — to their own
+> "Attendees browse by day, search the whole program, open a session for its
+> full description, and add any talk — or the whole program — to their own
 > calendar. It works with JavaScript switched off, because the filters are plain
 > links and forms."
 
@@ -265,7 +265,7 @@ curl.exe -H "Authorization: Bearer $env:GREENROOM_API_KEY" `
   "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 ```
 
-> "The same programme can feed a mobile app or a website build through a scoped,
+> "The same program can feed a mobile app or a website build through a scoped,
 > read-only API."
 
 *Then omit the header:*
@@ -280,8 +280,8 @@ curl.exe -i "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 
 > "Call for speakers, structured review, acceptance that provisions the session
 > and the onboarding in one step, speaker readiness, conflict-safe scheduling, a
-> published programme, calendar export, and an API — the whole life of a
-> conference programme, open source and self-hostable."
+> published program, calendar export, and an API — the whole life of a
+> conference program, open source and self-hostable."
 
 ---
 
@@ -298,12 +298,12 @@ must use that event, not the seeded `forward-2026` workspace.
 ## B1. Create a new event (and prove isolation)
 
 *As* **Event admin***, open* **Event settings**. *Show the event's own settings —
-name, dates, timezone, rooms, and the programme groupings — then choose*
+name, dates, timezone, rooms, and the program groupings — then choose*
 **New event***.*
 
 > "An organizer configures the event they're running here: its name, its dates,
 > its timezone, the rooms talks can be placed in, and the tracks and topics the
-> programme is grouped by."
+> program is grouped by."
 
 *Fill in a name, let the web address fill itself in, set a timezone and optional
 dates, and choose* **Create event***. Pause on the confirmation notice, then use
@@ -324,7 +324,7 @@ its empty settings before continuing.*
 new event.*
 
 > "This is the isolation that matters: a brand-new empty event never displaces
-> the published programme. The public pages still show Forward 2026 exactly as
+> the published program. The public pages still show Forward 2026 exactly as
 > before."
 
 ## B2. Create and publish a call for speakers, and receive a submission
@@ -338,7 +338,7 @@ builder, add one required question and one conditional question, set the open
 and close dates and the submission limit, then turn on* **Published** *and*
 **Save***.*
 
-> "The programme team writes its own questions, decides which appear only when
+> "The program team writes its own questions, decides which appear only when
 > they're relevant, sets the window and the limit, and then publishes it. Until
 > it's published the public page isn't there at all."
 
@@ -362,7 +362,7 @@ switcher (switch into it if necessary), and open* **Abstracts***.*
 
 **Say plainly on camera:** the event name in the shell, the event segment in the
 public CFP URL, and the proposal in the pipeline all name the workspace created
-in B1. The seeded Forward 2026 programme stayed isolated throughout.
+in B1. The seeded Forward 2026 program stayed isolated throughout.
 
 ---
 

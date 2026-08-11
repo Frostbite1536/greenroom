@@ -350,7 +350,7 @@ export function scheduleUtilizationChart(day: DayUtilization, dayLabel: string):
     legend: [],
     ariaLabel:
       `Bar chart of room utilization on ${dayLabel}: ${plural(bars.length, "room", "rooms")}, ` +
-      `${formatMinutes(day.bookedMinutes)} booked across a ${formatMinutes(day.spanMinutes)} programme span. ` +
+      `${formatMinutes(day.bookedMinutes)} booked across a ${formatMinutes(day.spanMinutes)} program span. ` +
       `The table below lists every figure.`,
   };
 }

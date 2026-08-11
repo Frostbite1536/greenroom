@@ -21,7 +21,7 @@ neither requiring a key: **`GET /api/v1/openapi.json`** serves a static
 OpenAPI 3.1.1 document, and **`/docs/api`** renders that same document as a page.
 They cannot disagree — the page is generated from the document, and
 `lib/api/openapi.test.ts` fails when the document stops matching the routes.
-Neither contains programme data, and neither ever contains the key, and
+Neither contains program data, and neither ever contains the key, and
 `lib/api/openapi-purity.test.ts` pins the document's whole import graph away
 from the environment, auth, and the database.
 
@@ -171,7 +171,7 @@ included and completed-review counts.
   onboarding-task × session-speaker assignments when accepting. It returns the decided
   abstract plus additive `session`, `sessionCreated`, and `tasksAssigned` keys. `session` is
   `{ id, title, isScheduled, scheduledAt, roomName }` or `null`, so the UI can also warn when
-  a later decline still leaves a talk on the programme. Nothing is auto-deleted
+  a later decline still leaves a talk on the program. Nothing is auto-deleted
   (INV-DOMAIN-001).
 - `POST /api/evaluations/convert` (admin) is the idempotent compatibility/backfill path for
   an accepted abstract whose Session or speaker-task assignments are missing. It returns 201

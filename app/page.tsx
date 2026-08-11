@@ -40,7 +40,7 @@ async function loadLandingProgramme(searchParams: SearchParams) {
 export async function generateMetadata({ searchParams }: { searchParams: SearchParams }) {
   const { agenda } = await loadLandingProgramme(searchParams);
   return {
-    title: agenda ? agenda.event.name : "Conference programme",
+    title: agenda ? agenda.event.name : "Conference program",
     description: agenda
       ? `Schedule, speakers, and the call for proposals for ${agenda.event.name}.`
       : "Schedule, speakers, and the call for proposals.",
@@ -115,7 +115,7 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
 
         <section className="landing-hero">
           {dates ? <p className="eyebrow">{dates}</p> : null}
-          <h1>{eventName ?? "Conference programme"}</h1>
+          <h1>{eventName ?? "Conference program"}</h1>
           <p className="landing-lede">
             {eventName
               ? `Browse the full ${eventName} schedule, meet the speakers, and submit a talk.`
@@ -153,15 +153,15 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
             </div>
             {programmeTruncated ? (
               <p className="landing-notice">
-                This programme is larger than this page counts at once, so the session and speaker
+                This program is larger than this page counts at once, so the session and speaker
                 figures above are the minimum. Open the full schedule to see everything.
               </p>
             ) : null}
           </>
         ) : (
           <p className="landing-notice">
-            No public programme is published yet. The schedule and speaker directory
-            appear here once the programme is announced.
+            No public program is published yet. The schedule and speaker directory
+            appear here once the program is announced.
           </p>
         )}
 
@@ -171,7 +171,7 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
           <section className="landing-panel" aria-labelledby="landing-public-pages">
             <h2 className="landing-panel-heading" id="landing-public-pages">Public pages</h2>
             <p className="landing-panel-lede">
-              The programme lives at these URLs and needs no sign-in. The
+              The program lives at these URLs and needs no sign-in. The
               <code> /embed/</code> variants are the same pages without this
               header, for an iframe on your own site.
             </p>
@@ -198,7 +198,7 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
 
         <footer className="landing-foot">
           <p>
-            {eventName ? `${eventName} · ` : ""}Programme operations run on Greenroom.
+            {eventName ? `${eventName} · ` : ""}Program operations run on Greenroom.
           </p>
         </footer>
       </div>

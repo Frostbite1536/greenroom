@@ -195,12 +195,12 @@ export function NewEventDialog({
           <p className="hint">
             {onboarding ? (
               <>
-                Creates an empty event with its own rooms, forms and programme, and makes you its
+                Creates an empty event with its own rooms, forms and program, and makes you its
                 organizer. The web address is fixed once the event is created.
               </>
             ) : (
               <>
-                Creates an empty event with its own rooms, forms and programme. Nothing is copied
+                Creates an empty event with its own rooms, forms and program. Nothing is copied
                 from {currentEventName}, and the web address is fixed once the event is created.
               </>
             )}

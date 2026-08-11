@@ -107,13 +107,13 @@ export default async function AdminOperationsPage() {
     name: "Airtable",
     mocked,
     configured: Boolean(process.env.AIRTABLE_API_KEY && process.env.AIRTABLE_BASE_ID),
-    action: "copy the programme to Airtable",
+    action: "copy the program to Airtable",
   });
   const accelevents = integrationStatus({
     name: "Accelevents",
     mocked,
     configured: Boolean(process.env.ACCELEVENTS_BASE_URL),
-    action: "send the programme to Accelevents",
+    action: "send the program to Accelevents",
   });
   const email = integrationStatus({
     name: "Email",
@@ -129,7 +129,7 @@ export default async function AdminOperationsPage() {
       <PageHeader
         eyebrow="Operations"
         title="Operations"
-        description="Send speaker reminders and calendar invites, bring proposals in from a spreadsheet, and keep your other tools in step with the programme."
+        description="Send speaker reminders and calendar invites, bring proposals in from a spreadsheet, and keep your other tools in step with the program."
       />
 
       <div className={styles.grid}>

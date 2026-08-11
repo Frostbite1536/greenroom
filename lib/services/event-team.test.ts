@@ -167,7 +167,7 @@ test("a speaker with sessions or tasks is not removable, and what is in the way 
   assert.match(both.allowed === false ? both.message : "", /1 session and 3 onboarding tasks/);
   // The reason, not just the refusal: deleting the membership would leave them
   // on the programme anyway, which is why this is refused rather than cascaded.
-  assert.match(both.allowed === false ? both.message : "", /would not take them off the programme/);
+  assert.match(both.allowed === false ? both.message : "", /would not take them off the program/);
 });
 
 test("a speaker with nothing on the programme is removable", () => {

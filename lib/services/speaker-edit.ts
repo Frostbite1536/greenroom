@@ -74,7 +74,7 @@ export function withdrawRefusal(
     return {
       code: "WITHDRAW_NOT_ALLOWED",
       message:
-        "This talk has already been accepted for the programme, so it can't be withdrawn here. Contact the program team and they will take it off the schedule for you.",
+        "This talk has already been accepted for the program, so it can't be withdrawn here. Contact the program team and they will take it off the schedule for you.",
     };
   }
   return null;

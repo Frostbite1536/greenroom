@@ -1,9 +1,9 @@
 # Evaluation index
 
-> Greenroom is an open-source, self-hostable conference programme platform that
+> Greenroom is an open-source, self-hostable conference program platform that
 > takes an organizer from an open CFP through structured review, atomic
 > acceptance, speaker readiness, conflict-safe scheduling, and a published
-> programme.
+> program.
 
 **Deployed application:** <https://greenroom-hq.com>
 **Commit this evidence describes:** `9e058f3560a398352bbd48277ef80cb16e8550dc`
@@ -171,7 +171,7 @@ Stated plainly, because an evaluator should not have to discover them.
 
 The required workflow is intentionally small: collect a proposal, route and
 review it, accept it, onboard the speakers, schedule it safely, and publish the
-programme. The following are already in the merged application — not
+program. The following are already in the merged application — not
 placeholders, not planned work.
 
 - **Evaluation depth.** Weighted rubric rounds with each criterion's share of
@@ -191,22 +191,22 @@ placeholders, not planned work.
   and withdrawal is never blocked by the deadline.
 - **Speaker operations.** Resources and form-carrying onboarding tasks with per-
   task due dates, an overdue count, and a readiness chase list on the admin side.
-- **Programme tooling.** List, Day (rooms), Week, Track grid, Tracks, and
+- **Program tooling.** List, Day (rooms), Week, Track grid, Tracks, and
   Conflicts agenda views — the schedule is readable by list, by day, by week, by
   track, and by room;
   drag-and-drop moves re-checked on the server; an assisted **Fill open slots**
   pass that previews conflict-free placements and writes nothing until applied;
   and per-session publication control, so a confirmed talk can be held back from
-  the public programme without losing its slot, speakers, or tasks. The
+  the public program without losing its slot, speakers, or tasks. The
   deterministic demo also includes a source-less guaranteed keynote — the
   opening keynote, Grand Ballroom, 09:00 on 12 May — which the schema supports
   but no route creates, so direct UI creation of that special case is not
-  claimed here. The seeded programme itself is conflict-free across all three
+  claimed here. The seeded program itself is conflict-free across all three
   event days and the Conflicts view reads zero: the walkthrough demonstrates a
   refusal live, which is stronger proof than shipping a standing mistake to
   point at.
 - **Integration surfaces.** The key-gated, read-only v1 API exposes submissions,
-  speakers, and schedule data. The Airtable mirror projects confirmed programme
+  speakers, and schedule data. The Airtable mirror projects confirmed program
   data into upserted Sessions, Speakers, and Schedule tables, with per-table
   repair reporting and no delete operation.
 

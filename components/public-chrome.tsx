@@ -39,7 +39,7 @@ export function PublicChrome({
               <span>Greenroom</span>
             </Link>
           </p>
-          <nav className="public-programme-nav" aria-label="Public programme">
+          <nav className="public-programme-nav" aria-label="Public program">
             <Link
               className="landing-signin"
               href={publicSurfaceUrl(CANONICAL_SCHEDULE_PATH, eventParam)}

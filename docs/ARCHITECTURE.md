@@ -60,7 +60,7 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
   (rooms)** view only (`onMove` is passed for `view === "day"`); Week is a
   read-only multi-day overview, Track grid is one day laid out in track columns
   (its view id is still the legacy `"rooms"`), and Tracks is a read-only
-  programme-wide grouping by track. Both track surfaces route through
+  program-wide grouping by track. Both track surfaces route through
   `lib/agenda-track-view.ts`, which is what keeps a slot with no track — or one
   whose track was deleted — rendered in a "No track" column or bucket rather
   than matching nothing and vanishing from the view.
@@ -76,7 +76,7 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
 Public routes (no shell, must render with a null session): `/` (landing),
 `/cfp/[eventSlug]/[formSlug]` (canonical; the legacy one-segment `/cfp/[formId]`
 resolves exact published IDs and unambiguous slugs only), `/embed/schedule`,
-`/embed/speakers`, the canonical public programme pages `/schedule` and
+`/embed/speakers`, the canonical public program pages `/schedule` and
 `/speakers` (server-rendered from the same agenda read as the embeds),
 `/reviewer-invite`, `/login`, `/signup`, `/forgot`, and `/reset`, plus the alias
 redirects `/agenda` and `/sessions` (both into `/schedule`). The shell-free

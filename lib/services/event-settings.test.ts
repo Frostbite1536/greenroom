@@ -196,7 +196,7 @@ test("category deletion refuses each reference on its own and names what is in t
   // programme loses its topics with nothing said.
   const withSession = decideCategoryDeletion({ hasAbstract: false, hasSession: true });
   assert.equal(withSession.allowed, false);
-  assert.match(withSession.allowed === false ? withSession.message : "", /Sessions on the programme still use this category/);
+  assert.match(withSession.allowed === false ? withSession.message : "", /Sessions on the program still use this category/);
 
   const withBoth = decideCategoryDeletion({ hasAbstract: true, hasSession: true });
   assert.equal(withBoth.allowed, false);
