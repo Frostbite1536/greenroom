@@ -54,6 +54,7 @@ test("the Playwright config owns canonical app and assistant servers", () => {
   assert.match(config, /reuseExistingServer: false/);
   assert.match(config, /DATABASE_URL: validatedDatabaseUrl/);
   assert.match(config, /MOCK_EXTERNAL_APIS: "true"/);
+  assert.match(config, /DEMO_PERSONA_LOGIN_ENABLED: "true"/);
   assert.match(config, /OPENAI_API_KEY: "greenroom-e2e-owned-provider-key-not-a-secret"/);
   assert.match(config, /ASSISTANT_ENDPOINT_OVERRIDE: assistantEndpoint/);
   assert.doesNotMatch(config, /process\.env\.OPENAI_API_KEY/);

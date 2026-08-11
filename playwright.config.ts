@@ -96,6 +96,7 @@ export default defineConfig({
         DATABASE_URL: validatedDatabaseUrl,
         SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
         MOCK_EXTERNAL_APIS: "true",
+        DEMO_PERSONA_LOGIN_ENABLED: "true",
         OPENAI_API_KEY: "greenroom-e2e-owned-provider-key-not-a-secret",
         ASSISTANT_ENDPOINT_OVERRIDE: assistantEndpoint,
       },
