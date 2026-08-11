@@ -10,7 +10,11 @@ export const RESOURCE_DRAFT_TITLE_MAX_CHARS = 180;
 export const RESOURCE_DRAFT_SUMMARY_MAX_CHARS = 500;
 export const RESOURCE_DRAFT_NOTES_MAX_CHARS = 8_000;
 export const RESOURCE_DRAFT_HTML_MAX_CHARS = 20_000;
-export const RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS = 200;
+export const RESOURCE_DRAFT_BODY_MAX_BYTES = 40 * 1_024;
+export const RESOURCE_DRAFT_SECTION_KEY_MAX_CHARS = 40;
+export const RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS = 120;
+export const RESOURCE_DRAFT_MAX_SECTIONS = 8;
+export const RESOURCE_DRAFT_MAX_PLACEHOLDERS = 20;
 
 const templateKeySchema = z.enum(RESOURCE_ASSISTANT_TEMPLATE_KEYS);
 
@@ -36,14 +40,56 @@ export const resourceDraftProviderOutputSchema = z
     grounding: z
       .object({
         templateKey: templateKeySchema,
-        sectionsUsed: z.array(z.string().min(1).max(80)).max(16),
-        placeholders: z.array(z.string().min(1).max(RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS)).max(40),
+        sectionsUsed: z
+          .array(z.string().min(1).max(RESOURCE_DRAFT_SECTION_KEY_MAX_CHARS))
+          .max(RESOURCE_DRAFT_MAX_SECTIONS),
+        placeholders: z
+          .array(z.string().min(1).max(RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS))
+          .max(RESOURCE_DRAFT_MAX_PLACEHOLDERS),
       })
       .strict(),
   })
   .strict();
 
 export type ResourceDraftProviderOutput = z.infer<typeof resourceDraftProviderOutputSchema>;
+
+/**
+ * Code-owned strict schema passed to the shared Responses client as
+ * `text.format`. Nothing in an HTTP request can select or alter this object.
+ * Zod still validates the returned JSON because the provider is never an
+ * authorization or trust boundary.
+ */
+export const RESOURCE_DRAFT_TEXT_FORMAT = Object.freeze({
+  type: "json_schema",
+  name: "greenroom_resource_draft",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["html", "grounding"],
+    properties: {
+      html: { type: "string", minLength: 1, maxLength: RESOURCE_DRAFT_HTML_MAX_CHARS },
+      grounding: {
+        type: "object",
+        additionalProperties: false,
+        required: ["templateKey", "sectionsUsed", "placeholders"],
+        properties: {
+          templateKey: { type: "string", enum: [...RESOURCE_ASSISTANT_TEMPLATE_KEYS] },
+          sectionsUsed: {
+            type: "array",
+            maxItems: RESOURCE_DRAFT_MAX_SECTIONS,
+            items: { type: "string", minLength: 1, maxLength: RESOURCE_DRAFT_SECTION_KEY_MAX_CHARS },
+          },
+          placeholders: {
+            type: "array",
+            maxItems: RESOURCE_DRAFT_MAX_PLACEHOLDERS,
+            items: { type: "string", minLength: 1, maxLength: RESOURCE_DRAFT_PLACEHOLDER_MAX_CHARS },
+          },
+        },
+      },
+    },
+  },
+} as const);
 
 export type ResourceDraftSuggestion = {
   html: string;

@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   RESOURCE_DRAFT_HTML_MAX_CHARS,
   RESOURCE_DRAFT_INSTRUCTIONS,
+  RESOURCE_DRAFT_MAX_PLACEHOLDERS,
   RESOURCE_DRAFT_NOTES_MAX_CHARS,
+  RESOURCE_DRAFT_TEXT_FORMAT,
   parseResourceDraftSuggestion,
   resourceDraftProviderInput,
   resourceDraftProviderOutputSchema,
@@ -84,6 +86,37 @@ test("strict structured output rejects extra keys and overlong HTML", () => {
   assert.equal(resourceDraftProviderOutputSchema.safeParse(extra).success, false);
   const overlong = JSON.parse(result("x".repeat(RESOURCE_DRAFT_HTML_MAX_CHARS + 1)));
   assert.equal(resourceDraftProviderOutputSchema.safeParse(overlong).success, false);
+});
+
+test("the Responses format is a code-owned strict schema, never caller-selected", () => {
+  assert.equal(Object.isFrozen(RESOURCE_DRAFT_TEXT_FORMAT), true);
+  assert.deepEqual(
+    {
+      type: RESOURCE_DRAFT_TEXT_FORMAT.type,
+      name: RESOURCE_DRAFT_TEXT_FORMAT.name,
+      strict: RESOURCE_DRAFT_TEXT_FORMAT.strict,
+      additionalProperties: RESOURCE_DRAFT_TEXT_FORMAT.schema.additionalProperties,
+      required: RESOURCE_DRAFT_TEXT_FORMAT.schema.required,
+    },
+    {
+      type: "json_schema",
+      name: "greenroom_resource_draft",
+      strict: true,
+      additionalProperties: false,
+      required: ["html", "grounding"],
+    },
+  );
+  assert.deepEqual(RESOURCE_DRAFT_TEXT_FORMAT.schema.properties.grounding.properties.templateKey.enum, [
+    "speaker-handbook",
+    "venue-travel",
+    "av-stage",
+    "day-of",
+  ]);
+  assert.equal(
+    RESOURCE_DRAFT_TEXT_FORMAT.schema.properties.grounding.properties.placeholders.maxItems,
+    RESOURCE_DRAFT_MAX_PLACEHOLDERS,
+  );
+  assert.equal(JSON.stringify(RESOURCE_DRAFT_TEXT_FORMAT).includes(request.notes), false);
 });
 
 test("a valid result is sanitized before it becomes a suggestion", () => {
