@@ -150,7 +150,8 @@ export const EMAIL_HISTORY_PARAMS = {
   status: "status",
   template: "template",
   query: "q",
-  page: "page",
+  cursor: "cursor",
+  direction: "dir",
 } as const;
 
 /**
@@ -166,11 +167,98 @@ export const EMAIL_HISTORY_PAGE_SIZE = OPERATOR_QUERY_LIMITS.adminEmailDispatchP
 export const EMAIL_HISTORY_PAGE_TAKE = EMAIL_HISTORY_PAGE_SIZE + 1;
 
 /**
- * Upper bound on the page number a URL may name. `skip` is work the database
- * does before it returns anything, so an unbounded `?page=` is an unbounded
- * offset scan requested by a URL — bounded here rather than trusted.
+ * Which way the current read walks away from its cursor. `older` is the
+ * default: the panel opens at the newest email and pages backwards in time.
  */
-export const EMAIL_HISTORY_MAX_PAGE = 200;
+export const EMAIL_HISTORY_DIRECTIONS = ["older", "newer"] as const;
+
+export type EmailHistoryDirection = (typeof EMAIL_HISTORY_DIRECTIONS)[number];
+
+/**
+ * A position in the log, not an offset into it.
+ *
+ * `EmailDispatch` is append-mostly and its filtered sets change under a reader:
+ * a dispatch inserted between two requests — or a `queued` row resolving into
+ * `sent` while a status chip is pressed — shifts every subsequent offset by
+ * one, so a numeric `skip` shows a row twice or never shows it at all. There is
+ * no page number this page could offer that stays true for the length of an
+ * operator reading it, so it offers none: each page is anchored to the last row
+ * the operator actually saw, and an insert somewhere else cannot move it.
+ */
+export type EmailHistoryCursor = {
+  /** The anchor row's `createdAt`, as the ISO instant it round-trips through. */
+  createdAt: string;
+  /** The anchor row's id, which breaks ties inside a bulk send's millisecond. */
+  id: string;
+};
+
+/**
+ * Bound on the encoded token. A real cursor is an ISO instant, a separator and
+ * a cuid — about 68 base64url characters — so this is generous and still keeps
+ * a hostile URL from pushing an unbounded string through the decoder.
+ */
+export const EMAIL_HISTORY_CURSOR_MAX_LENGTH = 120;
+
+/** Bound on the id half, which must survive being read back out of a token. */
+export const EMAIL_HISTORY_CURSOR_ID_MAX_LENGTH = 64;
+
+/**
+ * Opaque, not secret.
+ *
+ * The token carries a `createdAt` and an id that are both already on the page
+ * that issued it, so nothing is being hidden. Encoding exists so callers do not
+ * hand-assemble positions — a URL naming a raw instant invites exactly the
+ * "just add 50" arithmetic this pagination replaced.
+ */
+export function encodeEmailHistoryCursor(cursor: EmailHistoryCursor): string {
+  return Buffer.from(`${cursor.createdAt}|${cursor.id}`, "utf8").toString("base64url");
+}
+
+/**
+ * Decode `?cursor=`, or refuse it.
+ *
+ * Every malformed token — wrong charset, over-long, no separator, an instant
+ * that does not round-trip — resolves to the newest page rather than throwing.
+ * A stale or hand-edited link is a bad anchor, not a broken panel, and the same
+ * fallback the status and template parameters take is the right one here.
+ */
+export function decodeEmailHistoryCursor(
+  value: string | string[] | undefined,
+): EmailHistoryCursor | null {
+  if (typeof value !== "string") return null;
+  const token = value.trim();
+  if (token === "" || token.length > EMAIL_HISTORY_CURSOR_MAX_LENGTH) return null;
+  // Checked before decoding: `Buffer.from` silently drops anything outside the
+  // alphabet rather than failing, so a token that was never base64url would
+  // otherwise decode to some shorter arbitrary string.
+  if (!/^[A-Za-z0-9_-]+$/.test(token)) return null;
+
+  let decoded: string;
+  try {
+    decoded = Buffer.from(token, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+  const separator = decoded.indexOf("|");
+  if (separator <= 0) return null;
+  const createdAt = decoded.slice(0, separator);
+  const id = decoded.slice(separator + 1);
+
+  // Round-trip the instant rather than merely parsing it: `new Date` coerces
+  // plenty of strings this page never issued, and a coerced anchor silently
+  // pages from a different place than the URL names.
+  const parsed = new Date(createdAt);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== createdAt) return null;
+  if (id === "" || id.length > EMAIL_HISTORY_CURSOR_ID_MAX_LENGTH) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) return null;
+  return { createdAt, id };
+}
+
+export function parseEmailHistoryDirection(
+  value: string | string[] | undefined,
+): EmailHistoryDirection {
+  return value === "newer" ? "newer" : "older";
+}
 
 /** One resolved view: what the URL asked for, after every bound is applied. */
 export type EmailHistoryQuery = {
@@ -179,8 +267,10 @@ export type EmailHistoryQuery = {
   template: string | null;
   /** Bounded recipient substring, or "" for no search. */
   query: string;
-  /** 1-based, always within `[1, EMAIL_HISTORY_MAX_PAGE]`. */
-  page: number;
+  /** The anchor row, or null for the newest page of this view. */
+  cursor: EmailHistoryCursor | null;
+  /** Which side of the anchor to read. Meaningless without a cursor. */
+  direction: EmailHistoryDirection;
 };
 
 /** The raw `searchParams` shape a Next.js page hands in. */
@@ -223,30 +313,6 @@ export function parseEmailRecipientQuery(value: string | string[] | undefined): 
   return value.trim().slice(0, EMAIL_RECIPIENT_SEARCH_MAX_LENGTH);
 }
 
-/**
- * Normalize `?page=`. Only a plain run of digits is a page number: `-2`, `1.5`,
- * `1e9` and `０` are all the first page rather than an error, and anything past
- * the bound is clamped to it.
- */
-export function parseEmailHistoryPage(value: string | string[] | undefined): number {
-  if (typeof value !== "string") return 1;
-  const trimmed = value.trim();
-  if (!/^\d{1,6}$/.test(trimmed)) return 1;
-  const page = Number(trimmed);
-  if (page < 1) return 1;
-  return Math.min(page, EMAIL_HISTORY_MAX_PAGE);
-}
-
-/**
- * Clamp any page number into the bound, whatever produced it. `NaN` is the one
- * input with no position on the range, so it reads as the first page rather
- * than propagating through `Math.min` as `NaN` into a `skip`.
- */
-export function clampEmailHistoryPage(page: number): number {
-  if (Number.isNaN(page)) return 1;
-  return Math.min(Math.max(Math.trunc(page), 1), EMAIL_HISTORY_MAX_PAGE);
-}
-
 /** Resolve a whole URL into the one bounded view the read and the UI share. */
 export function parseEmailHistoryQuery(
   params: EmailHistorySearchParams,
@@ -256,7 +322,8 @@ export function parseEmailHistoryQuery(
     status: parseEmailStatusFilter(params[EMAIL_HISTORY_PARAMS.status]),
     template: parseEmailTemplateFilter(params[EMAIL_HISTORY_PARAMS.template], templateKeys),
     query: parseEmailRecipientQuery(params[EMAIL_HISTORY_PARAMS.query]),
-    page: parseEmailHistoryPage(params[EMAIL_HISTORY_PARAMS.page]),
+    cursor: decodeEmailHistoryCursor(params[EMAIL_HISTORY_PARAMS.cursor]),
+    direction: parseEmailHistoryDirection(params[EMAIL_HISTORY_PARAMS.direction]),
   };
 }
 
@@ -274,6 +341,10 @@ export function emailHistoryIsFiltered(query: EmailHistoryQuery): boolean {
  * event scope. The recipient search is a Prisma `contains`, which is a bound
  * parameter and never string-concatenated SQL; the value is length-bounded by
  * `parseEmailRecipientQuery` before it reaches here.
+ *
+ * The cursor predicate is ANDed in as its own clause rather than merged into
+ * the top level, so a future narrowing that also needs an `OR` cannot silently
+ * overwrite the keyset and turn paging back into a full re-scan.
  */
 export function emailHistoryWhere(
   eventId: string,
@@ -284,12 +355,58 @@ export function emailHistoryWhere(
   const where: Prisma.EmailDispatchWhereInput = { template };
   if (query && query.status !== EMAIL_STATUS_ALL) where.status = query.status;
   if (query?.query) where.recipient = { contains: query.query, mode: "insensitive" };
+  const keyset = query ? emailHistoryKeysetWhere(query.cursor, query.direction) : null;
+  if (keyset) where.AND = [keyset];
   return where;
 }
 
-/** Rows to skip for a page, with the page bound re-applied defensively. */
-export function emailHistorySkip(page: number): number {
-  return (clampEmailHistoryPage(page) - 1) * EMAIL_HISTORY_PAGE_SIZE;
+/**
+ * The keyset predicate: a tuple comparison on `(createdAt, id)`, not a bare
+ * `createdAt` comparison.
+ *
+ * This distinction is the whole correctness of the pager. A bulk send writes
+ * many rows inside one millisecond, so `createdAt` alone is not unique: `<`
+ * would skip every tied row after the anchor, and `<=` would repeat all of
+ * them. The disjunction below is the standard row-value comparison —
+ * `(createdAt, id) < (a, b)` — written the long way because Prisma has no
+ * tuple operator, and because Prisma's own `cursor:` needs the sort key to be a
+ * unique index, which `(createdAt, id)` is not.
+ *
+ * `newer` is the exact mirror: the comparison flips and the caller reverses the
+ * ascending result back into newest-first render order.
+ */
+export function emailHistoryKeysetWhere(
+  cursor: EmailHistoryCursor | null,
+  direction: EmailHistoryDirection,
+): Prisma.EmailDispatchWhereInput | null {
+  if (cursor === null) return null;
+  const createdAt = new Date(cursor.createdAt);
+  return direction === "older"
+    ? {
+        OR: [
+          { createdAt: { lt: createdAt } },
+          { createdAt, id: { lt: cursor.id } },
+        ],
+      }
+    : {
+        OR: [
+          { createdAt: { gt: createdAt } },
+          { createdAt, id: { gt: cursor.id } },
+        ],
+      };
+}
+
+/**
+ * Newest-first for an `older` read; oldest-first for a `newer` one, so the
+ * database returns the rows nearest the anchor rather than the far end of the
+ * log. `toEmailHistoryPage` reverses the ascending case back for rendering.
+ */
+export function emailHistoryOrderByFor(
+  direction: EmailHistoryDirection,
+): Prisma.EmailDispatchOrderByWithRelationInput[] {
+  return direction === "newer"
+    ? [{ createdAt: "asc" }, { id: "asc" }]
+    : [...emailHistoryOrderBy];
 }
 
 /**
@@ -305,24 +422,45 @@ export function emailHistoryHref(query: EmailHistoryQuery): string {
   if (query.status !== EMAIL_STATUS_ALL) params.set(EMAIL_HISTORY_PARAMS.status, query.status);
   if (query.template !== null) params.set(EMAIL_HISTORY_PARAMS.template, query.template);
   if (query.query !== "") params.set(EMAIL_HISTORY_PARAMS.query, query.query);
-  const page = clampEmailHistoryPage(query.page);
-  if (page > 1) params.set(EMAIL_HISTORY_PARAMS.page, String(page));
+  // The direction only means something relative to an anchor, so it is never
+  // written without one — and re-encoding the decoded cursor guarantees a
+  // malformed token can never be handed back out in a link.
+  if (query.cursor !== null) {
+    params.set(EMAIL_HISTORY_PARAMS.cursor, encodeEmailHistoryCursor(query.cursor));
+    if (query.direction === "newer") params.set(EMAIL_HISTORY_PARAMS.direction, "newer");
+  }
   const search = params.toString();
   return search === "" ? EMAIL_HISTORY_PATH : `${EMAIL_HISTORY_PATH}?${search}`;
 }
 
 /**
- * A chip's link. Changing which statuses are shown returns to the first page:
- * page 7 of one filter is not page 7 of another, and keeping the number would
- * land an operator on an empty page of a set they just narrowed.
+ * A chip's link. Changing which statuses are shown drops the anchor: a position
+ * inside one filtered set names no position in another, and carrying it would
+ * land an operator in the middle of a set they just narrowed.
  */
 export function emailHistoryStatusHref(query: EmailHistoryQuery, status: EmailStatusFilter): string {
-  return emailHistoryHref({ ...query, status, page: 1 });
+  return emailHistoryHref({ ...query, status, cursor: null, direction: "older" });
 }
 
-/** A pager link. Same filters, different page — never the other way round. */
-export function emailHistoryPageHref(query: EmailHistoryQuery, page: number): string {
-  return emailHistoryHref({ ...query, page });
+/** The newest page of the current view — the pager's way back to the top. */
+export function emailHistoryNewestHref(query: EmailHistoryQuery): string {
+  return emailHistoryHref({ ...query, cursor: null, direction: "older" });
+}
+
+/**
+ * A pager link. Same filters, a new anchor — never the other way round.
+ *
+ * The anchor is the row at the edge the operator is walking off: the oldest row
+ * on screen going older, the newest going newer. Both are rows they actually
+ * saw, which is what makes the next page contiguous with this one no matter
+ * what was inserted elsewhere in between.
+ */
+export function emailHistoryOlderHref(query: EmailHistoryQuery, cursor: EmailHistoryCursor): string {
+  return emailHistoryHref({ ...query, cursor, direction: "older" });
+}
+
+export function emailHistoryNewerHref(query: EmailHistoryQuery, cursor: EmailHistoryCursor): string {
+  return emailHistoryHref({ ...query, cursor, direction: "newer" });
 }
 
 /**
@@ -449,18 +587,17 @@ export function toEmailHistoryEntry(row: EmailDispatchRow): EmailHistoryEntry {
 }
 
 export type EmailHistoryPage = {
+  /** Always newest-first, whichever direction the read walked. */
   entries: EmailHistoryEntry[];
   /** Rows on this page. Never spoken of as an event-wide or filtered total. */
   shown: number;
   pageSize: number;
-  /** 1-based page number, already bounded. */
-  page: number;
-  /** True when the page-plus-one probe found another row after this page. */
-  hasMore: boolean;
-  hasPrevious: boolean;
-  /** 1-based position of the first and last row shown, 0 when the page is empty. */
-  firstShown: number;
-  lastShown: number;
+  /** True when the page-plus-one probe found a row past this page's old edge. */
+  hasOlder: boolean;
+  hasNewer: boolean;
+  /** Anchors for the two pager links — the rows at this page's own edges. */
+  olderCursor: EmailHistoryCursor | null;
+  newerCursor: EmailHistoryCursor | null;
   /** Counts across `entries` only — never presented as event-wide totals. */
   shownDelivered: number;
   shownUndelivered: number;
@@ -468,36 +605,52 @@ export type EmailHistoryPage = {
 };
 
 /**
- * Fold a page-plus-one query into an honest page.
+ * Fold a page-plus-one keyset query into an honest page.
  *
  * Everything the panel states comes from this one query. An earlier draft paired
  * it with a separate `count()` to show an exact event-wide total, but the two
  * statements read different snapshots: a dispatch inserted between them let the
  * page print a total that disagreed with the rows underneath it. Rather than
  * narrow that window — a `RepeatableRead` transaction would — the total is gone,
- * and pagination did not bring it back: there is a "next page" claim, sourced
- * from the extra fetched row, and no page count, because a page count needs a
- * total this module refuses to invent.
+ * and pagination did not bring it back.
  *
- * `firstShown`/`lastShown` are positions within the *current filters*, which is
- * why the copy says "in this view" rather than naming the log.
+ * Nor is there a page number. Numeric paging over this log was the defect this
+ * fold now exists in its current form to prevent: `skip` counts rows from the
+ * top, so one dispatch inserted while an operator reads — or one `queued` row
+ * resolving into `sent` under an active status chip — shifts every later offset
+ * and makes "page 2" repeat a row from page 1 or drop one entirely. Anchored to
+ * a row the operator actually saw, an insert elsewhere cannot move the boundary.
+ *
+ * The cost is honest and small: no absolute positions and no page count, which
+ * a live log could not have kept true anyway.
  */
 export function toEmailHistoryPage(
   rows: readonly EmailDispatchRow[],
-  page: number,
+  query: EmailHistoryQuery,
 ): EmailHistoryPage {
-  const safePage = clampEmailHistoryPage(page);
-  const entries = rows.slice(0, EMAIL_HISTORY_PAGE_SIZE).map(toEmailHistoryEntry);
-  const skip = emailHistorySkip(safePage);
+  const overflow = rows.length > EMAIL_HISTORY_PAGE_SIZE;
+  const window = rows.slice(0, EMAIL_HISTORY_PAGE_SIZE);
+  // A `newer` read runs ascending so the database returns the rows nearest the
+  // anchor; the table always renders newest-first, so restore that here.
+  const ordered = query.direction === "newer" ? [...window].reverse() : window;
+  const entries = ordered.map(toEmailHistoryEntry);
+  const first = entries[0] ?? null;
+  const last = entries.at(-1) ?? null;
+
+  // With no anchor this is the newest page, so nothing is newer by definition.
+  // With one, the direction not travelled is known to hold rows: the operator
+  // arrived from there.
+  const hasOlder = query.cursor === null || query.direction === "older" ? overflow : true;
+  const hasNewer = query.cursor === null ? false : query.direction === "newer" ? overflow : true;
+
   return {
     entries,
     shown: entries.length,
     pageSize: EMAIL_HISTORY_PAGE_SIZE,
-    page: safePage,
-    hasMore: rows.length > EMAIL_HISTORY_PAGE_SIZE,
-    hasPrevious: safePage > 1,
-    firstShown: entries.length === 0 ? 0 : skip + 1,
-    lastShown: entries.length === 0 ? 0 : skip + entries.length,
+    hasOlder,
+    hasNewer,
+    olderCursor: last ? { createdAt: last.loggedAt, id: last.id } : null,
+    newerCursor: first ? { createdAt: first.loggedAt, id: first.id } : null,
     shownDelivered: entries.filter((entry) => entry.delivered).length,
     shownUndelivered: entries.filter((entry) => !entry.delivered).length,
     shownFailed: entries.filter((entry) => entry.status === "failed").length,
@@ -505,19 +658,22 @@ export function toEmailHistoryPage(
 }
 
 /**
- * The "showing X–Y" line. States a position inside the current view and a next
- * page when one was observed; it never states how many emails exist, because
- * this page never counted them.
+ * The position line. States how much is on screen and which way the log
+ * continues; it states no absolute position and no total, because a keyset
+ * pager has neither and a live log could not keep either true.
  */
 export function emailHistoryRangeLabel(page: EmailHistoryPage): string {
   if (page.shown === 0) return "No emails in this view.";
-  const range =
-    page.firstShown === page.lastShown
-      ? `Showing email ${page.firstShown}`
-      : `Showing emails ${page.firstShown}–${page.lastShown}`;
-  return page.hasMore
-    ? `${range} of this view, newest first — older ones continue on the next page.`
-    : `${range} of this view, newest first — the oldest email in this view is on this page.`;
+  const parts = [
+    `Showing ${page.shown} email${page.shown === 1 ? "" : "s"} of this view, newest first.`,
+  ];
+  if (page.hasNewer) parts.push("Newer emails are on the previous page.");
+  parts.push(
+    page.hasOlder
+      ? "Older emails continue on the next page."
+      : "This is the oldest end of this view.",
+  );
+  return parts.join(" ");
 }
 
 function joinNarrowings(parts: readonly string[]): string {
@@ -533,10 +689,10 @@ function joinNarrowings(parts: readonly string[]): string {
  * every other empty view says what it narrowed to and offers to widen.
  */
 export function emailHistoryEmptyState(query: EmailHistoryQuery): { title: string; body: string } {
-  if (query.page > 1) {
+  if (query.cursor !== null) {
     return {
-      title: "Nothing on this page",
-      body: "This view has fewer emails than this page would start at. Go back a page to see the newest ones.",
+      title: "Nothing further in this view",
+      body: "There is nothing past the email this page was anchored to — or the log has changed since that link was made. Go back to the newest emails.",
     };
   }
   const narrowings: string[] = [];

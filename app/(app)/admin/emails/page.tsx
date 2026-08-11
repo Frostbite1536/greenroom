@@ -10,7 +10,9 @@ import {
   EMAIL_STATUS_FILTERS,
   emailHistoryEmptyState,
   emailHistoryIsFiltered,
-  emailHistoryPageHref,
+  emailHistoryNewerHref,
+  emailHistoryNewestHref,
+  emailHistoryOlderHref,
   emailHistoryRangeLabel,
   emailHistoryStatusHref,
 } from "@/lib/comms/email-history";
@@ -41,6 +43,11 @@ export const dynamic = "force-dynamic";
  * shareable URL, and no control here makes a client fetch. Because the filters
  * are applied by the database rather than to an already-read page, "Failed"
  * means failed in this event's log — not failed among the newest rows.
+ *
+ * The pager offers newer/older rather than numbered pages on purpose. This log
+ * grows while it is being read, so a row number is not a stable address: an
+ * offset-based "page 2" repeats a row from page 1 the moment one dispatch is
+ * inserted above it. Each link is anchored to a row on screen instead.
  */
 export default async function AdminEmailsPage({
   searchParams,
@@ -87,9 +94,9 @@ export default async function AdminEmailsPage({
               `?q=` and `?template=` server-side, so search and the template
               filter work with JavaScript disabled and every narrowed log is a
               shareable URL. The active status chip rides along in a hidden
-              field, or submitting would silently drop it — and `page` is
-              deliberately absent, because a new search starts at its own first
-              page rather than page 7 of the previous one. */}
+              field, or submitting would silently drop it — and the pager's
+              anchor is deliberately absent, because a position inside the
+              previous view names no position in the one being searched for. */}
           <form className="roster-search-form" method="get" action={EMAIL_HISTORY_PATH} role="search">
             {query.status === EMAIL_STATUS_ALL ? null : (
               <input type="hidden" name={EMAIL_HISTORY_PARAMS.status} value={query.status} />
@@ -203,22 +210,33 @@ export default async function AdminEmailsPage({
           </div>
         )}
 
-        {/* Both links carry every active filter, so paging never widens or
-            narrows the set being paged through. Only the directions that were
-            actually observed are offered: "older" comes from the page-plus-one
-            probe, never from a total this page never read. */}
-        {history.hasPrevious || history.hasMore ? (
+        {/* Every link carries the active filters, so paging never widens or
+            narrows the set being paged through. Each is anchored to a row on
+            this page rather than to a row number: the log grows underneath a
+            reader, and an offset would repeat or drop a row the moment anything
+            was inserted above it. Only directions the page-plus-one probe
+            actually observed are offered — and "Newest" is always there once an
+            anchor is active, so a page emptied by a stale link is never a dead
+            end. */}
+        {query.cursor !== null || history.hasOlder ? (
           <nav className="table-pager" aria-label="Email history pages">
-            {history.hasPrevious ? (
-              <Link className="ghost-button" rel="prev" href={emailHistoryPageHref(query, query.page - 1)}>
-                Newer emails
-              </Link>
-            ) : <span />}
-            {history.hasMore ? (
-              <Link className="ghost-button" rel="next" href={emailHistoryPageHref(query, query.page + 1)}>
+            <div className="row wrap">
+              {query.cursor === null ? null : (
+                <Link className="ghost-button" href={emailHistoryNewestHref(query)}>
+                  Newest emails
+                </Link>
+              )}
+              {history.hasNewer && history.newerCursor ? (
+                <Link className="ghost-button" rel="prev" href={emailHistoryNewerHref(query, history.newerCursor)}>
+                  Newer emails
+                </Link>
+              ) : null}
+            </div>
+            {history.hasOlder && history.olderCursor ? (
+              <Link className="ghost-button" rel="next" href={emailHistoryOlderHref(query, history.olderCursor)}>
                 Older emails
               </Link>
-            ) : <span />}
+            ) : null}
           </nav>
         ) : null}
       </div>

@@ -46,9 +46,8 @@ export type {
 } from "@/lib/services/admin-decision-summary";
 import {
   EMAIL_HISTORY_PAGE_TAKE,
-  emailHistoryOrderBy,
+  emailHistoryOrderByFor,
   emailHistorySelect,
-  emailHistorySkip,
   emailHistoryWhere,
   parseEmailHistoryQuery,
   toEmailHistoryPage,
@@ -1280,7 +1279,14 @@ export type EmailHistoryView = EmailHistoryPage & {
  * behind a `RepeatableRead` transaction — which is why the pager offers "older"
  * and "newer" links rather than "page 3 of 9".
  *
- * The status, template, recipient and page narrowings are applied by the
+ * Paging is keyset, not offset, for the same reason the total went: `skip`
+ * counts rows from the top of a set that changes while an operator reads it, so
+ * one dispatch inserted between two page requests shifts every later offset and
+ * makes the next page repeat a row or drop one. Each page is anchored to a row
+ * the operator actually saw — `(createdAt, id)`, the total order this read
+ * already used — so an insert anywhere else cannot move the boundary.
+ *
+ * The status, template, recipient and cursor narrowings are all applied by the
  * database (`emailHistoryWhere`), not by slicing an already-read page: a chip
  * that filtered a capped page would mean "failed among the newest 50", which is
  * not what the chip says.
@@ -1312,12 +1318,11 @@ export async function getEmailHistory(
   const rows = await prisma.emailDispatch.findMany({
     where: emailHistoryWhere(ctx.eventId, query),
     select: emailHistorySelect,
-    orderBy: emailHistoryOrderBy,
-    skip: emailHistorySkip(query.page),
+    orderBy: emailHistoryOrderByFor(query.direction),
     take: EMAIL_HISTORY_PAGE_TAKE,
   });
   return {
-    ...toEmailHistoryPage(rows, query.page),
+    ...toEmailHistoryPage(rows, query),
     timezone: event.timezone,
     templateKeys,
     templatesTruncated: templates.length > OPERATOR_QUERY_LIMITS.templates,

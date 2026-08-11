@@ -81,18 +81,70 @@ test("every control carries the other controls' state rather than dropping it", 
     component,
     /\{query\.status === EMAIL_STATUS_ALL \? null : \(\s*<input type="hidden" name=\{EMAIL_HISTORY_PARAMS\.status\} value=\{query\.status\} \/>/,
   );
-  // And it deliberately carries no page: a new search starts at its own page 1.
-  assert.equal(/name=\{EMAIL_HISTORY_PARAMS\.page\}/.test(component), false);
+  // And it deliberately carries no anchor: a position inside the previous view
+  // names no position in the one being searched for.
+  assert.equal(/name=\{EMAIL_HISTORY_PARAMS\.cursor\}/.test(component), false);
   // Chips and pager links are built by the shared href helpers, which is where
   // "carry every other narrowing" is unit-tested.
   assert.match(component, /href=\{emailHistoryStatusHref\(query, option\.value\)\}/);
-  assert.match(component, /rel="prev" href=\{emailHistoryPageHref\(query, query\.page - 1\)\}/);
-  assert.match(component, /rel="next" href=\{emailHistoryPageHref\(query, query\.page \+ 1\)\}/);
-  // Neither pager link is offered for a direction that was not observed.
-  assert.match(component, /\{history\.hasPrevious \? \(/);
-  assert.match(component, /\{history\.hasMore \? \(/);
+  assert.match(component, /rel="prev" href=\{emailHistoryNewerHref\(query, history\.newerCursor\)\}/);
+  assert.match(component, /rel="next" href=\{emailHistoryOlderHref\(query, history\.olderCursor\)\}/);
+  // Each pager link is offered only with an anchor the page actually observed,
+  // and "Newest" is always reachable so a stale link is never a dead end.
+  assert.match(component, /\{history\.hasNewer && history\.newerCursor \? \(/);
+  assert.match(component, /\{history\.hasOlder && history\.olderCursor \? \(/);
+  assert.match(component, /href=\{emailHistoryNewestHref\(query\)\}/);
   // No hand-built query strings anywhere: one builder, one encoding.
   assert.equal(/href=\{`\/admin\/emails\?/.test(component), false);
+});
+
+test("paging is anchored to a row, never to an offset", () => {
+  // The review defect: `skip` counts from the top of a set that changes while
+  // it is read, so one insert between two requests repeats or drops a row.
+  const read = reads();
+  const body = read.slice(
+    read.indexOf("export async function getEmailHistory("),
+    read.indexOf("// ---- Embeds"),
+  );
+  assert.equal(/\bskip\b/.test(body), false, "the dispatch read must not offset");
+  assert.equal(/emailHistorySkip|query\.page/.test(body), false);
+  assert.match(body, /orderBy: emailHistoryOrderByFor\(query\.direction\)/);
+
+  // The predicate is a tuple comparison on (createdAt, id), not a bare
+  // createdAt one: a bulk send writes many rows inside one millisecond, so
+  // `createdAt` alone skips every tied row after the anchor.
+  const module = fold();
+  const keyset = module.slice(
+    module.indexOf("export function emailHistoryKeysetWhere("),
+    module.indexOf("export function emailHistoryOrderByFor("),
+  );
+  assert.match(keyset, /OR: \[\s*\{ createdAt: \{ lt: createdAt \} \},\s*\{ createdAt, id: \{ lt: cursor\.id \} \},\s*\]/);
+  assert.match(keyset, /OR: \[\s*\{ createdAt: \{ gt: createdAt \} \},\s*\{ createdAt, id: \{ gt: cursor\.id \} \},\s*\]/);
+  // Each direction keeps its id tie-break — a lone createdAt term is exactly
+  // the regression this pins.
+  for (const operator of ["lt", "gt"]) {
+    const terms = keyset.match(new RegExp(`id: \\{ ${operator}: cursor\\.id \\}`, "g")) ?? [];
+    assert.equal(terms.length, 1, `the ${operator} branch lost its id tie-break`);
+  }
+  // It is ANDed in as its own clause so a future OR cannot overwrite it.
+  assert.match(module, /if \(keyset\) where\.AND = \[keyset\];/);
+  // Nothing in the module builds an offset any more.
+  assert.equal(/emailHistorySkip|EMAIL_HISTORY_MAX_PAGE|clampEmailHistoryPage/.test(module), false);
+});
+
+test("the cursor is bounded and opaque, and a bad one is the newest page", () => {
+  const module = fold();
+  assert.match(module, /token\.length > EMAIL_HISTORY_CURSOR_MAX_LENGTH\) return null;/);
+  assert.match(module, /if \(!\/\^\[A-Za-z0-9_-\]\+\$\/\.test\(token\)\) return null;/);
+  // The instant must round-trip, not merely parse: `new Date` coerces plenty of
+  // strings this page never issued, and a coerced anchor pages elsewhere.
+  assert.match(module, /parsed\.toISOString\(\) !== createdAt\) return null;/);
+  // Refusal is a fallback, never a throw — a stale link must not 500 the panel.
+  const decoder = module.slice(
+    module.indexOf("export function decodeEmailHistoryCursor("),
+    module.indexOf("export function parseEmailHistoryDirection("),
+  );
+  assert.equal(/throw /.test(decoder), false);
 });
 
 test("the narrowings are applied by the database, not to an already-read page", () => {
@@ -102,9 +154,8 @@ test("the narrowings are applied by the database, not to an already-read page", 
     read.indexOf("// ---- Embeds"),
   );
   assert.match(body, /where: emailHistoryWhere\(ctx\.eventId, query\)/);
-  assert.match(body, /skip: emailHistorySkip\(query\.page\)/);
   assert.match(body, /take: EMAIL_HISTORY_PAGE_TAKE/);
-  assert.match(body, /orderBy: emailHistoryOrderBy/);
+  assert.match(body, /orderBy: emailHistoryOrderByFor\(query\.direction\)/);
   // A chip that filtered rows already fetched would mean "failed among the
   // newest 50", which is not what the chip says.
   assert.equal(/\.filter\(|\.slice\(0, EMAIL_HISTORY_PAGE_SIZE\)/.test(body), false);

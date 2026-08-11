@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   EMAIL_DISPATCH_STATUSES,
   EMAIL_DISPATCH_STATUS_META,
-  EMAIL_HISTORY_MAX_PAGE,
+  EMAIL_HISTORY_CURSOR_ID_MAX_LENGTH,
+  EMAIL_HISTORY_CURSOR_MAX_LENGTH,
+  EMAIL_HISTORY_DIRECTIONS,
   EMAIL_HISTORY_PAGE_SIZE,
   EMAIL_HISTORY_PAGE_TAKE,
   EMAIL_HISTORY_PARAMS,
@@ -12,19 +14,23 @@ import {
   EMAIL_RECIPIENT_SEARCH_MAX_LENGTH,
   EMAIL_STATUS_ALL,
   EMAIL_STATUS_FILTERS,
-  clampEmailHistoryPage,
+  decodeEmailHistoryCursor,
   describeEmailDispatchStatus,
   emailHistoryEmptyState,
   emailHistoryHref,
   emailHistoryIsFiltered,
+  emailHistoryKeysetWhere,
+  emailHistoryNewerHref,
+  emailHistoryNewestHref,
+  emailHistoryOlderHref,
   emailHistoryOrderBy,
-  emailHistoryPageHref,
+  emailHistoryOrderByFor,
   emailHistoryRangeLabel,
   emailHistorySelect,
-  emailHistorySkip,
   emailHistoryStatusHref,
   emailHistoryWhere,
-  parseEmailHistoryPage,
+  encodeEmailHistoryCursor,
+  parseEmailHistoryDirection,
   parseEmailHistoryQuery,
   parseEmailRecipientQuery,
   parseEmailStatusFilter,
@@ -38,7 +44,14 @@ import {
 const TEMPLATE_KEYS = ["cfp.submitted", "decision.accepted", "speaker.reminder"];
 
 function view(overrides: Partial<EmailHistoryQuery> = {}): EmailHistoryQuery {
-  return { status: EMAIL_STATUS_ALL, template: null, query: "", page: 1, ...overrides };
+  return {
+    status: EMAIL_STATUS_ALL,
+    template: null,
+    query: "",
+    cursor: null,
+    direction: "older",
+    ...overrides,
+  };
 }
 
 function row(overrides: Partial<EmailDispatchRow> = {}): EmailDispatchRow {
@@ -129,56 +142,85 @@ test("an oversize view renders one page and says another follows, never how many
   const rows = Array.from({ length: EMAIL_HISTORY_PAGE_SIZE + 1 }, (_, index) =>
     row({ id: `dispatch-${index}`, status: index === 0 ? "failed" : "mocked", error: index === 0 ? "boom" : null }),
   );
-  const page = toEmailHistoryPage(rows, 1);
+  const page = toEmailHistoryPage(rows, view());
   assert.equal(page.entries.length, EMAIL_HISTORY_PAGE_SIZE);
   assert.equal(page.shown, EMAIL_HISTORY_PAGE_SIZE);
-  assert.equal(page.hasMore, true);
-  assert.equal(page.hasPrevious, false);
+  assert.equal(page.hasOlder, true);
+  assert.equal(page.hasNewer, false);
   // The extra probe row is never rendered.
   assert.equal(page.entries.at(-1)?.id, `dispatch-${EMAIL_HISTORY_PAGE_SIZE - 1}`);
-  // No page count, because no total was read.
-  assert.equal("total" in page, false);
-  assert.equal("pages" in page, false);
+  // No page count and no absolute positions, because neither is stable on a
+  // log that grows while it is read.
+  for (const absent of ["total", "pages", "page", "firstShown", "lastShown"]) {
+    assert.equal(absent in page, false, absent);
+  }
 });
 
-test("a page inside the view reports no next page and counts only what it shows", () => {
+test("a page inside the view reports no older page and counts only what it shows", () => {
   const page = toEmailHistoryPage([
     row({ id: "a", status: "sent" }),
     row({ id: "b", status: "mocked" }),
     row({ id: "c", status: "failed", error: "no mailbox" }),
-  ], 1);
-  assert.equal(page.hasMore, false);
+  ], view());
+  assert.equal(page.hasOlder, false);
+  assert.equal(page.hasNewer, false);
   assert.equal(page.shown, 3);
   assert.equal(page.shownDelivered, 1);
   assert.equal(page.shownUndelivered, 2);
   assert.equal(page.shownFailed, 1);
-  assert.equal(page.firstShown, 1);
-  assert.equal(page.lastShown, 3);
 });
 
-test("a later page numbers its rows by its own offset, not from one again", () => {
-  const page = toEmailHistoryPage([row({ id: "a" }), row({ id: "b" })], 3);
-  assert.equal(page.page, 3);
-  assert.equal(page.hasPrevious, true);
-  assert.equal(page.hasMore, false);
-  assert.equal(page.firstShown, 2 * EMAIL_HISTORY_PAGE_SIZE + 1);
-  assert.equal(page.lastShown, 2 * EMAIL_HISTORY_PAGE_SIZE + 2);
+test("an anchored page knows the side it came from holds rows", () => {
+  const anchor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const older = toEmailHistoryPage(
+    [row({ id: "a" }), row({ id: "b" })],
+    view({ cursor: anchor, direction: "older" }),
+  );
+  // Arrived from the newer side, so there is certainly something newer.
+  assert.equal(older.hasNewer, true);
+  assert.equal(older.hasOlder, false, "no probe row, so this is the oldest end");
+
+  const newer = toEmailHistoryPage(
+    [row({ id: "a" }), row({ id: "b" })],
+    view({ cursor: anchor, direction: "newer" }),
+  );
+  assert.equal(newer.hasOlder, true);
+  assert.equal(newer.hasNewer, false, "no probe row, so this is the newest end");
 });
 
-test("an empty view is an empty page, and claims no position in it", () => {
-  const first = toEmailHistoryPage([], 1);
+test("a newer read is re-reversed, so the table is newest-first either way", () => {
+  // The database returns ascending for a `newer` read so the rows nearest the
+  // anchor come back; rendering them in that order would show the log upside
+  // down on exactly one of the two pager directions.
+  const ascending = [
+    row({ id: "old", createdAt: new Date("2026-05-01T10:00:00.000Z") }),
+    row({ id: "mid", createdAt: new Date("2026-05-01T11:00:00.000Z") }),
+    row({ id: "new", createdAt: new Date("2026-05-01T12:00:00.000Z") }),
+  ];
+  const page = toEmailHistoryPage(
+    ascending,
+    view({ cursor: { createdAt: "2026-05-01T09:00:00.000Z", id: "anchor" }, direction: "newer" }),
+  );
+  assert.deepEqual(page.entries.map((entry) => entry.id), ["new", "mid", "old"]);
+  // The anchors are this page's own visible edges, in render order.
+  assert.deepEqual(page.newerCursor, { createdAt: "2026-05-01T12:00:00.000Z", id: "new" });
+  assert.deepEqual(page.olderCursor, { createdAt: "2026-05-01T10:00:00.000Z", id: "old" });
+});
+
+test("an empty view is an empty page, and offers no anchor it did not observe", () => {
+  const first = toEmailHistoryPage([], view());
   assert.deepEqual(first.entries, []);
   assert.equal(first.shown, 0);
-  assert.equal(first.hasMore, false);
-  assert.equal(first.hasPrevious, false);
-  assert.equal(first.firstShown, 0);
-  assert.equal(first.lastShown, 0);
+  assert.equal(first.hasOlder, false);
+  assert.equal(first.hasNewer, false);
+  assert.equal(first.olderCursor, null);
+  assert.equal(first.newerCursor, null);
 
-  // Past the end of a real view: previous still exists, position still does not.
-  const past = toEmailHistoryPage([], 4);
-  assert.equal(past.hasPrevious, true);
-  assert.equal(past.firstShown, 0);
-  assert.equal(past.lastShown, 0);
+  // Past the end of a real view: the way back is known, but there is no row on
+  // screen to anchor it, which is why the page always offers "Newest" too.
+  const past = toEmailHistoryPage([], view({ cursor: { createdAt: "2026-05-01T10:00:00.000Z", id: "x" } }));
+  assert.equal(past.hasNewer, true);
+  assert.equal(past.newerCursor, null);
 });
 
 test("the page states no volume it did not read from its own single query", () => {
@@ -189,7 +231,7 @@ test("the page states no volume it did not read from its own single query", () =
   // bring a total back in through a page count.
   const page = toEmailHistoryPage(
     [row({ id: "a", status: "sent" }), row({ id: "b", status: "failed", error: "bounced" })],
-    1,
+    view(),
   );
   assert.equal("total" in page, false);
   assert.equal(page.shown, page.entries.length);
@@ -199,28 +241,32 @@ test("the page states no volume it did not read from its own single query", () =
   // Full page: `shown` is the page size, never advertised as any total.
   const full = toEmailHistoryPage(
     Array.from({ length: EMAIL_HISTORY_PAGE_TAKE }, (_, i) => row({ id: `d-${i}` })),
-    1,
+    view(),
   );
   assert.equal(full.shown, full.entries.length);
   assert.equal(full.shown, full.pageSize);
 });
 
-test("the range line states a position in this view and never a total", () => {
-  const empty = emailHistoryRangeLabel(toEmailHistoryPage([], 1));
+test("the position line describes this page and never numbers it", () => {
+  const empty = emailHistoryRangeLabel(toEmailHistoryPage([], view()));
   assert.equal(empty, "No emails in this view.");
 
-  const one = emailHistoryRangeLabel(toEmailHistoryPage([row({ id: "a" })], 1));
-  assert.match(one, /^Showing email 1 of this view, newest first/);
-  assert.match(one, /the oldest email in this view is on this page\.$/);
+  const one = emailHistoryRangeLabel(toEmailHistoryPage([row({ id: "a" })], view()));
+  assert.match(one, /^Showing 1 email of this view, newest first\./);
+  assert.match(one, /This is the oldest end of this view\.$/);
 
   const more = emailHistoryRangeLabel(
-    toEmailHistoryPage(Array.from({ length: EMAIL_HISTORY_PAGE_TAKE }, (_, i) => row({ id: `d-${i}` })), 2),
+    toEmailHistoryPage(
+      Array.from({ length: EMAIL_HISTORY_PAGE_TAKE }, (_, i) => row({ id: `d-${i}` })),
+      view({ cursor: { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" } }),
+    ),
   );
-  assert.match(more, /^Showing emails 51–100 of this view/);
-  assert.match(more, /older ones continue on the next page\.$/);
-  // No lifetime claim anywhere in the sentence.
+  assert.match(more, /^Showing 50 emails of this view, newest first\./);
+  assert.match(more, /Newer emails are on the previous page\./);
+  assert.match(more, /Older emails continue on the next page\.$/);
+  // No lifetime claim and no absolute numbering anywhere in the sentence.
   for (const label of [empty, one, more]) {
-    assert.equal(/\bof \d+\b|\btotal\b|\bpage \d+ of\b/i.test(label), false, label);
+    assert.equal(/\bof \d+\b|\btotal\b|\bpage \d+\b/i.test(label), false, label);
   }
 });
 
@@ -293,50 +339,69 @@ test("the recipient search is trimmed and bounded before it reaches a predicate"
   assert.equal(parseEmailRecipientQuery(["a", "b"]), "");
 });
 
-test("the page parameter is a bounded positive integer or the first page", () => {
-  assert.equal(parseEmailHistoryPage(undefined), 1);
-  assert.equal(parseEmailHistoryPage("1"), 1);
-  assert.equal(parseEmailHistoryPage(" 7 "), 7);
-  for (const bogus of ["0", "-3", "1.5", "1e9", "abc", "", "٣", ["2"]]) {
-    assert.equal(parseEmailHistoryPage(bogus as string | string[]), 1, String(bogus));
+test("a cursor round-trips, and every malformed token is the newest page", () => {
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "cmsp9ois200g3x22womm4wfdp" };
+  const token = encodeEmailHistoryCursor(cursor);
+  assert.deepEqual(decodeEmailHistoryCursor(token), cursor);
+  assert.match(token, /^[A-Za-z0-9_-]+$/, "the token must survive a URL unescaped");
+  assert.ok(token.length <= EMAIL_HISTORY_CURSOR_MAX_LENGTH);
+  // Opaque, not secret: the position is already visible on the page that
+  // issued it. Encoding only stops callers hand-assembling offsets.
+  assert.equal(Buffer.from(token, "base64url").toString("utf8"), `${cursor.createdAt}|${cursor.id}`);
+
+  for (const bogus of [
+    undefined,
+    ["a", "b"],
+    "",
+    "   ",
+    "not base64!!",
+    Buffer.from("no-separator", "utf8").toString("base64url"),
+    Buffer.from("|missing-instant", "utf8").toString("base64url"),
+    Buffer.from("2026-05-01T10:00:00.000Z|", "utf8").toString("base64url"),
+    // Parses as a Date but is not the string this page issues — a coerced
+    // anchor pages from somewhere other than the URL names.
+    Buffer.from("2026-05-01|abc", "utf8").toString("base64url"),
+    Buffer.from("May 1 2026|abc", "utf8").toString("base64url"),
+    Buffer.from("not-a-date|abc", "utf8").toString("base64url"),
+    // An id that could never be a cuid, and one past the bound.
+    Buffer.from("2026-05-01T10:00:00.000Z|../../etc", "utf8").toString("base64url"),
+    Buffer.from(`2026-05-01T10:00:00.000Z|${"x".repeat(EMAIL_HISTORY_CURSOR_ID_MAX_LENGTH + 1)}`, "utf8").toString("base64url"),
+    "A".repeat(EMAIL_HISTORY_CURSOR_MAX_LENGTH + 1),
+  ]) {
+    assert.equal(
+      decodeEmailHistoryCursor(bogus as string | string[] | undefined),
+      null,
+      String(bogus).slice(0, 40),
+    );
   }
-  // `skip` is work the database does before returning anything, so an unbounded
-  // `?page=` would be an unbounded offset scan requested by a URL.
-  assert.equal(parseEmailHistoryPage(String(EMAIL_HISTORY_MAX_PAGE + 5_000)), EMAIL_HISTORY_MAX_PAGE);
-  assert.equal(parseEmailHistoryPage("9".repeat(40)), 1, "an over-long digit run is not a page number");
-  assert.equal(clampEmailHistoryPage(Number.NaN), 1);
-  assert.equal(clampEmailHistoryPage(Number.POSITIVE_INFINITY), EMAIL_HISTORY_MAX_PAGE);
-  assert.equal(clampEmailHistoryPage(-4), 1);
-  assert.equal(clampEmailHistoryPage(2.9), 2);
 });
 
-test("skip follows the bounded page, never the raw parameter", () => {
-  assert.equal(emailHistorySkip(1), 0);
-  assert.equal(emailHistorySkip(3), 2 * EMAIL_HISTORY_PAGE_SIZE);
-  assert.equal(emailHistorySkip(0), 0);
-  assert.equal(emailHistorySkip(-9), 0);
-  assert.equal(
-    emailHistorySkip(EMAIL_HISTORY_MAX_PAGE + 1_000),
-    (EMAIL_HISTORY_MAX_PAGE - 1) * EMAIL_HISTORY_PAGE_SIZE,
-  );
+test("the direction parameter is one of two words, defaulting to older", () => {
+  assert.deepEqual([...EMAIL_HISTORY_DIRECTIONS], ["older", "newer"]);
+  assert.equal(parseEmailHistoryDirection("newer"), "newer");
+  for (const bogus of [undefined, "", "older", "NEWER", " newer ", "sideways", ["newer"]]) {
+    assert.equal(parseEmailHistoryDirection(bogus as string | string[] | undefined), "older", String(bogus));
+  }
 });
 
 test("one URL resolves into one bounded view of all four narrowings", () => {
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
   assert.deepEqual(
     parseEmailHistoryQuery(
       {
         [EMAIL_HISTORY_PARAMS.status]: "failed",
         [EMAIL_HISTORY_PARAMS.template]: "decision.accepted",
         [EMAIL_HISTORY_PARAMS.query]: "  nadia@ ",
-        [EMAIL_HISTORY_PARAMS.page]: "4",
+        [EMAIL_HISTORY_PARAMS.cursor]: encodeEmailHistoryCursor(cursor),
+        [EMAIL_HISTORY_PARAMS.direction]: "newer",
       },
       TEMPLATE_KEYS,
     ),
-    { status: "failed", template: "decision.accepted", query: "nadia@", page: 4 },
+    { status: "failed", template: "decision.accepted", query: "nadia@", cursor, direction: "newer" },
   );
   assert.deepEqual(parseEmailHistoryQuery({}, TEMPLATE_KEYS), view());
   assert.equal(emailHistoryIsFiltered(view()), false);
-  assert.equal(emailHistoryIsFiltered(view({ page: 3 })), false, "paging is not a filter");
+  assert.equal(emailHistoryIsFiltered(view({ cursor })), false, "paging is not a filter");
   assert.equal(emailHistoryIsFiltered(view({ status: "failed" })), true);
   assert.equal(emailHistoryIsFiltered(view({ template: "cfp.submitted" })), true);
   assert.equal(emailHistoryIsFiltered(view({ query: "a" })), true);
@@ -367,13 +432,60 @@ test("every narrowing rides on the event scope rather than replacing it", () => 
   assert.deepEqual(injected.template, { eventId: "evt-1" });
 });
 
+test("the keyset predicate is a tuple comparison, not a bare createdAt one", () => {
+  // This is the whole correctness of the pager. A bulk send writes many rows
+  // inside one millisecond, so `createdAt` alone is not unique: `lt` would skip
+  // every tied row after the anchor and `lte` would repeat all of them. The
+  // second disjunct — same instant, smaller id — is what makes the boundary
+  // exact.
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const instant = new Date(cursor.createdAt);
+
+  assert.deepEqual(emailHistoryKeysetWhere(cursor, "older"), {
+    OR: [
+      { createdAt: { lt: instant } },
+      { createdAt: instant, id: { lt: "anchor" } },
+    ],
+  });
+  // The mirror, for walking back towards the newest.
+  assert.deepEqual(emailHistoryKeysetWhere(cursor, "newer"), {
+    OR: [
+      { createdAt: { gt: instant } },
+      { createdAt: instant, id: { gt: "anchor" } },
+    ],
+  });
+  assert.equal(emailHistoryKeysetWhere(null, "older"), null);
+
+  // It reaches the query ANDed as its own clause, so a future narrowing that
+  // also needs an OR cannot overwrite it and silently restore a full re-scan.
+  const where = emailHistoryWhere("evt-1", view({ status: "failed", cursor }));
+  assert.deepEqual(where.AND, [emailHistoryKeysetWhere(cursor, "older")]);
+  assert.deepEqual(where.template, { eventId: "evt-1" });
+  assert.equal(where.status, "failed");
+  // And no offset survives anywhere in the composition.
+  assert.equal("skip" in where, false);
+});
+
+test("a newer read reverses the order so the database returns the nearest rows", () => {
+  assert.deepEqual(emailHistoryOrderByFor("older"), [{ createdAt: "desc" }, { id: "desc" }]);
+  assert.deepEqual(emailHistoryOrderByFor("newer"), [{ createdAt: "asc" }, { id: "asc" }]);
+  // The render order constant is untouched: the table is always newest-first.
+  assert.deepEqual([...emailHistoryOrderBy], [{ createdAt: "desc" }, { id: "desc" }]);
+});
+
 test("the unfiltered chip is a bare path and every other state is spelled out", () => {
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const token = encodeEmailHistoryCursor(cursor);
   assert.equal(emailHistoryHref(view()), EMAIL_HISTORY_PATH);
-  // A no-op parameter is noise in a shared URL.
-  assert.equal(emailHistoryHref(view({ page: 1 })), EMAIL_HISTORY_PATH);
+  // A direction without an anchor means nothing, so it is never written alone.
+  assert.equal(emailHistoryHref(view({ direction: "newer" })), EMAIL_HISTORY_PATH);
   assert.equal(
-    emailHistoryHref(view({ status: "failed", template: "cfp.submitted", query: "a b", page: 2 })),
-    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=a+b&page=2`,
+    emailHistoryHref(view({ status: "failed", template: "cfp.submitted", query: "a b", cursor })),
+    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=a+b&cursor=${token}`,
+  );
+  assert.equal(
+    emailHistoryHref(view({ cursor, direction: "newer" })),
+    `${EMAIL_HISTORY_PATH}?cursor=${token}&dir=newer`,
   );
   // Anything an operator can type is encoded, never interpolated raw.
   assert.equal(
@@ -382,38 +494,48 @@ test("the unfiltered chip is a bare path and every other state is spelled out", 
   );
 });
 
-test("a chip link carries the search and template but returns to the first page", () => {
-  const current = view({ status: "sent", template: "cfp.submitted", query: "nadia", page: 6 });
+test("a chip link carries the search and template but drops the anchor", () => {
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const current = view({ status: "sent", template: "cfp.submitted", query: "nadia", cursor });
   const href = emailHistoryStatusHref(current, "failed");
   assert.equal(href, `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=nadia`);
-  // Page 6 of one filter is not page 6 of another; keeping it lands the
-  // operator on an empty page of a set they just narrowed.
-  assert.equal(href.includes("page="), false);
+  // A position inside one filtered set names no position in another; carrying
+  // it would land the operator mid-way through a set they just narrowed.
+  assert.equal(href.includes("cursor="), false);
   assert.equal(
     emailHistoryStatusHref(current, EMAIL_STATUS_ALL),
     `${EMAIL_HISTORY_PATH}?template=cfp.submitted&q=nadia`,
   );
+  assert.equal(
+    emailHistoryNewestHref(current),
+    `${EMAIL_HISTORY_PATH}?status=sent&template=cfp.submitted&q=nadia`,
+  );
 });
 
 test("a pager link carries every active filter, so paging never changes the set", () => {
-  const current = view({ status: "failed", template: "cfp.submitted", query: "nadia", page: 3 });
+  const anchor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const next = { createdAt: "2026-05-01T09:00:00.000Z", id: "edge" };
+  const current = view({ status: "failed", template: "cfp.submitted", query: "nadia", cursor: anchor });
+  const filters = "status=failed&template=cfp.submitted&q=nadia";
+
   assert.equal(
-    emailHistoryPageHref(current, 4),
-    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=nadia&page=4`,
+    emailHistoryOlderHref(current, next),
+    `${EMAIL_HISTORY_PATH}?${filters}&cursor=${encodeEmailHistoryCursor(next)}`,
   );
   assert.equal(
-    emailHistoryPageHref(current, 2),
-    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=nadia&page=2`,
+    emailHistoryNewerHref(current, next),
+    `${EMAIL_HISTORY_PATH}?${filters}&cursor=${encodeEmailHistoryCursor(next)}&dir=newer`,
   );
-  // Back to the first page drops the parameter rather than writing `page=1`.
-  assert.equal(
-    emailHistoryPageHref(current, 1),
-    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=nadia`,
-  );
-  assert.equal(
-    emailHistoryPageHref(current, EMAIL_HISTORY_MAX_PAGE + 10),
-    `${EMAIL_HISTORY_PATH}?status=failed&template=cfp.submitted&q=nadia&page=${EMAIL_HISTORY_MAX_PAGE}`,
-  );
+  // Back to the top drops the anchor rather than naming a first page.
+  assert.equal(emailHistoryNewestHref(current), `${EMAIL_HISTORY_PATH}?${filters}`);
+  // No link this page can build contains an offset.
+  for (const href of [
+    emailHistoryOlderHref(current, next),
+    emailHistoryNewerHref(current, next),
+    emailHistoryNewestHref(current),
+  ]) {
+    assert.equal(/page=|skip=|offset=/.test(href), false, href);
+  }
 });
 
 test("only the unfiltered first page may claim the log itself is empty", () => {
@@ -439,16 +561,19 @@ test("an empty view names what it narrowed to instead of the whole log", () => {
   assert.equal(both.title, "No emails match these filters");
   assert.match(both.body, /the “cfp\.submitted” template and recipients containing “nadia”/);
 
-  const past = emailHistoryEmptyState(view({ page: 4 }));
-  assert.equal(past.title, "Nothing on this page");
-  assert.match(past.body, /Go back a page/);
+  const past = emailHistoryEmptyState(view({ cursor: { createdAt: "2026-05-01T10:00:00.000Z", id: "x" } }));
+  assert.equal(past.title, "Nothing further in this view");
+  assert.match(past.body, /Go back to the newest emails/);
+  // An anchor that outlived what it pointed at is a stale link, not an empty
+  // log — and the copy says so rather than picking one of the two.
+  assert.match(past.body, /the log has changed since that link was made/);
 
   // Never claims the log is empty once anything narrowed it.
   for (const narrowed of [
     view({ status: "failed" }),
     view({ template: "cfp.submitted" }),
     view({ query: "nadia" }),
-    view({ page: 2 }),
+    view({ cursor: { createdAt: "2026-05-01T10:00:00.000Z", id: "x" } }),
   ]) {
     const state = emailHistoryEmptyState(narrowed);
     assert.notEqual(state.title, "No emails sent yet", JSON.stringify(narrowed));
