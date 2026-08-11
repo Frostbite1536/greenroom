@@ -56,6 +56,7 @@ the route tree but is not separately represented by a screenshot.
 | Surface | Route or document | Notes |
 | --- | --- | --- |
 | Versioned read-only API | `/api/v1/submissions`, `/api/v1/speakers`, `/api/v1/schedule` | Key-gated and off unless configured; see [../API.md](../API.md). |
+| Published API contract | `/api/v1/openapi`, `/docs/api` | The OpenAPI 3.1 document and its rendered page. Both are public: no key, no database read, no programme data, and never the key itself. |
 | Calendar export | `/api/comms/calendar?eventId=<eventId>` | Public export of the programme according to its publication rules. |
 | Foreign-origin schedule proof | [embed-schedule-proof.html](embed-schedule-proof.html) | Standalone embedding proof. |
 | Reproducible verification | [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) and the [verification receipts](README.md#verification-receipts) | Receipt provenance and historical/current labels remain authoritative in those documents. |
