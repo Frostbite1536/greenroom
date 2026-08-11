@@ -70,8 +70,10 @@ role in `components/app-shell.tsx`, mirroring the server-side authorization each
 Public routes (no shell, must render with a null session): `/` (landing),
 `/cfp/[eventSlug]/[formSlug]` (canonical; the legacy one-segment `/cfp/[formId]`
 resolves exact published IDs and unambiguous slugs only), `/embed/schedule`,
-`/embed/speakers`, `/reviewer-invite`, `/login`, and the alias redirects
-`/schedule`, `/speakers`, `/agenda`, `/sessions`.
+`/embed/speakers`, the canonical public programme pages `/schedule` and
+`/speakers` (server-rendered from the same agenda read as the embeds),
+`/reviewer-invite`, `/login`, and the alias redirects `/agenda` and `/sessions`
+(both into `/schedule`).
 
 Backend ownership routes:
 

@@ -196,8 +196,11 @@ One-click personas on `/login`:
 - **Evaluator** — Ravi Patel (`ravi@greenroom-hq.com`)
 - **Speaker** — Sofia Marques (`sofia@greenroom-hq.com`)
 
-`/login` offers only these three buttons — there is no email/password form — and
-a session grants no authority by itself: the role is resolved from the
+`/login` offers these three one-click persona buttons alongside an
+email/password form (the seeded personas and harness fixtures have credentials;
+there is deliberately no self-service registration — new accounts are on the
+post-hackathon roadmap). Either path yields the same kind of session, and a
+session grants no authority by itself: the role is resolved from the
 `EventMember` row for the signed-in email on every request. Shell users created
 by a public CFP submission (co-speakers keyed by email) have no membership and
 therefore no portal access. See [`LIFECYCLE.md`](LIFECYCLE.md) for what each
