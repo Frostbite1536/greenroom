@@ -4,6 +4,8 @@ import type { UserRole } from "@prisma/client";
 import {
   EVALUATOR_HAS_ASSIGNMENTS,
   LAST_ADMIN,
+  NO_ACCOUNT_FOR_EMAIL,
+  NO_ACCOUNT_FOR_EMAIL_MESSAGE,
   SPEAKER_HAS_PROGRAMME_WORK,
   TEAM_BLOCKING_ASSIGNMENT_STATUSES,
   decideMemberRemoval,
@@ -195,18 +197,36 @@ test("programme work does not block removing an organizer or a reviewer", () => 
 /* ---------------- contracts ---------------- */
 
 test("the add contract grants organizer or reviewer only, and accepts no event or role smuggling", () => {
-  const parsed = eventTeamAddSchema.parse({ email: "  Ada@Example.COM ", name: "  Ada  ", role: "ADMIN" });
-  assert.deepEqual(parsed, { email: "ada@example.com", name: "Ada", role: "ADMIN" });
+  const parsed = eventTeamAddSchema.parse({ email: "  Ada@Example.COM ", role: "ADMIN" });
+  assert.deepEqual(parsed, { email: "ada@example.com", role: "ADMIN" });
 
   // SPEAKER is provisioned by /admin/speakers, which also writes the profile.
-  assert.equal(eventTeamAddSchema.safeParse({ email: "a@b.co", name: "A", role: "SPEAKER" }).success, false);
+  assert.equal(eventTeamAddSchema.safeParse({ email: "a@b.co", role: "SPEAKER" }).success, false);
   // No event id, ever: the signed ADMIN context is the only event authority.
-  assert.equal(
-    eventTeamAddSchema.safeParse({ email: "a@b.co", name: "A", role: "ADMIN", eventId: "evt" }).success,
-    false,
-  );
-  assert.equal(eventTeamAddSchema.safeParse({ email: "not-an-email", name: "A", role: "ADMIN" }).success, false);
-  assert.equal(eventTeamAddSchema.safeParse({ email: "a@b.co", name: "   ", role: "ADMIN" }).success, false);
+  assert.equal(eventTeamAddSchema.safeParse({ email: "a@b.co", role: "ADMIN", eventId: "evt" }).success, false);
+  assert.equal(eventTeamAddSchema.safeParse({ email: "not-an-email", role: "ADMIN" }).success, false);
+});
+
+test("the add contract takes NO name, because it never creates the account it resolves", () => {
+  // Strict, so a client sending one is a validation failure rather than a
+  // silently ignored field: nobody can believe they named or renamed a person
+  // from this surface. The resolved account carries its own name.
+  assert.equal(eventTeamAddSchema.safeParse({ email: "a@b.co", role: "ADMIN", name: "Ada" }).success, false);
+  assert.ok(!("name" in eventTeamAddSchema.parse({ email: "a@b.co", role: "ADMIN" })));
+});
+
+test("an address with no account is a named refusal that spells out why, not a shell row", () => {
+  // A shell User here could never be signed in to (no credential to sign a
+  // reset token against) AND would make /api/auth/signup answer 409 forever,
+  // taking away that person's only self-service way in. Nothing in this
+  // codebase deletes a User, so the trap would be permanent. The refusal has to
+  // carry all three facts, and the order that actually works.
+  assert.equal(NO_ACCOUNT_FOR_EMAIL, "NO_ACCOUNT_FOR_EMAIL");
+  assert.match(NO_ACCOUNT_FOR_EMAIL_MESSAGE, /No Greenroom account uses that email address/);
+  assert.match(NO_ACCOUNT_FOR_EMAIL_MESSAGE, /a new account has no password/);
+  assert.match(NO_ACCOUNT_FOR_EMAIL_MESSAGE, /only mails accounts that already have one/);
+  assert.match(NO_ACCOUNT_FOR_EMAIL_MESSAGE, /block them from signing up themselves/);
+  assert.match(NO_ACCOUNT_FOR_EMAIL_MESSAGE, /sign up at \/signup first, then add the same address here/);
 });
 
 test("the role-change contract addresses a user id and refuses to carry an identity", () => {

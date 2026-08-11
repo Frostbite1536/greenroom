@@ -58,26 +58,44 @@ test("the event team key is taken FIRST, before every C17 key, in all three hand
   assert.doesNotMatch(del, /lockPublicSubmissionIdentities/);
 });
 
-test("C17: adding by email reuses the account and never overwrites its global name", () => {
+test("adding by email RESOLVES an account and never creates one", () => {
+  // The load-bearing property of this whole route. A shell User created here
+  // could never be signed in to — /api/auth/forgot has no stored credential to
+  // sign a reset token against — and its existence would make /api/auth/signup
+  // answer 409 forever, taking away that person's only self-service way in.
+  // Nothing in this codebase deletes a User, so the trap would be permanent.
   assert.match(post, /lockPublicSubmissionIdentities\(tx, \[email\]\)/);
-  assert.ok(post.indexOf("lockPublicSubmissionIdentities") < post.indexOf("tx.user.upsert"));
-  assert.match(post, /tx\.user\.upsert\(\{[\s\S]*?where:\s*\{ email \},[\s\S]*?update:\s*\{\},[\s\S]*?create:\s*\{ email, name \}/);
-  // `userCreated` distinguishes the existing-account case from the new-shell
-  // case, which is the whole difference the UI has to report honestly.
-  assert.match(post, /const existing = await tx\.user\.findUnique\(\{ where: \{ email \}/);
-  assert.match(post, /userCreated:\s*existing === null/);
+  assert.match(post, /const user = await tx\.user\.findUnique\(\{\s*where: \{ email \},/);
+  assert.ok(post.indexOf("lockPublicSubmissionIdentities") < post.indexOf("tx.user.findUnique"));
   // The membership is created only when absent, which is what makes a repeat
   // POST a no-op rather than a duplicate or a silent re-role.
   assert.match(post, /if \(!target\) \{\s*await tx\.eventMember\.create\(\{ data: \{ eventId: ctx\.eventId, userId: user\.id, role \} \}\);/);
   assert.ok(post.indexOf("lockExistingEventMembersForUpdate") < post.indexOf("tx.eventMember.create"));
 });
 
-test("no handler here writes a User email or renames a user", () => {
-  // `create: { email, name }` on a brand-new account is the only place either
-  // appears; no update path may carry them.
-  assert.doesNotMatch(route, /tx\.user\.update/);
+test("no handler here writes the User table at all — not a create, not an update", () => {
+  assert.doesNotMatch(route, /tx\.user\.(create|createMany|upsert|update|updateMany|delete|deleteMany)\(/);
+  // …and therefore cannot carry an identity into one.
   assert.doesNotMatch(route, /update:\s*\{[^}]*email/);
   assert.doesNotMatch(route, /update:\s*\{[^}]*name/);
+  // The add body carries no `name` at all, so there is nothing a reintroduced
+  // writer could take one from. Reading the RESOLVED account's stored name to
+  // report it back is the opposite of writing one and stays allowed.
+  assert.match(post, /const \{ email, role \} = await parseBody\(req, eventTeamAddSchema\)/);
+  assert.match(post, /member: \{ userId: user\.id, name: user\.name, email: user\.email, role \}/);
+});
+
+test("an unknown address is a named 422 raised only AFTER the caller's ADMIN row is re-read", () => {
+  assert.match(post, /if \(!user\) \{\s*throw new ApiError\(422, NO_ACCOUNT_FOR_EMAIL, NO_ACCOUNT_FOR_EMAIL_MESSAGE/);
+  // Whether an address has an account is answered only to a caller whose ADMIN
+  // role was just read from the database, never to one whose session merely
+  // claimed it — so the refusal must come after the authority check.
+  assert.ok(post.indexOf('issuer?.role !== "ADMIN"') < post.indexOf("if (!user) {"));
+  // …which requires the caller's own authority row to be locked and read even
+  // when the address resolves to nothing.
+  assert.match(post, /user \? \[ctx\.userId, user\.id\] : \[ctx\.userId\]/);
+  // The refusal lands on the field that caused it.
+  assert.match(post, /email: \["No Greenroom account uses this address yet\."\]/);
 });
 
 test("an add can never become a demotion — a different existing role is refused", () => {

@@ -8,6 +8,8 @@ import {
 } from "@/lib/services/event-member-lock";
 import { lockPublicSubmissionIdentities } from "@/lib/services/public-submission";
 import {
+  NO_ACCOUNT_FOR_EMAIL,
+  NO_ACCOUNT_FOR_EMAIL_MESSAGE,
   countActiveAssignments,
   countEventAdmins,
   decideMemberRemoval,
@@ -43,9 +45,12 @@ export const dynamic = "force-dynamic";
  * PATCH and DELETE address a user id directly and therefore never take the
  * identity key.
  *
- * `User.email` and `User.name` are never written by any handler here. Changing
- * a global identity is out of scope by design (S10 uniqueness, C26 recipient
- * derivation), exactly as on the speaker path.
+ * No handler here writes the `User` table at all — not a create, not an update.
+ * Changing a global identity is out of scope by design (S10 uniqueness, C26
+ * recipient derivation), and creating one is refused outright: see
+ * `NO_ACCOUNT_FOR_EMAIL`. That is the one place this surface deliberately
+ * departs from the speaker and reviewer-invite paths, which do provision a
+ * shell account, because only they can reach the person afterwards.
  *
  * No notification email is sent. The reviewer-invite template is a *bearer
  * link* shape, and there is no honest equivalent here: a newly provisioned
@@ -84,22 +89,27 @@ async function readGuardFacts(
 }
 
 /**
- * POST /api/admin/team — add one organizer or reviewer to this event.
+ * POST /api/admin/team — add one existing account to this event as an organizer
+ * or a reviewer.
  *
- * Idempotent on (email, event) for the same role: the account behind the email
- * is reused, the membership is created only when absent, and re-sending the
- * same body changes nothing. The existing account's global `name` is preserved,
- * never overwritten by what the organizer typed (C17) — the response reports
- * the stored name back so the UI can say so rather than imply a rename.
+ * **This handler never creates a `User`.** It is the one provisioning surface
+ * that must not: a shell account here could never be signed in to, and its
+ * existence would block the person's own `/signup`, permanently — nothing in
+ * this codebase deletes a `User`. An unknown address is therefore a named 422
+ * (`NO_ACCOUNT_FOR_EMAIL`) naming the order that works, not a row. The full
+ * reasoning, and why the speaker and reviewer paths legitimately differ, is in
+ * `lib/services/event-team.ts`.
  *
- * An email that already holds a DIFFERENT role is refused rather than silently
- * moved. Changing somebody's authority is PATCH's job, where the last-organizer
- * and open-assignment guards apply; letting an add do it quietly would route a
+ * Idempotent on (email, event) for the same role: the membership is created
+ * only when absent, and re-sending the same body changes nothing. An email that
+ * already holds a DIFFERENT role is refused rather than silently moved —
+ * changing somebody's authority is PATCH's job, where the last-organizer and
+ * open-assignment guards apply, and letting an add do it quietly would route a
  * demotion around both.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
-  const { email, name, role } = await parseBody(req, eventTeamAddSchema);
+  const { email, role } = await parseBody(req, eventTeamAddSchema);
 
   const result = await prisma.$transaction(async (tx) => {
     await lockEventTeam(tx, ctx.eventId);
@@ -108,27 +118,39 @@ export const POST = handle(async (req) => {
     `;
     if (!eventRows[0]) throw new ApiError(404, "EVENT_NOT_FOUND", "Event not found.");
 
-    // The public writer's normalized email identity lock: it closes a
-    // simultaneous anonymous co-speaker upsert on the same address. Same key,
-    // same position in the order, as `/api/admin/speakers`.
+    // Still taken, and still in the C17 position, even though nothing here
+    // writes a `User`: it serializes this lookup against the public writer's
+    // identity upsert, so the "no such account" answer stays true for as long
+    // as this transaction acts on it, and the acquisition order stays the one
+    // shared with `/api/admin/speakers` and the reviewer invite.
     await lockPublicSubmissionIdentities(tx, [email]);
-    const existing = await tx.user.findUnique({ where: { email }, select: { id: true } });
-    const user = await tx.user.upsert({
+    const user = await tx.user.findUnique({
       where: { email },
-      // Empty on purpose. A `User.name` is that person's own, across every
-      // event; an organizer adding them here does not get to rewrite it.
-      update: {},
-      create: { email, name },
       select: { id: true, email: true, name: true },
     });
 
+    // A missing account still locks the caller's own authority row below, so
+    // the refusal cannot be reached by anybody whose ADMIN role went away.
     await lockEventMemberAuthorities(tx, [
       { eventId: ctx.eventId, userId: ctx.userId },
-      { eventId: ctx.eventId, userId: user.id },
+      ...(user ? [{ eventId: ctx.eventId, userId: user.id }] : []),
     ]);
-    const members = await lockExistingEventMembersForUpdate(tx, ctx.eventId, [ctx.userId, user.id]);
+    const members = await lockExistingEventMembersForUpdate(
+      tx,
+      ctx.eventId,
+      user ? [ctx.userId, user.id] : [ctx.userId],
+    );
     const issuer = members.find((member) => member.userId === ctx.userId);
     if (issuer?.role !== "ADMIN") throw forbidden();
+
+    // Strictly after the authority check, never before it: whether an address
+    // has an account is answered only to a caller whose ADMIN role was just
+    // re-read from the database, not to one whose session merely claimed it.
+    if (!user) {
+      throw new ApiError(422, NO_ACCOUNT_FOR_EMAIL, NO_ACCOUNT_FOR_EMAIL_MESSAGE, {
+        email: ["No Greenroom account uses this address yet."],
+      });
+    }
 
     const target = members.find((member) => member.userId === user.id);
     if (target && target.role !== role) {
@@ -145,8 +167,6 @@ export const POST = handle(async (req) => {
 
     return {
       member: { userId: user.id, name: user.name, email: user.email, role },
-      requestedName: name,
-      userCreated: existing === null,
       membershipCreated: !target,
     };
   });

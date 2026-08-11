@@ -68,18 +68,62 @@ export function roleCanHoldAssignments(role: UserRole): boolean {
   return role === "EVALUATOR" || role === "ADMIN";
 }
 
-/** POST body: no event id, no authority id — the signed ADMIN context is both. */
+/**
+ * POST body: no event id, no authority id — the signed ADMIN context is both.
+ *
+ * There is deliberately no `name`. This surface never creates a `User` (see
+ * `NO_ACCOUNT_FOR_EMAIL`), so there is no row a typed name could land in, and
+ * `.strict()` makes sending one a validation failure rather than a silently
+ * ignored field — a client can never believe it named or renamed anybody here.
+ * The address resolves to an account that already has its own name, and the
+ * response reports that stored name back.
+ */
 export const eventTeamAddSchema = z
   .object({
     // Normalized identically to the speaker and reviewer-invite contracts, so
     // the three provisioning surfaces resolve one address to one account.
     email: z.string().trim().toLowerCase().max(254).email(),
-    name: z.string().trim().min(1).max(120),
     role: z.enum(TEAM_ADDABLE_ROLES),
   })
   .strict();
 
 export type EventTeamAdd = z.infer<typeof eventTeamAddSchema>;
+
+/**
+ * Adding an address with no account is refused, not provisioned.
+ *
+ * The speaker and reviewer-invite paths both upsert a shell `User` for an
+ * unknown address, and for them that is sound: a speaker is reachable through
+ * the organizer and a reviewer receives a signed bearer link that signs them in
+ * without a password. A team member has neither. A shell account here would be
+ * one **nobody could ever sign in to**, and worse, one that permanently blocks
+ * the only fix:
+ *
+ * - `/api/auth/forgot` cannot help it. The reset token is signed over a digest
+ *   of the credential a `User` currently stores, so an account holding none has
+ *   nothing to sign against; the route returns early and sends no mail.
+ * - `/api/auth/signup` cannot help it either. It answers an address that
+ *   already has a `User` row with a 409 — and the shell row would be exactly
+ *   that. Creating it takes away the person's own way in.
+ *
+ * Nothing in this codebase deletes a `User`, so that trap would be permanent.
+ * Refusing costs an organizer one message to the person they are adding;
+ * provisioning costs that person their account. The refusal names the order
+ * that works, which is the one `/welcome` and `/api/auth/continue` were built
+ * for: they sign up first, then the organizer adds the same address.
+ *
+ * What this does disclose to an event ADMIN: whether an address has an account.
+ * That is not new — the speaker path already reports `userCreated` to the same
+ * audience — and it is why the refusal is raised only AFTER the caller's stored
+ * ADMIN authority has been re-read under the write's own lock.
+ */
+export const NO_ACCOUNT_FOR_EMAIL = "NO_ACCOUNT_FOR_EMAIL";
+
+export const NO_ACCOUNT_FOR_EMAIL_MESSAGE =
+  "No Greenroom account uses that email address, and creating one from here would leave them unable to sign "
+  + "in: a new account has no password, “Forgot password” only mails accounts that already have one, and the "
+  + "empty account would then block them from signing up themselves. Ask them to sign up at /signup first, "
+  + "then add the same address here — they will land in this event the next time they sign in.";
 
 /**
  * PATCH body. `userId` addresses the row and is authorized against this event's

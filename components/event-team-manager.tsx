@@ -8,7 +8,7 @@ import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client
 import {
   TEAM_ADDABLE_ROLES,
   TEAM_ASSIGNABLE_ROLES,
-  TEAM_NEW_ACCOUNT_NOTE,
+  TEAM_EXISTING_ACCOUNT_NOTE,
   TEAM_ROLE_DESCRIPTIONS,
   TEAM_ROLE_LABELS,
   teamAddNotice,
@@ -29,9 +29,10 @@ import {
  * is a courtesy, never a control.
  *
  * The one thing this surface must not do is imply an access path that does not
- * exist. A brand-new account has no password and cannot obtain one — see
- * `TEAM_NEW_ACCOUNT_NOTE` — so the add dialog says so before the organizer
- * types, and again in the result.
+ * exist. An account created from here would have no password and no way to
+ * obtain one — so the add takes an address that already has an account, and the
+ * dialog says why before the organizer types (`TEAM_EXISTING_ACCOUNT_NOTE`)
+ * rather than only when the server refuses.
  */
 
 export type TeamMemberView = {
@@ -52,7 +53,6 @@ function Notice({ message }: { message: string | null }) {
 export function AddTeamMemberDialog() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamAddableRole>("EVALUATOR");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -61,7 +61,6 @@ export function AddTeamMemberDialog() {
 
   function close() {
     setOpen(false);
-    setName("");
     setEmail("");
     setRole("EVALUATOR");
     setErrors({});
@@ -69,34 +68,35 @@ export function AddTeamMemberDialog() {
   }
 
   async function submit() {
-    const next: Record<string, string> = {};
-    if (name.trim() === "") next.name = "Give this person a name.";
-    if (email.trim() === "") next.email = "An email address identifies their account.";
-    setErrors(next);
-    if (Object.keys(next).length > 0) return;
+    // The form asks for an address and a role, and nothing else: the account it
+    // resolves already stores its own name, and the route writes no `User`.
+    if (email.trim() === "") {
+      setErrors({ email: "An email address identifies their existing account." });
+      return;
+    }
+    setErrors({});
 
     setSubmitting(true);
     setNotice(null);
     const res = await apiPost<{
       member: { userId: string; name: string; email: string; role: UserRole };
-      requestedName: string;
-      userCreated: boolean;
       membershipCreated: boolean;
-    }>("/api/admin/team", { name: name.trim(), email: email.trim(), role });
+    }>("/api/admin/team", { email: email.trim(), role });
     setSubmitting(false);
     if (!res.ok) {
+      // A NO_ACCOUNT_FOR_EMAIL refusal arrives with `fieldErrors.email`, so it
+      // lands beside the input that caused it; the full explanation is the
+      // message, shown as the dialog's root error.
       const mapped = firstFieldErrors(res.error.fieldErrors);
-      setErrors(Object.keys(mapped).length > 0 ? mapped : { _root: res.error.message });
+      setErrors({ ...mapped, _root: res.error.message });
       return;
     }
-    // Reported from the stored row, not the typed draft: when the email already
-    // had an account, its saved name is what the table will show.
+    // The stored name, not anything typed here — which is also how the
+    // organizer confirms the address matched the person they meant.
     setNotice(teamAddNotice({
       name: res.data.member.name,
       email: res.data.member.email,
       role: res.data.member.role,
-      requestedName: res.data.requestedName,
-      userCreated: res.data.userCreated,
       membershipCreated: res.data.membershipCreated,
     }));
     close();
@@ -113,7 +113,7 @@ export function AddTeamMemberDialog() {
       {open ? (
         <TeamDialog
           title="Add a team member"
-          intro="Adds this person to the event as an organizer or a reviewer. If the email already has an account, that account is reused and keeps its own saved name."
+          intro="Gives an existing Greenroom account access to this event as an organizer or a reviewer. Their account keeps its own saved name — this never creates one."
           submitLabel={submitting ? "Adding…" : "Add member"}
           submitting={submitting}
           rootError={errors._root}
@@ -128,21 +128,8 @@ export function AddTeamMemberDialog() {
         >
           {(ids) => (
             <>
-              <label className="stack" htmlFor={`${ids}-name`}>
-                <span className="field-label">Full name</span>
-                <input
-                  id={`${ids}-name`}
-                  className="text-input"
-                  autoComplete="off"
-                  value={name}
-                  onChange={(change) => setName(change.target.value)}
-                  aria-describedby={errors.name ? `${ids}-name-error` : undefined}
-                />
-                {errors.name ? <span className="field-error" id={`${ids}-name-error`}>{errors.name}</span> : null}
-              </label>
-
               <label className="stack" htmlFor={`${ids}-email`}>
-                <span className="field-label">Email</span>
+                <span className="field-label">Email of an existing account</span>
                 <input
                   id={`${ids}-email`}
                   className="text-input"
@@ -151,8 +138,9 @@ export function AddTeamMemberDialog() {
                   value={email}
                   onChange={(change) => setEmail(change.target.value)}
                   aria-describedby={`${ids}-email-help`}
+                  aria-invalid={errors.email ? true : undefined}
                 />
-                <span className="hint" id={`${ids}-email-help`}>{TEAM_NEW_ACCOUNT_NOTE}</span>
+                <span className="hint" id={`${ids}-email-help`}>{TEAM_EXISTING_ACCOUNT_NOTE}</span>
                 {errors.email ? <span className="field-error">{errors.email}</span> : null}
               </label>
 

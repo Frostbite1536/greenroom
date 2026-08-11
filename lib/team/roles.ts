@@ -75,29 +75,28 @@ export function compareTeamMembers(a: TeamMember, b: TeamMember): number {
 }
 
 /**
- * How a newly provisioned account actually gets in — stated exactly, because
- * the obvious guess is wrong and this surface must not imply a door that does
- * not open.
+ * Why this form only accepts an address that already has an account — stated
+ * before the organizer types, because the obvious expectation is the opposite.
  *
  * "Forgot password" cannot help an account that has never had a password.
  * `lib/services/password-reset-token.ts` signs a reset token over a digest of
  * the credential a `User` currently stores, so an account holding none has
  * nothing to sign against; `app/api/auth/forgot/route.ts` returns early for
  * exactly that case and sends no mail, while still answering neutrally either
- * way. Nor can that person sign themselves up afterwards: `/api/auth/signup`
- * answers an address that already has a `User` row with a 409, and the row this
- * add creates is exactly that.
+ * way. Nor could that person sign themselves up afterwards: `/api/auth/signup`
+ * answers an address that already has a `User` row with a 409.
  *
- * So the working order is the reverse one, and it is the one `/welcome` and
- * `/api/auth/continue` were built for: the person creates their own account
- * first, then an organizer adds that address here, and they are in on their
- * next sign-in. Adding an unknown address still works and still stores a real
- * membership — it simply cannot hand that person a way in.
+ * So provisioning a shell account from here would create one nobody can sign in
+ * to AND take away that person's own way in — permanently, since nothing in
+ * this codebase deletes a `User`. The add refuses instead, and names the order
+ * that works: they sign up first, the organizer adds the same address second.
+ * That is exactly the flow `/welcome` and `/api/auth/continue` were built for.
  */
-export const TEAM_NEW_ACCOUNT_NOTE =
-  "If this address has no Greenroom account yet, one is created here — but it will have no password, and "
-  + "“Forgot password” only mails accounts that already have one. Ask them to sign up at /signup first, then "
-  + "add that address; they will land in this event the next time they sign in.";
+export const TEAM_EXISTING_ACCOUNT_NOTE =
+  "This address must already have a Greenroom account. Creating one from here would leave them unable to "
+  + "sign in — a new account has no password, and “Forgot password” only mails accounts that already have "
+  + "one. Ask them to sign up at /signup first, then add the same address; they will land in this event the "
+  + "next time they sign in.";
 
 /**
  * "an organizer", "a reviewer". The role labels are fixed and known, so this is
@@ -109,31 +108,25 @@ export function teamRolePhrase(role: UserRole): string {
   return `${role === "ADMIN" ? "an" : "a"} ${label}`;
 }
 
+/**
+ * The result of an add, in the organizer's words.
+ *
+ * `name` is the one the resolved account already stores, never anything the
+ * organizer typed — the form does not ask for a name and the route writes no
+ * `User` — so printing it back is also how the organizer confirms they matched
+ * the person they meant.
+ */
 export function teamAddNotice(result: {
   name: string;
   email: string;
   role: UserRole;
-  requestedName: string;
-  userCreated: boolean;
   membershipCreated: boolean;
 }): string {
   const role = teamRolePhrase(result.role);
   if (!result.membershipCreated) {
     return `${result.name} (${result.email}) is already ${role} on this event. Nothing changed.`;
   }
-  if (!result.userCreated) {
-    // Reported from the stored row: an existing account keeps its own name, so
-    // saying "added <typed name>" would imply a rename that did not happen.
-    const renamed = result.requestedName !== result.name
-      ? ` Their account is saved as “${result.name}”, not “${result.requestedName}” — a person's name is their own across every event.`
-      : "";
-    return `${result.name} (${result.email}) is now ${role} on this event. They will see it the next time they sign in.${renamed}`;
-  }
-  return (
-    `Created an account for ${result.email} and made it ${role} on this event. It has no password yet, and `
-    + "“Forgot password” cannot send a reset link to an account that never had one — so they cannot sign "
-    + "themselves in. Remove this member, ask them to sign up at /signup, then add the same address again."
-  );
+  return `${result.name} (${result.email}) is now ${role} on this event. They will see it the next time they sign in.`;
 }
 
 /** Shown when a dialog throws before it could report anything at all. */

@@ -97,21 +97,38 @@ the order stays narrowing and cycle-free. Nothing outside the team routes takes
 it. All guard counts are read after the member rows are locked and inside the
 transaction that writes; every refusal is a named 422.
 
-## Event team: a provisioned account cannot let itself in
-Adding an unknown address creates a `User` shell plus a membership, under the
-same C17 identity order `/api/admin/speakers` uses. That shell **cannot sign
-in, and cannot obtain a way in by itself**: the reset token is signed over a
-digest of the credential a user currently stores, so an account holding none
-has nothing to sign against and `/api/auth/forgot` sends no mail; and
-`/api/auth/signup` answers an address that already has a `User` row with a 409,
-which is precisely the row the add just created. Deliberately not fixed here —
-minting reset tokens for credential-less accounts would weaken the redeem
-path's use-once-by-construction property, and that is an auth decision, not a
-team-screen one. The working order is the reverse one, and it is the one
-`/welcome` and `/api/auth/continue` were built for: the person signs up first,
-then an organizer adds that address. The UI states this rather than implying a
-reset email is coming, and no notification mail is sent at all — a "you were
-added" message would point somebody at a door that does not open for them.
+## Event team: the add resolves an account, it never creates one
+`POST /api/admin/team` takes an email and a role, and **refuses an address with
+no `User` row** (422 `NO_ACCOUNT_FOR_EMAIL`). It is the one provisioning
+surface that must not upsert a shell account, because a shell created here
+would be a trap rather than a convenience:
+
+- It could never be signed in to. The reset token is signed over a digest of
+  the credential a user currently stores, so an account holding none has
+  nothing to sign against and `/api/auth/forgot` sends no mail.
+- It would take away that person's own way in. `/api/auth/signup` answers an
+  address that already has a `User` row with a 409 — precisely the row the add
+  would have created. Nothing in this codebase deletes a `User`, so the trap
+  would be permanent.
+
+The speaker and reviewer-invite paths legitimately still upsert a shell,
+because each can reach the person afterwards (the organizer directly; a signed
+bearer link that signs a reviewer in without a password). A team member has
+neither. Refusing costs an organizer one message to the person they are adding;
+provisioning would cost that person their account.
+
+The refusal names the order that works, which is the one `/welcome` and
+`/api/auth/continue` were built for: the person signs up first, then the
+organizer adds the same address. The add body therefore carries **no `name`** —
+there is no row it could land in — and the response reports the resolved
+account's stored name so the organizer can confirm they matched the right
+person. No notification mail is sent either: a "you were added" message has no
+door to point at that the recipient cannot already open themselves.
+
+Widening `/api/auth/forgot` to mint tokens for credential-less accounts was
+considered and declined: it would weaken the redeem path's
+use-once-by-construction property, and that is an auth decision, not a
+team-screen one.
 
 ## Event team: removing a speaker is refused, never cascaded
 `/admin/speakers` renders a *union* of `EventMember(role=SPEAKER)` and
