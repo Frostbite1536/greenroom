@@ -187,12 +187,20 @@ test("the publication route writes only contentStatus, and only inside this even
 });
 
 test("a reversed decision unpublishes under the same lock that wrote the status", () => {
-  const route = source("app/api/evaluations/decisions/route.ts");
-  assert.match(route, /sessionPublicationForDecision\(input\.decision\)/);
-  assert.match(route, /data: \{ contentStatus: publication \}/);
-  assert.ok(route.indexOf("lockAbstractForWrite") < route.indexOf("sessionPublicationForDecision"));
+  // The write moved out of the route and into the service the route now runs,
+  // so the rule is asserted where it lives. Same code, same order.
+  const write = source("lib/services/abstract-decision-write.ts");
+  assert.match(write, /sessionPublicationForDecision\(input\.decision\)/);
+  assert.match(write, /data: \{ contentStatus: publication \}/);
+  assert.ok(write.indexOf("lockAbstractForWrite") < write.indexOf("sessionPublicationForDecision"));
   // Scoped to the abstract's own session id, never a broader write.
-  assert.match(route, /where: \{ id: provisioned\.sessionId \}/);
+  assert.match(write, /where: \{ id: provisioned\.sessionId \}/);
+
+  // And the route really does reach it, rather than growing a second
+  // publication rule of its own.
+  const route = source("app/api/evaluations/decisions/route.ts");
+  assert.match(route, /writeAbstractDecision\(tx, \{/);
+  assert.ok(!route.includes("contentStatus"), "the route must not publish on its own");
 });
 
 test("past the cap, the unpublished count is a floor and says the page is partial", () => {
