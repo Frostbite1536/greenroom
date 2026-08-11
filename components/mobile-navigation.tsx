@@ -110,7 +110,13 @@ export function MobileNavigation({
         <Menu size={19} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="mobile-nav-overlay" onMouseDown={(event) => event.currentTarget === event.target && closeMenu()}>
+        // onClick, not onMouseDown: closing on mousedown unmounts the overlay
+        // mid-pointer-event, and the post-close focus restore then runs before
+        // the press completes, leaving the trigger inactive (observed at
+        // 390x664: a backdrop click closed the drawer but the trigger stayed
+        // dead). onClick fires after the full pointer event, so the restore
+        // lands. The own-target guard is unchanged: panel clicks do not close.
+        <div className="mobile-nav-overlay" onClick={(event) => event.currentTarget === event.target && closeMenu()}>
           <aside
             ref={panelRef}
             id="mobile-navigation"

@@ -149,6 +149,24 @@ test("the mobile drawer renders the same labelled blocks, off the same table", (
   assert.match(component, /<Link className="mobile-nav-link" href=\{link\.href\} key=\{link\.href\} onClick=\{closeMenu\}>/);
 });
 
+test("the backdrop closes on click, never on mousedown", () => {
+  const component = drawer();
+  // Closing on mousedown unmounts the overlay mid-pointer-event, so the
+  // post-close effect restores focus before the press completes and the
+  // trigger is left inactive (observed in a real browser at 390x664: a
+  // backdrop click closed the drawer but the trigger stayed dead). onClick
+  // fires after the full pointer event, so the focus restore lands.
+  assert.match(
+    component,
+    /<div className="mobile-nav-overlay" onClick=\{\(event\) => event\.currentTarget === event\.target && closeMenu\(\)\}>/,
+  );
+  assert.equal(
+    /onMouseDown/.test(component),
+    false,
+    "the overlay closes mid-pointer-event again",
+  );
+});
+
 test("the drawer signs out through the sidebar's own server action, as a form post", () => {
   const component = drawer();
   // The same import the sidebar footer uses. The drawer had no sign-out at
