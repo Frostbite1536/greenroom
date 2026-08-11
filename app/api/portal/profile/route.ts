@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
+import { lockSpeakerProfile } from "@/lib/services/speaker-roster";
 import { speakerProfileUpdateSchema } from "@/types/api";
 import type { ApiResponse } from "@/types/api";
 
@@ -40,11 +41,20 @@ export async function PATCH(request: Request) {
     ? textFields
     : { ...textFields, socialLinks: socialLinks === null ? Prisma.DbNull : socialLinks };
 
-  const profile = await prisma.speakerProfile.upsert({
-    where: { userId: user.id },
-    update: data,
-    create: { userId: user.id, ...data },
-    select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true, socialLinks: true },
+  // GRA-05: the organizer's roster editor (`app/api/admin/speakers/route.ts`)
+  // writes this same global row under `speakerProfileLockKey(userId)`. The two
+  // writers must serialize on the same key or they race to the unique `userId`
+  // and, worse, interleave a read-modify-write on it. Those two routes are the
+  // only request-path writers of `SpeakerProfile` (the seed and the smoke
+  // fixture write it offline), so locking here closes the pair.
+  const profile = await prisma.$transaction(async (tx) => {
+    await lockSpeakerProfile(tx, user.id);
+    return tx.speakerProfile.upsert({
+      where: { userId: user.id },
+      update: data,
+      create: { userId: user.id, ...data },
+      select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true, socialLinks: true },
+    });
   });
 
   return NextResponse.json<ApiResponse<typeof profile>>({ ok: true, data: profile });
