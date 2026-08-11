@@ -27,14 +27,35 @@
  * provisioning entry points against BOTH commit orders — with no sleeps. The
  * interleaving is driven by explicit transaction control:
  *
- *  1. the first writer signals a barrier from INSIDE its transaction, once its
- *     locked work is done and before it awaits release, so "the lock is held"
- *     is known from the transaction itself rather than inferred from outside;
- *  2. the second writer is issued, and is observed *queued* on that advisory
- *     lock in `pg_locks` — the server's own account of blocking;
- *  3. the first is released, and both are awaited.
+ *  1. each transaction publishes its own backend pid from inside itself, before
+ *     it invokes any lock helper;
+ *  2. the first writer signals a barrier from INSIDE its transaction, once its
+ *     locked work is done and before it awaits release, so "the lock is held" is
+ *     known from the transaction itself rather than inferred from outside;
+ *  3. the second writer is issued, and the server is asked directly whether it
+ *     is blocked *by the first* — `pg_blocking_pids(second)` must contain the
+ *     first pid;
+ *  4. the first is released, and both are awaited.
  *
  * Nothing here depends on how fast a machine happens to be.
+ *
+ * ## Why `pg_blocking_pids` and not `pg_locks`
+ *
+ * An earlier revision reconstructed the advisory lock's `classid`/`objid` from
+ * the hashed key and looked for an ungranted row in `pg_locks`. That worked on
+ * one server and reported nothing on another: the reconstruction depends on how
+ * a given version represents an advisory waiter, and getting it wrong fails
+ * *open* — a silent "not blocked" that looks like the bug this file exists to
+ * catch. `pg_blocking_pids` has existed since 9.6, understands every waiter
+ * representation itself, and answers the question actually being asked ("is B
+ * held up by A?") rather than a proxy for it.
+ *
+ * It does not say *which* lock, so: the required-task writer takes exactly one
+ * lock, the per-event fan-out lock, and takes it before it touches a row. The
+ * only lock the two racers can possibly contend on is therefore that one — the
+ * abstract lock is taken by the provisioner alone. `pg_stat_activity`'s wait
+ * state is captured alongside as corroboration and asserted when the server
+ * populates it.
  *
  * ## Running it
  *
@@ -61,7 +82,7 @@ import { PrismaClient } from "@prisma/client";
 import { assertDisposableDatabase, loadRepoEnv } from "../../e2e/db-guard";
 import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 import { backfillConfirmedSpeakerTasks } from "@/lib/services/onboarding-task-backfill";
-import { lockEventTaskFanOut, taskFanOutLockKey } from "@/lib/services/onboarding-task-lock";
+import { lockEventTaskFanOut } from "@/lib/services/onboarding-task-lock";
 import {
   provisionAcceptedAbstract,
   provisionGuaranteedSession,
@@ -90,70 +111,57 @@ function requireDisposableDatabase(): void {
 /**
  * A bound on the observation loop. Each iteration is a real round trip to the
  * database, not a timer, so this is a safety net against an unexpected hang
- * rather than a timing assumption: the loop also exits the moment the waiter
- * appears or the second writer settles, and the waiter is guaranteed to appear
- * and to stay until this test releases the first transaction.
+ * rather than a timing assumption: the loop also exits the moment the block is
+ * seen or the second writer settles, and the block is guaranteed to appear and
+ * to stay until this test releases the first transaction.
  */
 const MAX_POLLS = 200;
 
 /** Prisma's interactive-transaction budget. Generous: a blocked writer waits. */
 const TX = { timeout: 60_000, maxWait: 20_000 } as const;
 
-/**
- * Where a transaction-scoped advisory lock on this event's fan-out key shows up
- * in `pg_locks`.
- *
- * `pg_advisory_xact_lock(bigint)` splits its 64-bit key across two `oid`
- * columns: `classid` is the high half, `objid` the low half. Both the hash and
- * the split are computed by the server — the hash by `hashtextextended` over
- * `taskFanOutLockKey`, exactly as the production helper computes it, so this
- * cannot drift from the real key — and returned as text, because `oid` is
- * unsigned and a negative 64-bit hash has no bigint-safe reassembly.
- */
-async function lockCoordinates(observer: PrismaClient, eventId: string) {
-  const key = taskFanOutLockKey(eventId);
-  const rows = await observer.$queryRaw<{ classid: string; objid: string }[]>`
-    SELECT ((hashtextextended(${key}, 0) >> 32) & 4294967295)::text AS classid,
-           (hashtextextended(${key}, 0) & 4294967295)::text AS objid
-  `;
-  return rows[0];
+/** The backend serving this transaction, asked from inside it. */
+async function backendPid(tx: { $queryRaw: PrismaClient["$queryRaw"] }): Promise<number> {
+  const rows = await tx.$queryRaw<{ pid: number }[]>`SELECT pg_backend_pid()::int AS pid`;
+  return rows[0].pid;
 }
 
-type LockCoordinates = Awaited<ReturnType<typeof lockCoordinates>>;
+type Blocked = { seen: boolean; polls: number; wait: string | null };
 
 /**
- * Poll until a backend is *queued* on this event's fan-out lock, or until the
- * second writer settles without ever queueing (which is the pre-fix behaviour,
- * and is what this observation exists to rule out).
- *
- * Only the ungranted side is observed. Who *holds* the lock is already known
- * from the barrier the holder signals inside its own transaction, and reading
- * the granted holder out of `pg_locks` is not portable across the pooled and
- * self-hosted servers this proof has to run on.
+ * Ask the server whether the second writer is held up by the first, and by what
+ * kind of wait. Both pids are published from inside their own transactions, so
+ * they name the backends actually running the racers even through a pooler.
  */
 async function observeBlocked(
   observer: PrismaClient,
-  coordinates: LockCoordinates,
+  pids: { first: () => number; second: () => number },
   done: () => boolean,
-): Promise<{ seen: boolean; polls: number }> {
+): Promise<Blocked> {
   for (let polls = 1; polls <= MAX_POLLS; polls++) {
-    const rows = await observer.$queryRaw<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM pg_locks
-      WHERE locktype = 'advisory'
-        AND NOT granted
-        AND classid::text = ${coordinates.classid}
-        AND objid::text = ${coordinates.objid}
-    `;
-    if (rows[0].n > 0) return { seen: true, polls };
-    if (done()) return { seen: false, polls };
+    const first = pids.first();
+    const second = pids.second();
+    if (first > 0 && second > 0) {
+      const rows = await observer.$queryRaw<{ blocked: boolean; wait: string | null }[]>`
+        SELECT (${first}::int = ANY(pg_blocking_pids(${second}::int))) AS blocked,
+               (SELECT wait_event_type || ':' || wait_event
+                  FROM pg_stat_activity WHERE pid = ${second}::int) AS wait
+      `;
+      if (rows[0].blocked) return { seen: true, polls, wait: rows[0].wait };
+    } else {
+      // A pid is not published yet. Burn a round trip rather than spin the loop.
+      await observer.$queryRaw`SELECT 1`;
+    }
+    if (done()) return { seen: false, polls, wait: null };
   }
-  return { seen: false, polls: MAX_POLLS };
+  return { seen: false, polls: MAX_POLLS, wait: null };
 }
 
 /**
  * The handshake a racing transaction is driven by: it signals `reached` from
  * inside itself once its locked work is done, then waits on `held` until the
- * test releases it.
+ * test releases it. `open` is idempotent, which is what lets the outer `finally`
+ * release unconditionally.
  */
 type Barrier = { signal: () => void; held: Promise<void> };
 
@@ -164,6 +172,9 @@ function barrier() {
   const held = new Promise<void>((resolve) => { open = resolve; });
   return { signal, reached, open, held };
 }
+
+/** How a racer reports itself while it is still inside its transaction. */
+type Probe = { onPid: (pid: number) => void; hold?: Barrier };
 
 /** Never rejects, so a failing racer cannot surface as an unhandled rejection. */
 function settled<T>(promise: Promise<T>) {
@@ -299,9 +310,12 @@ function asProvisioned(value: TaskWritten | Provisioned): Provisioned {
 async function requiredTaskWriter(
   client: PrismaClient,
   fixture: Fixture,
-  hold?: Barrier,
+  probe: Probe,
 ): Promise<TaskWritten> {
   return client.$transaction(async (tx) => {
+    // Published before any lock helper runs, so the pid is known even when the
+    // very next statement is the one that blocks.
+    probe.onPid(await backendPid(tx));
     // The route's own first statement, imported rather than re-implemented so
     // this side of the race cannot drift from `app/api/admin/tasks/route.ts`.
     await lockEventTaskFanOut(tx, fixture.eventId);
@@ -310,8 +324,8 @@ async function requiredTaskWriter(
       select: { id: true },
     });
     const fanOut = await backfillConfirmedSpeakerTasks(tx, fixture.eventId);
-    hold?.signal();
-    if (hold) await hold.held;
+    probe.hold?.signal();
+    if (probe.hold) await probe.hold.held;
     return { taskId: task.id, assigned: fanOut.assigned };
   }, TX);
 }
@@ -320,16 +334,17 @@ async function requiredTaskWriter(
 async function guaranteedProvisioner(
   client: PrismaClient,
   fixture: Fixture,
-  hold?: Barrier,
+  probe: Probe,
 ): Promise<Provisioned> {
   return client.$transaction(async (tx) => {
+    probe.onPid(await backendPid(tx));
     const result = await provisionGuaranteedSession(tx, fixture.eventId, {
       title: "Opening keynote",
       durationMinutes: 45,
       speakers: [{ userId: fixture.userId, isPrimary: true }],
     });
-    hold?.signal();
-    if (hold) await hold.held;
+    probe.hold?.signal();
+    if (probe.hold) await probe.hold.held;
     return { sessionId: result.sessionId, tasksAssigned: result.tasksAssigned };
   }, TX);
 }
@@ -344,9 +359,10 @@ async function guaranteedProvisioner(
 async function acceptedProvisioner(
   client: PrismaClient,
   fixture: Fixture,
-  hold?: Barrier,
+  probe: Probe,
 ): Promise<Provisioned> {
   return client.$transaction(async (tx) => {
+    probe.onPid(await backendPid(tx));
     await lockAbstractForWrite(tx, fixture.abstractId);
     const abstract = await tx.abstract.findUniqueOrThrow({
       where: { id: fixture.abstractId },
@@ -356,8 +372,8 @@ async function acceptedProvisioner(
       },
     });
     const result = await provisionAcceptedAbstract(tx, abstract);
-    hold?.signal();
-    if (hold) await hold.held;
+    probe.hold?.signal();
+    if (probe.hold) await probe.hold.held;
     return { sessionId: result.sessionId, tasksAssigned: result.tasksAssigned };
   }, TX);
 }
@@ -382,6 +398,136 @@ async function assignments(observer: PrismaClient, fixture: Fixture, taskId: str
   );
 }
 
+// ---- One cell of the matrix, with its lifecycle pinned --------------------
+
+/**
+ * The teardown contract, recorded in the order it actually happened.
+ *
+ * This is asserted, not merely logged. A transaction parked on a barrier holds
+ * uncommitted rows for the scratch event, so any cleanup that runs before the
+ * hold is released blocks behind it — for the full transaction budget, or
+ * forever if the budget were raised. Releasing FIRST, then settling the racers,
+ * then deleting, is the only order in which no cleanup step can ever wait on a
+ * transaction this test itself is holding open.
+ */
+const LIFECYCLE = ["hold-released", "racers-settled", "cleanup-completed", "rows-absent"] as const;
+
+type Observed = {
+  secondWriterBlocked: boolean;
+  assignments: string[];
+  reportedAssignments: number;
+  speakersOnSession: number;
+};
+
+type CellConfig = {
+  mode: Mode;
+  order: Order;
+  fixture: Fixture;
+  /** Filled in by the outer `finally`, in the order the steps completed. */
+  lifecycle: string[];
+  /**
+   * Injected at the observation point — after the first transaction has parked
+   * on its barrier — to prove the teardown path survives a fault there.
+   */
+  fault?: () => never;
+};
+
+async function runCell(config: CellConfig): Promise<{ observed: Observed; blocked: Blocked }> {
+  const { mode, order, fixture, lifecycle } = config;
+  const writerClient = new PrismaClient();
+  const provisionerClient = new PrismaClient();
+  const observer = new PrismaClient();
+  const provision = provisionerFor(mode);
+
+  const hold = barrier();
+  const started: Promise<unknown>[] = [];
+  let firstPid = 0;
+  let secondPid = 0;
+
+  try {
+    await createFixture(observer, fixture, mode);
+
+    // The first writer runs its whole locked body, then signals from inside its
+    // own still-open transaction. No polling, no timer: when `reached` resolves,
+    // the lock is held and the work under it is done.
+    const firstProbe: Probe = { onPid: (pid) => { firstPid = pid; }, hold };
+    const firstRun = settled<TaskWritten | Provisioned>(
+      order === "task-writer-first"
+        ? requiredTaskWriter(writerClient, fixture, firstProbe)
+        : provision(provisionerClient, fixture, firstProbe),
+    );
+    started.push(firstRun.result);
+    // Raced against the run itself, so a first writer that throws before
+    // signalling fails the test rather than hanging it.
+    await Promise.race([hold.reached, firstRun.result]);
+
+    // Everything from here to `hold.open()` is the stranding window: a throw
+    // here leaves a parked transaction, which is exactly what the outer
+    // `finally` and the fault-path contract below exist to make survivable.
+    config.fault?.();
+
+    // Only now is the second writer issued. It must queue on the fan-out lock
+    // rather than read a snapshot taken before the first one commits.
+    const secondProbe: Probe = { onPid: (pid) => { secondPid = pid; } };
+    const secondRun = settled<TaskWritten | Provisioned>(
+      order === "task-writer-first"
+        ? provision(provisionerClient, fixture, secondProbe)
+        : requiredTaskWriter(writerClient, fixture, secondProbe),
+    );
+    started.push(secondRun.result);
+    const blocked = await observeBlocked(
+      observer,
+      { first: () => firstPid, second: () => secondPid },
+      secondRun.isDone,
+    );
+
+    // Released here so the results can be awaited and asserted. The outer
+    // `finally` releases again, first and unconditionally; `open` is idempotent.
+    hold.open();
+    const firstOutcome = await firstRun.result;
+    const secondOutcome = await secondRun.result;
+
+    const taskOutcome = order === "task-writer-first" ? firstOutcome : secondOutcome;
+    const sessionOutcome = order === "task-writer-first" ? secondOutcome : firstOutcome;
+    const taskResult = asTaskWritten(unwrap(taskOutcome, "required-task writer"));
+    const sessionResult = asProvisioned(unwrap(sessionOutcome, "session provisioner"));
+
+    const observed: Observed = {
+      secondWriterBlocked: blocked.seen,
+      assignments: await assignments(observer, fixture, taskResult.taskId),
+      reportedAssignments: taskResult.assigned + sessionResult.tasksAssigned,
+      speakersOnSession: await observer.sessionSpeaker.count({
+        where: { sessionId: sessionResult.sessionId },
+      }),
+    };
+    return { observed, blocked };
+  } finally {
+    // 1. Release first, before anything else, so no step below can wait on a
+    //    transaction this test is holding open.
+    hold.open();
+    lifecycle.push("hold-released");
+    // 2. Let every racer that was actually started finish rolling back or
+    //    committing. `settled` promises never reject; `allSettled` is belt.
+    await Promise.allSettled(started);
+    lifecycle.push("racers-settled");
+    try {
+      // 3. Loud cleanup: a scratch event left behind on a shared disposable
+      //    database is this suite's own failure to report.
+      await destroyFixture(observer, fixture);
+      lifecycle.push("cleanup-completed");
+      await assertFixtureGone(observer, fixture);
+      lifecycle.push("rows-absent");
+    } finally {
+      // 4. Disconnects, last resort, even when cleanup throws.
+      await Promise.all([
+        writerClient.$disconnect(),
+        provisionerClient.$disconnect(),
+        observer.$disconnect(),
+      ]);
+    }
+  }
+}
+
 // ---- The matrix: both entry points, both orders ---------------------------
 
 const RUNS: { mode: Mode; order: Order }[] = [
@@ -399,84 +545,79 @@ for (const { mode, order } of RUNS) {
       // Before any client, any connection, any row.
       requireDisposableDatabase();
 
-      const writerClient = new PrismaClient();
-      const provisionerClient = new PrismaClient();
-      const observer = new PrismaClient();
+      const lifecycle: string[] = [];
       const fixture = planFixture(`${mode}-${order}`);
-      const provision = provisionerFor(mode);
+      const { observed, blocked } = await runCell({ mode, order, fixture, lifecycle });
 
-      try {
-        await createFixture(observer, fixture, mode);
-        const coordinates = await lockCoordinates(observer, fixture.eventId);
+      t.diagnostic(
+        `${mode}/${order}: ${JSON.stringify(observed)} (blocked after ${blocked.polls} polls, wait=${blocked.wait ?? "n/a"})`,
+      );
 
-        const hold = barrier();
-
-        // The first writer runs its whole locked body, then signals from inside
-        // its own still-open transaction. No polling, no timer: when `reached`
-        // resolves, the lock is held and the work under it is done.
-        const firstRun = settled<TaskWritten | Provisioned>(
-          order === "task-writer-first"
-            ? requiredTaskWriter(writerClient, fixture, hold)
-            : provision(provisionerClient, fixture, hold),
-        );
-        // Raced against the run itself, so a first writer that throws before
-        // signalling fails the test rather than hanging it.
-        await Promise.race([hold.reached, firstRun.result]);
-
-        // Only now is the second writer issued. It must queue on the fan-out
-        // lock rather than read a snapshot taken before the first one commits.
-        const secondRun = settled<TaskWritten | Provisioned>(
-          order === "task-writer-first"
-            ? provision(provisionerClient, fixture)
-            : requiredTaskWriter(writerClient, fixture),
-        );
-        const blocked = await observeBlocked(observer, coordinates, secondRun.isDone);
-
-        // Released before any assertion, so a failing run still lets both
-        // transactions finish and the fixture still cleans up.
-        hold.open();
-        const firstOutcome = await firstRun.result;
-        const secondOutcome = await secondRun.result;
-
-        const taskOutcome = order === "task-writer-first" ? firstOutcome : secondOutcome;
-        const sessionOutcome = order === "task-writer-first" ? secondOutcome : firstOutcome;
-        const taskResult = asTaskWritten(unwrap(taskOutcome, "required-task writer"));
-        const sessionResult = asProvisioned(unwrap(sessionOutcome, "session provisioner"));
-
-        const observed = {
-          secondWriterBlocked: blocked.seen,
-          assignments: await assignments(observer, fixture, taskResult.taskId),
-          reportedAssignments: taskResult.assigned + sessionResult.tasksAssigned,
-          speakersOnSession: await observer.sessionSpeaker.count({
-            where: { sessionId: sessionResult.sessionId },
-          }),
-        };
-        t.diagnostic(`${mode}/${order}: ${JSON.stringify(observed)} (blocked after ${blocked.polls} polls)`);
-
-        assert.deepEqual(observed, {
-          // The second writer queued on the fan-out lock instead of racing past
-          // it — the server's own account of the serialization.
-          secondWriterBlocked: true,
-          // Exactly the cross-product, exactly once: this is the invariant.
-          assignments: ["required-task:new-speaker"],
-          // And exactly one writer reports having made it — no double count.
-          reportedAssignments: 1,
-          speakersOnSession: 1,
-        });
-      } finally {
-        try {
-          // Not swallowed: a scratch event left behind on a shared disposable
-          // database is this suite's own failure to report.
-          await destroyFixture(observer, fixture);
-          await assertFixtureGone(observer, fixture);
-        } finally {
-          await Promise.all([
-            writerClient.$disconnect(),
-            provisionerClient.$disconnect(),
-            observer.$disconnect(),
-          ]);
-        }
+      assert.deepEqual(observed, {
+        // The server's own answer to "is the second writer held up by the
+        // first": pg_blocking_pids(second) contains the first backend's pid.
+        secondWriterBlocked: true,
+        // Exactly the cross-product, exactly once: this is the invariant.
+        assignments: ["required-task:new-speaker"],
+        // And exactly one writer reports having made it — no double count.
+        reportedAssignments: 1,
+        speakersOnSession: 1,
+      });
+      // Corroboration, where the server populates it: the wait is on an advisory
+      // lock, not a row lock. Skipped rather than guessed where it is null.
+      if (blocked.wait !== null) {
+        assert.match(blocked.wait, /advisory/i, "the block must be on the advisory fan-out lock");
       }
+      // And teardown ran in the only order that cannot deadlock on itself.
+      assert.deepEqual(lifecycle, [...LIFECYCLE]);
     },
   );
 }
+
+// ---- The fault path -------------------------------------------------------
+
+test(
+  "C33 lifecycle: a fault while the first transaction is parked still releases, settles and cleans up",
+  { skip, timeout: 300_000 },
+  async (t) => {
+    requireDisposableDatabase();
+
+    const lifecycle: string[] = [];
+    const fixture = planFixture("fault-path");
+    const injected = new Error("injected observer fault while the first transaction is parked");
+
+    // The fault fires after the first writer has signalled its barrier, so a
+    // transaction is parked holding uncommitted rows for this scratch event.
+    // Without the release-first teardown, the delete below would queue behind it.
+    await assert.rejects(
+      () =>
+        runCell({
+          mode: "guaranteed",
+          order: "task-writer-first",
+          fixture,
+          lifecycle,
+          fault: () => { throw injected; },
+        }),
+      (error: unknown) => error === injected,
+    );
+
+    t.diagnostic(`fault-path lifecycle: ${JSON.stringify(lifecycle)}`);
+
+    // The whole contract, in order: the hold was released first, the one racer
+    // that had been started settled, cleanup ran to completion, and the rows are
+    // gone. Cleanup completing at all is itself the liveness proof — it deletes
+    // rows the parked transaction had locked.
+    assert.deepEqual(lifecycle, [...LIFECYCLE]);
+
+    // Verified independently of the client `runCell` used and then disconnected.
+    const auditor = new PrismaClient();
+    try {
+      assert.equal(await auditor.event.count({ where: { id: fixture.eventId } }), 0);
+      assert.equal(await auditor.user.count({ where: { id: fixture.userId } }), 0);
+      assert.equal(await auditor.onboardingTask.count({ where: { eventId: fixture.eventId } }), 0);
+      assert.equal(await auditor.session.count({ where: { eventId: fixture.eventId } }), 0);
+    } finally {
+      await auditor.$disconnect();
+    }
+  },
+);
