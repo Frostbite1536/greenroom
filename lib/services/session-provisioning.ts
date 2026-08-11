@@ -11,15 +11,27 @@ import { lockEventTaskFanOut } from "@/lib/services/onboarding-task-lock";
  * path (accept) and the manual one (`/api/evaluations/convert`), so they cannot
  * drift apart.
  *
- * Every function here expects to run inside a transaction that already holds
- * the per-abstract advisory lock (`lockAbstractForWrite`).
+ * What each function here expects of its caller differs, so it is stated per
+ * group rather than once for the file:
+ *
+ *  - **The abstract-derived writers** (`provisionSessionForAbstract`,
+ *    `provisionAcceptedAbstract`) run inside a transaction that already holds
+ *    that abstract's advisory lock (`lockAbstractForWrite`). Both callers —
+ *    `POST /api/evaluations/decisions` and `POST /api/evaluations/convert` —
+ *    take it before they read the row these are handed.
+ *  - **`provisionGuaranteedSession`** has no abstract, and so no abstract lock.
+ *    Its route authorizes the event and checks every speaker against the roster
+ *    first instead, under the C17 keys.
+ *  - **The pure helpers** (`resolveSessionDuration`, `planTaskAssignments`,
+ *    `reconciledSessionFields`, `newSessionData`, `newGuaranteedSessionData`)
+ *    touch no database and expect nothing at all.
  *
  * The two ENTRY points — `provisionAcceptedAbstract` and
- * `provisionGuaranteedSession` — additionally take the per-event onboarding
- * fan-out lock themselves, as their first act. See each for why; the short
- * version is that provisioning maintains the same task × speaker cross-product
- * the template writers maintain, from the other end, so it belongs to their
- * lock class (LOCK-ORDER-v1, C33).
+ * `provisionGuaranteedSession` — take the per-event onboarding fan-out lock
+ * themselves, as their first act. See each for why; the short version is that
+ * provisioning maintains the same task × speaker cross-product the template
+ * writers maintain, from the other end, so it belongs to their lock class
+ * (LOCK-ORDER-v1, C33).
  */
 
 /** Fallback length for an auto-created session when the proposal never stated one. */
