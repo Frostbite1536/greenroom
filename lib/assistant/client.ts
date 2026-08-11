@@ -51,17 +51,39 @@ export const ASSISTANT_TIMEOUT_MS = 12_000;
 export const ASSISTANT_MAX_ATTEMPTS = 2;
 
 export const ASSISTANT_MAX_INSTRUCTION_CHARS = 2_000;
-/** Hard ceiling on instructions + input together, whatever the caller passes. */
-export const ASSISTANT_MAX_TOTAL_INPUT_CHARS = 8_000;
+/**
+ * Hard ceiling on instructions + input together, whatever the caller passes.
+ *
+ * 16,000 because the widest consumer sends a resource note of up to 8,000
+ * characters *plus* fixed title, summary, and template content alongside it,
+ * and a ceiling that clipped the fixed part would silently drop context rather
+ * than data. Features stay well under this with their own caps; this is the
+ * backstop, not the budget.
+ */
+export const ASSISTANT_MAX_TOTAL_INPUT_CHARS = 16_000;
 
+/** Unchanged: a short prose draft is still what an unspecified caller gets. */
 export const ASSISTANT_DEFAULT_MAX_OUTPUT_CHARS = 1_200;
-/** No caller may ask for more than this, however large its own cap is. */
-export const ASSISTANT_MAX_OUTPUT_CHARS = 2_000;
+/**
+ * No caller may ask for more than this, however large its own cap is.
+ *
+ * 24,000 admits the widest consumer: a validated HTML body of up to 20,000
+ * characters returned inside a JSON wrapper, whose escaping and envelope cost
+ * meaningfully more than the payload's own length. Narrower features pass their
+ * own `maxOutputChars` — decision-note drafting stays at 1,200 — so this
+ * ceiling only bounds what the boundary will ever hand back.
+ */
+export const ASSISTANT_MAX_OUTPUT_CHARS = 24_000;
 /**
  * Extra `max_output_tokens` beyond the character cap's own estimate, so a
  * reasoning model's hidden tokens do not consume the visible answer.
+ *
+ * A flat reserve rather than a proportional one: reasoning tokens track how
+ * hard the task is, not how long the answer is. Raised alongside the output
+ * ceiling because a 24,000-character structured generation is a harder task
+ * than a paragraph.
  */
-export const ASSISTANT_OUTPUT_TOKEN_HEADROOM = 512;
+export const ASSISTANT_OUTPUT_TOKEN_HEADROOM = 1_024;
 
 /**
  * The closed set of reasons a caller may ever see.
@@ -87,6 +109,16 @@ export type AssistantResult =
 
 export type AssistantFetcher = typeof fetch;
 
+/**
+ * A caller-owned Responses `text.format` specification.
+ *
+ * Passed through verbatim, unread and unvalidated by this module. The caller
+ * owns the schema, so the caller — not this boundary — is who knows what shape
+ * came back and how to check it. Deliberately opaque here: a foundation that
+ * understood the schema would have to keep up with every consumer's.
+ */
+export type AssistantTextFormat = Record<string, unknown>;
+
 export type AssistantRequest = {
   /** How to write. Authored by the feature, never by a user. */
   instructions: string;
@@ -94,6 +126,17 @@ export type AssistantRequest = {
   input: string;
   /** Caller's own cap, clamped to `ASSISTANT_MAX_OUTPUT_CHARS`. */
   maxOutputChars?: number;
+  /**
+   * Opt into the provider's Structured Outputs mode.
+   *
+   * When present it becomes the request body's `text.format` unchanged, and
+   * `result.text` is the RAW JSON STRING the model produced — this module does
+   * not `JSON.parse` it and does not validate it. The caller parses and
+   * Zod-validates its own schema's output, because only the caller can say
+   * what a valid answer is. Absent (the default) leaves the request in plain
+   * prose mode, exactly as before this field existed.
+   */
+  textFormat?: AssistantTextFormat;
   /** Test seam, mirroring `DeliveryConfig.fetcher` in `lib/comms/send.ts`. */
   fetcher?: AssistantFetcher;
   /** Test seam. May only shorten `ASSISTANT_TIMEOUT_MS`, never extend it. */
@@ -229,7 +272,15 @@ async function attemptGeneration(config: {
       return { kind: "fail", reason: "provider_error", retryable: false };
     }
 
-    const parsed = providerResponseSchema.safeParse(await response.json().catch(() => null));
+    // `null` here means the body never produced JSON — it was malformed, or it
+    // stalled and our own abort tore it up mid-read. Those are different
+    // failures: a stalled body is a spent time budget, not a bad answer, and
+    // reporting it as `invalid_output` would blame the provider's content for
+    // a deadline this module set.
+    const raw = await response.json().catch(() => null);
+    if (raw === null && timedOut) return { kind: "fail", reason: "timeout", retryable: false };
+
+    const parsed = providerResponseSchema.safeParse(raw);
     if (!parsed.success) return { kind: "fail", reason: "invalid_output", retryable: false };
 
     const usage = {
@@ -278,6 +329,10 @@ export async function runAssistant(request: AssistantRequest): Promise<Assistant
     input: bounded.input,
     max_output_tokens: assistantMaxOutputTokens(maxOutputChars),
     reasoning: { effort: ASSISTANT_REASONING_EFFORT },
+    // Structured Outputs, only when a caller asked for it. Spread rather than
+    // set to `undefined`, so a plain-prose request produces the identical body
+    // it produced before this option existed.
+    ...(request.textFormat ? { text: { format: request.textFormat } } : {}),
     // Non-retention. Reviewer comments must not become a conversation held on
     // the provider's side that Greenroom would then owe someone a deletion for.
     store: false,
