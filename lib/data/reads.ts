@@ -1666,9 +1666,8 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
     event,
     funnelGroups,
     formGroups,
-    plans,
+    plansPlusOne,
     assignmentGroups,
-    withdrawn,
     acceptedUnscheduled,
     agenda,
     roster,
@@ -1678,21 +1677,21 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
     prisma.event.findUnique({ where: { id: eventId }, select: { name: true, timezone: true } }),
     prisma.abstract.groupBy({ by: ["status"], where: abstractWhere, _count: { _all: true } }),
     prisma.formConfig.groupBy({ by: ["published"], where: { eventId }, _count: { _all: true } }),
+    // Cap-plus-one so truncation is a stated fact on the card, never a
+    // silently shorter list consumed as complete.
     prisma.evaluationPlan.findMany({
       where: { eventId },
       orderBy: { ordinal: "asc" },
       select: { id: true, name: true, ordinal: true },
-      take: OPERATOR_QUERY_LIMITS.dashboardPlans,
+      take: OPERATOR_QUERY_LIMITS.dashboardPlans + 1,
     }),
+    // Withdrawn exclusion happens IN the query, not against a materialized id
+    // set: a capped id set consumed as complete would silently count withdrawn
+    // work as active above the cap. The database is authoritative at any size.
     prisma.reviewAssignment.groupBy({
       by: ["planId", "abstractId", "status"],
-      where: { plan: { eventId } },
+      where: { plan: { eventId }, abstract: { status: { not: "WITHDRAWN" } } },
       _count: { _all: true },
-    }),
-    prisma.abstract.findMany({
-      where: { eventId, status: "WITHDRAWN" },
-      select: { id: true },
-      take: OPERATOR_QUERY_LIMITS.dashboardWithdrawn,
     }),
     // "Decided but not on the programme": accepted, and either no talk was
     // created from it or the talk holds no slot. INV-DOMAIN-001 keeps the two
@@ -1723,10 +1722,16 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
     }),
   ]);
 
-  const withdrawnIds = new Set(withdrawn.map((row) => row.id));
+  const truncatedRounds = plansPlusOne.length > OPERATOR_QUERY_LIMITS.dashboardPlans;
+  const plans = truncatedRounds
+    ? plansPlusOne.slice(0, OPERATOR_QUERY_LIMITS.dashboardPlans)
+    : plansPlusOne;
   const review = summarizeReviewProgress(
     plans,
-    summarizeRoundTotals(assignmentGroups, (id) => withdrawnIds.has(id)),
+    // Withdrawn assignments were excluded by the groupBy's own where clause,
+    // so the fold's skip predicate has nothing left to do here.
+    summarizeRoundTotals(assignmentGroups, () => false),
+    truncatedRounds,
   );
 
   const roomName = (id: string) => agenda.rooms.find((room) => room.id === id)?.name ?? "Room";

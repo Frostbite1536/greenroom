@@ -25,10 +25,10 @@ export const OPERATOR_QUERY_LIMITS = {
   // Onboarding-task templates are authored by hand, one checklist per event.
   onboardingTasks: 250,
   // Review rounds are authored by hand too — a handful per event. The
-  // dashboard's cards read them all; the cap is a ceiling, not a page size.
+  // dashboard reads cap-plus-one and states truncation on the card; withdrawn
+  // exclusion happens inside the assignment groupBy itself, so no id-set cap
+  // exists to corrupt the totals.
   dashboardPlans: 100,
-  // Withdrawn ids feed one funnel count; bounded like every dashboard read.
-  dashboardWithdrawn: 2_000,
   settingsTracks: 250,
   settingsCategories: 1_000,
   adminAbstracts: 100,

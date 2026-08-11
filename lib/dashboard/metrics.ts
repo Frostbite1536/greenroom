@@ -115,11 +115,18 @@ export type ReviewProgress = {
   assigned: number;
   completed: number;
   outstanding: number;
+  /**
+   * True when the rounds list hit its read cap — the totals above then cover
+   * only the rounds shown, and the card must say so rather than present a
+   * truncated list as the whole event.
+   */
+  truncatedRounds: boolean;
 };
 
 export function summarizeReviewProgress(
   plans: readonly { id: string; ordinal: number; name: string }[],
   planTotals: ReadonlyMap<string, RoundTotals>,
+  truncatedRounds = false,
 ): ReviewProgress {
   const rounds = plans.map((plan) => {
     const totals = planTotals.get(plan.id) ?? { assigned: 0, completed: 0 };
@@ -137,6 +144,7 @@ export function summarizeReviewProgress(
     assigned: rounds.reduce((sum, round) => sum + round.assigned, 0),
     completed: rounds.reduce((sum, round) => sum + round.completed, 0),
     outstanding: rounds.reduce((sum, round) => sum + round.outstanding, 0),
+    truncatedRounds,
   };
 }
 

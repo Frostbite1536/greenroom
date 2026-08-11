@@ -101,9 +101,14 @@ test("conflicts come from the agenda's own detector, never reimplemented here", 
 
 test("round progress uses the evaluation screen's own fold, withdrawn excluded", () => {
   const read = dashboardRead();
-  assert.match(read, /summarizeRoundTotals\(assignmentGroups, \(id\) => withdrawnIds\.has\(id\)\)/);
+  // The dashboard excludes withdrawn work inside the groupBy itself — a
+  // materialized id set would need a cap, and a capped set consumed as
+  // complete silently counts withdrawn assignments as active above the cap.
+  assert.match(read, /abstract: \{ status: \{ not: "WITHDRAWN" \} \}/);
+  assert.match(read, /summarizeRoundTotals\(assignmentGroups, \(\) => false\)/);
   // getEvaluationSetup must fold the same rows through the same helper, or the
-  // two screens can drift.
+  // two screens can drift. It already holds every abstract row, so its skip
+  // predicate is the id set it materialized anyway.
   const setup = reads();
   assert.match(setup, /const planTotals = summarizeRoundTotals\(byAbstract, \(id\) => withdrawnAbstractIds\.has\(id\)\);/);
 });

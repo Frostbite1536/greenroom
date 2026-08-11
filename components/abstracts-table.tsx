@@ -629,7 +629,7 @@ function AbstractDrawer({
       <div className="abstract-drawer-body">
         <div className="row" style={{ justifyContent: "space-between", marginBottom: 12 }}>
           <Pill tone={meta.tone}>{meta.label}</Pill>
-          <button type="button" className="ghost-button" onClick={onClose} aria-label="Close"><X size={16} /></button>
+          <button type="button" className="ghost-button" onClick={onClose} disabled={busy !== null || pending} aria-label="Close"><X size={16} /></button>
         </div>
         <h2 id={`${ids}-title`} style={{ marginTop: 0 }}>{abstract.title}</h2>
         {abstract.abstract ? <p style={{ lineHeight: 1.6 }}>{abstract.abstract}</p> : <p className="muted">No abstract body provided.</p>}

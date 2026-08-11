@@ -10,6 +10,7 @@ import {
 import "@/components/feature.css";
 import { EmptyState, PageHeader, Pill } from "@/components/ui";
 import { getAdminDashboard } from "@/lib/data/reads";
+import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import { ABSTRACT_STATUS_META } from "@/lib/abstract-status";
 import { boundedCount, boundedCountLabel } from "@/lib/bounded-count";
 import { roundLabel } from "@/lib/round-label";
@@ -135,6 +136,13 @@ export default async function AdminDashboardPage() {
               ))}
             </ul>
           )}
+          {review.truncatedRounds ? (
+            <p className="dashboard-note">
+              Only the first {OPERATOR_QUERY_LIMITS.dashboardPlans} rounds are shown; the totals
+              above cover these rounds only. The full list lives in{" "}
+              <Link href="/admin/evaluations">Evaluation</Link>.
+            </p>
+          ) : null}
           {funnel.segments.find((segment) => segment.status === "ACCEPTED")?.count ? (
             <p className="dashboard-note">
               {review.acceptedUnscheduled === 0 ? (

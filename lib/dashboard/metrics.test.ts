@@ -141,7 +141,7 @@ test("outstanding never goes negative", () => {
 
 test("no rounds at all is an empty progress, not a fabricated round", () => {
   const progress = summarizeReviewProgress([], new Map());
-  assert.deepEqual(progress, { rounds: [], assigned: 0, completed: 0, outstanding: 0 });
+  assert.deepEqual(progress, { rounds: [], assigned: 0, completed: 0, outstanding: 0, truncatedRounds: false });
 });
 
 // ---- programme health ------------------------------------------------------
