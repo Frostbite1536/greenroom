@@ -15,3 +15,9 @@ test("the clean-install rehearsal proves acceptance provisions its Session witho
   assert.doesNotMatch(rehearsal, /\/api\/evaluations\/convert/);
   assert.doesNotMatch(rehearsal, /convert to session → 201/);
 });
+
+test("the clean-install rehearsal answers required checkboxes with their boolean wire value", () => {
+  assert.match(rehearsal, /field\.type === "MULTISELECT"\) answers\[field\.key\] = \[field\.options\?\.\[0\]\?\.value \?\? ""\];/);
+  assert.match(rehearsal, /field\.type === "CHECKBOX"\) answers\[field\.key\] = true;/);
+  assert.doesNotMatch(rehearsal, /field\.type === "MULTISELECT" \|\| field\.type === "CHECKBOX"/);
+});
