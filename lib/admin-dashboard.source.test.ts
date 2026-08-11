@@ -22,12 +22,19 @@ const shell = () => source("components/app-shell.tsx");
 const abstractsPage = () => source("app/(app)/admin/abstracts/page.tsx");
 const abstractsTable = () => source("components/abstracts-table.tsx");
 
-/** The `getAdminDashboard` body, so assertions cannot match a neighbouring read. */
+/**
+ * The `getAdminDashboard` body, so assertions cannot match a neighbouring read.
+ *
+ * Bounded at the next `// ---- ` section marker rather than running to the end
+ * of the file: `getAdminReports` was added directly below (D-C5-16 #4) and an
+ * unbounded slice counted its awaits as the dashboard's.
+ */
 function dashboardRead(): string {
   const file = reads();
   const start = file.indexOf("export async function getAdminDashboard()");
   assert.notEqual(start, -1, "getAdminDashboard must exist in lib/data/reads.ts");
-  return file.slice(start);
+  const next = file.indexOf("// ---- ", start);
+  return next === -1 ? file.slice(start) : file.slice(start, next);
 }
 
 test("the dashboard page is a server component with no client island", () => {
