@@ -156,15 +156,20 @@ test("/reset collapses every token failure into one message, shared with its pag
   // The resolver collapses them, and the page uses the same resolver, so it can
   // never render a form the route would refuse.
   assert.match(resetPage, /await resolvePasswordResetToken\(token\)/);
-  assert.equal(redeem.split("return null;").length - 1, 4, "malformed, no secret, unknown user, bad signature");
-  // The redeeming write is the credential and nothing else.
-  assert.match(reset, /prisma\.user\.update\(\{ where: \{ id: resolved\.user\.id \}, data: \{ passwordHash \} \}\)/);
+  assert.match(reset, /await consumePasswordResetToken\(parsed\.data\.token, policy\.password\)/);
+  // The redeeming write is a credential-only compare-and-swap. The observed
+  // hash stays in the service, and only the one-row winner can issue a session.
+  assert.match(redeem, /prisma\.user\.updateMany\(\{/);
+  assert.match(redeem, /where: \{ id: record\.user\.id, passwordHash: record\.passwordHash \}/);
+  assert.match(redeem, /data: \{ passwordHash: replacementHash \}/);
+  assert.match(redeem, /consumed\.count === 1 \? withoutCredential\(record\) : null/);
+  assert.doesNotMatch(reset, /prisma\.user\.(?:update|updateMany)/);
   // One write, and it is the credential. A reset must not grant a membership or
   // change a role — anything beyond the password makes a phished link more
   // valuable than it already is. (`role:` alone would false-positive on the
   // session the route issues afterwards from a membership it merely read.)
-  assert.equal(reset.split("prisma.user.update(").length - 1, 1);
-  assert.doesNotMatch(reset, /eventMember|\.create\(|data: \{ role/);
+  assert.equal(redeem.split("prisma.user.updateMany(").length - 1, 1);
+  assert.doesNotMatch(`${reset}\n${redeem}`, /eventMember|\.create\(|data: \{ role/);
 });
 
 test("use-once is enforced by construction: the signature is derived from the current hash", () => {
@@ -210,6 +215,13 @@ test("a new account is issued the pending variant, never a session it has no mem
     assert.match(route, /pickCredentialMembership\(/);
     assert.match(route, /homeForRole\(membership\.role\)/);
   }
+});
+
+test("the frontend smoke races one reset token and accepts exactly one password", () => {
+  assert.match(frontendSmoke, /const resetAttempts = await Promise\.all\(/);
+  assert.match(frontendSmoke, /successfulResets\.length === 1 && refusedResets\.length === 1/);
+  assert.match(frontendSmoke, /refusedResets\[0\]\?\.data\?\.error\?\.code === "RESET_TOKEN_INVALID"/);
+  assert.match(frontendSmoke, /successfulLogins\.length === 1 && refusedLogins\.length === 1/);
 });
 
 test("the frontend smoke checks an empty composite EventMember projection", () => {

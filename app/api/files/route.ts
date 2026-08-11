@@ -8,12 +8,15 @@ import { enforceUploadRateLimit } from "@/lib/services/upload-rate";
 import {
   normalizeMime,
   parseStoredFileKind,
-  storedFileDedupeKey,
   storedFileMaxBytes,
   storedFilePath,
   verifyStoredFile,
   type StoredFileKindValue,
 } from "@/lib/uploads/stored-file";
+import {
+  legacyStoredFileDedupeKey,
+  storedFileDedupeKey,
+} from "@/lib/uploads/stored-file-dedupe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -127,16 +130,33 @@ export const POST = handle(async (req) => {
   const verdict = verifyStoredFile({ kind, claimedMime: normalizeMime(req.headers.get("content-type")), bytes });
   if (!verdict.ok) throw refuse(verdict.reason, kind);
 
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const dedupe = storedFileDedupeKey({ uploaderUserId: ctx.userId, kind, sha256 });
+  const contentSha256 = createHash("sha256").update(bytes).digest("hex");
+  const dedupeInput = {
+    uploaderUserId: ctx.userId,
+    eventId: ctx.eventId,
+    kind,
+    contentSha256,
+  };
+  const dedupe = storedFileDedupeKey(dedupeInput);
 
-  // Re-uploading a file this person already stored returns the id they already
-  // have, so a speaker who picks the same headshot twice gets the same URL
-  // rather than a second copy of the bytes.
-  const existing = await prisma.storedFile.findUnique({
+  // Re-uploading under the same authorization scope returns the existing id.
+  // Headshots are public and dedupe across events; a private deck's fingerprint
+  // includes the active event, so another event can never inherit this row's
+  // organizer access merely because its bytes match.
+  let existing = await prisma.storedFile.findUnique({
     where: { uploaderUserId_kind_sha256: dedupe },
-    select: { id: true, mime: true, size: true },
+    select: { id: true, mime: true, size: true, eventId: true },
   });
+  if (!existing && kind === "SLIDE_DECK") {
+    // Rows written before the event-scoped fingerprint used the raw content
+    // digest. Reuse one only inside the event that already owns its private
+    // authorization; a cross-event legacy hit must fall through to a new row.
+    const legacy = await prisma.storedFile.findUnique({
+      where: { uploaderUserId_kind_sha256: legacyStoredFileDedupeKey(dedupeInput) },
+      select: { id: true, mime: true, size: true, eventId: true },
+    });
+    if (legacy?.eventId === ctx.eventId) existing = legacy;
+  }
   if (existing) {
     return ok({ id: existing.id, url: storedFilePath(existing.id), kind, mime: existing.mime, size: existing.size, deduped: true });
   }
@@ -158,8 +178,10 @@ export const POST = handle(async (req) => {
       select: { id: true, mime: true, size: true },
     });
   } catch (error) {
-    // Two identical uploads racing past the read above: the unique dedupe key
+    // Two same-scope uploads racing past the read above: the scoped unique key
     // is the arbiter, and the loser returns the winner's id rather than a 500.
+    // Recovery deliberately never consults a legacy raw digest, because a row
+    // another event owns must not become this upload's race winner.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const raced = await prisma.storedFile.findUnique({
         where: { uploaderUserId_kind_sha256: dedupe },

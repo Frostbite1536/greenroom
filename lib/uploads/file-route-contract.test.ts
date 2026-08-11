@@ -20,6 +20,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const read = (relative: string) => readFileSync(path.join(repoRoot, relative), "utf8");
 
 const upload = read("app/api/files/route.ts");
+const dedupe = read("lib/uploads/stored-file-dedupe.ts");
 const serve = read("app/api/files/[id]/route.ts");
 const field = read("components/file-upload-field.tsx");
 const portalForm = read("app/(app)/portal/profile-form.tsx");
@@ -78,11 +79,28 @@ test("the stored mime is the server's verdict, and the claimed header is never w
   assert.match(upload, /size: bytes\.byteLength,/);
 });
 
-test("dedupe returns the existing id, and a race on it is resolved rather than 500ing", () => {
-  assert.match(upload, /storedFileDedupeKey\(\{ uploaderUserId: ctx\.userId, kind, sha256 \}\)/);
+test("dedupe preserves public identity and event-scopes private deck authorization", () => {
+  assert.match(upload, /const contentSha256 = createHash\("sha256"\)\.update\(bytes\)\.digest\("hex"\)/);
+  assert.match(upload, /eventId: ctx\.eventId,[\s\S]{0,100}?contentSha256,/);
+  assert.match(upload, /const dedupe = storedFileDedupeKey\(dedupeInput\)/);
+  assert.match(dedupe, /input\.kind === "HEADSHOT"\s*\? contentSha256/);
+  assert.match(dedupe, /greenroom:stored-file-dedupe:v1/);
+  assert.match(dedupe, /\$\{SLIDE_DECK_DEDUPE_DOMAIN\}\\0\$\{input\.eventId\}\\0\$\{contentSha256\}/);
+  assert.equal(dedupe.includes("\0"), false, "the helper source contains no literal NUL byte");
+
+  // A pre-v1 raw-digest deck is compatible only with the event that already
+  // owns its organizer claim. Another event must fall through to a scoped row.
+  assert.match(upload, /legacyStoredFileDedupeKey\(dedupeInput\)/);
+  assert.match(upload, /if \(legacy\?\.eventId === ctx\.eventId\) existing = legacy/);
+  assert.equal(upload.split("legacyStoredFileDedupeKey(dedupeInput)").length - 1, 1);
+
+  // Same-event races still converge through the scoped key, never the legacy
+  // fallback that might belong to another event.
   assert.match(upload, /where: \{ uploaderUserId_kind_sha256: dedupe \}/);
   assert.equal(upload.split("uploaderUserId_kind_sha256: dedupe").length - 1, 2, "pre-read plus the P2002 recovery");
   assert.match(upload, /error\.code === "P2002"/);
+  const recovery = upload.slice(upload.indexOf('error instanceof Prisma.PrismaClientKnownRequestError'));
+  assert.doesNotMatch(recovery, /legacyStoredFileDedupeKey/);
   assert.match(upload, /deduped: true/);
   // A fresh store is a 201; a dedupe hit is a 200 on the row that already exists.
   assert.match(upload, /deduped: false \},\s*201,/);
@@ -107,6 +125,15 @@ test("the repeatable smoke clears only guarded scratch-owned files before reset 
   assert.match(smoke, /scratch-owned stored files are cleared before event reset/);
   assert.match(smoke, /scratch-owned stored files are cleared at final teardown/);
   assert.match(smoke, /prisma\.storedFile\.deleteMany\(\{ where: scratchFileWhere \}\)/);
+});
+
+test("the backend smoke proves identical private bytes stay inside each event authority", () => {
+  assert.match(smoke, /const otherSpeaker = \{ \.\.\.speaker, event: OTHER_SCRATCH_EVENT \}/);
+  assert.match(smoke, /const otherAdmin = \{ \.\.\.admin, event: OTHER_SCRATCH_EVENT \}/);
+  assert.match(smoke, /deckOther\.status === 201[\s\S]{0,300}?deckOtherUrl !== deckUrl/);
+  assert.match(smoke, /deckOtherAgain\.status === 200[\s\S]{0,200}?deckOtherAgain\.data\?\.data\?\.url === deckOtherUrl/);
+  assert.match(smoke, /deckAFromOtherAdmin\.status === 404[\s\S]{0,200}?deckBFromAdmin\.status === 404/);
+  assert.match(smoke, /deckBFromOtherAdmin\.status === 200/);
 });
 
 test("the served content type comes from the stored column and is pinned with nosniff", () => {

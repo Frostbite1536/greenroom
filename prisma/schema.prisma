@@ -606,9 +606,12 @@ model EmailDispatch {
  * speaker surfaces); for slide decks it is half of the organizer's read claim.
  * SetNull because deleting an event must never delete a person's own headshot.
  *
- * `@@unique([uploaderUserId, kind, sha256])` is the dedupe key: re-uploading
- * the same file returns the id that already exists instead of storing the
- * bytes twice. Its leftmost column is the per-uploader index — a separate
+ * `@@unique([uploaderUserId, kind, sha256])` is the dedupe key. For a public
+ * headshot, `sha256` is the raw content digest and re-uploading across events
+ * returns the same row. For a private slide deck it is a versioned,
+ * event-scoped SHA-256 fingerprint over the event id and raw content digest,
+ * so matching bytes cannot inherit another event's organizer authorization.
+ * Its leftmost column is the per-uploader index — a separate
  * `@@index([uploaderUserId])` would be an exact prefix duplicate of it.
  */
 model StoredFile {
@@ -619,6 +622,7 @@ model StoredFile {
   /// Server-derived content type. Never the client's claimed value.
   mime           String
   size           Int
+  /// Raw content SHA for headshots; event-scoped dedupe fingerprint for decks.
   sha256         String
   bytes          Bytes
   createdAt      DateTime       @default(now())

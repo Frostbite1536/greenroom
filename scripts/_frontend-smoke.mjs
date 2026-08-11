@@ -113,6 +113,7 @@ const SELF_SERVICE_EMAILS = [SIGNUP_EMAIL, RESET_EMAIL, SIGNUP_REJECT_EMAIL, FOR
 const SIGNUP_PASSWORD = "scratch-signup-passphrase";
 const RESET_OLD_PASSWORD = "scratch-reset-old-passphrase";
 const RESET_NEW_PASSWORD = "scratch-reset-new-passphrase";
+const RESET_RACE_PASSWORD = "scratch-reset-race-passphrase";
 // The floor is 10 code points (`lib/services/password-policy.ts`); this is nine.
 const TOO_SHORT_PASSWORD = "shortpwd1";
 const PASSWORD_RESET_TTL_MS = 30 * 60 * 1_000;
@@ -796,13 +797,23 @@ async function runSelfServiceAuthChecks() {
     shortReset.status === 422 && Array.isArray(shortReset.data?.error?.fieldErrors?.password),
     `${shortReset.status}`);
 
-  const resetOk = await authPost("/api/auth/reset",
-    { token: liveToken, password: RESET_NEW_PASSWORD, confirmPassword: RESET_NEW_PASSWORD });
-  check("D-C5-16 a real token sets the new password and signs the person in",
-    resetOk.status === 200 && resetOk.data?.data?.redirectTo === "/admin"
-    && resetOk.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk.setCookie)),
-    `${resetOk.status} ${JSON.stringify(resetOk.data?.data ?? resetOk.data?.error?.code ?? null)}`);
-  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk.setCookie));
+  const resetPasswords = [RESET_NEW_PASSWORD, RESET_RACE_PASSWORD];
+  const resetAttempts = await Promise.all(resetPasswords.map((password) => authPost(
+    "/api/auth/reset",
+    { token: liveToken, password, confirmPassword: password },
+  )));
+  const successfulResets = resetAttempts.filter((attempt) => attempt.status === 200);
+  const refusedResets = resetAttempts.filter((attempt) => attempt.status === 400);
+  const winningPasswordIndex = resetAttempts.findIndex((attempt) => attempt.status === 200);
+  const resetOk = successfulResets[0];
+  check("D-C5-16 one reset token has exactly one concurrent winner",
+    successfulResets.length === 1 && refusedResets.length === 1
+    && resetOk?.data?.data?.redirectTo === "/admin"
+    && resetOk?.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk?.setCookie))
+    && refusedResets[0]?.data?.error?.code === "RESET_TOKEN_INVALID"
+    && refusedResets[0]?.text === garbage.text,
+    resetAttempts.map((attempt) => `${attempt.status}:${attempt.data?.error?.code ?? "ok"}`).join(","));
+  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk?.setCookie));
   check("D-C5-16 the session the reset issued really opens the workspace",
     resetSessionAdmin.status === 200, `${resetSessionAdmin.status}`);
 
@@ -816,11 +827,16 @@ async function runSelfServiceAuthChecks() {
     `${replay.status} identical=${replay.text === garbage.text}`);
 
   const loginOldAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
-  const loginNewAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_NEW_PASSWORD });
-  check("D-C5-16 the old password is refused and the new one works",
+  const loginAttempts = await Promise.all(resetPasswords.map((password) =>
+    authPost("/api/auth/login", { email: RESET_EMAIL, password })));
+  const successfulLogins = loginAttempts.filter((attempt) => attempt.status === 200);
+  const refusedLogins = loginAttempts.filter((attempt) => attempt.status === 401);
+  check("D-C5-16 the old and losing passwords are refused and only the winner works",
     loginOldAfter.status === 401 && !loginOldAfter.setCookie
-    && loginNewAfter.status === 200 && Boolean(sessionCookieFrom(loginNewAfter.setCookie)),
-    `old ${loginOldAfter.status}, new ${loginNewAfter.status}`);
+    && successfulLogins.length === 1 && refusedLogins.length === 1
+    && loginAttempts[winningPasswordIndex]?.status === 200
+    && Boolean(sessionCookieFrom(loginAttempts[winningPasswordIndex]?.setCookie)),
+    `old ${loginOldAfter.status}, candidates ${loginAttempts.map((attempt) => attempt.status).join("/")}`);
 
   // --- the durable rate bucket actually refuses -----------------------------
   // The per-address /forgot bucket is 3 per hour. One request against the

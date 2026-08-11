@@ -8,7 +8,6 @@ import {
   parseStoredFileKind,
   sniffMime,
   storedFileCacheControl,
-  storedFileDedupeKey,
   storedFileDisposition,
   storedFileIdFromPath,
   storedFileMaxBytes,
@@ -143,22 +142,6 @@ test("size is refused before type, so an oversize body is never sniffed", () => 
     }),
     { ok: false, reason: "TOO_LARGE" },
   );
-});
-
-test("the dedupe key is per uploader AND per kind, and normalises the digest", () => {
-  assert.deepEqual(
-    storedFileDedupeKey({ uploaderUserId: "u1", kind: "HEADSHOT", sha256: "ABCDEF" }),
-    { uploaderUserId: "u1", kind: "HEADSHOT", sha256: "abcdef" },
-  );
-  // Kind is part of the identity because it decides who may read the row back:
-  // collapsing two kinds would let the later upload inherit the earlier one's
-  // authorization.
-  const headshot = storedFileDedupeKey({ uploaderUserId: "u1", kind: "HEADSHOT", sha256: "aa" });
-  const deck = storedFileDedupeKey({ uploaderUserId: "u1", kind: "SLIDE_DECK", sha256: "aa" });
-  assert.notDeepEqual(headshot, deck);
-  // And two uploaders' identical bytes are two rows, so one cannot learn that
-  // the other holds the same file.
-  assert.notDeepEqual(headshot, storedFileDedupeKey({ uploaderUserId: "u2", kind: "HEADSHOT", sha256: "aa" }));
 });
 
 test("a stored-file URL is an app-relative path that cannot point anywhere else", () => {

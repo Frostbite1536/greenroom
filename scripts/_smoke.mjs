@@ -5250,6 +5250,39 @@ try {
       && deckOwner.bytes.equals(PDF_BYTES),
     `anon ${deckAnon.status}/eval ${deckEvaluator.status}/owner ${deckOwner.status}/admin ${deckAdmin.status}`);
 
+  // The same uploader can belong to two events. Identical private bytes must
+  // produce one id per event authority: public headshot dedupe is global, but a
+  // deck uploaded in B must never return A's row or retain A's admin claim.
+  const fileAdminUser = await prisma.user.findUniqueOrThrow({ where: { email: admin.user.email }, select: { id: true } });
+  const fileSpeakerUser = await prisma.user.findUniqueOrThrow({ where: { email: speaker.user.email }, select: { id: true } });
+  await prisma.eventMember.createMany({
+    data: [
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileAdminUser.id, role: "ADMIN" },
+      { eventId: OTHER_SCRATCH_EVENT.id, userId: fileSpeakerUser.id, role: "SPEAKER" },
+    ],
+    skipDuplicates: true,
+  });
+  const otherSpeaker = { ...speaker, event: OTHER_SCRATCH_EVENT };
+  const otherAdmin = { ...admin, event: OTHER_SCRATCH_EVENT };
+  const deckOther = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  const deckOtherUrl = deckOther.data?.data?.url;
+  const deckOtherAgain = await uploadPost("slide-deck", PDF_BYTES, "application/pdf", otherSpeaker);
+  check("C5-FILES identical private bytes dedupe within an event but not across events",
+    deckOther.status === 201 && deckOther.data?.data?.deduped === false
+      && deckOtherUrl !== deckUrl
+      && deckOtherAgain.status === 200 && deckOtherAgain.data?.data?.deduped === true
+      && deckOtherAgain.data?.data?.url === deckOtherUrl,
+    `other ${deckOther.status}/again ${deckOtherAgain.status}/distinct ${deckOtherUrl !== deckUrl}`);
+
+  const deckAFromOtherAdmin = await uploadGet(deckUrl, otherAdmin);
+  const deckBFromAdmin = await uploadGet(deckOtherUrl, admin);
+  const deckBFromOtherAdmin = await uploadGet(deckOtherUrl, otherAdmin);
+  const deckBFromOwner = await uploadGet(deckOtherUrl, otherSpeaker);
+  check("C5-FILES each private deck id remains inside its upload event's admin authority",
+    deckAFromOtherAdmin.status === 404 && deckBFromAdmin.status === 404
+      && deckBFromOtherAdmin.status === 200 && deckBFromOwner.status === 200,
+    `A→B ${deckAFromOtherAdmin.status}/B→A ${deckBFromAdmin.status}/B ${deckBFromOtherAdmin.status}/owner ${deckBFromOwner.status}`);
+
   const missingFile = await uploadGet("/api/files/no-such-stored-file", admin);
   check("C5-FILES an unreadable deck and an id that does not exist are the same 404",
     missingFile.status === 404 && deckAnon.status === 404,
