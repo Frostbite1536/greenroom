@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import Link from "next/link";
-import { Menu, X } from "lucide-react";
+import { LogOut, Menu, X } from "lucide-react";
+import { logout } from "@/app/login/actions";
 
 /**
  * `href: null` renders a visible, non-interactive entry. The C16 no-open-CFP
@@ -145,6 +146,24 @@ export function MobileNavigation({
                 {cfpLinks.map(entry)}
               </nav>
             ) : null}
+            {/* The drawer offered no way out: on a phone the sidebar that owns
+                the sign-out control is `display: none`, so the only route to
+                it was to widen the window. This is the sidebar footer's own
+                form — the same `logout` server action, posted the same way, so
+                it carries the same session handling and still works with
+                JavaScript off.
+
+                It sits at the end of the panel's content, in flow. The panel
+                is the scroll container, so the control scrolls with the list
+                rather than floating over it: a fixed control would cover the
+                last entries, which is the fold problem the panel's
+                `overflow-y` was added to fix. */}
+            <form action={logout} className="mobile-nav-signout">
+              <button className="mobile-nav-link mobile-nav-signout-button" type="submit">
+                <LogOut size={17} aria-hidden="true" />
+                <span>Sign out</span>
+              </button>
+            </form>
           </aside>
         </div>
       ) : null}

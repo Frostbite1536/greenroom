@@ -149,6 +149,43 @@ test("the mobile drawer renders the same labelled blocks, off the same table", (
   assert.match(component, /<Link className="mobile-nav-link" href=\{link\.href\} key=\{link\.href\} onClick=\{closeMenu\}>/);
 });
 
+test("the drawer signs out through the sidebar's own server action, as a form post", () => {
+  const component = drawer();
+  // The same import the sidebar footer uses. The drawer had no sign-out at
+  // all: on a phone the sidebar that owns it is `display: none`, so the only
+  // way out was to widen the window.
+  const importLine = /import \{ logout \} from "@\/app\/login\/actions";/;
+  assert.match(shell(), importLine);
+  assert.match(component, importLine);
+  // A plain form whose action IS the server action, so React posts it: same
+  // request identity and session handling as the sidebar's, and it still
+  // works with JavaScript off. Not a click handler calling an endpoint.
+  assert.match(component, /<form action=\{logout\} className="mobile-nav-signout">/);
+  assert.match(component, /<button className="mobile-nav-link mobile-nav-signout-button" type="submit">/);
+  assert.equal(/fetch\(/.test(component), false, "the drawer signs out with a hand-rolled request");
+  assert.equal(/onSubmit/.test(component), false, "the sign-out form intercepts its own submit");
+  // The sidebar's control is unchanged and still posts the same action.
+  assert.match(shell(), /<form action=\{logout\} className="logout-form">/);
+});
+
+test("the drawer's sign-out scrolls with the drawer instead of floating over it", () => {
+  const sheet = css();
+  const mediaStart = sheet.indexOf("@media (max-width: 820px)");
+  assert.ok(mediaStart > 0, "the 820px block was not found");
+  const nextMedia = sheet.indexOf("@media", mediaStart + 1);
+  const phone = sheet.slice(mediaStart, nextMedia > 0 ? nextMedia : sheet.length);
+  const rule = /\.mobile-nav-signout \{([^}]*)\}/.exec(phone)?.[1] ?? "";
+  assert.notEqual(rule, "", "`.mobile-nav-signout` is not declared in the phone block");
+  // The panel is the scroll container. Taking this out of flow would put it
+  // over the last entries — the fold problem `overflow-y` was added to fix.
+  assert.equal(
+    /position:\s*(fixed|absolute|sticky)/.test(rule),
+    false,
+    "the sign-out is taken out of the drawer's flow",
+  );
+  assert.match(rule, /border-top: 1px solid #394446;/);
+});
+
 test("the drawer shares the sidebar's label style rather than re-declaring it", () => {
   const sheet = css();
   // `.nav-group`/`.nav-group-label` are declared above the phone breakpoint,

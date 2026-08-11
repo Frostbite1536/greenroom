@@ -342,6 +342,12 @@ button { letter-spacing: 0; }
   .mobile-nav-link:hover, .mobile-nav-link:focus-visible { color: white; background: #303b3d; outline: none; }
   .mobile-nav-static { margin: 0; color: #9fabad; cursor: default; }
   .mobile-nav-static:hover { background: none; }
+  /* Sign out, at the end of the panel's content and in normal flow. The panel
+     scrolls, so this scrolls with the entries above it; positioning it over
+     them would hide the last of the list again. The separator is the one
+     `.nav-cfp` and `.sidebar-footer` already draw. */
+  .mobile-nav-signout { margin-top: 14px; padding-top: 12px; border-top: 1px solid #394446; }
+  .mobile-nav-signout-button { width: 100%; gap: 8px; border: 0; background: none; color: #c7d0d0; text-align: left; cursor: pointer; }
   .main-content { padding: 22px 16px; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .primary-button { width: 100%; }
