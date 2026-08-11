@@ -4,6 +4,13 @@ import { buildIcsCalendar, escapeIcsText, foldIcsLine, formatIcsDate, icsFilenam
 
 const NOW = new Date("2026-04-01T12:00:00.000Z");
 
+/**
+ * RFC 5545 folds any content line past 75 octets, so a full ATTENDEE line is
+ * split in the real file. Assertions about a line's *content* unfold first;
+ * assertions about line structure deliberately do not.
+ */
+const unfold = (ics: string) => ics.split("\r\n ").join("");
+
 const baseEvent = {
   uid: "session-123",
   title: "Scaling Vector Search",
@@ -117,6 +124,57 @@ test("a calendar description rides in the file, escaped, and only when given", (
 test("escapes titles containing commas and semicolons", () => {
   const ics = buildIcsCalendar([{ ...baseEvent, title: "Scaling, Sharding; and You" }], { now: NOW });
   assert.ok(ics.includes("SUMMARY:Scaling\\, Sharding\\; and You"));
+});
+
+test("an invitation names its attendee and asks them to answer", () => {
+  // PARTSTAT/RSVP is the difference between a calendar client offering
+  // accept/decline and filing the file as a passive attachment.
+  const ics = buildIcsCalendar(
+    [{ ...baseEvent, attendees: [{ email: "ada@example.test", name: "Ada Lovelace" }], status: "CONFIRMED", sequence: 7 }],
+    { method: "REQUEST", now: NOW },
+  );
+  assert.ok(
+    unfold(ics).includes("ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE;CN=Ada Lovelace:mailto:ada@example.test"),
+    ics,
+  );
+  assert.ok(ics.includes("STATUS:CONFIRMED"));
+  assert.ok(ics.includes("SEQUENCE:7"));
+});
+
+test("a display name that would break a content line is quoted or dropped, never emitted raw", () => {
+  // A parameter value is not TEXT: a comma or colon inside one must be quoted,
+  // and a CR would end the line and let a name forge a property.
+  const ics = buildIcsCalendar(
+    [{ ...baseEvent, attendees: [{ email: "ada@example.test", name: "Lovelace, Ada" }] }],
+    { method: "REQUEST", now: NOW },
+  );
+  assert.ok(unfold(ics).includes('CN="Lovelace, Ada":mailto:ada@example.test'), ics);
+
+  const injected = buildIcsCalendar(
+    [{ ...baseEvent, attendees: [{ email: "ada@example.test", name: "Ada\r\nSUMMARY:forged" }] }],
+    { method: "REQUEST", now: NOW },
+  );
+  // The forged text survives only as inert characters inside a quoted parameter
+  // value. What must not survive is the line break that would have made it a
+  // property of its own — there is still exactly one real SUMMARY line.
+  assert.ok(!injected.includes("\r\nSUMMARY:forged"));
+  assert.equal(unfold(injected).split("\r\n").filter((line) => line.startsWith("SUMMARY:")).length, 1);
+});
+
+test("an export makes no attendee, status or revision claim it was not given", () => {
+  // The public schedule download must never name its readers to each other,
+  // and it has no revisions to assert.
+  const ics = buildIcsCalendar([baseEvent], { now: NOW });
+  assert.ok(!ics.includes("ATTENDEE"));
+  assert.ok(!ics.includes("SEQUENCE"));
+  assert.ok(!ics.includes("STATUS"));
+  assert.ok(!buildIcsCalendar([{ ...baseEvent, attendees: [], sequence: null, status: null }], { now: NOW }).includes("ATTENDEE"));
+});
+
+test("a negative or fractional revision clamps to a whole non-negative SEQUENCE", () => {
+  assert.ok(buildIcsCalendar([{ ...baseEvent, sequence: -5 }], { now: NOW }).includes("SEQUENCE:0"));
+  assert.ok(buildIcsCalendar([{ ...baseEvent, sequence: 3.9 }], { now: NOW }).includes("SEQUENCE:3"));
+  assert.ok(!buildIcsCalendar([{ ...baseEvent, sequence: Number.NaN }], { now: NOW }).includes("SEQUENCE"));
 });
 
 test("builds safe filenames", () => {
