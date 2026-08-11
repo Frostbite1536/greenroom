@@ -36,6 +36,10 @@ test("a row editor sends only the planned diff, never a rebuilt whole row", () =
   // overwrites whatever a colleague changed while this editor sat open. The
   // body must be the planner's sparse output spread onto the id, nothing else.
   for (const [name, next, plan] of [
+    // Rooms is the same defect class as the two taxonomies, so it is held to
+    // the same contract here rather than left as the one editor that resends
+    // a whole row.
+    ["saveRoom", "removeRoom", "planRoomPatch\\(\\{ name: editingRoom\\.name, capacity: capacity \\?\\? null \\}, editingRoom\\.loaded\\)"],
     ["saveTrack", "removeTrack", "planTrackPatch\\(editingTrack, editingTrack\\.loaded\\)"],
     ["saveCategory", "removeCategory", "planCategoryPatch\\(editingCategory, editingCategory\\.loaded\\)"],
   ] as const) {
@@ -47,7 +51,7 @@ test("a row editor sends only the planned diff, never a rebuilt whole row", () =
     // No field may be named in the outbound body beside the id.
     const bodyStart = save.indexOf("apiPatch");
     const body = save.slice(bodyStart, save.indexOf("});", bodyStart));
-    for (const field of ["name:", "color:", "description:", "defaultTeamKey:"]) {
+    for (const field of ["name:", "color:", "capacity:", "description:", "defaultTeamKey:", "sortOrder:"]) {
       assert.equal(body.includes(field), false, `${name} must not resend ${field}`);
     }
   }
@@ -57,12 +61,13 @@ test("a row editor diffs against the row as loaded, not against current server t
   // Diffing against the live RSC payload would reintroduce the bug from the
   // other side: a field this operator never touched would differ from a
   // colleague's newer value and be resent, reverting it.
+  assert.match(source, /loaded: \{ name: room\.name, capacity: room\.capacity \}/);
   assert.match(source, /loaded: \{ name: track\.name, color: track\.color \}/);
   assert.match(source, /loaded: \{[\s\S]{0,200}?defaultTeamKey: category\.defaultTeamKey,[\s\S]{0,40}?\}/);
-  for (const save of ["saveTrack", "saveCategory"]) {
+  for (const save of ["saveRoom", "saveTrack", "saveCategory"]) {
     const start = source.indexOf(`async function ${save}`);
     const body = source.slice(start, source.indexOf("const patch", start));
-    assert.doesNotMatch(body, /view\.(tracks|categories)\.find/, save);
+    assert.doesNotMatch(body, /view\.(rooms|tracks|categories)\.find/, save);
   }
 });
 

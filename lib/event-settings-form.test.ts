@@ -4,6 +4,7 @@ import {
   eventSettingsDraft,
   planCategoryPatch,
   planEventSettingsPatch,
+  planRoomPatch,
   planTrackPatch,
   reconcileEventSettingsDraft,
   validateEventDatePair,
@@ -190,4 +191,45 @@ test("track colour comparison uses the form the colour input actually shows", ()
 
 test("an untouched track edit plans no request at all", () => {
   assert.equal(planTrackPatch({ name: "Mainstage", color: "#6366f1" }, { name: "Mainstage", color: "#6366f1" }), null);
+});
+
+const loadedRoom = { name: "Hall A", capacity: 180 };
+
+test("a room rename omits the capacity, so a concurrent resize survives", () => {
+  const patch = planRoomPatch({ name: "Hall A West", capacity: 180 }, loadedRoom);
+  assert.deepEqual(patch, { name: "Hall A West" });
+  assert.equal(patch !== null && "capacity" in patch, false);
+});
+
+test("a room resize omits the name, so a concurrent rename survives", () => {
+  const patch = planRoomPatch({ name: "Hall A", capacity: 220 }, loadedRoom);
+  assert.deepEqual(patch, { capacity: 220 });
+  assert.equal(patch !== null && "name" in patch, false);
+});
+
+test("clearing a room capacity is an explicit null, not an omission", () => {
+  // `roomCapacitySchema` is nullable precisely so a cleared capacity can be
+  // written. Omitting it here would silently keep the old number instead.
+  assert.deepEqual(planRoomPatch({ name: "Hall A", capacity: null }, loadedRoom), { capacity: null });
+  // A capacity that was already unset and stayed unset is not a change.
+  assert.equal(planRoomPatch({ name: "Lab", capacity: null }, { name: "Lab", capacity: null }), null);
+  // Setting one for the first time is.
+  assert.deepEqual(planRoomPatch({ name: "Lab", capacity: 60 }, { name: "Lab", capacity: null }), { capacity: 60 });
+});
+
+test("an untouched room edit plans no request at all", () => {
+  assert.equal(planRoomPatch({ name: "Hall A", capacity: 180 }, loadedRoom), null);
+  assert.equal(planRoomPatch({ name: "  Hall A  ", capacity: 180 }, loadedRoom), null);
+});
+
+test("a room editor never plans sortOrder, so a save cannot reorder the list", () => {
+  // sortOrder is patchable on the wire but the editor does not expose it.
+  for (const draft of [
+    { name: "Hall A West", capacity: 180 },
+    { name: "Hall A", capacity: 220 },
+    { name: "Hall A", capacity: null },
+  ]) {
+    const patch = planRoomPatch(draft, loadedRoom);
+    assert.equal(patch !== null && "sortOrder" in patch, false, JSON.stringify(draft));
+  }
 });

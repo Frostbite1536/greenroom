@@ -123,21 +123,52 @@ export function planEventSettingsPatch(
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-// ---- Taxonomy row editors -------------------------------------------------
+// ---- Settings row editors -------------------------------------------------
 //
-// The track and category row editors need the same guarantee the event form
-// above already makes, for the same reason: two admins share one settings page.
-// A row editor loads a snapshot, so resending every field on save would carry
-// that snapshot's now-stale values over a colleague's newer edit — a rename
-// would quietly undo a routing-key change made thirty seconds earlier. The
-// server contracts (`trackUpdateSchema`, `categoryUpdateSchema`) are partial
-// and require at least one field precisely so the client can send sparsely;
-// these planners are what make the client actually do it.
+// The room, track and category row editors need the same guarantee the event
+// form above already makes, for the same reason: two admins share one settings
+// page. A row editor loads a snapshot, so resending every field on save would
+// carry that snapshot's now-stale values over a colleague's newer edit — a
+// rename would quietly undo a routing-key change made thirty seconds earlier.
+// The server contracts (`roomUpdateSchema`, `trackUpdateSchema`,
+// `categoryUpdateSchema`) are partial and require at least one field precisely
+// so the client can send sparsely; these planners make the client actually do
+// it. Each diffs against the row as loaded, never against current server truth:
+// a field this operator never touched must be omitted exactly when a colleague
+// has already changed it, which is the case a diff against current truth would
+// get wrong.
 
 /** `null` clears an optional text column; a value sets it; `""` means cleared. */
 export function optionalText(value: string): string | null {
   const trimmed = value.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+export type RoomRowDraft = { name: string; capacity: number | null };
+export type RoomRowAuthority = { name: string; capacity: number | null };
+export type RoomRowPatch = { name?: string; capacity?: number | null };
+
+/**
+ * Omit every room field the editor did not change from the row as loaded.
+ *
+ * Capacity arrives already parsed rather than as the raw input string: the
+ * field is genuinely tri-state (a number, empty meaning cleared, or invalid),
+ * and only the caller can tell "cleared" from "typed nonsense" and refuse the
+ * latter before anything is planned. `null` here therefore always means the
+ * operator cleared it, which `roomCapacitySchema` accepts as an explicit clear.
+ *
+ * `sortOrder` is patchable on the wire but this editor does not expose it, so
+ * it is never planned and a save cannot disturb the stored room order.
+ */
+export function planRoomPatch(
+  draft: RoomRowDraft,
+  authoritative: RoomRowAuthority,
+): RoomRowPatch | null {
+  const patch: RoomRowPatch = {};
+  const name = draft.name.trim();
+  if (name !== authoritative.name) patch.name = name;
+  if (draft.capacity !== (authoritative.capacity ?? null)) patch.capacity = draft.capacity;
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 export type TrackRowDraft = { name: string; color: string };

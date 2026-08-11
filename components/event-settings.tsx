@@ -10,11 +10,13 @@ import {
   eventSettingsDraft,
   planCategoryPatch,
   planEventSettingsPatch,
+  planRoomPatch,
   planTrackPatch,
   reconcileEventSettingsDraft,
   validateEventDatePair,
   type CategoryRowAuthority,
   type EventSettingsDraft,
+  type RoomRowAuthority,
   type TrackRowAuthority,
 } from "@/lib/event-settings-form";
 import { normalizeHex } from "@/lib/color-contrast";
@@ -22,7 +24,7 @@ import { EmptyState, Pill } from "@/components/ui";
 
 type EventForm = EventSettingsDraft;
 
-type RoomDraft = { id: string; name: string; capacity: string };
+type RoomDraft = { id: string; name: string; capacity: string; loaded: RoomRowAuthority };
 /**
  * A row draft carries the row exactly as it was loaded. The save diffs against
  * that `loaded` snapshot rather than against the current RSC payload: a field
@@ -205,13 +207,21 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
       setRoomError("Capacity must be a whole number greater than zero, or leave it empty.");
       return;
     }
+    // Only what this operator actually changed, diffed against the row as it
+    // was loaded, so a colleague's capacity change survives a rename here.
+    const patch = planRoomPatch({ name: editingRoom.name, capacity: capacity ?? null }, editingRoom.loaded);
+    if (!patch) {
+      setEditingRoom(null);
+      setRoomError(null);
+      setRoomNotice("No room details have changed.");
+      return;
+    }
     setRoomBusy(editingRoom.id);
     setRoomError(null);
     setRoomNotice(null);
     const res = await apiPatch<{ room: EventSettingsView["rooms"][number] }>("/api/admin/settings/rooms", {
       id: editingRoom.id,
-      name: editingRoom.name.trim(),
-      capacity: capacity ?? null,
+      ...patch,
     });
     setRoomBusy(null);
     if (!res.ok) {
@@ -543,7 +553,12 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
                     busy={roomBusy === room.id || roomBusy === `delete:${room.id}`}
                     onEdit={() => {
                       setRoomError(null);
-                      setEditingRoom({ id: room.id, name: room.name, capacity: room.capacity?.toString() ?? "" });
+                      setEditingRoom({
+                        id: room.id,
+                        name: room.name,
+                        capacity: room.capacity?.toString() ?? "",
+                        loaded: { name: room.name, capacity: room.capacity },
+                      });
                     }}
                     onCancel={() => setEditingRoom(null)}
                     onDraftChange={setEditingRoom}
