@@ -6,6 +6,7 @@ import { AlertTriangle, CheckCheck, X } from "lucide-react";
 import { apiPost } from "@/lib/api-client";
 import {
   bulkDecisionActionLabel,
+  bulkDecisionNothingEligibleNotice,
   bulkDecisionPromptBody,
   bulkDecisionPromptSkipNotice,
   bulkDecisionPromptTitle,
@@ -173,9 +174,7 @@ export function BulkDecisionBar({
         Clear selection
       </button>
       {eligible.length === 0 ? (
-        <span className="hint">
-          Every selected proposal already has a decision. Open one to change it.
-        </span>
+        <span className="hint">{bulkDecisionNothingEligibleNotice(selected.length)}</span>
       ) : null}
 
       <dialog
@@ -247,9 +246,15 @@ export function BulkDecisionBar({
  * Every skipped proposal, named with the server's own reason.
  *
  * The grouping is `bulkDecisionSkipGroups`, so the promise that no skipped row
- * goes unnamed is a unit test rather than an eyeball over this JSX. Titles are
- * listed up to a readable number, so a small skip is still specific about which
- * proposals an operator has to go and open.
+ * goes unnamed is a unit test rather than an eyeball over this JSX.
+ *
+ * Every title is rendered, with no truncation branch and no "+N more". The
+ * count is the tally; the list is the answer to "which ones do I have to go and
+ * open?", and a list that stops at five answers it for a small batch and
+ * silently withholds it for a large one — the same defect as a filtered request,
+ * one screen later. The worst case is bounded: the batch cap is
+ * `BULK_ABSTRACT_DECISION_LIMIT` rows, so a group is at most that many lines,
+ * and the list scrolls within the receipt rather than pushing "Done" off it.
  */
 function BulkDecisionSkips({
   report,
@@ -267,9 +272,11 @@ function BulkDecisionSkips({
         {groups.map((group) => (
           <li key={group.reasonCode}>
             <strong>{proposalCount(group.ids.length)}</strong> — {group.reason}
-            {group.ids.length <= 5 ? (
-              <div className="cell-sub">{group.labels.join(", ")}</div>
-            ) : null}
+            <ul className="bulk-decision-skip-titles">
+              {group.ids.map((id, index) => (
+                <li key={id}>{group.labels[index]}</li>
+              ))}
+            </ul>
           </li>
         ))}
       </ul>

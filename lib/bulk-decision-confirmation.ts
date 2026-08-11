@@ -110,6 +110,27 @@ export function bulkDecisionPromptSkipNotice(prompt: BulkDecisionPrompt): string
 }
 
 /**
+ * Why the buttons are dead while rows are still ticked.
+ *
+ * Two things this must not say. It must not read as "nothing is selected" — the
+ * selection is right there beside it and the operator built it deliberately. And
+ * it must not claim every selected proposal is already decided: withdrawn rows
+ * and drafts are ineligible too, and telling an organizer their drafts "already
+ * have a decision" sends them looking for a decision nobody made.
+ *
+ * So it names the count they selected and the one property that actually gates
+ * the batch — still awaiting a decision — and points at the single-proposal
+ * route, which can do what bulk deliberately will not.
+ */
+export function bulkDecisionNothingEligibleNotice(selectedCount: number): string {
+  const n = Math.max(0, Math.trunc(selectedCount));
+  if (n === 1) {
+    return "The selected proposal is not awaiting a decision, so there is nothing to apply. Open it to change its decision.";
+  }
+  return `None of the ${proposalCount(n)} selected is awaiting a decision, so there is nothing to apply. Open a proposal to change its decision.`;
+}
+
+/**
  * The request body for a batch: EVERY selected id, in selection order.
  *
  * The client's eligibility read is a preview and nothing more. It sizes the

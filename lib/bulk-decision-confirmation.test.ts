@@ -4,6 +4,7 @@ import {
   BULK_DECISION_NO_EMAIL_SENTENCE,
   BULK_DECISION_NO_EMAIL_SENTENCE_PAST,
   bulkDecisionActionLabel,
+  bulkDecisionNothingEligibleNotice,
   bulkDecisionPromptBody,
   bulkDecisionPromptSkipNotice,
   bulkDecisionPromptTitle,
@@ -246,6 +247,79 @@ test("an all-ineligible selection still posts every id, and every row comes back
   const summary = bulkDecisionSummary(report);
   assert.match(summary, /^Nothing was changed\. 3 proposals skipped/);
   assert.ok(summary.includes(BULK_DECISION_NO_EMAIL_SENTENCE_PAST));
+});
+
+test("a same-reason group larger than five still names every proposal in it", async () => {
+  // The receipt used to list titles only for groups of five or fewer. A count
+  // without names answers "how many?" and withholds "which ones do I open?" —
+  // the same silence as a filtered request, one screen later, and it appeared
+  // exactly when the batch was big enough for the operator to need the list.
+  const rows = selection(
+    Array.from({ length: 8 }, (_, index) => [`old-${index}`, "ACCEPTED"] as [string, AbstractStatus]),
+  );
+  const { body, report } = await runSelection("REJECTED", rows);
+  assert.equal(body.abstractIds.length, 8);
+  assert.equal(report.skipped, 8);
+
+  const groups = bulkDecisionSkipGroups(report, new Map(rows.map((r) => [r.id, r.title])));
+  assert.equal(groups.length, 1);
+  const [group] = groups;
+  assert.equal(group.reasonCode, "ABSTRACT_ALREADY_DECIDED");
+  // All eight, not the first five: one label per id, in report order.
+  assert.equal(group.ids.length, 8);
+  assert.deepEqual(group.labels, rows.map((row) => row.title));
+  assert.equal(group.labels.length, group.ids.length);
+  assert.equal(new Set(group.labels).size, 8);
+
+  // And at the batch cap, which is the largest group the server can report.
+  const many = selection(
+    Array.from(
+      { length: BULK_ABSTRACT_DECISION_LIMIT },
+      (_, index) => [`w-${index}`, "WITHDRAWN"] as [string, AbstractStatus],
+    ),
+  );
+  const capped = await runSelection("ACCEPTED", many);
+  const [cappedGroup] = bulkDecisionSkipGroups(capped.report, new Map(many.map((r) => [r.id, r.title])));
+  assert.equal(cappedGroup.labels.length, BULK_ABSTRACT_DECISION_LIMIT);
+  assert.equal(cappedGroup.labels.at(-1), `Proposal w-${BULK_ABSTRACT_DECISION_LIMIT - 1}`);
+});
+
+test("a skipped row the selection has no title for is still named by its id", () => {
+  // `labels` is never short and never blank: the ids come back from the server
+  // and the map is the client's, so a stale or missing title degrades to the id
+  // rather than to an empty line.
+  const groups = bulkDecisionSkipGroups(
+    report({
+      results: [
+        { abstractId: "a", outcome: "SKIPPED", reasonCode: "ABSTRACT_NOT_FOUND", reason: BULK_DECISION_SKIP_REASONS.ABSTRACT_NOT_FOUND },
+        { abstractId: "b", outcome: "SKIPPED", reasonCode: "ABSTRACT_NOT_FOUND", reason: BULK_DECISION_SKIP_REASONS.ABSTRACT_NOT_FOUND },
+      ],
+      decided: 0,
+      skipped: 2,
+    }),
+    new Map([["b", "Known title"]]),
+  );
+  assert.deepEqual(groups[0].labels, ["a", "Known title"]);
+});
+
+test("the dead-button notice names the selection and the real gate", () => {
+  // It must not read as "nothing selected" — the rows are ticked and visible
+  // right beside it.
+  const many = bulkDecisionNothingEligibleNotice(6);
+  assert.match(many, /^None of the 6 proposals selected is awaiting a decision/);
+  assert.match(many, /nothing to apply/);
+  assert.match(many, /Open a proposal to change its decision\.$/);
+  assert.equal(bulkDecisionNothingEligibleNotice(1),
+    "The selected proposal is not awaiting a decision, so there is nothing to apply. Open it to change its decision.");
+
+  // And it must not claim a decision that was never made: a selection of drafts
+  // or withdrawn rows is ineligible too, and "already has a decision" would send
+  // an organizer looking for one nobody wrote.
+  for (const count of [1, 2, 40]) {
+    assert.equal(/already ha[sv]e? a decision/.test(bulkDecisionNothingEligibleNotice(count)), false, `${count}`);
+    assert.equal(/already decided/.test(bulkDecisionNothingEligibleNotice(count)), false, `${count}`);
+  }
+  assert.equal(bulkDecisionNothingEligibleNotice(-2).startsWith("None of the 0 proposals"), true);
 });
 
 test("the request body is the selection verbatim, whatever the client thinks of it", () => {

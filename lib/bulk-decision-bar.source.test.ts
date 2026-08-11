@@ -92,6 +92,38 @@ test("the dialog states the consequence before the click and the real numbers af
   assert.match(component, /onClearSelection\(\);/);
 });
 
+test("the receipt names every skipped proposal, however many share one reason", () => {
+  const component = bar();
+  // The render maps the whole group, so a group of six is six lines and a group
+  // of a hundred is a hundred. The count answers "how many?"; only the list
+  // answers "which ones do I have to open?".
+  assert.match(component, /group\.ids\.map\(\(id, index\) => \(\r?$/m);
+  assert.match(component, /<li key=\{id\}>\{group\.labels\[index\]\}<\/li>/);
+  // By absence: no truncation branch may come back. The batch cap bounds the
+  // worst case, so there is nothing here to protect the operator from.
+  assert.equal(/group\.ids\.length <= \d+/.test(component), false);
+  assert.equal(/group\.labels\.length <= \d+/.test(component), false);
+  assert.equal(/\.slice\(0,\s*\d+\)/.test(component), false);
+  assert.equal(/labels\.join\(/.test(component), false);
+  assert.equal(/\+\{[^}]*\}\s*more|and \d+ more|more…/.test(component), false);
+  // A hundred names is a scroll, not a wall: the group list has its own bounded
+  // height so "Done" stays in the receipt.
+  assert.match(component, /className="bulk-decision-skip-titles"/);
+  const css = featureCss();
+  assert.match(css, /\.bulk-decision-skips ul\.bulk-decision-skip-titles \{[^}]*overflow-y: auto;/);
+  assert.match(css, /\.bulk-decision-skips ul\.bulk-decision-skip-titles \{[^}]*max-height:/);
+});
+
+test("the dead-button hint says which truth, and is the tested copy", () => {
+  const component = bar();
+  // A ticked selection with nothing writable in it must not read as an empty
+  // selection, and must not claim a decision nobody made — a withdrawn row or a
+  // draft is ineligible too. The sentence lives in the unit-tested module.
+  assert.match(component, /bulkDecisionNothingEligibleNotice\(selected\.length\)/);
+  assert.equal(/already has a decision/.test(component), false);
+  assert.equal(/Every selected proposal/.test(component), false);
+});
+
 test("the toolbar appears only with a selection, and its eligibility read is preview only", () => {
   const component = bar();
   assert.match(component, /if \(selected\.length === 0\) return null;/);
