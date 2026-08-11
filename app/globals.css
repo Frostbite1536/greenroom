@@ -94,6 +94,13 @@ button { letter-spacing: 0; }
   .dashboard-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
+/* /admin/reports: the same .data-table as every other operator table, with the
+   row-header column and the numeric columns it needs to be read across. */
+.report-table th[scope="row"] { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; font-weight: 600; font-size: 13px; }
+.report-table tr:last-child th[scope="row"] { border-bottom: none; }
+.report-number { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.report-table tfoot td, .report-table tfoot th { border-top: 1px solid var(--line); border-bottom: none; font-weight: 600; background: #fbfcfb; }
+
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .logout-form { margin-left: auto; }
 

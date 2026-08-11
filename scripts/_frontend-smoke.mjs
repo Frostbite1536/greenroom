@@ -4392,6 +4392,276 @@ try {
       || freshNamedSpeakers + freshSessionSpeakers === 0,
     "the fresh scratch event is no longer empty in any dimension");
 
+  // --- D-C5-16 #4: the /admin/reports process report ------------------------
+  // Same discipline as the B7 block above: every figure is checked against a
+  // Prisma query written HERE, from a different angle than the page's own read
+  // (per-status counts, raw ScheduleSlot intervals, a membership scan), so a
+  // shared bug cannot make both sides agree. Nothing is hardcoded — the scratch
+  // fixture has been mutated by the whole run above.
+  const reportsPage = await req("GET", "/admin/reports", null, admin);
+  check("C5-REPORTS the reports page renders → 200", reportsPage.status === 200, `got ${reportsPage.status}`);
+  const reportsHtml = stripComments(reportsPage.text);
+  /** One panel's markup, so an assertion cannot match a neighbouring section. */
+  const reportSection = (id, next) => {
+    const start = reportsHtml.indexOf(`id="reports-${id}"`);
+    if (start === -1) return "";
+    const end = next ? reportsHtml.indexOf(`id="reports-${next}"`) : -1;
+    return reportsHtml.slice(start, end === -1 ? reportsHtml.length : end);
+  };
+  const reportMetric = (label) =>
+    collapse(reportsHtml.match(new RegExp(`<span>${label}</span>\\s*<strong>([^<]*)</strong>`))?.[1] ?? null);
+  const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  /** The numeric cells of one labelled table row, inner markup stripped. */
+  const reportRow = (section, label) => {
+    const match = section.match(new RegExp(`<th scope="row">${escapeRe(label)}</th>([\\s\\S]*?)</tr>`));
+    if (!match) return null;
+    return [...match[1].matchAll(/<td class="report-number">([\s\S]*?)<\/td>/g)]
+      .map((cell) => collapse(cell[1].replace(/<[^>]*>/g, "")));
+  };
+  // Mirrors of lib/tz and lib/reports/metrics formatting, the way this script
+  // already mirrors the HMAC and scrypt formats it cannot import.
+  const dayKeyOf = (date, timeZone) => {
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(date);
+    const get = (type) => parts.find((part) => part.type === type).value;
+    return `${get("year")}-${get("month")}-${get("day")}`;
+  };
+  const dayLabelOf = (key) =>
+    new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short", month: "short", day: "numeric" })
+      .format(new Date(`${key}T12:00:00Z`));
+  const fmtMinutes = (minutes) => {
+    if (minutes <= 0) return "—";
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    if (hours === 0) return `${rest}m`;
+    return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+  };
+  const fmtRate = (rate) => (rate === null ? "—" : `${Math.round(rate * 100)}%`);
+
+  // 1. Acceptance — accepted over decided, where MAYBE is not a decision.
+  const [repAccepted, repRejected, repMaybe] = await Promise.all([
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "ACCEPTED" } }),
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "REJECTED" } }),
+    prisma.abstract.count({ where: { eventId: EVENT_ID, status: "MAYBE" } }),
+  ]);
+  check("C5-REPORTS the acceptance metric is not vacuous",
+    repAccepted + repRejected > 0, `${repAccepted} accepted, ${repRejected} declined`);
+  check("C5-REPORTS acceptance is accepted over decided, counted independently",
+    reportMetric("Acceptance rate") === fmtRate(repAccepted / (repAccepted + repRejected)),
+    `page "${reportMetric("Acceptance rate")}" vs db ${repAccepted}/${repAccepted + repRejected}`);
+  // A maybe in the denominator would move the number; prove it is excluded.
+  check("C5-REPORTS a maybe is excluded from the acceptance denominator",
+    repMaybe === 0
+      || reportMetric("Acceptance rate") !== fmtRate(repAccepted / (repAccepted + repRejected + repMaybe)),
+    `${repMaybe} maybes did not change the rate`);
+
+  // 2. Review load — grouped per evaluator, withdrawn excluded, restricted to
+  //    the members the page can actually name.
+  const repMembers = await prisma.eventMember.findMany({
+    where: { eventId: EVENT_ID, role: { in: ["EVALUATOR", "ADMIN"] } },
+    select: { userId: true, user: { select: { name: true, email: true } } },
+  });
+  const repMemberIds = new Set(repMembers.map((member) => member.userId));
+  const repLoadGroups = await prisma.reviewAssignment.groupBy({
+    by: ["evaluatorId", "status"],
+    where: { plan: { eventId: EVENT_ID }, abstract: { status: { not: "WITHDRAWN" } } },
+    _count: { _all: true },
+  });
+  const repLoad = new Map();
+  for (const row of repLoadGroups) {
+    if (!repMemberIds.has(row.evaluatorId)) continue;
+    const totals = repLoad.get(row.evaluatorId) ?? { assigned: 0, completed: 0 };
+    totals.assigned += row._count._all;
+    if (row.status === "COMPLETED") totals.completed += row._count._all;
+    repLoad.set(row.evaluatorId, totals);
+  }
+  const repAssigned = [...repLoad.values()].reduce((sum, row) => sum + row.assigned, 0);
+  const repCompleted = [...repLoad.values()].reduce((sum, row) => sum + row.completed, 0);
+  check("C5-REPORTS the review load is not vacuous", repAssigned > 0, `${repAssigned} assignments`);
+  check("C5-REPORTS outstanding reviews match an independently grouped count",
+    reportMetric("Reviews outstanding") === String(repAssigned - repCompleted),
+    `page "${reportMetric("Reviews outstanding")}" vs db ${repAssigned - repCompleted}`);
+  const reviewSection = reportSection("review", "utilization");
+  const loadMismatch = repMembers
+    .map((member) => {
+      const totals = repLoad.get(member.userId) ?? { assigned: 0, completed: 0 };
+      const rendered = reportRow(reviewSection, member.user.name);
+      const expected = [
+        String(totals.assigned),
+        String(totals.completed),
+        String(Math.max(0, totals.assigned - totals.completed)),
+      ];
+      return rendered && rendered.slice(0, 3).join("/") === expected.join("/")
+        ? null
+        : `${member.user.name}: page ${rendered?.slice(0, 3).join("/") ?? "missing"} vs db ${expected.join("/")}`;
+    })
+    .filter(Boolean);
+  check("C5-REPORTS every reviewer's assigned/completed/outstanding matches the database",
+    loadMismatch.length === 0, loadMismatch.join("; "));
+  check("C5-REPORTS the review section names reviewers without exposing their address",
+    repMembers.every((member) => !reviewSection.includes(member.user.email)),
+    "a reviewer email reached the report");
+  check("C5-REPORTS the report carries no score, rubric or per-abstract review link",
+    !/rubric|weighted|reviewScore/i.test(reportsHtml)
+      && !reportsHtml.includes("/admin/abstracts?abstract="),
+    "review detail leaked onto the process report");
+
+  // 3. Per-category funnel — the fixture category against its own groupBy, in
+  //    the abstracts page's chip order.
+  const REPORT_FUNNEL_ORDER = ["SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED", "REJECTED", "DRAFT", "WITHDRAWN"];
+  const repCategoryGroups = await prisma.abstract.groupBy({
+    by: ["status"],
+    where: { eventId: EVENT_ID, categoryId: fx.category.id },
+    _count: { _all: true },
+  });
+  const repCategoryCounts = new Map(repCategoryGroups.map((row) => [row.status, row._count._all]));
+  const repCategoryDecided = (repCategoryCounts.get("ACCEPTED") ?? 0) + (repCategoryCounts.get("REJECTED") ?? 0);
+  const funnelSection = reportSection("funnel", "review");
+  const renderedCategory = reportRow(funnelSection, fx.category.name);
+  const expectedCategory = [
+    ...REPORT_FUNNEL_ORDER.map((status) => String(repCategoryCounts.get(status) ?? 0)),
+    String(repCategoryDecided),
+    fmtRate(repCategoryDecided === 0 ? null : (repCategoryCounts.get("ACCEPTED") ?? 0) / repCategoryDecided),
+  ];
+  check("C5-REPORTS the category funnel row is not vacuous",
+    [...repCategoryCounts.values()].reduce((sum, n) => sum + n, 0) > 0, "the fixture category holds no proposals");
+  check("C5-REPORTS the category row matches an independent per-status count",
+    renderedCategory !== null && renderedCategory.join("|") === expectedCategory.join("|"),
+    `page ${renderedCategory?.join("|") ?? "missing"} vs db ${expectedCategory.join("|")}`);
+  // The foot must equal the whole event, counted without any category join.
+  const repAllGroups = await prisma.abstract.groupBy({
+    by: ["status"], where: { eventId: EVENT_ID }, _count: { _all: true },
+  });
+  const repAllCounts = new Map(repAllGroups.map((row) => [row.status, row._count._all]));
+  const renderedTotals = reportRow(funnelSection, "All categories");
+  check("C5-REPORTS the totals row equals the event's own status counts",
+    renderedTotals !== null
+      && renderedTotals.slice(0, 7).join("|")
+        === REPORT_FUNNEL_ORDER.map((status) => String(repAllCounts.get(status) ?? 0)).join("|"),
+    `page ${renderedTotals?.slice(0, 7).join("|") ?? "missing"}`);
+
+  // 4. Room utilization — recomputed from raw ScheduleSlot intervals.
+  const repEvent = await prisma.event.findUnique({
+    where: { id: EVENT_ID }, select: { timezone: true },
+  });
+  const [repSlots, repRooms] = await Promise.all([
+    prisma.scheduleSlot.findMany({
+      where: { eventId: EVENT_ID }, select: { roomId: true, startsAt: true, endsAt: true },
+    }),
+    prisma.room.findMany({ where: { eventId: EVENT_ID }, select: { id: true, name: true } }),
+  ]);
+  const repRoomName = new Map(repRooms.map((room) => [room.id, room.name]));
+  const repBookedTotal = repSlots.reduce(
+    (sum, slot) => sum + Math.max(0, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / 60000)), 0);
+  check("C5-REPORTS the utilization section is not vacuous",
+    repSlots.length > 0 && repRooms.length > 0, `${repSlots.length} slots, ${repRooms.length} rooms`);
+  check("C5-REPORTS booked programme time is the sum of the placed slot intervals",
+    reportMetric("Programme time booked") === fmtMinutes(repBookedTotal),
+    `page "${reportMetric("Programme time booked")}" vs db ${fmtMinutes(repBookedTotal)}`);
+
+  const repPerRoomDay = new Map();
+  for (const slot of repSlots) {
+    const key = `${dayLabelOf(dayKeyOf(slot.startsAt, repEvent.timezone))}|${repRoomName.get(slot.roomId)}`;
+    const totals = repPerRoomDay.get(key) ?? { slots: 0, minutes: 0 };
+    totals.slots += 1;
+    totals.minutes += Math.max(0, Math.round((slot.endsAt.getTime() - slot.startsAt.getTime()) / 60000));
+    repPerRoomDay.set(key, totals);
+  }
+  const utilSection = reportSection("utilization", "readiness");
+  const utilTable = new Map();
+  let utilDay = null;
+  for (const match of utilSection.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+    const row = match[1];
+    const dayLabel = row.match(/<div class="cell-title">([^<]*)<\/div>/)?.[1];
+    if (dayLabel) utilDay = dayLabel;
+    const roomName = row.match(/<td>([^<]*)<\/td>/)?.[1];
+    const numbers = [...row.matchAll(/<td class="report-number">([\s\S]*?)<\/td>/g)]
+      .map((cell) => collapse(cell[1].replace(/<[^>]*>/g, "")));
+    if (roomName && numbers.length === 4) utilTable.set(`${utilDay}|${roomName}`, numbers);
+  }
+  const utilMismatch = [...repPerRoomDay.entries()]
+    .map(([key, totals]) => {
+      const rendered = utilTable.get(key);
+      return rendered && rendered[0] === String(totals.slots) && rendered[1] === fmtMinutes(totals.minutes)
+        ? null
+        : `${key}: page ${rendered?.slice(0, 2).join("/") ?? "missing"} vs db ${totals.slots}/${fmtMinutes(totals.minutes)}`;
+    })
+    .filter(Boolean);
+  check("C5-REPORTS every booked room-day matches an independently summed interval",
+    repPerRoomDay.size > 0 && utilMismatch.length === 0,
+    utilMismatch.join("; ") || `${repPerRoomDay.size} room-days`);
+  const idleRooms = repRooms.filter((room) => ![...repPerRoomDay.keys()].some((key) => key.endsWith(`|${room.name}`)));
+  check("C5-REPORTS an idle room is still listed, as a zero row rather than a gap",
+    idleRooms.length === 0
+      || idleRooms.every((room) => [...utilTable.keys()].some((key) => key.endsWith(`|${room.name}`))),
+    idleRooms.map((room) => room.name).join(", "));
+
+  // 5. Readiness — measured over the same cohort the roster page reports.
+  const repRosterHtml = stripComments((await req("GET", "/admin/speakers", null, admin)).text);
+  const repRosterConfirmed = repRosterHtml.match(/<span>Confirmed speakers<\/span><strong>(\d+)<\/strong>/)?.[1] ?? null;
+  const readinessSection = reportSection("readiness", null);
+  const readinessBuckets = [...readinessSection.matchAll(/<strong>(\d+) \/ (\d+)<\/strong>/g)]
+    .map((match) => [Number(match[1]), Number(match[2])]);
+  check("C5-REPORTS the readiness ladder renders all three buckets",
+    readinessBuckets.length === 3, `${readinessBuckets.length} buckets`);
+  check("C5-REPORTS readiness is measured over the roster page's own confirmed cohort",
+    repRosterConfirmed !== null && readinessBuckets.every(([, cohort]) => String(cohort) === repRosterConfirmed),
+    `report cohorts ${readinessBuckets.map(([, cohort]) => cohort).join(",")} vs roster ${repRosterConfirmed ?? "none"}`);
+  check("C5-REPORTS the readiness buckets partition the cohort exactly",
+    readinessBuckets.length === 3
+      && readinessBuckets.reduce((sum, [count]) => sum + count, 0) === Number(repRosterConfirmed),
+    `${readinessBuckets.map(([count]) => count).join("+")} vs ${repRosterConfirmed}`);
+
+  // 6. The exports are reachable from the page, including the ABS-13 one.
+  const reportExportLinks = [
+    "/api/admin/speakers/export",
+    "/api/admin/sessions/export",
+    "/api/admin/schedule/export",
+    "/api/admin/abstracts/export",
+  ].filter((href) => !reportsHtml.includes(`href="${href}"`));
+  check("C5-REPORTS all four CSV exports are offered beside their sections",
+    reportExportLinks.length === 0, reportExportLinks.join(", "));
+  check("C5-REPORTS the sidebar offers Reports to an admin",
+    reportsHtml.includes('href="/admin/reports"'), "no sidebar entry");
+
+  // 7. Authorization — identical to every sibling admin page.
+  const reportsSpeaker = await reqManual("/admin/reports", speaker);
+  check("C5-REPORTS a speaker is redirected away from the reports page → 307",
+    reportsSpeaker.status === 307, `got ${reportsSpeaker.status}`);
+  const reportsForged = await reqManual("/admin/reports", { ...speaker, role: "ADMIN" });
+  check("C5-REPORTS a forged ADMIN claim in the cookie does not open the reports page → 307",
+    reportsForged.status === 307, `got ${reportsForged.status}`);
+  const reportsEvaluator = await reqManual("/admin/reports", evaluator);
+  check("C5-REPORTS a reviewer is redirected away from the reports page → 307",
+    reportsEvaluator.status === 307, `got ${reportsEvaluator.status}`);
+  const reportsAnon = await reqManual("/admin/reports", null);
+  check("C5-REPORTS an unauthenticated reports request → 307 /login",
+    reportsAnon.status === 307 && reportsAnon.location.includes("/login"),
+    `${reportsAnon.status} ${reportsAnon.location || "no location"}`);
+  // A SPEAKER must not see the entry advertised either.
+  const speakerShell = await req("GET", "/portal", null, speaker);
+  check("C5-REPORTS the sidebar hides Reports from a speaker",
+    !speakerShell.text.includes('href="/admin/reports"'), "the entry was advertised to a speaker");
+
+  // 8. Zero-state honesty on the fresh event.
+  const freshReports = await req("GET", "/admin/reports", null,
+    { ...admin, event: { id: FRESH_EVENT_ID, name: "Scratch Fresh", slug: FRESH_EVENT_ID } });
+  check("C5-REPORTS the reports page renders for a fresh event → 200",
+    freshReports.status === 200, `got ${freshReports.status}`);
+  const freshReportsHtml = stripComments(freshReports.text);
+  const [freshReportSlots, freshReportAssignments] = await Promise.all([
+    prisma.scheduleSlot.count({ where: { eventId: FRESH_EVENT_ID } }),
+    prisma.reviewAssignment.count({ where: { plan: { eventId: FRESH_EVENT_ID } } }),
+  ]);
+  check("C5-REPORTS an event with nothing placed says so and points at the builder",
+    freshReportSlots > 0
+      ? true
+      : freshReportsHtml.includes("Nothing is placed yet") && freshReportsHtml.includes('href="/admin/agenda"'),
+    `${freshReportSlots} slots`);
+  check("C5-REPORTS an unstarted acceptance rate reads as a dash, never as zero percent",
+    freshReportsHtml.includes("<strong>—</strong>") || freshReportAssignments > 0,
+    "a fresh event reported 0% acceptance");
+
   // --- authorization ---
   // Must be a clean redirect, not a thrown 401 error page: the page's own data
   // read races the layout's requireSession(), so the read has to redirect too.

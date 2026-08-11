@@ -89,6 +89,17 @@ import {
   type ProgrammeHealth,
   type ReviewProgress,
 } from "@/lib/dashboard/metrics";
+import {
+  summarizeCategoryFunnel,
+  summarizeReviewLoad,
+  summarizeScheduleUtilization,
+  summarizeSpeakerReadiness,
+  type CategoryFunnel,
+  type DayUtilization,
+  type ReviewLoad,
+  type SpeakerReadiness,
+} from "@/lib/reports/metrics";
+import { placementDayKeys } from "@/lib/services/agenda-autoplace";
 
 /**
  * Page-level auth: redirect to `/login` rather than throwing.
@@ -697,6 +708,22 @@ export type AgendaData = {
 
 export async function getAgendaData(): Promise<AgendaData> {
   const ctx = await pageContext(["ADMIN"]);
+  return readAgendaData(ctx.eventId);
+}
+
+/**
+ * The agenda read itself, addressed by event id.
+ *
+ * Split out of `getAgendaData()` for the same reason `readSpeakerRoster` is
+ * split out of the roster page: an API route cannot call `pageContext()`, whose
+ * refusal is a `redirect("/login")`. The `/admin/reports` page and the two
+ * agenda CSV exports therefore share this one read — bounds, ordering, and
+ * truncation rule included — instead of restating the programme's shape in
+ * three places. `getAgendaData()` above remains the only caller that resolves
+ * authorization; every other caller has already resolved its own.
+ */
+export async function readAgendaData(eventId: string): Promise<AgendaData> {
+  const ctx = { eventId };
   const [event, rooms, tracks, sessions] = await Promise.all([
     prisma.event.findUnique({ where: { id: ctx.eventId }, select: { timezone: true } }),
     // P-01: the grid's axes were the only unbounded reads left in this builder
@@ -1785,5 +1812,125 @@ export async function getAdminDashboard(): Promise<AdminDashboardView> {
     recentDecisions: decisionRows.flatMap((row) =>
       row.decidedAt ? [toActivityRow(row, row.decidedAt)] : [],
     ),
+  };
+}
+
+// ---- /admin/reports --------------------------------------------------------
+
+export type AdminReportsView = {
+  eventId: string;
+  eventName: string;
+  timezone: string;
+  /** Submissions by category and status, with acceptance where decided. */
+  funnel: CategoryFunnel;
+  review: ReviewLoad;
+  /** True when this event has more reviewers than one bounded read carries. */
+  reviewersTruncated: boolean;
+  utilization: DayUtilization[];
+  rooms: { id: string; name: string }[];
+  /** True when the agenda read was cut, so every schedule figure is a floor. */
+  agendaTruncated: boolean;
+  readiness: SpeakerReadiness;
+  rosterTruncated: boolean;
+  /** Whether anything has been placed at all, for the schedule empty state. */
+  placedSlots: number;
+};
+
+/**
+ * Everything `/admin/reports` renders, in ONE batched event-scoped read.
+ *
+ * The sibling `getAdminDashboard()` answers "where does my programme stand".
+ * This answers "how did the process perform", so it reads different rows — but
+ * under the same rule: no definition is invented where one exists.
+ *
+ * - the category funnel groups by `["categoryId","status"]` over the SAME
+ *   `adminAbstractListWhere` the abstracts table, its metric strip and the
+ *   dashboard funnel all count from, so the report's column sums equal the
+ *   dashboard's segments;
+ * - the review load groups the reviewer assignments with the identical
+ *   non-withdrawn filter `getEvaluationSetup`'s own per-evaluator groupBy uses,
+ *   over the same `reviewerSetupMembers`-bounded membership read;
+ * - schedule utilization reads `readAgendaData()` — the agenda builder's own
+ *   bounded, truncation-reporting programme read — and derives its day keys
+ *   with `placementDayKeys`, the helper the auto-placer already walks;
+ * - readiness is `readSpeakerRoster()`, the read behind `/admin/speakers` and
+ *   the dashboard's speaker card, folded over its own `confirmed` cohort.
+ *
+ * The six reads run concurrently (`readAgendaData` and `readSpeakerRoster` each
+ * batch internally), so this is one round of parallel queries, not a waterfall.
+ */
+export async function getAdminReports(): Promise<AdminReportsView> {
+  const ctx = await pageContext(["ADMIN"]);
+  const eventId = ctx.eventId;
+  const abstractWhere = adminAbstractListWhere({ eventId });
+
+  const [event, categoryGroups, categories, evaluatorGroups, members, agenda, roster] =
+    await Promise.all([
+      prisma.event.findUnique({
+        where: { id: eventId },
+        select: { name: true, timezone: true, startsAt: true, endsAt: true },
+      }),
+      prisma.abstract.groupBy({
+        by: ["categoryId", "status"],
+        where: abstractWhere,
+        _count: { _all: true },
+      }),
+      prisma.category.findMany({
+        where: { eventId },
+        orderBy: { sortOrder: "asc" },
+        take: OPERATOR_QUERY_LIMITS.settingsCategories + 1,
+        select: { id: true, name: true },
+      }),
+      // Withdrawn work can no longer be scored and must not inflate a
+      // reviewer's load — the exact filter `getEvaluationSetup` applies.
+      prisma.reviewAssignment.groupBy({
+        by: ["evaluatorId", "status"],
+        where: { plan: { eventId }, abstract: { status: { not: "WITHDRAWN" } } },
+        _count: { _all: true },
+      }),
+      prisma.eventMember.findMany({
+        where: { eventId, role: { in: ["EVALUATOR", "ADMIN"] } },
+        orderBy: { user: { name: "asc" } },
+        take: OPERATOR_QUERY_LIMITS.reviewerSetupMembers + 1,
+        // Name only. An evaluator's email is not needed to report a workload,
+        // and this projection is what keeps it out of the rendered page.
+        select: { userId: true, user: { select: { name: true } } },
+      }),
+      readAgendaData(eventId),
+      readSpeakerRoster(eventId),
+    ]);
+
+  assertEventQueryBound(categories, OPERATOR_QUERY_LIMITS.settingsCategories, "categories");
+  // Reviewers are reported cap-plus-one with an honest notice rather than a
+  // 422: refusing to render a whole report because an event has many members
+  // would be worse for an operator than rendering it and naming the cut.
+  const reviewersTruncated = members.length > OPERATOR_QUERY_LIMITS.reviewerSetupMembers;
+  const evaluators = members
+    .slice(0, OPERATOR_QUERY_LIMITS.reviewerSetupMembers)
+    .map((member) => ({ userId: member.userId, name: member.user.name }));
+
+  const timezone = agenda.timezone;
+  const slots = agenda.sessions.flatMap((session) =>
+    session.slot ? [{ roomId: session.slot.roomId, startsAt: session.slot.startsAt, endsAt: session.slot.endsAt }] : [],
+  );
+
+  return {
+    eventId,
+    eventName: event?.name ?? "This event",
+    timezone,
+    funnel: summarizeCategoryFunnel(categoryGroups, categories),
+    review: summarizeReviewLoad(evaluatorGroups, evaluators),
+    reviewersTruncated,
+    utilization: summarizeScheduleUtilization(
+      slots,
+      agenda.rooms,
+      placementDayKeys(event?.startsAt ?? null, event?.endsAt ?? null, timezone),
+      timezone,
+    ),
+    rooms: agenda.rooms.map((room) => ({ id: room.id, name: room.name })),
+    agendaTruncated: agenda.truncated,
+    readiness: summarizeSpeakerReadiness(roster.rows, roster.confirmed),
+    rosterTruncated: roster.truncated,
+    placedSlots: slots.length,
   };
 }

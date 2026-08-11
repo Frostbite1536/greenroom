@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  BarChart3,
   CalendarDays,
   ClipboardCheck,
   Code2,
@@ -51,6 +52,10 @@ const navigation: { href: string; label: string; icon: typeof FileText; roles: R
   // admin entry below is one of the workspaces it links into. ADMIN-only,
   // mirroring `pageContext(["ADMIN"])` in `getAdminDashboard()`.
   { href: "/admin", label: "Dashboard", icon: Gauge, roles: ["ADMIN"] },
+  // Second: the dashboard's counterpart. Where Dashboard says how the programme
+  // stands, Reports says how the process performed, and it owns the CSV exports.
+  // ADMIN-only, mirroring `pageContext(["ADMIN"])` in `getAdminReports()`.
+  { href: "/admin/reports", label: "Reports", icon: BarChart3, roles: ["ADMIN"] },
   { href: "/admin/forms", label: "CFP forms", icon: FileText, roles: ["ADMIN"] },
   { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN"] },
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"] },
