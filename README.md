@@ -1,9 +1,9 @@
 # Greenroom
 
-Greenroom is an open-source, self-hostable conference programme platform that
+Greenroom is an open-source, self-hostable conference program platform that
 takes an organizer from an open CFP through structured review, atomic
 acceptance, speaker readiness, conflict-safe scheduling, and a published
-programme.
+program.
 
 An alternative to closed CFP/speaker-ops SaaS: CFP forms, abstract evaluation,
 speaker onboarding, and a conflict-aware agenda, with public embeds for your
@@ -11,7 +11,7 @@ event site.
 
 The repository includes reproducible demo data, deployment instructions,
 verification scripts, and role-based walkthroughs so contributors and evaluators
-can validate the complete programme workflow. Evaluating this project? Start at
+can validate the complete program workflow. Evaluating this project? Start at
 the [evaluation index](docs/judging/README.md).
 
 ## Features (the golden path)

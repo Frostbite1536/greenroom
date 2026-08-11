@@ -5,7 +5,7 @@ knowledge required — start signed in.
 
 | Guide | For you if… |
 | --- | --- |
-| [Event admin](event-admin.md) | you run the call for speakers and build the programme |
+| [Event admin](event-admin.md) | you run the call for speakers and build the program |
 | [Evaluator](evaluator.md) | you have been asked to score proposals |
 | [Speaker](speaker.md) | you submitted a talk, or your talk was accepted |
 

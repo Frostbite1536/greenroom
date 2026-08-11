@@ -404,7 +404,7 @@ export function SubmissionEditor({ abstractId }: { abstractId: string }) {
             </ul>
             <p className="hint">
               {submission.speakersLocked
-                ? "Your talk is on the programme, so the line-up is fixed here. Contact the programme team to change who's presenting."
+                ? "Your talk is on the program, so the line-up is fixed here. Contact the program team to change who's presenting."
                 : "This proposal can no longer be edited."}
             </p>
           </>

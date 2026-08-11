@@ -17,7 +17,7 @@ export default function PublicNotFound() {
         <p className="eyebrow">Not found</p>
         <h1>We couldn’t find that page</h1>
         <p>
-          The link may be out of date, or the page may have moved. The published programme is
+          The link may be out of date, or the page may have moved. The published program is
           always available from the schedule.
         </p>
         <div className="boundary-actions">

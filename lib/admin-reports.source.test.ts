@@ -159,7 +159,7 @@ test("the reports page is a different report, not a second dashboard", () => {
   const dashboard = source("app/(app)/admin/page.tsx");
   // Every card heading on the dashboard, none of which may reappear here.
   for (const heading of [
-    ">Call for proposals<", ">Review progress<", ">Programme<", ">Speakers<",
+    ">Call for proposals<", ">Review progress<", ">Program<", ">Speakers<",
     "Latest submissions", "Latest decisions",
   ]) {
     assert.ok(dashboard.includes(heading), `dashboard heading moved: ${heading}`);
@@ -185,6 +185,48 @@ test("a fresh event gets an actionable empty state per section, not a wall of ze
   }
   assert.match(component, /<Link href="\/admin\/evaluations">Invite reviewers and assign a round<\/Link>/);
   assert.match(component, /<Link href="\/admin\/agenda">Place a talk in the agenda builder<\/Link>/);
+});
+
+test("the charts are an enhancement over the tables, never a replacement", () => {
+  const component = page();
+  // Every table this page shipped with is still rendered, above them or not.
+  assert.equal((component.match(/className="data-table report-table"/g) ?? []).length, 3);
+  for (const caption of [
+    "Proposals by category and status, with acceptance rate",
+    "Assigned, completed and outstanding reviews per reviewer",
+    "Slots and minutes booked per room, by event day",
+  ]) {
+    assert.ok(component.includes(caption), `a table caption was dropped: ${caption}`);
+  }
+  // And the readiness section's list, which is that section's own table.
+  assert.match(component, /<ul className="dashboard-list">[\s\S]*?readiness\.buckets\.map/);
+  // The charts are pure geometry built from the folds already read — no second
+  // read, no client island, and no chart dependency.
+  assert.match(component, /from "@\/lib\/reports\/charts"/);
+  assert.equal((component.match(/await /g) ?? []).length, 1);
+  const chart = source("components/report-charts.tsx");
+  assert.equal(chart.includes('"use client"'), false);
+  assert.match(chart, /<svg[\s\S]{0,200}viewBox=\{`0 0 100 \$\{TRACK_HEIGHT\}`\}/);
+  assert.match(chart, /role="img"[\s\S]{0,40}aria-label=\{chart\.ariaLabel\}/);
+});
+
+test("no charting dependency was added for them", () => {
+  const manifest = JSON.parse(source("package.json")) as {
+    dependencies: Record<string, string>;
+  };
+  assert.deepEqual(Object.keys(manifest.dependencies).sort(), [
+    "@prisma/client",
+    "lucide-react",
+    "next",
+    "react",
+    "react-dom",
+    "zod",
+  ]);
+  // Every fill is a theme token, so a palette change moves the charts with it.
+  const styles = source("app/globals.css");
+  const palette = styles.slice(styles.indexOf("--chart-strong:"), styles.indexOf("--chart-track:"));
+  assert.doesNotMatch(palette, /#[0-9a-f]{3,8}/i, "a chart colour is a literal, not a token");
+  assert.doesNotMatch(source("components/report-charts.tsx"), /#[0-9a-f]{3,8}/i);
 });
 
 test("the sidebar entry is ADMIN-only and sits directly after the dashboard", () => {

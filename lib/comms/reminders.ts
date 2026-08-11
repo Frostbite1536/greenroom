@@ -119,15 +119,19 @@ export function reminderVariables({
 /**
  * Select event speakers without silently accepting ids from another event.
  * Routes turn `invalidUserIds` into a stable 422 response before dispatching.
+ *
+ * Generic over the speaker shape so the calendar-invite trigger reuses this
+ * rule rather than reimplementing it: "an id the caller named is not in the
+ * eligible set" must refuse identically on every send surface.
  */
-export function selectEligibleSpeakers(
-  eligible: EligibleSpeaker[],
+export function selectEligibleSpeakers<T extends { userId: string }>(
+  eligible: T[],
   requestedUserIds?: string[],
-): { recipients: EligibleSpeaker[]; invalidUserIds: string[] } {
+): { recipients: T[]; invalidUserIds: string[] } {
   if (!requestedUserIds) return { recipients: eligible, invalidUserIds: [] };
 
   const byId = new Map(eligible.map((speaker) => [speaker.userId, speaker]));
-  const recipients: EligibleSpeaker[] = [];
+  const recipients: T[] = [];
   const invalidUserIds: string[] = [];
   for (const userId of requestedUserIds) {
     const speaker = byId.get(userId);

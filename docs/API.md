@@ -16,6 +16,15 @@ The v1 API is an optional server-to-server, read-only surface. Set
 32 characters. When the variable is unset or too short, all v1 routes return
 `503 API_KEY_NOT_CONFIGURED`; the key is never safe to expose in browser code.
 
+The contract for these three routes is published in two forms, both public and
+neither requiring a key: **`GET /api/v1/openapi.json`** serves a static
+OpenAPI 3.1.1 document, and **`/docs/api`** renders that same document as a page.
+They cannot disagree — the page is generated from the document, and
+`lib/api/openapi.test.ts` fails when the document stops matching the routes.
+Neither contains program data, and neither ever contains the key, and
+`lib/api/openapi-purity.test.ts` pins the document's whole import graph away
+from the environment, auth, and the database.
+
 Authenticate with either `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 Every request must provide an explicit `event` query parameter containing the
 event's slug or id. Unknown events return `404 EVENT_NOT_FOUND`.
@@ -72,19 +81,19 @@ All three endpoints accept `event=<slug|id>`, `limit=<1..100>`, and
 
 This is an ordered design queue, not an available API contract.
 
-1. A public, static OpenAPI document will describe the existing read-only v1
-   routes first, with a test that detects contract drift. It may be read without
-   a key because it contains no programme data.
-2. The deployment-wide `GREENROOM_API_KEY` will **not** be published as a demo
+The first item of this queue — the static OpenAPI document and its drift test —
+has shipped and is described above; what remains is below.
+
+1. The deployment-wide `GREENROOM_API_KEY` will **not** be published as a demo
    credential. It is not event-scoped, so exposing it would turn every event
    addressable by the current API into public data.
-3. Event discovery and resource visibility come before new read endpoints. In
+2. Event discovery and resource visibility come before new read endpoints. In
    particular, held-back or unplaced sessions must remain private unless a
    future scoped-read contract explicitly permits them; filters and incremental
    sync also need bounded, stable cursor semantics.
-4. Hashed, revocable per-event credentials and a safely scoped demo-access path
+3. Hashed, revocable per-event credentials and a safely scoped demo-access path
    precede any broader discovery or data demonstrations.
-5. Generic webhook delivery and any agent-writable API come last. A write must
+4. Generic webhook delivery and any agent-writable API come last. A write must
    carry idempotency, per-token rate limits, auditability, and the same server
    authorization, abstract locks, and schedule locks used by the application
    routes. It must never reimplement or bypass those protections.
@@ -136,7 +145,7 @@ Unauthenticated `POST /api/cfp/submissions` accepts `saveDraft` and `submit`; **
 the selected form to be published and open. Its JSON body is capped at 128 KiB before parsing,
 and its strict, bounded answers and speaker roster reject duplicate normalized speaker emails.
 The durable, HMAC-fingerprinted limits run in this scope order: 20 public writes per IP per 10
-minutes; 120 per event per hour across both drafts and submits; then, for a submit, 3 per primary
+minutes; 120 per event per hour across both drafts and submits; then, for a submit, 10 per primary
 email per 24 hours and 60 submit attempts per event per hour. Those submit buckets are consumed
 before later business validation or conflict checks. It still refuses any non-`DRAFT` `abstractId`
 with `409 ABSTRACT_LOCKED`, so the anonymous route cannot rewrite a submitted or accepted proposal.
@@ -162,7 +171,7 @@ included and completed-review counts.
   onboarding-task × session-speaker assignments when accepting. It returns the decided
   abstract plus additive `session`, `sessionCreated`, and `tasksAssigned` keys. `session` is
   `{ id, title, isScheduled, scheduledAt, roomName }` or `null`, so the UI can also warn when
-  a later decline still leaves a talk on the programme. Nothing is auto-deleted
+  a later decline still leaves a talk on the program. Nothing is auto-deleted
   (INV-DOMAIN-001).
 - `POST /api/evaluations/convert` (admin) is the idempotent compatibility/backfill path for
   an accepted abstract whose Session or speaker-task assignments are missing. It returns 201

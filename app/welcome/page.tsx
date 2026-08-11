@@ -86,7 +86,7 @@ export default async function WelcomePage() {
         ) : null}
 
         <p className="login-hint">
-          An event of your own starts empty — your forms, your programme, your speakers. You become
+          An event of your own starts empty — your forms, your program, your speakers. You become
           its organizer as soon as it is created.
         </p>
         <NewEventDialog onboarding />

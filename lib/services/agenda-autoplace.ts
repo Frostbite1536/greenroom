@@ -386,7 +386,7 @@ export function planOpenSlotPlacements(snapshot: PlacementSnapshot): PlacementPl
       ...remaining.map((session) => unplaceable(
         session,
         "NO_FREE_SLOT",
-        "No room is free for this talk's whole length inside the programme window on any event day. "
+        "No room is free for this talk's whole length inside the program window on any event day. "
           + "Free up time, add a room, or place it by hand.",
       )),
     ].sort((left, right) => byId(left.sessionId, right.sessionId)),

@@ -45,6 +45,6 @@ first slot 9:00 AM local, speaker persona restored to demo defaults.
 
 Note, and part of what makes this run historical: the seeded agenda **at that
 commit** carried one deliberate room conflict so the agenda builder's conflict
-banner had something to show. The current seed does not — the demo programme is
+banner had something to show. The current seed does not — the demo program is
 conflict-free across all three event days, the Conflicts view reads zero, and
 the walkthrough demonstrates a refusal live instead.

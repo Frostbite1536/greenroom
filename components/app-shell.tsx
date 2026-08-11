@@ -17,6 +17,7 @@ import {
   Settings2,
   UserCheck,
   Users,
+  UsersRound,
 } from "lucide-react";
 import { homeForRole, type DemoSession } from "@/lib/auth";
 import { logout } from "@/app/login/actions";
@@ -62,7 +63,7 @@ type NavItem = { href: string; label: string; icon: typeof FileText; roles: Role
 const NAV_GROUPS: { key: NavGroup; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "cfp", label: "Call for proposals" },
-  { key: "programme", label: "Programme" },
+  { key: "programme", label: "Program" },
   { key: "communications", label: "Communications" },
   { key: "public", label: "Public site" },
   { key: "configure", label: "Configure" },
@@ -102,6 +103,9 @@ const navigation: NavItem[] = [
   { href: "/embed/speakers", label: "Public speakers", icon: Mic2, roles: EVERYONE, group: "public" },
   { href: "/portal", label: "Speaker portal", icon: Users, roles: ["ADMIN", "SPEAKER"], group: "public" },
   { href: "/admin/settings", label: "Event settings", icon: SlidersHorizontal, roles: ["ADMIN"], group: "configure" },
+  // Beside Event settings: both configure the event itself rather than its
+  // programme. ADMIN-only, mirroring the page's own `ctx.role !== "ADMIN"` check.
+  { href: "/admin/team", label: "Event team", icon: UsersRound, roles: ["ADMIN"], group: "configure" },
 ];
 
 /**
@@ -236,8 +240,20 @@ export function AppShell({
       </aside>
       <div className="workspace">
         <header className="topbar">
+          {/* The drawer renders the same labelled blocks the sidebar does, so the
+              grouping is applied once — here, off the same NAV_GROUPS table and
+              the same role-filtered `links`. The drawer is a client component;
+              handing it finished groups keeps the table, and the role filter
+              that is the actual authorization mirror, on the server. */}
           <MobileNavigation
-            links={[...links.map(({ href, label }) => ({ href, label })), ...cfpItems]}
+            cfpLinks={cfpItems}
+            groups={NAV_GROUPS.map(({ key, label }) => ({
+              key,
+              label,
+              links: links
+                .filter((item) => item.group === key)
+                .map(({ href, label: entry }) => ({ href, label: entry })),
+            }))}
           />
           <span className="status-dot" aria-hidden="true" />
           <span>Planning workspace</span>

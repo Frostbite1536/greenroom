@@ -5,7 +5,7 @@ build of this application:
 
 | Suite | Script | What it proves |
 | --- | --- | --- |
-| `golden-path.spec.ts` | `npm run test:e2e` | The judge journey, in order: anonymous CFP → submission → organizer sign-in → the proposal in the pipeline → acceptance provisioning a session and onboarding tasks → a **refused** colliding placement → a clean placement → the speaker portal → the logged-out public programme. |
+| `golden-path.spec.ts` | `npm run test:e2e` | The judge journey, in order: anonymous CFP → submission → organizer sign-in → the proposal in the pipeline → acceptance provisioning a session and onboarding tasks → a **refused** colliding placement → a clean placement → the speaker portal → the logged-out public program. |
 | `screenshots.spec.ts` | `npm run evidence:screenshots` | Every row of [`../docs/judging/SCREENSHOT-INDEX.md`](../docs/judging/SCREENSHOT-INDEX.md), captured as a PNG into `../docs/judging/screenshots/` together with a `capture-manifest.json` of per-file metadata. |
 
 ## The database rule — read this first

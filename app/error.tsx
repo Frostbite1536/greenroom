@@ -21,7 +21,7 @@ export default function PublicError({ retry }: { retry: () => void }) {
         <p className="eyebrow">Something went wrong</p>
         <h1>This page didn’t load</h1>
         <p>
-          We couldn’t load this part of the programme just now. It’s not something you did — please
+          We couldn’t load this part of the program just now. It’s not something you did — please
           try again in a moment.
         </p>
         <div className="boundary-actions">

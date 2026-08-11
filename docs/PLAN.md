@@ -20,7 +20,7 @@ Durable product priorities live here; the state machines they operate on are in
 
 ## Stage 1 — Golden path, end to end
 
-Goal: one proposal travels from an open CFP to a published programme slot.
+Goal: one proposal travels from an open CFP to a published program slot.
 
 - **Platform:** deployed on Vercel + Neon with environment validation at boot;
   every push to `main` auto-deploys.
@@ -55,10 +55,10 @@ without instructions from the authors.
 
 - Read-only REST API at `/api/v1/*` (API-key gated, off by default) for
   submissions, speakers, and schedule.
-- One-way Airtable mirror of confirmed programme data; a no-op when
+- One-way Airtable mirror of confirmed program data; a no-op when
   unconfigured, with per-table repair reporting and no delete operation.
 - Performance pass: no N+1 queries, server-rendered list pages, and measured
-  timings for the hottest routes. A programme tool that is slow to read is not
+  timings for the hottest routes. A program tool that is slow to read is not
   finished.
 
 ## Stage 4 — Release readiness

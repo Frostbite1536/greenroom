@@ -7,8 +7,15 @@ import {
   UserCheck,
 } from "lucide-react";
 import "@/components/feature.css";
+import { ReportChart } from "@/components/report-charts";
 import { EmptyState, PageHeader, Pill } from "@/components/ui";
 import { getAdminReports } from "@/lib/data/reads";
+import {
+  categoryFunnelChart,
+  reviewLoadChart,
+  scheduleUtilizationChart,
+  speakerReadinessChart,
+} from "@/lib/reports/charts";
 import {
   formatMinutes,
   formatRate,
@@ -46,6 +53,23 @@ export default async function AdminReportsPage() {
   const hasSubmissions = funnel.totals.total > 0;
   const bookedMinutes = utilization.reduce((sum, day) => sum + day.bookedMinutes, 0);
 
+  // Charts, built from the folds already read above — pure, synchronous, and
+  // null wherever there is nothing honest to draw, so a section falls back to
+  // its own empty state rather than a row of zero-width bars. Each one sits
+  // above the table holding the same numbers; the table stays the truth.
+  const funnelChart = categoryFunnelChart(funnel);
+  const reviewChart = reviewLoadChart(review);
+  const readinessChart = speakerReadinessChart(readiness);
+  const utilizationCharts = utilization.flatMap((day) => {
+    const label = formatDayLabel(day.dateKey, view.timezone);
+    const chart = scheduleUtilizationChart(day, label);
+    if (!chart) return [];
+    const heading = day.startMinutes === null || day.endMinutes === null
+      ? label
+      : `${label} · ${minutesToTimeInput(day.startMinutes)}–${minutesToTimeInput(day.endMinutes)}`;
+    return [{ key: day.dateKey, heading, chart }];
+  });
+
   return (
     <section className="page-stack" style={{ width: "min(1280px, 100%)" }}>
       <PageHeader
@@ -64,7 +88,7 @@ export default async function AdminReportsPage() {
           <strong>{review.assigned === 0 ? "—" : review.outstanding}</strong>
         </div>
         <div className="metric">
-          <span>Programme time booked</span>
+          <span>Program time booked</span>
           <strong>{formatMinutes(bookedMinutes)}</strong>
         </div>
       </div>
@@ -88,6 +112,12 @@ export default async function AdminReportsPage() {
             </a>
           </div>
         </div>
+        {funnelChart ? (
+          <ReportChart
+            chart={funnelChart}
+            caption="Bar length is the category’s proposal count, split by status. The figure beside each bar is that category’s total and its acceptance rate."
+          />
+        ) : null}
         {!hasSubmissions ? (
           <EmptyState icon={<FileStack size={22} />} title="No proposals yet">
             Categories break down the call once proposals arrive.{" "}
@@ -148,6 +178,12 @@ export default async function AdminReportsPage() {
           </div>
           <Link className="ghost-button" href="/admin/evaluations">Evaluation</Link>
         </div>
+        {reviewChart ? (
+          <ReportChart
+            chart={reviewChart}
+            caption="Bar length is the reviewer’s assigned count, filled by how much of it is done. Most outstanding first, as in the table."
+          />
+        ) : null}
         {review.rows.length === 0 ? (
           <EmptyState icon={<ClipboardCheck size={22} />} title="No reviewers yet">
             Load is measured per reviewer.{" "}
@@ -220,7 +256,7 @@ export default async function AdminReportsPage() {
           <div>
             <h2 id="reports-utilization">Room utilization</h2>
             <p>
-              Minutes booked per room against each day&rsquo;s programme span — first start to last end across
+              Minutes booked per room against each day&rsquo;s program span — first start to last end across
               all rooms, in {view.timezone}. Booked time is the placed slot&rsquo;s own length, so the room that
               defines a day&rsquo;s span reads 100% and an idle room reads zero.
             </p>
@@ -236,6 +272,16 @@ export default async function AdminReportsPage() {
             </a>
           </div>
         </div>
+        {utilizationCharts.map((entry, index) => (
+          <ReportChart
+            key={entry.key}
+            chart={entry.chart}
+            heading={entry.heading}
+            caption={index === 0
+              ? "Each bar is one room’s booked minutes against that day’s program span, so the room that defines the span reads 100%."
+              : undefined}
+          />
+        ))}
         {view.placedSlots === 0 ? (
           <EmptyState icon={<CalendarClock size={22} />} title="Nothing is placed yet">
             Utilization is measured from placed slots.{" "}
@@ -313,6 +359,12 @@ export default async function AdminReportsPage() {
             </a>
           </div>
         </div>
+        {readinessChart ? (
+          <ReportChart
+            chart={readinessChart}
+            caption="One bar, the whole confirmed-session cohort, split by where each speaker sits on the roster’s readiness ladder."
+          />
+        ) : null}
         {readiness.cohort === 0 && readiness.awaitingSession === 0 ? (
           <EmptyState icon={<UserCheck size={22} />} title="No speakers yet">
             Accepting a proposal names its speakers, or{" "}

@@ -1,10 +1,27 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import {
+  DEFAULT_V1_LIMIT,
+  MAX_V1_EVENT_SELECTOR_LENGTH,
+  MAX_V1_LIMIT,
+  MAX_V1_OFFSET,
+  V1_API_VERSION,
+} from "@/lib/api/v1-contract";
 import { getV1ApiKey } from "@/lib/env";
 
-export const V1_API_VERSION = "v1";
-export const DEFAULT_V1_LIMIT = 50;
-export const MAX_V1_LIMIT = 100;
-const MAX_V1_OFFSET = 1_000_000;
+/**
+ * The bounds enforced below are declared once, in the pure
+ * `lib/api/v1-contract` module, and re-exported here so existing importers keep
+ * a single import site. The published OpenAPI document reads the same numbers
+ * without importing this runtime module, which is what keeps the contract
+ * endpoint free of an env/auth/Prisma graph.
+ */
+export {
+  DEFAULT_V1_LIMIT,
+  MAX_V1_EVENT_SELECTOR_LENGTH,
+  MAX_V1_LIMIT,
+  MAX_V1_OFFSET,
+  V1_API_VERSION,
+};
 
 export type V1ListQuery = {
   event: string;
@@ -95,7 +112,7 @@ export function parseV1ListQuery(searchParams: URLSearchParams):
       error: { status: 400, code: "EVENT_REQUIRED", message: "Query parameter 'event' is required." },
     };
   }
-  if (event.length > 191) {
+  if (event.length > MAX_V1_EVENT_SELECTOR_LENGTH) {
     return {
       ok: false,
       error: { status: 400, code: "INVALID_QUERY", message: "Query parameter 'event' is too long." },

@@ -13,7 +13,7 @@ the route tree but is not separately represented by a screenshot.
 
 | Workflow | Live route | Evidence |
 | --- | --- | --- |
-| Programme overview and next actions | `/admin` | Route exists; the linked workflow screens below carry the evidence. |
+| Program overview and next actions | `/admin` | Route exists; the linked workflow screens below carry the evidence. |
 | Event identity, rooms, tracks, and create-event flow | `/admin/settings` | Screenshot rows [4–5](SCREENSHOT-INDEX.md#shot-list). |
 | CFP list and form builder | `/admin/forms`, `/admin/forms/[formId]` | Screenshot rows [6, 24](SCREENSHOT-INDEX.md#shot-list). |
 | Proposal pipeline, decisions, and review-results CSV | `/admin/abstracts` | Screenshot rows [7, 25](SCREENSHOT-INDEX.md#shot-list). |
@@ -46,7 +46,7 @@ the route tree but is not separately represented by a screenshot.
 | --- | --- | --- |
 | Landing page and currently open CFP entry | `/` | Screenshot row [2](SCREENSHOT-INDEX.md#shot-list). |
 | Canonical public call for speakers | `/cfp/[eventSlug]/[formSlug]` | Screenshot rows [3, 23, 27](SCREENSHOT-INDEX.md#shot-list) use `/cfp/forward-2026/call-for-speakers`. |
-| Public programme and speaker directory | `/schedule`, `/speakers` | These canonical pages share the public programme read with the embeds below. |
+| Public program and speaker directory | `/schedule`, `/speakers` | These canonical pages share the public program read with the embeds below. |
 | Embeddable schedule and speakers | `/embed/schedule`, `/embed/speakers` | Screenshot rows [18–20, 26](SCREENSHOT-INDEX.md#shot-list). |
 | Sign-in, self-service account creation, recovery, and first-event welcome | `/login`, `/signup`, `/forgot`, `/reset`, `/welcome` | Screenshot row [1](SCREENSHOT-INDEX.md#shot-list) covers the sign-in entry. |
 | Reviewer invite landing | `/reviewer-invite` | Route exists; invitation material is deliberately not shown in screenshot evidence. |
@@ -56,6 +56,7 @@ the route tree but is not separately represented by a screenshot.
 | Surface | Route or document | Notes |
 | --- | --- | --- |
 | Versioned read-only API | `/api/v1/submissions`, `/api/v1/speakers`, `/api/v1/schedule` | Key-gated and off unless configured; see [../API.md](../API.md). |
-| Calendar export | `/api/comms/calendar?eventId=<eventId>` | Public export of the programme according to its publication rules. |
+| Published API contract | `/api/v1/openapi.json`, `/docs/api` | The OpenAPI 3.1.1 document and its rendered page. Both are public: no key, no database read, no program data, and never the key itself. |
+| Calendar export | `/api/comms/calendar?eventId=<eventId>` | Public export of the program according to its publication rules. |
 | Foreign-origin schedule proof | [embed-schedule-proof.html](embed-schedule-proof.html) | Standalone embedding proof. |
 | Reproducible verification | [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) and the [verification receipts](README.md#verification-receipts) | Receipt provenance and historical/current labels remain authoritative in those documents. |

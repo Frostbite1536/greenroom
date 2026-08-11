@@ -7,7 +7,7 @@ test("a published talk offers to unpublish, and says what that costs first", () 
   const control = publicationControl("PUBLISHED");
   assert.equal(control.next, "DRAFT");
   assert.equal(control.label, "Unpublish");
-  assert.equal(control.actionLabel("Scaling to 10M"), "Unpublish Scaling to 10M from the public programme");
+  assert.equal(control.actionLabel("Scaling to 10M"), "Unpublish Scaling to 10M from the public program");
   // The warning has to be honest in both directions: what stops, and what does not.
   const confirm = control.confirm?.("Scaling to 10M") ?? "";
   assert.match(confirm, /Scaling to 10M/);
@@ -20,7 +20,7 @@ test("an unpublished talk offers to publish, with nothing to warn about", () => 
   assert.equal(control.next, "PUBLISHED");
   assert.equal(control.label, "Publish");
   assert.equal(control.confirm, null);
-  assert.equal(control.actionLabel("Scaling to 10M"), "Publish Scaling to 10M to the public programme");
+  assert.equal(control.actionLabel("Scaling to 10M"), "Publish Scaling to 10M to the public program");
 });
 
 test("pressing the control twice returns a talk to where it started", () => {
@@ -187,18 +187,33 @@ test("the publication route writes only contentStatus, and only inside this even
 });
 
 test("a reversed decision unpublishes under the same lock that wrote the status", () => {
-  const route = source("app/api/evaluations/decisions/route.ts");
-  assert.match(route, /sessionPublicationForDecision\(input\.decision\)/);
-  assert.match(route, /data: \{ contentStatus: publication \}/);
-  assert.ok(route.indexOf("lockAbstractForWrite") < route.indexOf("sessionPublicationForDecision"));
+  // The write lives in the service both decision routes run — the single-row
+  // one and the bulk one — so the rule is asserted where it lives. It matters
+  // more now: a bulk decline must unpublish every talk it reverses, not merely
+  // the first.
+  const write = source("lib/services/abstract-decision-write.ts");
+  assert.match(write, /sessionPublicationForDecision\(input\.decision\)/);
+  assert.match(write, /data: \{ contentStatus: publication \}/);
+  assert.ok(write.indexOf("lockAbstractForWrite") < write.indexOf("sessionPublicationForDecision"));
   // Scoped to the abstract's own session id, never a broader write.
-  assert.match(route, /where: \{ id: provisioned\.sessionId \}/);
+  assert.match(write, /where: \{ id: provisioned\.sessionId \}/);
+
+  // And both callers really do reach it, so neither can grow a second
+  // publication rule of its own.
+  for (const path of [
+    "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
+  ]) {
+    const route = source(path);
+    assert.match(route, /writeAbstractDecision\(tx, \{/, path);
+    assert.ok(!route.includes("contentStatus"), `${path} must not publish on its own`);
+  }
 });
 
 test("past the cap, the unpublished count is a floor and says the page is partial", () => {
   const notice = unpublishedNotice(["DRAFT", "PUBLISHED", "DRAFT"], true) ?? "";
   assert.match(notice, /At least 2 talks are unpublished/);
-  assert.match(notice, /does not hold the whole programme/);
+  assert.match(notice, /does not hold the whole program/);
   assert.match(notice, /List view/);
   // Singular still reads as English.
   assert.match(unpublishedNotice(["DRAFT"], true) ?? "", /At least 1 talk is unpublished/);

@@ -1,6 +1,6 @@
 # Guide: scoring proposals
 
-For programme committee members and reviewers. Signed in as **Ravi Patel**, an evaluator for
+For program committee members and reviewers. Signed in as **Ravi Patel**, an evaluator for
 **Forward 2026**.
 
 Your whole job lives on one page: **Evaluations**. The global **Abstracts** pipeline is for event
@@ -68,7 +68,7 @@ Click a number for each criterion. A running **weighted score** appears at the t
 you can sanity-check the overall impression — Relevance counts half again as much as the
 others here, which is why the average is not a plain average.
 
-Add a **comment** if you want to say something to the programme team. It is optional and does
+Add a **comment** if you want to say something to the program team. It is optional and does
 not appear in the speaker portal. An organiser may choose to share written feedback in a
 decision email, but Greenroom never includes scores or reviewer identities.
 
@@ -87,14 +87,14 @@ To remove a saved note, choose **Clear note**, then choose **Update review**.
 
 ## Common questions
 
-**Why is a proposal not in my queue?** Queues are per person. Ask the programme team to assign
+**Why is a proposal not in my queue?** Queues are per person. Ask the program team to assign
 it to you; there is nothing you can do from this page.
 
 **Nothing is in my queue at all.** There are no review assignments for you in the displayed
 round yet.
 
-**Can I see who else scored it?** No. You see your own scores; averages are for the programme
+**Can I see who else scored it?** No. You see your own scores; averages are for the program
 team.
 
-**Does a high score accept the talk?** No. Scores inform the decision; a programme admin
+**Does a high score accept the talk?** No. Scores inform the decision; a program admin
 accepts or declines.

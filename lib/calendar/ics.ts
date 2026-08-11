@@ -5,8 +5,24 @@
  * safe to render from any route. Callers pass already-loaded session data.
  */
 
+/**
+ * One invited person, emitted as RFC 5545 §3.8.4.1 ATTENDEE.
+ *
+ * `PARTSTAT=NEEDS-ACTION;RSVP=TRUE` is what makes Gmail and Outlook render
+ * accept/decline buttons instead of a passive "add to calendar" link, so it is
+ * fixed here rather than left to callers to remember.
+ */
+export type IcsAttendee = {
+  email: string;
+  name?: string | null;
+};
+
 export type IcsEvent = {
-  /** Stable unique id; the session id is a good choice. */
+  /**
+   * Stable unique id. The session id is a good choice for an export; an
+   * invitation needs one stable per (session, invitee) so a re-send updates
+   * the recipient's existing entry instead of creating a second one.
+   */
   uid: string;
   title: string;
   description?: string | null;
@@ -24,6 +40,21 @@ export type IcsEvent = {
   categories?: readonly string[] | null;
   organizerName?: string | null;
   organizerEmail?: string | null;
+  /**
+   * RFC 5545 §3.8.7.4 SEQUENCE — the revision number a calendar client compares
+   * against the copy it already holds for this UID. An update that does not
+   * raise it is entitled to be ignored, so a re-send after a schedule change
+   * must carry a higher value than the send before it. Omitted entirely for
+   * exports, where there is no revision to track.
+   */
+  sequence?: number | null;
+  /**
+   * Who this VEVENT is addressed to. Only invitations set this; a public export
+   * must never name its readers to each other.
+   */
+  attendees?: readonly IcsAttendee[] | null;
+  /** RFC 5545 §3.8.1.11 STATUS, e.g. CONFIRMED for a scheduled talk. */
+  status?: "CONFIRMED" | "TENTATIVE" | "CANCELLED" | null;
 };
 
 const PRODID = "-//Greenroom//Program Manager//EN";
@@ -75,6 +106,30 @@ function line(name: string, value: string): string {
   return foldIcsLine(`${name}:${value}`);
 }
 
+/**
+ * RFC 5545 §3.1 param-value quoting for things like `CN=`.
+ *
+ * A parameter value is not TEXT: backslash escaping does not apply to it, and a
+ * value containing `:`, `;` or `,` must be DQUOTE-quoted instead. Control
+ * characters and the quote character itself have no representation at all
+ * inside one, so they are dropped rather than emitted — a stray CR here would
+ * end the content line and let a display name forge a property.
+ */
+function icsParamValue(value: string): string {
+  const clean = value.replace(/["\x00-\x1f\x7f]/g, "").trim();
+  return /[:;,]/.test(clean) ? `"${clean}"` : clean;
+}
+
+/**
+ * A `mailto:` address is part of the property value, so the same line-injection
+ * concern applies. Addresses reaching here are already-persisted `User.email`
+ * values; this is the belt that keeps one malformed row from corrupting a whole
+ * calendar file.
+ */
+function icsMailto(email: string): string {
+  return email.replace(/[\s"',;:<>\x00-\x1f\x7f]/g, "");
+}
+
 /** Build a single VEVENT block. */
 function buildEvent(event: IcsEvent, stamp: Date): string[] {
   const out = [
@@ -97,8 +152,26 @@ function buildEvent(event: IcsEvent, stamp: Date): string[] {
     out.push(line("CATEGORIES", categories.map(escapeIcsText).join(",")));
   }
   if (event.organizerEmail) {
-    const cn = event.organizerName ? `;CN=${escapeIcsText(event.organizerName)}` : "";
-    out.push(foldIcsLine(`ORGANIZER${cn}:mailto:${event.organizerEmail}`));
+    const cn = event.organizerName ? `;CN=${icsParamValue(event.organizerName)}` : "";
+    out.push(foldIcsLine(`ORGANIZER${cn}:mailto:${icsMailto(event.organizerEmail)}`));
+  }
+  // Every ATTENDEE is a required participant whose answer is being asked for:
+  // that pair of parameters is what turns an attached file into an invitation
+  // a client will offer to accept or decline.
+  for (const attendee of event.attendees ?? []) {
+    const address = icsMailto(attendee.email);
+    if (!address) continue;
+    const cn = attendee.name ? `;CN=${icsParamValue(attendee.name)}` : "";
+    out.push(foldIcsLine(
+      `ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE${cn}:mailto:${address}`,
+    ));
+  }
+  if (event.status) out.push(line("STATUS", event.status));
+  // Emitted only when a caller tracks revisions. RFC 5545 defaults an absent
+  // SEQUENCE to 0, so an export that never revises anything stays silent rather
+  // than repeatedly asserting revision zero.
+  if (typeof event.sequence === "number" && Number.isFinite(event.sequence)) {
+    out.push(line("SEQUENCE", String(Math.max(0, Math.trunc(event.sequence)))));
   }
 
   out.push("END:VEVENT");

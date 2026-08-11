@@ -12,6 +12,7 @@
  */
 import Link from "next/link";
 import { Mic2 } from "lucide-react";
+import { API_DOCS_PATH } from "@/lib/api/openapi";
 import {
   CANONICAL_SCHEDULE_PATH,
   CANONICAL_SPEAKERS_PATH,
@@ -25,7 +26,7 @@ export function PublicChrome({
 }: {
   /** Echoed onto every nav link exactly as it arrived, so `?event=` survives. */
   eventParam?: string;
-  active: "schedule" | "speakers";
+  active: "schedule" | "speakers" | "api";
   children: React.ReactNode;
 }) {
   return (
@@ -38,7 +39,7 @@ export function PublicChrome({
               <span>Greenroom</span>
             </Link>
           </p>
-          <nav className="public-programme-nav" aria-label="Public programme">
+          <nav className="public-programme-nav" aria-label="Public program">
             <Link
               className="landing-signin"
               href={publicSurfaceUrl(CANONICAL_SCHEDULE_PATH, eventParam)}
@@ -52,6 +53,15 @@ export function PublicChrome({
               aria-current={active === "speakers" ? "page" : undefined}
             >
               Speakers
+            </Link>
+            {/* The API contract is a public page like the two above it: no key,
+                no programme data, and nothing to configure before reading it. */}
+            <Link
+              className="landing-signin"
+              href={API_DOCS_PATH}
+              aria-current={active === "api" ? "page" : undefined}
+            >
+              API
             </Link>
             <Link className="landing-signin" href="/login">Organizer sign in</Link>
           </nav>

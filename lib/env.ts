@@ -1,7 +1,13 @@
 import { z } from "zod";
+import { V1_API_KEY_MIN_LENGTH } from "@/lib/api/v1-contract";
 
 const boolish = z.enum(["true", "false"]);
-export const V1_API_KEY_MIN_LENGTH = 32;
+/**
+ * Declared in the pure `lib/api/v1-contract` module so the published OpenAPI
+ * document can state the same minimum without importing this file, which reads
+ * the environment. Re-exported here because this is where callers expect it.
+ */
+export { V1_API_KEY_MIN_LENGTH };
 export const SESSION_SECRET_MIN_LENGTH = 32;
 const v1ApiKeySchema = z.string().trim().min(V1_API_KEY_MIN_LENGTH).optional();
 const sessionSecretSchema = z.string().trim().min(SESSION_SECRET_MIN_LENGTH).optional();

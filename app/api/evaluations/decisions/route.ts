@@ -3,15 +3,10 @@ import { abstractDecisionSchema } from "@/types/api";
 import { requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
 import { serializeAbstract } from "@/lib/api/abstract-serialize";
-import { lockAbstractForWrite } from "@/lib/services/abstract-lock";
 import {
-  canAdminDecide,
-  decisionProvisionsSession,
-  decisionTimestamp,
-  maybeBlockedByConfirmedSession,
-  sessionPublicationForDecision,
-} from "@/lib/services/abstract-decision";
-import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
+  ABSTRACT_DECISION_REFUSALS,
+  writeAbstractDecision,
+} from "@/lib/services/abstract-decision-write";
 
 export const dynamic = "force-dynamic";
 
@@ -30,77 +25,34 @@ export const dynamic = "force-dynamic";
  * truth and would promise withdrawal while the Session guard correctly blocks
  * it. Existing final-decision reversals still never delete a Session; C10 owns
  * one publication rule across those legacy consumers.
+ *
+ * The locked write itself lives in `lib/services/abstract-decision-write.ts`
+ * because `POST /api/evaluations/decisions/bulk` loops the same function, one
+ * transaction per abstract. This route's own contract is unchanged: it still
+ * allows a re-decision (the drawer gates that behind "Change decision"), so it
+ * does not pass `requireAwaitingDecision`, and it still raises the same three
+ * refusals with the same statuses, codes and messages — now read from the
+ * service's own table so the two callers cannot drift.
  */
 export const POST = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
   const input = await parseBody(req, abstractDecisionSchema);
 
-  // Same per-abstract advisory lock as the speaker PATCH and conversion:
-  // every writer that checks-then-writes this abstract serializes here, so a
-  // decision cannot interleave with an in-flight speaker edit (and vice
-  // versa) between its status read and its write.
   const updated = await prisma.$transaction(async (tx) => {
-    await lockAbstractForWrite(tx, input.abstractId);
-
-    const abstract = await tx.abstract.findUnique({
-      where: { id: input.abstractId },
-      select: { eventId: true, status: true, session: { select: { id: true } } },
+    const result = await writeAbstractDecision(tx, {
+      abstractId: input.abstractId,
+      eventId: ctx.eventId,
+      decision: input.decision,
     });
-    if (!abstract || abstract.eventId !== ctx.eventId) {
-      throw new ApiError(404, "ABSTRACT_NOT_FOUND", "Abstract not found.");
+    if (!result.decided) {
+      const refusal = ABSTRACT_DECISION_REFUSALS[result.refusal];
+      throw new ApiError(refusal.status, result.refusal, refusal.message);
     }
-    if (!canAdminDecide(abstract.status)) {
-      throw new ApiError(409, "ABSTRACT_WITHDRAWN", "This abstract has been withdrawn.");
-    }
-    if (maybeBlockedByConfirmedSession(input.decision, Boolean(abstract.session))) {
-      throw new ApiError(
-        409,
-        "MAYBE_NOT_AVAILABLE",
-        "Maybe is only available before a proposal becomes a confirmed Session.",
-      );
-    }
-
-    const decided = await tx.abstract.update({
-      where: { id: input.abstractId },
-      // MAYBE keeps an abstract in review: it carries no final-decision
-      // timestamp, can be scored/re-decided later, and never provisions.
-      data: { status: input.decision, decidedAt: decisionTimestamp(input.decision, new Date()) },
-      include: {
-        speakers: { select: { userId: true, isPrimary: true } },
-        // `categoryId` so re-accepting can reconcile a topic that moved on the
-        // proposal after the talk was created, and `description` so it can
-        // reconcile the attendee-facing summary the public programme prints.
-        // Both read under the same abstract lock as the write that follows.
-        session: { select: { id: true, categoryId: true, description: true } },
-      },
-    });
-
-    // Rejecting deliberately provisions nothing and removes nothing: an already
-    // confirmed session stays on the programme for the admin to unschedule
-    // (INV-DOMAIN-001, W2), and its speakers keep any tasks they are working on
-    // for other talks.
-    const provisioned =
-      decisionProvisionsSession(input.decision)
-        ? await provisionAcceptedAbstract(tx, decided)
-        : {
-            sessionId: decided.session?.id ?? null,
-            created: false,
-            topicReconciled: false,
-            summaryReconciled: false,
-            tasksAssigned: 0,
-          };
-
-    // Nothing is deleted, but a reversed decision must stop speaking publicly.
-    // Scoped to this abstract's own Session by its unique `sourceAbstractId`,
-    // inside the same advisory lock as the status write, so the public
-    // programme can never disagree with the decision that produced it.
-    const publication = sessionPublicationForDecision(input.decision);
-    if (publication && provisioned.sessionId) {
-      await tx.session.update({
-        where: { id: provisioned.sessionId },
-        data: { contentStatus: publication },
-      });
-    }
+    const provisioned = {
+      created: result.sessionCreated,
+      tasksAssigned: result.tasksAssigned,
+      topicReconciled: result.topicReconciled,
+    };
 
     const full = await tx.abstract.findUniqueOrThrow({
       where: { id: input.abstractId },
