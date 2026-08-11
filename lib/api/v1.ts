@@ -4,7 +4,16 @@ import { getV1ApiKey } from "@/lib/env";
 export const V1_API_VERSION = "v1";
 export const DEFAULT_V1_LIMIT = 50;
 export const MAX_V1_LIMIT = 100;
-const MAX_V1_OFFSET = 1_000_000;
+export const MAX_V1_OFFSET = 1_000_000;
+/**
+ * Longest accepted `event` selector. A slug or a cuid is far shorter; this is
+ * the varchar bound the column itself carries, rejected before any query runs.
+ *
+ * Exported alongside the pagination bounds because the published OpenAPI
+ * document states all four, and the drift test imports them from here rather
+ * than restating the numbers.
+ */
+export const MAX_V1_EVENT_SELECTOR_LENGTH = 191;
 
 export type V1ListQuery = {
   event: string;
@@ -95,7 +104,7 @@ export function parseV1ListQuery(searchParams: URLSearchParams):
       error: { status: 400, code: "EVENT_REQUIRED", message: "Query parameter 'event' is required." },
     };
   }
-  if (event.length > 191) {
+  if (event.length > MAX_V1_EVENT_SELECTOR_LENGTH) {
     return {
       ok: false,
       error: { status: 400, code: "INVALID_QUERY", message: "Query parameter 'event' is too long." },
