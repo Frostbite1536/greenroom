@@ -84,3 +84,28 @@ Repository automation (GitHub workflows, issue templates, third-party Apps)
 requires the maintainer's approval. A developer CLI that created
 `.github/ISSUE_TEMPLATE/` as an install side effect was reverted under this
 rule.
+
+## Bulk decisions: one transaction per abstract, and no email
+Deciding a selection on `/admin/abstracts` loops the existing locked
+per-abstract write (`lib/services/abstract-decision-write.ts`, extracted
+unchanged from `POST /api/evaluations/decisions` so both routes run one code
+path) with a separate transaction for each item, bounded at 100 per request.
+A batch-wide transaction was rejected: it would hold every selected abstract's
+advisory lock against concurrent speaker edits for the length of the slowest
+provisioning, and would discard every correct write to report one refusal.
+Ineligible items — already decided, withdrawn, still a draft, `MAYBE` on a
+confirmed talk, or an id outside the caller's event — are skipped and named
+per item rather than failing the batch.
+
+Bulk will not reverse an existing decision. The drawer gates a re-decision
+behind an explicit "Change decision" click on one named proposal; a tick box
+carries no such evidence, so a selection containing a declined proposal must
+not silently accept it. The single-row route's reversible-decision contract is
+unchanged — the gate is a bulk-only parameter.
+
+Bulk sends no mail, which is what "preview-safe" in the roadmap item means.
+`POST /api/comms/decision` remains the only path to a speaker's inbox and is
+bound by an HMAC proof to the exact content and recipients an admin previewed;
+a batch cannot satisfy that proof and must not bypass it. The confirm dialog
+and the result both say so in words, and a source contract test asserts the
+absence of any email import across the whole bulk path.
