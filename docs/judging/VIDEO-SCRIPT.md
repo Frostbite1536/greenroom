@@ -290,9 +290,10 @@ curl.exe -i "https://greenroom-hq.com/api/v1/schedule?event=forward-2026"
 This segment proves Greenroom is not a single hard-coded demo. Record it as the
 tail of the same video or as a separate short clip.
 
-**Record honestly.** As of `9e058f3` an organizer can create a new event, but the
-workspace cannot yet be switched into it — the app says so itself. So the proof
-splits into two halves, and the script says which is which.
+**Record honestly.** Event creation and event switching are one continuous
+workflow: the success notice and the sidebar switcher both let the organizer
+enter the new event. Keep its generated event slug visible; the CFP proof below
+must use that event, not the seeded `forward-2026` workspace.
 
 ## B1. Create a new event (and prove isolation)
 
@@ -305,18 +306,22 @@ name, dates, timezone, rooms, and the programme groupings — then choose*
 > programme is grouped by."
 
 *Fill in a name, let the web address fill itself in, set a timezone and optional
-dates, and choose* **Create event***. Pause on the confirmation notice and read
-it aloud.*
+dates, and choose* **Create event***. Pause on the confirmation notice, then use
+its action to switch into the event. Show the new event name in the shell and
+its empty settings before continuing.*
 
 > "A new event is created empty — no rooms, no forms, nothing copied. The
-> workspace is still showing Forward 2026, and the sidebar switcher is how you
-> move into the new one; it lists every event you hold a membership on."
+> success action takes me straight into it, and the sidebar switcher lists every
+> event where I hold a membership. Authority is resolved again for the event I
+> actually chose."
 
 *Try creating it again with the same web address and show the refusal.*
 
 > "The address is unique, so two events can't collide."
 
-*Now sign out and open* `/` *and* `/embed/schedule` *again.*
+*Now open a clean logged-out profile and show* `/` *and* `/embed/schedule`
+*again. Return to the admin profile and use the sidebar switcher to re-enter the
+new event.*
 
 > "This is the isolation that matters: a brand-new empty event never displaces
 > the published programme. The public pages still show Forward 2026 exactly as
@@ -338,7 +343,7 @@ and close dates and the submission limit, then turn on* **Published** *and*
 > it's published the public page isn't there at all."
 
 *Open the public address in a new tab. The* **New form** *dialog showed it while
-you were typing:* `/cfp/forward-2026/<your-slug>`.
+you were typing:* `/cfp/<your-event-slug>/<your-form-slug>`.
 
 > "The public address carries the event and the form, so one organizer can run
 > several calls side by side."
@@ -349,15 +354,15 @@ commit — navigate to the address the dialog showed you.
 *Sign out, or switch to the clean profile, and submit a proposal with a second
 distinctive title.*
 
-*Sign back in as* **Event admin** *and open* **Abstracts***.*
+*Sign back in as* **Event admin***, confirm the new event in the sidebar
+switcher (switch into it if necessary), and open* **Abstracts***.*
 
 > "It lands in this event's pipeline, against the form it was submitted to —
 > a call built from nothing minutes ago, not seeded data."
 
-**Say plainly on camera:** this half of the proof is recorded in the event the
-organizer is signed in to. Authoring a call inside the *newly created* event is
-possible — the sidebar switcher moves you there — and is simply not the path
-this take records.
+**Say plainly on camera:** the event name in the shell, the event segment in the
+public CFP URL, and the proposal in the pipeline all name the workspace created
+in B1. The seeded Forward 2026 programme stayed isolated throughout.
 
 ---
 
@@ -379,7 +384,7 @@ this take records.
 | 12 | Public `/`, schedule, speakers | logged out; day tabs, search, session details, `.ics` |
 | 13 | Website embeds | copyable iframe snippet |
 | 14 | Terminal | 200 with the environment-held key, refusal without; no secret on screen |
-| 15 | Greenfield | **New event** created + isolation notice; new form published → submission in the pipeline |
+| 15 | Greenfield | **New event** created + switched into; its canonical CFP published → submission in its pipeline |
 
 ## If something goes wrong on camera
 

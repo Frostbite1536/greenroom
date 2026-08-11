@@ -43,8 +43,9 @@ import {
  *   imported, not reimplemented.
  * - Nothing here logs the request body, the submitted address, or the password.
  *
- * There is no self-registration and no password reset: credentials exist only
- * for seeded and organizer-provisioned users.
+ * Account creation and credential recovery are separate, reviewed endpoints.
+ * This handler only validates an existing credential and resolves one of that
+ * identity's current event memberships.
  */
 
 export const runtime = "nodejs";
