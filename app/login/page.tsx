@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ClipboardCheck, LogIn, Mic2, ShieldCheck, Users } from "lucide-react";
-import { DEMO_PERSONAS, getResolvedSession, homeForRole } from "@/lib/auth";
+import { DEMO_PERSONAS, getPendingIdentity, getResolvedSession, homeForRole } from "@/lib/auth";
 import { arePersonaLoginsEnabled } from "@/lib/env";
 import { loginAsPersona } from "./actions";
 
@@ -70,6 +71,14 @@ export default async function LoginPage({
   if (session) {
     redirect(homeForRole(session.role));
   }
+  // D-C5-16 item 2: someone who signed up but belongs to no event yet holds the
+  // pending cookie, which this resolver cannot see. Without this they would be
+  // shown the sign-in form they just came from, with no hint that they are in
+  // fact already authenticated.
+  const pending = await getPendingIdentity();
+  if (pending) {
+    redirect("/welcome");
+  }
   const params = await searchParams;
   const error = signInError(firstParam(params.error), firstParam(params.retryAfter));
   // GRA2-01: one source of truth with the server action that actually refuses.
@@ -127,8 +136,8 @@ export default async function LoginPage({
             Sign in
           </button>
           <p className="login-note">
-            Self-service sign-up is on the roadmap — for now organizers provision accounts. Password
-            reset is not available yet — ask your event organizer if you need access.
+            No account yet? <Link href="/signup">Create one</Link> — you can start your own event
+            straight away. Forgotten your password? <Link href="/forgot">Reset it</Link>.
           </p>
         </form>
 
