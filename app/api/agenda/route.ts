@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
 import { handle, ok } from "@/lib/api/http";
-import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
+import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +14,19 @@ export const GET = handle(async () => {
   const ctx = await requireContext(["ADMIN"]);
 
   const [rooms, tracks, sessions] = await Promise.all([
-    prisma.room.findMany({ where: { eventId: ctx.eventId }, orderBy: { sortOrder: "asc" } }),
-    prisma.track.findMany({ where: { eventId: ctx.eventId }, orderBy: { sortOrder: "asc" } }),
+    // P-01: same caps and the same fail-closed shape as `getAgendaData` and
+    // `getEventSettings`. The grid's axes were unbounded while the sessions
+    // placed on them were capped.
+    prisma.room.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsRooms + 1,
+    }),
+    prisma.track.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: { sortOrder: "asc" },
+      take: OPERATOR_QUERY_LIMITS.settingsTracks + 1,
+    }),
     prisma.session.findMany({
       where: { eventId: ctx.eventId },
       include: {
@@ -29,6 +40,8 @@ export const GET = handle(async () => {
       take: OPERATOR_QUERY_LIMITS.agendaSessions + 1,
     }),
   ]);
+  assertEventQueryBound(rooms, OPERATOR_QUERY_LIMITS.settingsRooms, "rooms in the agenda builder");
+  assertEventQueryBound(tracks, OPERATOR_QUERY_LIMITS.settingsTracks, "tracks in the agenda builder");
 
   return ok({
     rooms,

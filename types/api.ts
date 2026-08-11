@@ -413,10 +413,29 @@ export const evaluationPlanInputSchema = z.object({
   rubric: z.array(rubricCriterionSchema).min(1),
 });
 
+/**
+ * R4 — a repeated id in either array is a duplicate request, not a bad one.
+ *
+ * The assignment route establishes scope by comparing what the database
+ * returned against `input.<ids>.length` at three separate points (the
+ * authorization preflight, the post-lock re-read, and the evaluator-role
+ * check). Every one of those reads is a set, so `["a", "a"]` came back as one
+ * row and the route answered `422 INVALID_ABSTRACTS` / `INVALID_EVALUATORS` —
+ * telling an admin their proposal was "not in this event" when it was, purely
+ * because a UI multi-select or a retried payload named it twice. The upsert
+ * loop below is idempotent on (plan, abstract, evaluator), so the duplicate
+ * would also have inflated the returned `assignments` count for work done once.
+ *
+ * Deduped here rather than at the three comparison sites so the invariant is
+ * stated once and every consumer of the parsed input sees the same set. Order
+ * is preserved: it is the order the assignments are written in.
+ */
+const uniqueIds = (ids: string[]) => [...new Set(ids)];
+
 export const reviewAssignmentInputSchema = z.object({
   planId: idSchema,
-  abstractIds: z.array(idSchema).min(1),
-  evaluatorIds: z.array(idSchema).min(1),
+  abstractIds: z.array(idSchema).min(1).transform(uniqueIds),
+  evaluatorIds: z.array(idSchema).min(1).transform(uniqueIds),
   teamKey: z.string().trim().max(120).optional(),
 });
 

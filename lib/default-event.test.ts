@@ -47,6 +47,40 @@ test("every public default-event read matches that slug exactly and orders nothi
   }
 });
 
+/**
+ * L1. Every default-event fallback must READ the pin, not re-type its value.
+ * Three sites carried the literal `"forward-2026"` as a parameter default while
+ * `lib/data/open-cfp.ts` already imported the constant, so the pin and its
+ * consumers could drift apart silently — renaming the slug in one place would
+ * have left `/api/agenda/public` and the two cached public reads answering for
+ * an event that no longer exists.
+ *
+ * CRLF-safe: no pattern below crosses a line break.
+ */
+test("no default-event fallback re-types the slug instead of reading the pin", () => {
+  const consumers = [
+    "lib/data/reads.ts",
+    "lib/data/open-cfp.ts",
+    "app/api/agenda/public/route.ts",
+  ];
+  for (const file of consumers) {
+    const text = source(file);
+    assert.match(text, /DEFAULT_PUBLIC_EVENT/, `${file} must read the pin`);
+    assert.equal(
+      text.includes(`"${DEFAULT_PUBLIC_EVENT}"`),
+      false,
+      `${file} re-types the pinned slug instead of importing DEFAULT_PUBLIC_EVENT`,
+    );
+  }
+  // Non-vacuity: each fallback is actually a default-argument site, so the
+  // assertion above is checking the thing that was wrong, not merely a mention.
+  assert.match(source("lib/data/reads.ts"), /eventParam = DEFAULT_PUBLIC_EVENT,/);
+  assert.match(
+    source("app/api/agenda/public/route.ts"),
+    /searchParams\.get\("event"\) \?\? DEFAULT_PUBLIC_EVENT;/,
+  );
+});
+
 test("the landing page and both embeds fall back to the pinned slug and nothing else", () => {
   const landing = source("app/page.tsx");
   assert.match(landing, /DEFAULT_PUBLIC_EVENT/);

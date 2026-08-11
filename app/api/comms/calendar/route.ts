@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
+import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
 import { publicSessionSummary } from "@/lib/public-session-copy";
 import { CANONICAL_SCHEDULE_PATH, publicSurfaceUrl } from "@/lib/embed-alias";
 import type { ApiResponse } from "@/types/api";
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
   });
   if (!event) return fail("NOT_FOUND", "Unknown event.", 404);
 
-  const sessions = await prisma.session.findMany({
+  const rows = await prisma.session.findMany({
     where: {
       eventId,
       ...(sessionId ? { id: sessionId } : {}),
@@ -49,6 +50,13 @@ export async function GET(request: Request) {
       // Same predicate as `getPublicAgenda` and `GET /api/agenda/public`.
       contentStatus: "PUBLISHED",
     },
+    // NEW-1: this was the one anonymous read in the app with no bound at all.
+    // Same cap, same predicate and the same cap-plus-one probe as the JSON
+    // twin (`GET /api/agenda/public`) and the server-rendered embed, so the
+    // three public views of one programme cannot disagree about which sessions
+    // fall inside it. `id` breaks `startsAt` ties so the cut is deterministic
+    // rather than whatever Postgres returned this time.
+    take: PUBLIC_AGENDA_LIMITS.sessions + 1,
     select: {
       id: true,
       title: true,
@@ -63,8 +71,11 @@ export async function GET(request: Request) {
         },
       },
     },
-    orderBy: { scheduleSlot: { startsAt: "asc" } },
+    orderBy: [{ scheduleSlot: { startsAt: "asc" } }, { id: "asc" }],
   });
+
+  const truncated = rows.length > PUBLIC_AGENDA_LIMITS.sessions;
+  const sessions = rows.slice(0, PUBLIC_AGENDA_LIMITS.sessions);
 
   if (sessions.length === 0) {
     // One refusal for "never scheduled" and "not published": distinguishing
@@ -107,6 +118,16 @@ export async function GET(request: Request) {
     // no calendar name is filed by the client under an untitled calendar, or
     // silently merged into the user's default one.
     calendarName: event.name,
+    // Additive and honest, the same rule the JSON twin's `truncated` flag
+    // serves: a reader who imports exactly the cap must be able to tell a
+    // complete programme from a cut one. Omitted entirely when nothing was cut.
+    ...(truncated
+      ? {
+          calendarDescription:
+            `This file holds the first ${PUBLIC_AGENDA_LIMITS.sessions} sessions of ` +
+            `${event.name} in start-time order. The programme has more; see the full schedule online.`,
+        }
+      : {}),
   });
 
   const filename = sessionId ? icsFilename(sessions[0].title) : icsFilename(event.name);

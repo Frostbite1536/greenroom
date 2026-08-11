@@ -248,3 +248,133 @@ test("evaluator assignment API remains assignment-scoped and omits evaluator ide
   assert.match(getRoute, /plan\.isBlind && ctx\.role === "EVALUATOR"/);
   assert.match(getRoute, /ctx\.role === "ADMIN" \? \{ evaluator: a\.evaluator \}/);
 });
+
+/**
+ * B3 — an unreadable rubric must be visible, not silent.
+ *
+ * `parseDecisionRubric` fails closed for the whole rubric on any malformed
+ * criterion, which is right: a partial rubric would produce a misleading
+ * average. What it could not do is SAY so. The resulting board — every
+ * `weightedAverage: null`, every `criteria: []` — is byte-identical to the
+ * ordinary "nobody has reviewed these yet" state, so an organizer had no way
+ * to tell a quiet round from a broken one. Only they can fix the second.
+ *
+ * These are the two halves the service must keep aligned: the flag it raises
+ * and the aggregate it computes have to come from ONE parse, and the log line
+ * must carry the plan id and nothing from the rubric itself.
+ *
+ * CRLF-safe: no source pattern below crosses a line break.
+ */
+test("B3: the flagged state and the blanked scores come from one parse", () => {
+  const source = readFileSync(new URL("./admin-decision-summary.ts", import.meta.url), "utf8");
+
+  // Parsed exactly once and bound, so the flag and the aggregate cannot
+  // describe different rubrics. Two separate parseDecisionRubric() calls would
+  // be the regression: they can disagree, and then the banner lies.
+  assert.equal((source.match(/parseDecisionRubric\(selected\.rubric\)/g) ?? []).length, 1);
+  assert.match(source, /const rubric = parseDecisionRubric\(selected\.rubric\);/);
+  assert.match(source, /rubricUnreadable: rubric === null,/);
+  assert.match(source, /^\s+rubric,$/m, "the same binding feeds the aggregate");
+
+  // Logged server-side, once, at the point of failure.
+  assert.match(source, /if \(rubric === null\) \{/);
+  assert.match(source, /console\.error\("\[decision-summary\] round rubric failed to parse"/);
+  assert.match(source, /planId: selectedPlan\.id,/);
+});
+
+test("B3: neither the log nor the response carries any rubric content", () => {
+  const source = readFileSync(new URL("./admin-decision-summary.ts", import.meta.url), "utf8");
+  const logAt = source.indexOf("[decision-summary] round rubric failed to parse");
+  assert.ok(logAt > 0);
+  // The whole console.error call, bounded at its closing `});`.
+  const call = source.slice(logAt, source.indexOf("});", logAt));
+  for (const leak of ["selected.rubric", "rubric,", "JSON.stringify", "rubric)"]) {
+    assert.equal(call.includes(leak), false, `the log line must not carry ${leak}`);
+  }
+  // And the flag is a boolean, not the parse error: the rubric is operator
+  // input of unknown shape and does not belong in a response body.
+  assert.match(source, /rubricUnreadable: boolean;/);
+});
+
+test("B3: a readable round reports nothing, so the banner cannot be permanent", () => {
+  const source = readFileSync(new URL("./admin-decision-summary.ts", import.meta.url), "utf8");
+  // The no-round / no-abstracts early return must be explicitly unflagged.
+  assert.match(source, /rubricUnreadable: false,/);
+  // Non-vacuity for the whole trio above: the false and the derived value are
+  // two DIFFERENT sites, so neither assertion can be satisfied by the other.
+  assert.ok(
+    source.indexOf("rubricUnreadable: false,") < source.indexOf("rubricUnreadable: rubric === null,"),
+  );
+});
+
+test("B3: the decision board renders a one-line notice, not a silent blank", () => {
+  const table = readFileSync(new URL("../../components/abstracts-table.tsx", import.meta.url), "utf8");
+
+  assert.match(table, /const \{ plans, selectedPlan, rubricUnreadable \} = decisionSummary;/);
+  assert.match(table, /\{rubricUnreadable \? \(/, "the notice is conditional on the flag");
+  // The same alerting convention the programme warning in this file already
+  // uses: it is not a state the reader chose, and it arrives while they are
+  // reading numbers that silently mean nothing.
+  assert.match(table, /Scores can’t be computed: this round’s rubric is invalid\./);
+  assert.match(table, /className="conflict-banner" role="alert"/);
+  // It must say WHY the scores are blank, or it is just a second blank.
+  assert.match(table, /not because the reviews are/);
+});
+
+/**
+ * B3's premise, proved rather than asserted: without the flag, a broken round
+ * and a quiet one are the SAME object. This is the test that would have caught
+ * the bug — and the one that stops a future refactor deciding the flag is
+ * redundant because "the nulls already say it".
+ */
+test("B3: a broken rubric and an unreviewed round produce identical summaries", () => {
+  const assignments = [{ abstractId: "abstract-1", evaluatorId: "reviewer-a" }];
+  const scores = [
+    { abstractId: "abstract-1", evaluatorId: "reviewer-a", rubricKey: "impact", score: 4 },
+    { abstractId: "abstract-1", evaluatorId: "reviewer-a", rubricKey: "clarity", score: 3 },
+  ];
+
+  // Malformed stored JSON: a rubric that is not an array at all. Real reviews
+  // exist and are complete; the round is simply unscoreable.
+  const broken = parseDecisionRubric({ impact: 1 });
+  assert.equal(broken, null, "the premise: this rubric does not parse");
+  const brokenBoard = summarizeCompletedDecisionReviews({
+    abstractIds: ["abstract-1"],
+    rubric: broken,
+    assignments,
+    scores,
+  });
+
+  // A perfectly valid round that nobody has finished reviewing.
+  const quietBoard = summarizeCompletedDecisionReviews({
+    abstractIds: ["abstract-1"],
+    rubric: null,
+    assignments,
+    scores: [],
+  });
+
+  assert.equal(brokenBoard["abstract-1"].weightedAverage, null);
+  assert.deepEqual(brokenBoard["abstract-1"].criteria, []);
+  // The point: these two are indistinguishable from the summary alone, so the
+  // boolean beside them is the ONLY thing that can tell an organizer which
+  // situation they are looking at.
+  assert.deepEqual(brokenBoard, quietBoard);
+
+  // And a valid rubric is genuinely unchanged by any of this: same scores, a
+  // real weighted average, real criteria rows.
+  const healthy = parseDecisionRubric([
+    { key: "impact", label: "Impact", min: 1, max: 5, weight: 2 },
+    { key: "clarity", label: "Clarity", min: 1, max: 5, weight: 1 },
+  ]);
+  assert.notEqual(healthy, null);
+  const healthyBoard = summarizeCompletedDecisionReviews({
+    abstractIds: ["abstract-1"],
+    rubric: healthy,
+    assignments,
+    scores,
+  });
+  assert.equal(healthyBoard["abstract-1"].includedReviews, 1);
+  // (4*2 + 3*1) / 3
+  assert.equal(healthyBoard["abstract-1"].weightedAverage, (4 * 2 + 3 * 1) / 3);
+  assert.deepEqual(healthyBoard["abstract-1"].criteria.map((c) => c.key), ["impact", "clarity"]);
+});

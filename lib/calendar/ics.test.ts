@@ -92,6 +92,28 @@ test("emits one VEVENT per session for a full-schedule export", () => {
   assert.ok(ics.includes("X-WR-CALNAME:Forward 2026"));
 });
 
+/**
+ * NEW-1. A bounded export has to be able to say so inside the file — a
+ * downloaded .ics outlives the response that carried it, so the JSON twin's
+ * `truncated` field has no equivalent a reader would ever see. X-WR-CALDESC is
+ * the companion of the X-WR-CALNAME already emitted here, and calendar clients
+ * show it as the calendar's description.
+ */
+test("a calendar description rides in the file, escaped, and only when given", () => {
+  const withDesc = buildIcsCalendar([baseEvent], {
+    calendarName: "Forward 2026",
+    calendarDescription: "First 500 sessions; the programme has more, see online.",
+    now: NOW,
+  });
+  assert.ok(
+    withDesc.includes("X-WR-CALDESC:First 500 sessions\\; the programme has more\\, see online."),
+    "the description is present and RFC 5545 TEXT-escaped",
+  );
+  // Absent by default, so an untruncated export makes no claim at all.
+  assert.ok(!buildIcsCalendar([baseEvent], { calendarName: "Forward 2026", now: NOW }).includes("X-WR-CALDESC"));
+  assert.ok(!buildIcsCalendar([baseEvent], { calendarDescription: "", now: NOW }).includes("X-WR-CALDESC"));
+});
+
 test("escapes titles containing commas and semicolons", () => {
   const ics = buildIcsCalendar([{ ...baseEvent, title: "Scaling, Sharding; and You" }], { now: NOW });
   assert.ok(ics.includes("SUMMARY:Scaling\\, Sharding\\; and You"));

@@ -54,6 +54,22 @@ export type AdminDecisionSummary = {
   /** Null only when the event has no evaluation plan at all. */
   selectedPlan: AdminDecisionPlan | null;
   summariesByAbstractId: Record<string, AdminDecisionAbstractSummary>;
+  /**
+   * B3 — true when a round IS selected but its stored rubric would not parse.
+   *
+   * `parseDecisionRubric` fails closed for the whole rubric on any malformed
+   * criterion, which correctly stops a misleading average from being computed.
+   * What it could not do is say so: every proposal on the board came back with
+   * `weightedAverage: null` and `criteria: []`, which is character-identical to
+   * the ordinary "nobody has reviewed these yet" state. An organizer reading
+   * the decision board had no way to tell a round nobody had scored from a
+   * round whose rubric is broken — and the second one is a data problem only
+   * they can fix.
+   *
+   * Deliberately a boolean and not the parse error: the rubric is operator
+   * input and its contents do not belong in a response body.
+   */
+  rubricUnreadable: boolean;
 };
 
 export type AdminDecisionSummaryInput = {
@@ -328,6 +344,9 @@ export async function getAdminDecisionSummary(
       plans: planOptions,
       selectedPlan,
       summariesByAbstractId: emptySummaries(abstractIds),
+      // No round selected, or nothing to score against it: there is no rubric
+      // in play, so there is nothing to report as unreadable.
+      rubricUnreadable: false,
     };
     if (!selectedPlan || abstractIds.length === 0) return base;
 
@@ -372,11 +391,25 @@ export async function getAdminDecisionSummary(
         });
     assertEventQueryBound(scores, OPERATOR_QUERY_LIMITS.adminDecisionScores, "review scores");
 
+    // B3: parsed once, so the flag the board renders and the rubric the
+    // aggregate uses can never describe different things.
+    const rubric = parseDecisionRubric(selected.rubric);
+    if (rubric === null) {
+      // Server-side, once per read, and deliberately without the rubric value:
+      // it is operator input of unknown shape and this line goes to the
+      // platform log. The plan id is what an operator needs to go fix it.
+      console.error("[decision-summary] round rubric failed to parse", {
+        planId: selectedPlan.id,
+        eventId: ctx.eventId,
+      });
+    }
+
     return {
       ...base,
+      rubricUnreadable: rubric === null,
       summariesByAbstractId: summarizeCompletedDecisionReviews({
         abstractIds,
-        rubric: parseDecisionRubric(selected.rubric),
+        rubric,
         assignments,
         scores,
       }),
