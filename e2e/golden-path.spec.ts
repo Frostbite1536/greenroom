@@ -157,7 +157,14 @@ test.describe("golden path", () => {
 
       const refusal = dialog.getByRole("alert");
       await expect(refusal).toContainText("This placement conflicts with an existing slot.");
-      await expect(refusal).toContainText("Room is already booked for an overlapping time.");
+      // The refusal names the collision: room, occupying talk, and the slot's
+      // event-local clock range (PDT in May). The occupant is session index 1 —
+      // the first ACCEPTED proposal, DEMO_TALKS[0] — per the seeded geometry
+      // pinned in the header above.
+      await expect(refusal).toContainText("Room conflict:");
+      await expect(refusal).toContainText("Hall A");
+      await expect(refusal).toContainText("Scaling Vector Search Past the First Million Documents");
+      await expect(refusal).toContainText(/from 10:00 AM–\d{1,2}:\d{2} (AM|PM) PDT/);
       // Refused means refused: the dialog is still open and nothing was written.
       await expect(dialog).toBeVisible();
     });
