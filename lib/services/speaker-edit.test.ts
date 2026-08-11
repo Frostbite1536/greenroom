@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   closeDateEditRefusal,
@@ -328,6 +329,44 @@ test("the withdrawable set includes MAYBE and excludes ACCEPTED and terminal sta
   assert.deepEqual([...WITHDRAWABLE_STATUSES], ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE"]);
   for (const status of WITHDRAWABLE_STATUSES) {
     assert.equal(isEditableStatus(status), true, `${status} must also be editable`);
+  }
+});
+
+/**
+ * SM1. The lifecycle doc is the artifact a reviewer checks the arrow against,
+ * so a status this module allows and the doc omits is a doc that lies. `MAYBE`
+ * was in both status sets here and in neither table there. Pinned per status
+ * rather than by whole-table match so a wording edit does not fail the check.
+ *
+ * CRLF-safe: every pattern below is matched inside a single line.
+ */
+test("docs/LIFECYCLE.md lists every status this module actually allows", () => {
+  const lines = readFileSync(new URL("../../docs/LIFECYCLE.md", import.meta.url), "utf8")
+    .split(/\r?\n/);
+
+  const withdrawRow = lines.find((line) => /\|\s*`WITHDRAWN`\s*\|/.test(line));
+  assert.ok(withdrawRow, "the transition table must still carry a row landing in WITHDRAWN");
+  for (const status of WITHDRAWABLE_STATUSES) {
+    assert.ok(
+      withdrawRow.includes(`\`${status}\``),
+      `LIFECYCLE.md omits the ${status} -> WITHDRAWN transition this module implements`,
+    );
+  }
+
+  // Same class of gap, one table lower: the R1 editing table is a row per status.
+  for (const status of EDITABLE_STATUSES) {
+    assert.ok(
+      lines.some((line) => new RegExp(`^\\|\\s*\`${status}\`\\s*\\|`).test(line)),
+      `LIFECYCLE.md's editing table has no row for the editable status ${status}`,
+    );
+  }
+
+  // And the state diagram must draw the arrow, not just the table.
+  for (const status of WITHDRAWABLE_STATUSES) {
+    assert.ok(
+      lines.some((line) => line.trim().startsWith(`${status} --> WITHDRAWN`)),
+      `LIFECYCLE.md's diagram omits ${status} --> WITHDRAWN`,
+    );
   }
 });
 
