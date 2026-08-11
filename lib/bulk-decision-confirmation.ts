@@ -1,6 +1,9 @@
 import { speakerTaskCount } from "@/lib/decision-confirmation";
 import type { AbstractDecision } from "@/lib/services/abstract-decision";
-import type { BulkDecisionReport } from "@/lib/services/bulk-abstract-decision";
+import type {
+  BulkDecisionReport,
+  BulkDecisionSkipReason,
+} from "@/lib/services/bulk-abstract-decision";
 
 /**
  * What a bulk decision is about to do, and afterwards what it did.
@@ -104,6 +107,96 @@ export function bulkDecisionPromptSkipNotice(prompt: BulkDecisionPrompt): string
   const n = Math.max(0, Math.trunc(prompt.ineligible));
   if (n === 0) return null;
   return `${proposalCount(n)} in this selection ${n === 1 ? "is" : "are"} skipped: bulk decisions only change proposals still awaiting a decision. Open a decided proposal to change it.`;
+}
+
+/**
+ * Why the buttons are dead while rows are still ticked.
+ *
+ * Two things this must not say. It must not read as "nothing is selected" — the
+ * selection is right there beside it and the operator built it deliberately. And
+ * it must not claim every selected proposal is already decided: withdrawn rows
+ * and drafts are ineligible too, and telling an organizer their drafts "already
+ * have a decision" sends them looking for a decision nobody made.
+ *
+ * So it names the count they selected and the one property that actually gates
+ * the batch — still awaiting a decision — and points at the single-proposal
+ * route, which can do what bulk deliberately will not.
+ */
+export function bulkDecisionNothingEligibleNotice(selectedCount: number): string {
+  const n = Math.max(0, Math.trunc(selectedCount));
+  if (n === 1) {
+    return "The selected proposal is not awaiting a decision, so there is nothing to apply. Open it to change its decision.";
+  }
+  return `None of the ${proposalCount(n)} selected is awaiting a decision, so there is nothing to apply. Open a proposal to change its decision.`;
+}
+
+/**
+ * The request body for a batch: EVERY selected id, in selection order.
+ *
+ * The client's eligibility read is a preview and nothing more. It sizes the
+ * prompt's arithmetic and warns about rows that look already-decided, but it
+ * must never decide what the server is told about, for two reasons.
+ *
+ * It is not authoritative. The rows were rendered by an earlier response; a
+ * proposal decided, withdrawn or submitted since then is a status this client
+ * does not have. The server re-reads every status under that abstract's own
+ * advisory lock, which is the only reading that can be acted on.
+ *
+ * And it would silently shrink the receipt. The report has one entry per
+ * requested id, so an id withheld here is a row the operator ticked and gets no
+ * answer about — indistinguishable, on the screen they are looking at, from a
+ * row that was quietly decided. Sending the whole selection is what makes
+ * "every selected proposal is either written or named with its reason" true.
+ *
+ * The selection cannot outgrow the batch cap: the table it is made in loads at
+ * most `OPERATOR_QUERY_LIMITS.adminAbstracts` rows and
+ * `BULK_ABSTRACT_DECISION_LIMIT` is the same number, so an unfiltered post of
+ * everything on screen still fits. The unit tests pin those two together.
+ */
+export function bulkDecisionRequestBody(
+  decision: AbstractDecision,
+  selected: readonly { id: string }[],
+): { abstractIds: string[]; decision: AbstractDecision } {
+  return { abstractIds: selected.map((row) => row.id), decision };
+}
+
+/** One skip reason and the proposals the server reported under it. */
+export type BulkDecisionSkipGroup = {
+  reasonCode: BulkDecisionSkipReason;
+  /** The server's own sentence for this reason, never re-worded here. */
+  reason: string;
+  ids: string[];
+  /** Row titles where the selection knows them, else the id. */
+  labels: string[];
+};
+
+/**
+ * Every skipped proposal, grouped by the server's own reason code.
+ *
+ * Grouped rather than one line per row because a hundred-item batch would
+ * otherwise print a hundred lines, and because the reason is the actionable
+ * part: "already decided" tells an operator to open those proposals, "not found
+ * in this event" tells them their selection was stale. Groups come back in the
+ * order the reasons first appear in the report, so the list is stable.
+ *
+ * Pure, and separate from the component, so the promise that matters — no
+ * skipped row goes unnamed — is unit tested rather than eyeballed.
+ */
+export function bulkDecisionSkipGroups(
+  report: BulkDecisionReport,
+  titles?: ReadonlyMap<string, string>,
+): BulkDecisionSkipGroup[] {
+  const groups = new Map<BulkDecisionSkipReason, BulkDecisionSkipGroup>();
+  for (const item of report.results) {
+    if (item.outcome !== "SKIPPED") continue;
+    const group =
+      groups.get(item.reasonCode) ??
+      { reasonCode: item.reasonCode, reason: item.reason, ids: [], labels: [] };
+    group.ids.push(item.abstractId);
+    group.labels.push(titles?.get(item.abstractId) ?? item.abstractId);
+    groups.set(item.reasonCode, group);
+  }
+  return [...groups.values()];
 }
 
 /** What the batch actually did, from the server's own per-item report. */

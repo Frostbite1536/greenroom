@@ -98,6 +98,15 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .bulk-decision-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .bulk-decision-skips { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
 .bulk-decision-skips ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 13px; }
+/* Every skipped proposal is named, so a same-reason group can be a hundred rows
+   (the batch cap). It scrolls inside the group rather than pushing "Done" out of
+   the receipt; the outer selector is a class + element, so this one has to be
+   both to win. */
+.bulk-decision-skips ul.bulk-decision-skip-titles {
+  margin: 4px 0 0; padding-left: 0; list-style: none; gap: 2px;
+  font-size: 12.5px; color: var(--muted);
+  max-height: 168px; overflow-y: auto; overscroll-behavior: contain;
+}
 
 .empty-state { display: grid; place-items: center; gap: 8px; padding: 60px 20px; text-align: center; color: var(--muted); }
 .empty-state .empty-icon { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--soft); color: var(--brand); }
