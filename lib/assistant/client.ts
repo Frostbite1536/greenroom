@@ -110,15 +110,18 @@ export type AssistantEndpointResolution =
  * what `disabled` already means.
  */
 export function resolveAssistantEndpoint(env: AssistantEnv = process.env): AssistantEndpointResolution {
-  const override = env[ASSISTANT_ENDPOINT_OVERRIDE_VAR]?.trim();
-  if (!override) return { ok: true, endpoint: ASSISTANT_ENDPOINT };
+  // PRESENT means present: the production refusal must see the raw value,
+  // before any trim/empty normalization. An operator who set this variable —
+  // even to "" or whitespace — believes traffic is going to a stub, and the
+  // one outcome they must never get is real prompts on the wire because their
+  // value was quietly discarded as "empty".
+  const rawOverride = env[ASSISTANT_ENDPOINT_OVERRIDE_VAR];
+  if (rawOverride !== undefined && isProductionRuntime(env)) {
+    return { ok: false, reason: "disabled" };
+  }
 
-  // Present in production: refuse, before any fetch. Silently ignoring it and
-  // calling the real provider would be worse than refusing — an operator who
-  // set this believes traffic is going to a stub, and the one outcome they
-  // must never get is real prompts on the wire because their variable was
-  // quietly discarded.
-  if (isProductionRuntime(env)) return { ok: false, reason: "disabled" };
+  const override = rawOverride?.trim();
+  if (!override) return { ok: true, endpoint: ASSISTANT_ENDPOINT };
 
   // Exact string, deliberately stricter than `useMockIntegrations()`, which
   // treats an absent value as mocked. Here absence must not enable anything.

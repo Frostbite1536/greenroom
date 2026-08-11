@@ -653,6 +653,37 @@ test("in production the override fails CLOSED, and is never ignored or fallen th
     { ok: false, reason: "disabled" },
     "a present override must be refused on deployed production",
   );
+  // PRESENT means present, before trim/empty normalization: an empty or
+  // whitespace-only production value must refuse exactly like a valid one.
+  // The old code trimmed first, so "" and "   " silently fell through to the
+  // real provider — the precise outcome the fence exists to prevent.
+  for (const sneaky of ["", "   ", "\t", "\n"]) {
+    assert.deepEqual(
+      resolveAssistantEndpoint({
+        VERCEL_ENV: "production",
+        MOCK_EXTERNAL_APIS: "true",
+        [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: sneaky,
+      }),
+      { ok: false, reason: "disabled" },
+      `a present ${JSON.stringify(sneaky)} production override must refuse, not fall through`,
+    );
+  }
+  // And the refusal happens with zero fetches, for empty exactly as for valid.
+  for (const present of ["", "   ", LOOPBACK]) {
+    // No responses supplied: a single fetch would reject loudly, which is the point.
+    const { calls, fetcher } = recordingFetcher([]);
+    const { value } = await withProcessEnv(
+      {
+        VERCEL_ENV: "production",
+        MOCK_EXTERNAL_APIS: "true",
+        [ASSISTANT_ENDPOINT_OVERRIDE_VAR]: present,
+        OPENAI_API_KEY: "sk-test-key-of-sufficient-length",
+      },
+      async () => withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+    );
+    assert.deepEqual(value, { ok: false, reason: "disabled" });
+    assert.equal(calls.length, 0, `zero fetches for present=${JSON.stringify(present)}`);
+  }
   // Preview and development deployments are not production and keep the seam.
   for (const vercelEnv of ["preview", "development"]) {
     assert.deepEqual(
