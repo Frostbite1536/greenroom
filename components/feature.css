@@ -70,6 +70,35 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .table-toolbar { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .search-input { flex: 1; min-width: 180px; }
 
+/* ---- G7: bulk decisions on /admin/abstracts ----
+   The select column is the narrowest thing in the table and must not grow with
+   the viewport, or the status pill beside it starts wrapping. The box itself is
+   left as the platform's: a native checkbox is what assistive tech and the
+   automation an evaluator drives both expect to find, and the `.switch`
+   component below is this file's own cautionary tale about painting
+   decoration over one. */
+.row-select-cell { width: 36px; }
+.row-select { width: 15px; height: 15px; margin: 0; accent-color: var(--brand); cursor: pointer; display: block; }
+.row-select:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Appears only when something is ticked, so it keeps the toolbar's own 14px
+   gutter and border rhythm and does not reflow the table when it arrives. */
+.bulk-decision-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--soft);
+}
+.bulk-decision-count { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; color: var(--brand-strong); }
+.bulk-decision-bar .hint { margin: 0; }
+/* Padding on the body, never on the dialog: `event.target === dialog` is only a
+   backdrop click if the dialog has no padding of its own to click on. */
+.app-dialog.bulk-decision-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; }
+.bulk-decision-dialog-body { max-height: calc(100vh - 48px); overflow-y: auto; overscroll-behavior: contain; padding: 24px 26px; }
+.bulk-decision-dialog-body h2 { margin: 0 0 6px; font-size: 17px; }
+.bulk-decision-dialog-body .conflict-banner { font-size: 12.5px; }
+.bulk-decision-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.bulk-decision-skips { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.bulk-decision-skips ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; font-size: 13px; }
+
 .empty-state { display: grid; place-items: center; gap: 8px; padding: 60px 20px; text-align: center; color: var(--muted); }
 .empty-state .empty-icon { width: 48px; height: 48px; border-radius: 12px; display: grid; place-items: center; background: var(--soft); color: var(--brand); }
 .empty-state h3 { margin: 4px 0 0; color: var(--ink); font-size: 15px; }

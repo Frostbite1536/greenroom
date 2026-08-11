@@ -305,27 +305,52 @@ const routeSource = (path: string) =>
   readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
 test("only ADMIN-authorized routes reconcile a Session's topic and summary", () => {
-  for (const path of ["app/api/evaluations/decisions/route.ts", "app/api/evaluations/convert/route.ts"]) {
+  // Authorization is a property of the ROUTE, so it stays asserted on every
+  // route that can reach reconciliation — G7 added a third.
+  for (const path of [
+    "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
+    "app/api/evaluations/convert/route.ts",
+  ]) {
     const route = routeSource(path);
     assert.match(route, /requireContext\(\["ADMIN"\]\)/, `${path} is ADMIN-only`);
-    // Both reach reconciliation through the shared provisioning helper rather
-    // than writing Session.categoryId or Session.description themselves. Either
-    // may appear in a `select` — that read is what makes reconciliation
+    // None of them writes Session.categoryId or Session.description itself.
+    // Either may appear in a `select` — that read is what makes reconciliation
     // possible — but never inside a `data:` payload.
-    assert.match(route, /provisionAcceptedAbstract\(tx, /, `${path} goes through provisioning`);
     for (const payload of route.match(/data: \{[^}]*\}/g) ?? []) {
       assert.doesNotMatch(payload, /categoryId/, `${path} writes no category directly`);
       assert.doesNotMatch(payload, /description/, `${path} writes no description directly`);
     }
   }
+
+  // And each reaches reconciliation only through the shared provisioning
+  // helper. The two decision routes reach it one hop away, through the locked
+  // write they share; the convert route calls it directly.
+  assert.match(
+    routeSource("lib/services/abstract-decision-write.ts"),
+    /provisionAcceptedAbstract\(tx, /,
+    "the shared decision write goes through provisioning",
+  );
+  for (const path of [
+    "app/api/evaluations/decisions/route.ts",
+    "app/api/evaluations/decisions/bulk/route.ts",
+  ]) {
+    assert.match(routeSource(path), /writeAbstractDecision\(tx, \{/, `${path} runs the shared write`);
+  }
+  assert.match(
+    routeSource("app/api/evaluations/convert/route.ts"),
+    /provisionAcceptedAbstract\(tx, /,
+    "the convert route goes through provisioning",
+  );
 });
 
-test("the decisions route reads the session fields reconciliation needs", () => {
+test("the shared decision write reads the session fields reconciliation needs", () => {
   // The reconcile compares against the stored Session; a select that omits
   // `description` would make every re-accept look like a summary change and
-  // rewrite the row on every run.
+  // rewrite the row on every run. This read moved into the service with the
+  // write it belongs to, and now serves the bulk path as well.
   assert.match(
-    routeSource("app/api/evaluations/decisions/route.ts"),
+    routeSource("lib/services/abstract-decision-write.ts"),
     /session: \{ select: \{ id: true, categoryId: true, description: true \} \}/,
   );
 });

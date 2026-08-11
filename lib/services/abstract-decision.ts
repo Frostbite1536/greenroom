@@ -9,6 +9,46 @@ export function canAdminDecide(status: AbstractStatus): boolean {
   return status !== "WITHDRAWN";
 }
 
+/**
+ * Why a proposal is, or is not, eligible for a decision taken over a selection.
+ *
+ * The single-row path deliberately allows a re-decision: the drawer makes the
+ * organizer press "Change decision" first, so reversing an outcome is an
+ * explicit second click on one named proposal. A bulk action has no such click —
+ * a tick box carries no evidence that the operator saw what that row already
+ * decided — so a selection that happens to include a declined proposal must not
+ * silently reverse it. Bulk therefore writes only proposals that are still
+ * awaiting a decision, which is exactly the set the drawer offers buttons for
+ * without "Change decision" (`SUBMITTED`, `UNDER_REVIEW`).
+ *
+ * Everything else is named rather than refused as a batch: an ineligible row is
+ * a skip with this reason attached, and the other rows are still written.
+ *
+ * The switch is exhaustive over `AbstractStatus` on purpose — a status added to
+ * the schema fails to compile here rather than quietly defaulting to eligible.
+ */
+export type BulkDecisionEligibility =
+  | "ELIGIBLE"
+  | "ABSTRACT_WITHDRAWN"
+  | "ABSTRACT_ALREADY_DECIDED"
+  | "ABSTRACT_NOT_SUBMITTED";
+
+export function bulkDecisionEligibility(status: AbstractStatus): BulkDecisionEligibility {
+  switch (status) {
+    case "SUBMITTED":
+    case "UNDER_REVIEW":
+      return "ELIGIBLE";
+    case "ACCEPTED":
+    case "MAYBE":
+    case "REJECTED":
+      return "ABSTRACT_ALREADY_DECIDED";
+    case "WITHDRAWN":
+      return "ABSTRACT_WITHDRAWN";
+    case "DRAFT":
+      return "ABSTRACT_NOT_SUBMITTED";
+  }
+}
+
 /** MAYBE is a pre-confirmation review state; a linked Session is programme truth. */
 export function maybeBlockedByConfirmedSession(
   decision: AbstractDecision,
