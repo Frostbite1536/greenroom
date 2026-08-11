@@ -148,31 +148,10 @@ from any static host or localhost.
 
 ## Current limitations
 
-Stated up front rather than left to be discovered. The fuller list, with
-context, is in the [evaluation index](docs/judging/README.md#current-limitations).
-
-- **A new self-service account starts outside every event.** Sign-up (`/signup`)
-  and password reset (`/forgot`) are both public, but signing up joins you to
-  nothing: a new account holds no membership, so it must create its own event or
-  wait for an organizer to add its address.
-- **Event switching is bounded by your own memberships.** The sidebar switcher
-  lists every event you hold a membership on, and your role is re-resolved per
-  event. You cannot join an event you were not added to, and no screen shows
-  more than one event at a time.
-- **No file upload on proposals.** Speaker profiles do take real uploads —
-  headshots and slide decks are stored and served from `/api/files/<id>`, with
-  a URL field still offered as the alternative — but a proposal carries no
-  attachment.
-- **One topic per submission, by design.** A form can offer several topic
-  options; each proposal stores exactly one, and that is what routes it to a
-  review team. The agenda `Track` is a separate, later placement choice.
-- **Email is split on purpose.** Submission receipts dispatch on the live
-  provider path when one is configured; decision mail is preview-gated and
-  cannot send content that was not previewed.
-- **The read-only v1 API is off** unless `GREENROOM_API_KEY` is configured.
-- **Demo reset is refused** unless an operator sets `ALLOW_DEMO_RESET=true`. It
-  is unset in production and there is no reset control in the UI.
-- **Accessibility evidence is automated only** — no manual screen-reader pass.
+The authoritative, contextual list lives in one place: the
+[evaluation index](docs/judging/README.md#current-limitations). Keeping the
+limitations there prevents a shorter README copy from drifting away from the
+evidence package.
 
 ## Stack
 
