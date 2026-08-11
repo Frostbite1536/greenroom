@@ -1,4 +1,5 @@
 import { formatDecisionScore } from "@/lib/decision-summary-display";
+import { roundLabel } from "@/lib/round-label";
 import type {
   AdminDecisionAbstractSummary,
   AdminDecisionPlan,
@@ -95,12 +96,14 @@ export type DecisionExportInput = {
 
 /**
  * Round label, character-for-character the admin table's `planLabel`, so the
- * export names the round the operator selected on screen. `null` becomes an
- * empty cell rather than the word "none": an event with no evaluation plan has
- * no round, and inventing a name for it would be a lie.
+ * export names the round the operator selected on screen. Both now compose it
+ * through `@/lib/round-label`, which is what keeps them identical *and* stops
+ * the shared "Round 1 — Round 1 — Program Committee" duplication. `null`
+ * becomes an empty cell rather than the word "none": an event with no
+ * evaluation plan has no round, and inventing a name for it would be a lie.
  */
-function roundLabel(plan: AdminDecisionPlan | null): string {
-  return plan ? `Round ${plan.ordinal} — ${plan.name}` : "";
+function exportRoundLabel(plan: AdminDecisionPlan | null): string {
+  return plan ? roundLabel(plan) : "";
 }
 
 /**
@@ -117,7 +120,7 @@ function roundLabel(plan: AdminDecisionPlan | null): string {
  */
 export function buildDecisionExportCsv(input: DecisionExportInput): string {
   const lines: string[] = [csvRow(DECISION_EXPORT_HEADER)];
-  const round = roundLabel(input.selectedPlan);
+  const round = exportRoundLabel(input.selectedPlan);
 
   for (const row of input.rows) {
     const summary = input.summariesByAbstractId[row.id];

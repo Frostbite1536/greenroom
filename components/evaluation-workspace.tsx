@@ -10,6 +10,7 @@ import {
   isActiveQueueAssignment,
   isDeclaredConflict,
 } from "@/lib/review-conflict";
+import { roundLabel } from "@/lib/round-label";
 import { EmptyState, Pill } from "@/components/ui";
 import {
   planReviewCommentUpdate,
@@ -580,7 +581,12 @@ function EvaluationRoundNav({
         >
           {rounds.map((round) => (
             <option key={round.id} value={round.id}>
-              {`Round ${round.ordinal} — ${round.name} · ${round.assignedToMe} assigned to you`}
+              {/* Composed through `roundLabel`, not by concatenating the
+                  ordinal with the name: the stored name already carries its
+                  own "Round 1 — " prefix, so this option used to read
+                  "Round 1 — Round 1 — Program Committee · 3 assigned to
+                  you". */}
+              {`${roundLabel(round)} · ${round.assignedToMe} assigned to you`}
             </option>
           ))}
         </select>
