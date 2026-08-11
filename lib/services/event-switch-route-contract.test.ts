@@ -108,7 +108,14 @@ test("the create-event success path offers the switch through the same endpoint"
   assert.match(dialog, /value=\{created\.id\}/);
   // No client-side navigation to a screen still scoped to the old event.
   assert.doesNotMatch(dialog, /router\.push/);
-  assert.doesNotMatch(dialog, /window\.location/);
+  // One full navigation is allowed and required: the ONBOARDING branch
+  // (D-C5-16 #2) just swapped a pending cookie for a real session, and only a
+  // fresh document request re-reads it. The created-notice switch offer must
+  // still go through the endpoint, so the navigation may appear exactly once,
+  // guarded by the onboarding flag.
+  const navigations = dialog.match(/window\.location/g) ?? [];
+  assert.equal(navigations.length, 1, "only the onboarding branch may navigate");
+  assert.match(dialog, /if \(onboarding\) \{[^]*?window\.location\.assign\("\/admin"\);[^]*?\}/);
 });
 
 test("the obsoleted 'switching is on the roadmap' copy is gone from the product surfaces", () => {
