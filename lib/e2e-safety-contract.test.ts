@@ -7,15 +7,16 @@ const source = (path: string) => readFileSync(new URL(`../${path}`, import.meta.
 
 test("the disposable-database guard refuses missing and mismatched assertions", () => {
   assert.throws(
-    () => assertDisposableDatabase({ DATABASE_URL: "postgresql://local/db" }),
+    () => assertDisposableDatabase({ NODE_ENV: "test", DATABASE_URL: "postgresql://local/db" }),
     new RegExp(`Set ${EXPECTED_DB_VAR}`),
   );
   assert.throws(
-    () => assertDisposableDatabase({ [EXPECTED_DB_VAR]: "throwaway" }),
+    () => assertDisposableDatabase({ NODE_ENV: "test", [EXPECTED_DB_VAR]: "throwaway" }),
     /DATABASE_URL is not set/,
   );
   assert.throws(
     () => assertDisposableDatabase({
+      NODE_ENV: "test",
       [EXPECTED_DB_VAR]: "throwaway",
       DATABASE_URL: "postgresql://local/shared-demo",
     }),
@@ -23,6 +24,7 @@ test("the disposable-database guard refuses missing and mismatched assertions", 
   );
   assert.equal(
     assertDisposableDatabase({
+      NODE_ENV: "test",
       [EXPECTED_DB_VAR]: "throwaway",
       DATABASE_URL: "postgresql://local/greenroom-throwaway",
     }),
