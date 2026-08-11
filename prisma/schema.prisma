@@ -111,6 +111,7 @@ model Event {
   publicSubmissionRateBuckets PublicSubmissionRateBucket[]
   reviewerInvites             ReviewerInvite[]
   storedFiles                 StoredFile[]
+  apiCredentials              ApiCredential[]
 
   @@index([startsAt])
 }
@@ -138,6 +139,7 @@ model User {
   sentEmails         EmailDispatch[]    @relation("EmailSender")
   reviewerInvites    ReviewerInvite[]
   storedFiles        StoredFile[]
+  apiCredentials     ApiCredential[]
 }
 
 model EventMember {
@@ -648,4 +650,69 @@ model ImportJob {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, status])
+}
+
+/**
+ * A revocable, event-scoped credential for the read-only v1 API
+ * (docs/ROADMAP.md, "Scoped credentials").
+ *
+ * The issued token is `grk_<lookupId>_<secret>` and exists in plaintext exactly
+ * once, in the body of the response that creates it. The two halves are stored
+ * differently on purpose:
+ *
+ *   - `lookupId` is NOT a secret. It is stored in plaintext, uniquely indexed,
+ *     and shown to the organizer as the credential's visible name. It is what
+ *     authentication looks a row up by, which is what makes verification a
+ *     single indexed point read rather than a scan over the event's keys — and
+ *     it means no index here is keyed on anything derived from the secret.
+ *   - `secretHash` is the SHA-256 hex digest of the secret half, and the only
+ *     stored form of it. This table can therefore be read end to end without
+ *     recovering a single working credential (INV-SECRET-001).
+ *
+ * There is no stored display prefix: the visible form is `grk_` plus
+ * `lookupId`, derived where it is shown. A stored copy of a pure function of
+ * another column is a second source of truth with nothing keeping it in step.
+ *
+ * `revokedAt` is a tombstone, not a delete: a credential that was used against
+ * this event must stay auditable after it stops working, and keeping the row
+ * keeps its `lookupId` permanently claimed, so a revoked identifier can never
+ * be handed out again by chance.
+ *
+ * There is deliberately no `lastUsedAt`. Every authenticated v1 read is a
+ * SELECT; stamping a timestamp would turn the whole read surface into a writer,
+ * adding a row update and its WAL traffic to a path whose entire purpose is
+ * cheap mirroring. Usage telemetry, if it is ever wanted, belongs in an
+ * append-only log, not in the authenticator's own row.
+ *
+ * Delete behaviour is chosen, not defaulted:
+ *   - `event`     Cascade. The credential authorizes reads of exactly one
+ *                 event. When that event is gone the credential authorizes
+ *                 nothing, and leaving live secret material behind pointing at
+ *                 a dead scope is strictly worse than removing it. This is also
+ *                 the prevailing convention for every event-owned row here.
+ *   - `createdBy` SetNull, and the column is nullable. The credential belongs
+ *                 to the event, not to the person who happened to press the
+ *                 button: an organizer leaving the team must not silently break
+ *                 a working integration, and must not be able to erase the
+ *                 record of what they issued either. Same reasoning, and the
+ *                 same convention, as `EmailDispatch.sender`.
+ */
+model ApiCredential {
+  id              String    @id @default(cuid())
+  eventId         String
+  /// Operator-supplied display name. Bounded at the request boundary.
+  label           String
+  /// Non-secret public identifier: the indexed lookup key, and the shown value.
+  lookupId        String    @unique
+  /// SHA-256 hex digest of the secret half. Never projected, never logged.
+  secretHash      String
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  /// Set once, never cleared: revocation is permanent for this credential.
+  revokedAt       DateTime?
+
+  event     Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
 }
