@@ -2025,9 +2025,20 @@ try {
     boardSetupText.slice(Math.max(0, boardSetupText.indexOf("Round 95") - 20), boardSetupText.indexOf("Round 95") + 120));
   // Non-vacuity: the assertion above would also pass on a page that never
   // mentioned this round at all, so pin that the composed label is present.
-  const boardOrdinalHits = (boardSetupText.match(/Round 95/g) ?? []).length;
+  // Counted in VISIBLE text only: renderedText keeps <script> contents, and the
+  // RSC flight payload inside them repeats every rendered string, so a count
+  // over it measures Next's serialization, not the page. Presence checks are
+  // immune; this is the harness's first occurrence COUNT, so it strips
+  // script/style bodies first.
+  const boardVisibleText = (boardSetupPage.text ?? "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&[^;]+;/g, "");
+  const boardOrdinalHits = (boardVisibleText.match(/Round 95/g) ?? []).length;
   check("§4-5 the round IS on the page — the no-duplication check is not vacuous",
-    boardOrdinalHits >= 1 && boardOrdinalHits <= 2, `got ${boardOrdinalHits} occurrences`);
+    boardOrdinalHits >= 1 && boardOrdinalHits <= 2, `got ${boardOrdinalHits} visible occurrences`);
   // Same round, the other surface: the abstracts page's decision-round select.
   const boardDecisionPage = await req(
     "GET", `/admin/abstracts?planId=${encodeURIComponent(boardPlan.id)}`, null, admin,
