@@ -35,7 +35,23 @@ type CreatedEvent = { id: string; name: string; slug: string };
  * screen still scoped to the old event. The route re-checks the membership the
  * create transaction just wrote before it moves anyone.
  */
-export function NewEventDialog({ currentEventName }: { currentEventName: string }) {
+/**
+ * `onboarding` is the `/welcome` variant (D-C5-16 item 2): the same dialog and
+ * the same endpoint, driven by someone who has no event yet.
+ *
+ * The two differences are both consequences of that. There is no current event
+ * to say "nothing is copied from", and — unlike the workspace case — success
+ * really does change which workspace this person is in, because the server
+ * issues them a real session as ADMIN of the event it just created. So this
+ * variant navigates, and the "we did not switch you" notice would be a lie here.
+ */
+export function NewEventDialog({
+  currentEventName,
+  onboarding = false,
+}: {
+  currentEventName?: string;
+  onboarding?: boolean;
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -110,6 +126,14 @@ export function NewEventDialog({ currentEventName }: { currentEventName: string 
       return;
     }
 
+    if (onboarding) {
+      // A full navigation, not a router push: the response just replaced this
+      // person's pending cookie with a real session, and only a fresh document
+      // request re-reads it everywhere the shell needs it.
+      window.location.assign("/admin");
+      return;
+    }
+
     setCreated(res.data.event);
     close();
   }
@@ -125,7 +149,7 @@ export function NewEventDialog({ currentEventName }: { currentEventName: string 
         }}
         style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
       >
-        <CalendarPlus size={16} aria-hidden="true" /> New event
+        <CalendarPlus size={16} aria-hidden="true" /> {onboarding ? "Create your first event" : "New event"}
       </button>
 
       {/* A div, not a <p>: a form is flow content and a paragraph may not
@@ -167,11 +191,19 @@ export function NewEventDialog({ currentEventName }: { currentEventName: string 
             });
           }}
         >
-          <h2 id={`${ids}-title`}>New event</h2>
+          <h2 id={`${ids}-title`}>{onboarding ? "Create your first event" : "New event"}</h2>
           <p className="hint">
-            Creates an empty event with its own rooms, forms and programme. Nothing is copied from
-            {" "}
-            {currentEventName}, and the web address is fixed once the event is created.
+            {onboarding ? (
+              <>
+                Creates an empty event with its own rooms, forms and programme, and makes you its
+                organizer. The web address is fixed once the event is created.
+              </>
+            ) : (
+              <>
+                Creates an empty event with its own rooms, forms and programme. Nothing is copied
+                from {currentEventName}, and the web address is fixed once the event is created.
+              </>
+            )}
           </p>
 
           {errors._root ? (

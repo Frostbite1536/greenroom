@@ -478,6 +478,42 @@ export const reviewerInviteAcceptSchema = z
   .object({ token: z.unknown().optional() })
   .strict();
 
+/**
+ * Self-service auth input (D-C5-16 item 2).
+ *
+ * Shape only. The password **strength** floor lives in
+ * `lib/services/password-policy.ts` so one rule serves signup and reset and the
+ * message is written once; these schemas bound length and reject anything that
+ * is not a plausible address before a scrypt is ever paid for.
+ *
+ * `.strict()` on every one: an authority identifier — an event, a role, a user
+ * id — must never be accepted from an unauthenticated body, and the strict
+ * object is what makes that a refusal rather than a silently ignored field.
+ */
+const selfServiceEmailSchema = z.string().trim().toLowerCase().max(254).email();
+/** Bounded here; `checkNewPassword` owns whether it is good enough. */
+const selfServiceSecretSchema = z.string().max(512);
+
+export const signupSchema = z
+  .object({
+    email: selfServiceEmailSchema,
+    password: selfServiceSecretSchema,
+    confirmPassword: selfServiceSecretSchema,
+  })
+  .strict();
+
+export const forgotPasswordSchema = z
+  .object({ email: selfServiceEmailSchema })
+  .strict();
+
+export const passwordResetSchema = z
+  .object({
+    token: z.string().min(1).max(512),
+    password: selfServiceSecretSchema,
+    confirmPassword: selfServiceSecretSchema,
+  })
+  .strict();
+
 export const reviewScoreInputSchema = z.object({
   planId: idSchema,
   abstractId: idSchema,
@@ -647,6 +683,9 @@ export type OnboardingTaskCreate = z.infer<typeof onboardingTaskCreateSchema>;
 export type OnboardingTaskUpdate = z.infer<typeof onboardingTaskUpdateSchema>;
 export type ImportRequest = z.infer<typeof importRequestSchema>;
 export type EmailDispatchRequest = z.infer<typeof emailDispatchRequestSchema>;
+export type SignupInput = z.infer<typeof signupSchema>;
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+export type PasswordResetInput = z.infer<typeof passwordResetSchema>;
 
 export type ApiSuccess<T> = { ok: true; data: T };
 // `retryAfterSeconds` is an additive extension: present only on refusals that

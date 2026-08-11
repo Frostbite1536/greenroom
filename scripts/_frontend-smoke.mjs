@@ -96,6 +96,26 @@ const S2_OTHER_EVENT_ID = "scratch-frontend-s2-other";
 // both the one that succeeds and the `${slug}-*` variants the refusal checks
 // attempt — so a failed run cannot leave an event behind to collide next time.
 const CREATED_EVENT_SLUG = "scratch-frontend-created";
+// D-C5-16 item 2 (self-service signup + password reset). These identities are
+// created only through the public endpoints — never seeded — so the checks below
+// exercise the real create path rather than a fixture that resembles it. All
+// three are deleted with the other scratch users at both ends of the run.
+const SIGNUP_EMAIL = "signup-newcomer@scratch.test";
+const RESET_EMAIL = "signup-resetter@scratch.test";
+// The refused-signup checks use their own address so they do not spend
+// SIGNUP_EMAIL's per-address hourly budget before the taken-address 409 — which
+// would turn that check into a 429 and quietly stop testing what it names.
+const SIGNUP_REJECT_EMAIL = "signup-rejected@scratch.test";
+// Deliberately never created: /forgot's neutral response is only meaningful if
+// one of the two addresses genuinely has no account.
+const FORGOT_MISSING_EMAIL = "signup-nobody@scratch.test";
+const SELF_SERVICE_EMAILS = [SIGNUP_EMAIL, RESET_EMAIL, SIGNUP_REJECT_EMAIL, FORGOT_MISSING_EMAIL];
+const SIGNUP_PASSWORD = "scratch-signup-passphrase";
+const RESET_OLD_PASSWORD = "scratch-reset-old-passphrase";
+const RESET_NEW_PASSWORD = "scratch-reset-new-passphrase";
+// The floor is 10 code points (`lib/services/password-policy.ts`); this is nine.
+const TOO_SHORT_PASSWORD = "shortpwd1";
+const PASSWORD_RESET_TTL_MS = 30 * 60 * 1_000;
 const PORT = process.env.SMOKE_PORT || "3222";
 const BASE = `http://127.0.0.1:${PORT}`;
 const REVIEWER_INVITE_APP_URL = "https://greenroom-hq.test";
@@ -184,7 +204,12 @@ async function resetScratch() {
   // Delete children first; the event cascade covers most, but be explicit.
   await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
   await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
-  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
+  await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL, ...SELF_SERVICE_EMAILS] } } });
+  // The reset dispatch row's parent template belongs to whichever event sorts
+  // first, which may be demo-event — so it does NOT cascade away with the
+  // scratch event and must be removed by recipient. demo-event is READ-ONLY
+  // for workers, and its email history is an operator-visible surface.
+  await prisma.emailDispatch.deleteMany({ where: { recipient: { in: SELF_SERVICE_EMAILS } } });
 
   const now = Date.now();
   const event = await prisma.event.create({
@@ -448,7 +473,20 @@ const check = (name, pass, detail = "") => {
 
 const server = spawn("npx", ["next", "start", "-p", PORT], {
   cwd: process.cwd(), shell: true, stdio: ["ignore", "pipe", "pipe"],
-  env: { ...process.env, SESSION_SECRET: SMOKE_SESSION_SECRET, APP_URL: REVIEWER_INVITE_APP_URL },
+  env: {
+    ...process.env,
+    SESSION_SECRET: SMOKE_SESSION_SECRET,
+    APP_URL: REVIEWER_INVITE_APP_URL,
+    // Durable rate buckets are partitioned by event, and the login/self-service
+    // throttles are not event-scoped — without this they default to the
+    // lexicographically-first event, which is `demo-event`, and this run would
+    // write throttle rows onto the judged programme (READ-ONLY for workers).
+    // Anchoring them to the scratch event also makes the run repeatable: the
+    // buckets cascade-delete with the event `resetScratch` rebuilds, so an
+    // hour-long window from a previous run cannot refuse this one's checks.
+    // `scripts/_smoke.mjs` sets the same variable for the same reasons.
+    LOGIN_RATE_ANCHOR_EVENT_ID: EVENT_ID,
+  },
 });
 console.log(`[smoke] spawned pid ${server.pid} on port ${PORT}`);
 
@@ -478,7 +516,12 @@ function cleanup() {
     try {
       await prisma.event.deleteMany({ where: { id: { in: [EVENT_ID, FRESH_EVENT_ID, S20_OTHER_EVENT_ID, S2_OTHER_EVENT_ID, SWITCH_FOREIGN_EVENT_ID] } } });
       await prisma.event.deleteMany({ where: { slug: { startsWith: CREATED_EVENT_SLUG } } });
-      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL] } } });
+      await prisma.user.deleteMany({ where: { email: { in: [BLIND_SPEAKER_EMAIL, SECOND_EVALUATOR_EMAIL, C17_REVIEWER_EMAIL, CONFLICT_REVIEWER_EMAIL, EMBED_SPEAKER_EMAIL, EMBED_NOPROFILE_EMAIL, ROSTER_MEMBER_EMAIL, ROSTER_NEW_EMAIL, ROSTER_FOREIGN_EMAIL, ROSTER_SHARED_EMAIL, ...SELF_SERVICE_EMAILS] } } });
+      // The reset dispatch row's parent template belongs to whichever event sorts
+      // first, which may be demo-event — so it does NOT cascade away with the
+      // scratch event and must be removed by recipient. demo-event is READ-ONLY
+      // for workers, and its email history is an operator-visible surface.
+      await prisma.emailDispatch.deleteMany({ where: { recipient: { in: SELF_SERVICE_EMAILS } } });
       console.log("[smoke] scratch-frontend cleaned up");
     } catch (error) {
       cleanupFailed = true;
@@ -510,6 +553,306 @@ async function waitReady() {
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
+}
+
+// ---- D-C5-16 item 2: self-service signup + password reset -------------------
+
+/**
+ * POST as a browser on this site would.
+ *
+ * Every self-service auth route refuses a post it cannot positively confirm is
+ * same-origin, so the `Origin` header is not optional decoration here — omit it
+ * and every check below would pass vacuously against a 403.
+ */
+async function authPost(path, body, headers = {}) {
+  const res = await fetch(BASE + path, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "application/json", origin: BASE, ...headers },
+    body: body === null ? undefined : JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { status: res.status, data, text, headers: res.headers, setCookie: res.headers.get("set-cookie") ?? "" };
+}
+
+/** The `sb_session=...` pair out of a Set-Cookie header, ready to send back. */
+function sessionCookieFrom(setCookie) {
+  const match = /(^|[,;\s])(sb_session=[^;,\s]+)/.exec(setCookie ?? "");
+  return match ? match[2] : "";
+}
+
+async function getWith(path, cookie) {
+  const res = await fetch(BASE + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  return { status: res.status, text: await res.text(), location: res.headers.get("location") ?? "" };
+}
+
+/**
+ * Mint a reset token the way `lib/services/password-reset-token.ts` does.
+ *
+ * Deliberately re-derived here rather than read out of the sent email: the token
+ * is kept OUT of `EmailDispatch.variables` on purpose (it is durable storage),
+ * and the rendered HTML is not persisted, so there is nothing to scrape. This
+ * mirrors the existing `_signed-session.mjs` precedent — the smoke re-implements
+ * the signing, and the server verifies it independently, which is what makes a
+ * pass meaningful. The digest is taken from the account's CURRENT stored hash,
+ * so these are genuinely the bytes the product would have mailed.
+ */
+function mintResetToken(userId, passwordHash, expiresAtMs) {
+  const digest = createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:password-reset:credential:v1 ${passwordHash}`)
+    .digest("base64url");
+  const exp = Math.floor(expiresAtMs / 1_000);
+  const signature = createHmac("sha256", SMOKE_SESSION_SECRET)
+    .update(`greenroom:password-reset:v1:${userId}:${exp}:${digest}`)
+    .digest("base64url");
+  return `v1.${userId}.${exp}.${signature}`;
+}
+
+async function runSelfServiceAuthChecks() {
+  // --- the origin gate is what makes any of the rest safe -------------------
+  const foreign = await authPost(
+    "/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD },
+    { origin: "https://evil.test" },
+  );
+  check("D-C5-16 a cross-origin signup post is refused before anything is created",
+    foreign.status === 403 && foreign.data?.error?.code === "CROSS_ORIGIN_REFUSED" && !foreign.setCookie,
+    `${foreign.status} ${JSON.stringify(foreign.data?.error?.code ?? null)} cookie=${Boolean(foreign.setCookie)}`);
+  check("D-C5-16 the refused cross-origin post created no account",
+    (await prisma.user.count({ where: { email: SIGNUP_EMAIL } })) === 0);
+
+  // --- the strength floor is enforced server-side ---------------------------
+  const weak = await authPost("/api/auth/signup",
+    { email: SIGNUP_REJECT_EMAIL, password: TOO_SHORT_PASSWORD, confirmPassword: TOO_SHORT_PASSWORD });
+  check("D-C5-16 a password under the floor is a 422 with a field-scoped message",
+    weak.status === 422 && Array.isArray(weak.data?.error?.fieldErrors?.password),
+    `${weak.status} ${JSON.stringify(weak.data?.error?.code ?? null)}`);
+  const mismatch = await authPost("/api/auth/signup",
+    { email: SIGNUP_REJECT_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: `${SIGNUP_PASSWORD}x` });
+  check("D-C5-16 a mismatched confirmation is a 422 on the confirm field",
+    mismatch.status === 422 && Array.isArray(mismatch.data?.error?.fieldErrors?.confirmPassword),
+    `${mismatch.status}`);
+  check("D-C5-16 neither refused signup created an account",
+    (await prisma.user.count({ where: { email: { in: [SIGNUP_EMAIL, SIGNUP_REJECT_EMAIL] } } })) === 0);
+
+  // --- happy path: an account, a credential, and a session ------------------
+  const signup = await authPost("/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD });
+  const signupCookie = sessionCookieFrom(signup.setCookie);
+  check("D-C5-16 signup creates the account and issues a session cookie",
+    signup.status === 201 && signup.data?.data?.redirectTo === "/welcome" && signup.data?.data?.pending === true
+    && signupCookie.startsWith("sb_session="),
+    `${signup.status} ${JSON.stringify(signup.data?.data ?? signup.data?.error?.code ?? null)} cookie=${Boolean(signupCookie)}`);
+  const newcomer = await prisma.user.findUnique({
+    where: { email: SIGNUP_EMAIL },
+    select: { id: true, passwordHash: true, memberships: { select: { id: true } } },
+  });
+  check("D-C5-16 the new account has a scrypt credential and belongs to nothing",
+    Boolean(newcomer) && typeof newcomer.passwordHash === "string"
+    && newcomer.passwordHash.startsWith("scrypt$s1$") && newcomer.memberships.length === 0,
+    `hash=${newcomer?.passwordHash?.slice(0, 10) ?? "none"} memberships=${newcomer?.memberships.length ?? "n/a"}`);
+
+  // The session is real enough to land on /welcome and carries ZERO authority
+  // anywhere else. This is the property the pending payload variant exists for.
+  const welcome = await getWith("/welcome", signupCookie);
+  check("D-C5-16 the membership-less session lands on a real welcome page",
+    welcome.status === 200 && welcome.text.includes(SIGNUP_EMAIL) && /Create your first event/.test(welcome.text),
+    `${welcome.status}`);
+  const pendingOnAdmin = await getWith("/admin", signupCookie);
+  check("D-C5-16 the pending session grants nothing on an admin surface",
+    pendingOnAdmin.status === 307 && pendingOnAdmin.location.includes("/login"),
+    `${pendingOnAdmin.status} ${pendingOnAdmin.location}`);
+  const pendingOnLogin = await getWith("/login", signupCookie);
+  check("D-C5-16 a pending visitor is sent to /welcome instead of the form they just used",
+    pendingOnLogin.status === 307 && pendingOnLogin.location.includes("/welcome"),
+    `${pendingOnLogin.status} ${pendingOnLogin.location}`);
+  const anonWelcome = await getWith("/welcome", "");
+  check("D-C5-16 /welcome is not a public page",
+    anonWelcome.status === 307 && anonWelcome.location.includes("/login"),
+    `${anonWelcome.status} ${anonWelcome.location}`);
+
+  // Credential login still refuses a membership-less identity — the pending
+  // cookie is the ONLY way this account is in, and the refusal is the generic one.
+  const loginNoMembership = await authPost("/api/auth/login", { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD });
+  check("D-C5-16 credential login still refuses an identity with no membership",
+    loginNoMembership.status === 401 && loginNoMembership.data?.error?.code === "INVALID_CREDENTIALS"
+    && !loginNoMembership.setCookie,
+    `${loginNoMembership.status} ${JSON.stringify(loginNoMembership.data?.error?.code ?? null)}`);
+
+  // --- the taken-address 409 (the deliberate enumeration tradeoff) ----------
+  const taken = await authPost("/api/auth/signup",
+    { email: SIGNUP_EMAIL, password: SIGNUP_PASSWORD, confirmPassword: SIGNUP_PASSWORD });
+  check("D-C5-16 a taken address is a calm 409 pointing at sign-in and reset",
+    taken.status === 409 && taken.data?.error?.code === "EMAIL_TAKEN"
+    && /Sign in instead, or reset the password/.test(taken.data?.error?.message ?? "")
+    && !taken.setCookie,
+    `${taken.status} ${JSON.stringify(taken.data?.error?.code ?? null)}`);
+
+  // --- first event: the bootstrap upgrades the pending cookie in place ------
+  const bootstrapSlug = `${CREATED_EVENT_SLUG}-bootstrap`;
+  const bootstrap = await authPost("/api/admin/events",
+    { name: "Scratch Bootstrap Event", slug: bootstrapSlug, timezone: "UTC" },
+    { cookie: signupCookie });
+  const bootstrapCookie = sessionCookieFrom(bootstrap.setCookie);
+  check("D-C5-16 a membership-less identity can create its first event and is upgraded",
+    bootstrap.status === 201 && bootstrap.data?.data?.event?.slug === bootstrapSlug
+    && bootstrapCookie.startsWith("sb_session=") && bootstrapCookie !== signupCookie,
+    `${bootstrap.status} ${JSON.stringify(bootstrap.data?.data?.event?.slug ?? bootstrap.data?.error?.code ?? null)}`);
+  const bootstrapAdmin = await getWith("/admin", bootstrapCookie);
+  check("D-C5-16 the upgraded session opens the admin workspace",
+    bootstrapAdmin.status === 200 && bootstrapAdmin.text.includes("Scratch Bootstrap Event"),
+    `${bootstrapAdmin.status}`);
+  // The branch closes behind them: the same pending cookie is now an identity
+  // WITH a membership, so it can no longer bootstrap a second event.
+  const secondBootstrap = await authPost("/api/admin/events",
+    { name: "Scratch Bootstrap Twice", slug: `${bootstrapSlug}-twice`, timezone: "UTC" },
+    { cookie: signupCookie });
+  check("D-C5-16 the bootstrap branch closes once the identity belongs to something",
+    secondBootstrap.status === 401 && secondBootstrap.data?.error?.code === "UNAUTHENTICATED",
+    `${secondBootstrap.status} ${JSON.stringify(secondBootstrap.data?.error?.code ?? null)}`);
+  check("D-C5-16 the refused second bootstrap created no event",
+    (await prisma.event.count({ where: { slug: `${bootstrapSlug}-twice` } })) === 0);
+  // An anonymous caller is still refused exactly as before this route grew a
+  // second caller.
+  const anonCreate = await authPost("/api/admin/events",
+    { name: "Scratch Anon Event", slug: `${bootstrapSlug}-anon`, timezone: "UTC" });
+  check("D-C5-16 an anonymous event create is still 401",
+    anonCreate.status === 401 && anonCreate.data?.error?.code === "UNAUTHENTICATED",
+    `${anonCreate.status} ${JSON.stringify(anonCreate.data?.error?.code ?? null)}`);
+
+  // --- password reset ------------------------------------------------------
+  // The resetter is created through the public endpoint too, so the credential
+  // this flow changes is a real scrypt hash written by the product. It is then
+  // given a membership, because credential login refuses one without — which is
+  // exactly what lets the "old refused / new works" checks below use the real
+  // sign-in endpoint as the oracle.
+  const resetSignup = await authPost("/api/auth/signup",
+    { email: RESET_EMAIL, password: RESET_OLD_PASSWORD, confirmPassword: RESET_OLD_PASSWORD });
+  const resetter = await prisma.user.findUnique({
+    where: { email: RESET_EMAIL },
+    select: { id: true, passwordHash: true },
+  });
+  await prisma.eventMember.create({ data: { eventId: EVENT_ID, userId: resetter.id, role: "ADMIN" } });
+  check("D-C5-16 the reset fixture signed up and was given a membership",
+    resetSignup.status === 201 && Boolean(resetter?.passwordHash), `${resetSignup.status}`);
+
+  const loginOldBefore = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
+  check("D-C5-16 the old password works before the reset",
+    loginOldBefore.status === 200 && Boolean(sessionCookieFrom(loginOldBefore.setCookie)),
+    `${loginOldBefore.status}`);
+
+  // /forgot must answer the SAME BYTES for an address that exists and one that
+  // does not. Both are asserted, and so is the fact that the two paths really
+  // did differ internally — otherwise the parity would be vacuous.
+  const dispatchesBefore = await prisma.emailDispatch.count({ where: { recipient: RESET_EMAIL } });
+  const forgotKnown = await authPost("/api/auth/forgot", { email: RESET_EMAIL });
+  const forgotMissing = await authPost("/api/auth/forgot", { email: FORGOT_MISSING_EMAIL });
+  check("D-C5-16 /forgot is byte-identical for an existing and a missing address",
+    forgotKnown.status === 200 && forgotMissing.status === 200
+    && forgotKnown.text === forgotMissing.text
+    && !forgotKnown.setCookie && !forgotMissing.setCookie,
+    `${forgotKnown.status}/${forgotMissing.status} identical=${forgotKnown.text === forgotMissing.text}`);
+  check("D-C5-16 the neutral body names no account and promises nothing specific",
+    /If that email address has an account with a password/.test(forgotKnown.text)
+    && !forgotKnown.text.includes(RESET_EMAIL) && !forgotMissing.text.includes(FORGOT_MISSING_EMAIL),
+    forgotKnown.text.slice(0, 120));
+  const dispatchesAfter = await prisma.emailDispatch.findMany({
+    where: { recipient: { in: [RESET_EMAIL, FORGOT_MISSING_EMAIL] } },
+    select: { recipient: true, status: true, variables: true },
+  });
+  const knownDispatch = dispatchesAfter.find((d) => d.recipient === RESET_EMAIL);
+  check("D-C5-16 the identical answers hide a real difference: only the real address was mailed",
+    dispatchesAfter.length === dispatchesBefore + 1 && Boolean(knownDispatch)
+    && !dispatchesAfter.some((d) => d.recipient === FORGOT_MISSING_EMAIL),
+    `dispatches=${JSON.stringify(dispatchesAfter.map((d) => d.recipient))}`);
+  check("D-C5-16 the reset email was mocked, audited as fixed-source, and stored no token",
+    knownDispatch?.status === "mocked"
+    && knownDispatch?.variables?.kind === "password-reset"
+    && knownDispatch?.variables?.source === "fixed"
+    && !JSON.stringify(knownDispatch?.variables ?? {}).includes("v1."),
+    `${knownDispatch?.status} ${JSON.stringify(knownDispatch?.variables ?? null)}`);
+
+  // A garbage token and an expired one take the same calm refusal.
+  const garbage = await authPost("/api/auth/reset",
+    { token: "v1.nope.1900000000.notarealsignaturenotarealsignaturenotarea", password: RESET_NEW_PASSWORD, confirmPassword: RESET_NEW_PASSWORD });
+  const expired = await authPost("/api/auth/reset", {
+    token: mintResetToken(resetter.id, resetter.passwordHash, Date.now() - 60_000),
+    password: RESET_NEW_PASSWORD,
+    confirmPassword: RESET_NEW_PASSWORD,
+  });
+  check("D-C5-16 a garbage token and an expired one are one indistinguishable refusal",
+    garbage.status === 400 && expired.status === 400 && garbage.text === expired.text
+    && garbage.data?.error?.code === "RESET_TOKEN_INVALID"
+    && /no longer valid/.test(garbage.data?.error?.message ?? ""),
+    `${garbage.status}/${expired.status} identical=${garbage.text === expired.text}`);
+
+  // A real token, signed over the credential as it stands right now.
+  const liveToken = mintResetToken(resetter.id, resetter.passwordHash, Date.now() + PASSWORD_RESET_TTL_MS);
+  const shortReset = await authPost("/api/auth/reset",
+    { token: liveToken, password: TOO_SHORT_PASSWORD, confirmPassword: TOO_SHORT_PASSWORD });
+  check("D-C5-16 the strength floor applies to a reset too",
+    shortReset.status === 422 && Array.isArray(shortReset.data?.error?.fieldErrors?.password),
+    `${shortReset.status}`);
+
+  const resetOk = await authPost("/api/auth/reset",
+    { token: liveToken, password: RESET_NEW_PASSWORD, confirmPassword: RESET_NEW_PASSWORD });
+  check("D-C5-16 a real token sets the new password and signs the person in",
+    resetOk.status === 200 && resetOk.data?.data?.redirectTo === "/admin"
+    && resetOk.data?.data?.pending === false && Boolean(sessionCookieFrom(resetOk.setCookie)),
+    `${resetOk.status} ${JSON.stringify(resetOk.data?.data ?? resetOk.data?.error?.code ?? null)}`);
+  const resetSessionAdmin = await getWith("/admin", sessionCookieFrom(resetOk.setCookie));
+  check("D-C5-16 the session the reset issued really opens the workspace",
+    resetSessionAdmin.status === 200, `${resetSessionAdmin.status}`);
+
+  // Single use, by construction: the same token was signed over the hash the
+  // reset just replaced, so it can no longer verify — and the refusal is the
+  // same one a garbage token gets.
+  const replay = await authPost("/api/auth/reset",
+    { token: liveToken, password: `${RESET_NEW_PASSWORD}-again`, confirmPassword: `${RESET_NEW_PASSWORD}-again` });
+  check("D-C5-16 the spent token no longer works, with the same calm refusal",
+    replay.status === 400 && replay.text === garbage.text,
+    `${replay.status} identical=${replay.text === garbage.text}`);
+
+  const loginOldAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_OLD_PASSWORD });
+  const loginNewAfter = await authPost("/api/auth/login", { email: RESET_EMAIL, password: RESET_NEW_PASSWORD });
+  check("D-C5-16 the old password is refused and the new one works",
+    loginOldAfter.status === 401 && !loginOldAfter.setCookie
+    && loginNewAfter.status === 200 && Boolean(sessionCookieFrom(loginNewAfter.setCookie)),
+    `old ${loginOldAfter.status}, new ${loginNewAfter.status}`);
+
+  // --- the durable rate bucket actually refuses -----------------------------
+  // The per-address /forgot bucket is 3 per hour. One request against the
+  // missing address has already been spent above, so the third more is the
+  // fourth overall and must be refused. The per-IP bucket (5/h) is deliberately
+  // not the one under test here: tripping the address bucket first proves the
+  // narrower rule fires, and proves the throttle is charged for an address that
+  // has no account at all.
+  let throttled = null;
+  for (let i = 0; i < 3; i++) {
+    const attempt = await authPost("/api/auth/forgot", { email: FORGOT_MISSING_EMAIL });
+    if (attempt.status === 429) { throttled = attempt; break; }
+  }
+  check("D-C5-16 /forgot refuses past its durable per-address bound, with an honest wait",
+    Boolean(throttled) && throttled.status === 429
+    && throttled.data?.error?.code === "SELF_SERVICE_AUTH_RATE_LIMITED"
+    && Number(throttled.data?.error?.retryAfterSeconds) > 0
+    && Number(throttled.headers.get("retry-after")) > 0,
+    throttled ? `${throttled.status} ${JSON.stringify(throttled.data?.error ?? null)}` : "never refused");
+  check("D-C5-16 the throttle is charged for an address with no account, so it is no oracle",
+    (await prisma.user.count({ where: { email: FORGOT_MISSING_EMAIL } })) === 0
+    && (await prisma.publicSubmissionRateBucket.count({
+      where: { eventId: EVENT_ID, scope: "forgot_email_1h" },
+    })) >= 2,
+    "expected buckets for both the known and the unknown address");
+
+  // No live provider call was possible: the harness never sets
+  // MOCK_EXTERNAL_APIS=false, and every dispatch above recorded `mocked`.
+  const liveSends = await prisma.emailDispatch.count({
+    where: { recipient: { in: SELF_SERVICE_EMAILS }, status: "sent" },
+  });
+  check("D-C5-16 no self-service email left this machine", liveSends === 0, `sent=${liveSends}`);
 }
 
 let fx;
@@ -852,11 +1195,17 @@ try {
   check("D-C5-9 the new event never appears on the public default surfaces",
     !landingAfter.text.includes("Scratch Created Event") && !embedAfter.text.includes("Scratch Created Event"));
 
+  // D-C5-16 item 2 reversed D-C5-9's roadmap-only ruling: both doors now exist,
+  // so the login page must LINK them rather than apologise for their absence.
+  // The retired sentence is asserted gone — a stale "on the roadmap" line beside
+  // a working /signup link is worse than either alone.
   const roadmapLogin = await req("GET", "/login", null, null);
-  check("D-C5-9 the login page names self-service sign-up as roadmap",
+  check("D-C5-16 the login page links self-service sign-up and password reset",
     roadmapLogin.status === 200
-    && /Self-service sign-up is on the roadmap/.test(roadmapLogin.text)
-    && /for now organizers provision accounts\./.test(roadmapLogin.text),
+    && /href="\/signup"/.test(roadmapLogin.text)
+    && /href="\/forgot"/.test(roadmapLogin.text)
+    && !/on the roadmap/i.test(roadmapLogin.text)
+    && !/reset is not available/i.test(roadmapLogin.text),
     `${roadmapLogin.status}`);
 
   // ---- D-C5-16 item 1: the event switcher --------------------------------
@@ -1026,6 +1375,7 @@ try {
     && /switch between the events you belong to/i.test(switcherLogin.text)
     && !/switching between events is on the roadmap/i.test(switcherLogin.text),
     `${switcherLogin.status}`);
+  await runSelfServiceAuthChecks();
 
   const agendaPage = await req("GET", "/admin/agenda", null, admin);
   check("agenda shows scheduled session", agendaPage.text.includes("Scratch Session A"));
