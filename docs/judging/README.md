@@ -118,10 +118,12 @@ Stated plainly, because a judge should not have to discover them.
 - **No self-service sign-up.** Organizers provision accounts; the login page says
   so. Public sign-up is roadmap, not shipped.
 - **No password reset.** An organizer re-provisions access.
-- **No event switching.** An admin can create a new event from **Event settings**,
-  and it is created genuinely empty, but the workspace stays on the event the
-  session was issued for — the app says "switching between events is on the
-  roadmap". A newly created event therefore cannot yet be configured from the UI.
+- **Event switching is bounded by your own memberships.** An admin can create a new
+  event from **Event settings** and switch straight into it from the success notice.
+  The sidebar switcher lists every event you hold an `EventMember` row on, and your
+  role is re-resolved per event, so the same person can be an admin on one and a
+  speaker on another. What is *not* there: no way to join an event you were not
+  added to, and no cross-event view — every screen still shows exactly one event.
 - **No file upload on proposals or speaker profiles.** Slide decks and headshots
   are stored as URLs. The only file input in the product is the admin CSV
   proposal import.
