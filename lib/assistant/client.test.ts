@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   ASSISTANT_DEFAULT_MAX_OUTPUT_CHARS,
@@ -10,6 +10,7 @@ import {
   ASSISTANT_MAX_OUTPUT_CHARS,
   ASSISTANT_MAX_TOTAL_INPUT_CHARS,
   ASSISTANT_MODEL,
+  ASSISTANT_OUTPUT_TOKEN_HEADROOM,
   ASSISTANT_TIMEOUT_MS,
   assistantMaxOutputTokens,
   boundAssistantInput,
@@ -171,6 +172,104 @@ test("the outbound request is non-retained, capped, and carries no tools, stream
   for (const forbidden of ["stream", "tools", "tool_choice", "previous_response_id", "conversation", "prompt"]) {
     assert.equal(forbidden in body, false, `the request must not carry \`${forbidden}\``);
   }
+  // Plain prose is still the default: a caller that asked for no format sends
+  // the body it sent before Structured Outputs was an option.
+  assert.equal("text" in body, false, "plain-text mode must not send a `text` field");
+});
+
+test("a caller-owned text.format is passed through verbatim, and only when asked for", async () => {
+  const format = {
+    type: "json_schema",
+    name: "resource_note",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["html"],
+      properties: { html: { type: "string" } },
+    },
+  };
+
+  const { calls, fetcher } = recordingFetcher([async () => completedResponse('{"html":"<p>hi</p>"}')]);
+  const { value } = await withKey(KEY, async () =>
+    withCapturedLogs(async () =>
+      runAssistant({ instructions: "i", input: "d", textFormat: format, maxOutputChars: 5_000, fetcher }),
+    ),
+  );
+
+  const body = outboundBody(calls[0]!);
+  // Verbatim: the caller owns the schema, so the boundary must not normalize,
+  // re-key, or re-order any part of it.
+  assert.deepEqual(body.text, { format });
+  assert.equal(JSON.stringify((body.text as { format: unknown }).format), JSON.stringify(format));
+  // Opting in changes nothing else about the request.
+  assert.equal(body.store, false);
+  assert.equal("tools" in body, false);
+
+  // The result is the RAW JSON STRING. This module does not parse it — the
+  // caller owns the schema, so the caller owns the validation.
+  assert.equal(value.ok, true);
+  assert.equal(value.ok && value.text, '{"html":"<p>hi</p>"}');
+  assert.deepEqual(value.ok ? JSON.parse(value.text) : null, { html: "<p>hi</p>" });
+});
+
+test("the shared ceilings admit the widest consumer, and the narrow defaults are unchanged", () => {
+  // A resource note of 8,000 chars plus fixed title/summary/template content.
+  assert.equal(ASSISTANT_MAX_TOTAL_INPUT_CHARS, 16_000);
+  const wide = boundAssistantInput({ instructions: "rules", input: "n".repeat(8_000) + "t".repeat(6_000) });
+  assert.equal(wide.input.length, 14_000, "a 14,000-char body must survive the total cap whole");
+  assert.equal(wide.instructions, "rules");
+
+  // A validated html body of 20,000 chars inside a JSON wrapper.
+  assert.equal(ASSISTANT_MAX_OUTPUT_CHARS, 24_000);
+  assert.equal(boundAssistantOutputChars(22_000), 22_000);
+  assert.ok(ASSISTANT_MAX_OUTPUT_CHARS - 20_000 >= 4_000, "the JSON wrapper overhead must fit above 20,000");
+
+  // Defaults a narrow caller relies on are untouched.
+  assert.equal(ASSISTANT_DEFAULT_MAX_OUTPUT_CHARS, 1_200);
+  assert.equal(ASSISTANT_MAX_INSTRUCTION_CHARS, 2_000);
+  assert.equal(ASSISTANT_TIMEOUT_MS, 12_000);
+  assert.equal(ASSISTANT_MAX_ATTEMPTS, 2);
+
+  // Token headroom is recomputed from the cap and covers the widest ask.
+  assert.equal(ASSISTANT_OUTPUT_TOKEN_HEADROOM, 1_024);
+  assert.equal(assistantMaxOutputTokens(1_200), 400 + 1_024);
+  assert.equal(assistantMaxOutputTokens(24_000), 8_000 + 1_024);
+});
+
+test("an abort while the response body stalls is a timeout, not a bad answer", async () => {
+  // fetch() resolved — headers arrived — and then the body never finished. The
+  // deadline is this module's own, so blaming the provider's content would be a
+  // misdiagnosis a caller acts on: it would retry a "malformed" answer forever.
+  const { calls, fetcher } = recordingFetcher([
+    (init) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+          }),
+      } as unknown as Response),
+  ]);
+
+  const { value, logs } = await withKey(KEY, async () =>
+    withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher, timeoutMs: 25 })),
+  );
+  assert.deepEqual(value, { ok: false, reason: "timeout" });
+  assert.equal(calls.length, 1, "a body that began must not buy a retry");
+  assert.match(logs[0]!, /outcome=timeout/);
+});
+
+test("a malformed body that did NOT time out keeps its invalid_output classification", async () => {
+  // The companion to the test above: the same unusable body, no abort, must not
+  // be relabelled a timeout by the new branch.
+  const { calls, fetcher } = recordingFetcher([async () => new Response("<html>nope</html>", { status: 200 })]);
+  const { value } = await withKey(KEY, async () =>
+    withCapturedLogs(async () => runAssistant({ instructions: "i", input: "d", fetcher })),
+  );
+  assert.deepEqual(value, { ok: false, reason: "invalid_output" });
+  assert.equal(calls.length, 1);
 });
 
 test("input is hard-capped in total, and instructions keep their own reserve", async () => {
@@ -500,27 +599,125 @@ test("the reason codes are a closed set, declared once", () => {
   assert.match(clientSource, /\(typeof ASSISTANT_FAILURE_REASONS\)\[number\]/);
 });
 
-test("no client component imports the server-only provider boundary", () => {
-  const repoRoot = new URL("../../", import.meta.url);
-  const offenders: string[] = [];
-  const clientComponents: string[] = [];
+/* -------------------------------------------------------------------------- */
+/* Server-only rail: transitive, not one hop                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A direct-import grep is not enough. The credential would arrive in a client
+ * bundle through an import of an import — a component pulls a helper, the
+ * helper pulls a service, the service pulls this module — and every file in
+ * that chain looks innocent on its own. So the rail walks the real graph, the
+ * way `lib/api/openapi-purity.test.ts` walks the contract endpoint's.
+ */
+const repoRoot = new URL("../../", import.meta.url);
+const repoRead = (path: string) => readFileSync(new URL(path, repoRoot), "utf8");
+const repoExists = (path: string) => existsSync(new URL(path, repoRoot));
+
+/** Comments stripped, so a path named in prose is never walked as an edge. */
+const repoCode = (path: string) =>
+  repoRead(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/[^\r\n]*/g, "$1");
+
+function specifiersOf(path: string): string[] {
+  const source = repoCode(path);
+  return [
+    ...new Set(
+      [
+        ...[...source.matchAll(/(?:\bimport\b|\bexport\b)[^"';]*?\bfrom\s*["']([^"']+)["']/g)],
+        ...[...source.matchAll(/\bimport\s*["']([^"']+)["']/g)],
+        ...[...source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)],
+      ].map(([, specifier]) => specifier),
+    ),
+  ];
+}
+
+/**
+ * Resolve a repo-internal specifier to a TypeScript file.
+ *
+ * Returns null for packages AND for assets: a `.css` module cannot import
+ * TypeScript, so it is a leaf rather than an unresolvable edge.
+ */
+function resolveInternal(specifier: string, importer: string): string | null {
+  let base: string;
+  if (specifier.startsWith("@/")) {
+    base = specifier.slice(2);
+  } else if (specifier.startsWith(".")) {
+    const dir = importer.split("/").slice(0, -1);
+    for (const segment of specifier.split("/")) {
+      if (segment === "." || segment === "") continue;
+      if (segment === "..") dir.pop();
+      else dir.push(segment);
+    }
+    base = dir.join("/");
+  } else {
+    return null;
+  }
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if ((candidate.endsWith(".ts") || candidate.endsWith(".tsx")) && repoExists(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** Breadth-first walk of the real import graph from a set of entry files. */
+function importGraph(entries: string[]): Set<string> {
+  const modules = new Set<string>();
+  const queue = [...entries];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    if (modules.has(current)) continue;
+    modules.add(current);
+    for (const specifier of specifiersOf(current)) {
+      const resolved = resolveInternal(specifier, current);
+      if (resolved !== null && !modules.has(resolved)) queue.push(resolved);
+    }
+  }
+  return modules;
+}
+
+/** Every `"use client"` file under `app/` and `components/`. */
+function clientComponents(): string[] {
+  const found: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(new URL(dir, repoRoot), { withFileTypes: true })) {
       if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
       const rel = `${dir}/${entry.name}`;
       if (entry.isDirectory()) walk(rel);
       else if (/\.(ts|tsx)$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-        const source = readFileSync(new URL(rel, repoRoot), "utf8");
-        if (!/^\s*"use client";/m.test(source)) continue;
-        clientComponents.push(rel);
-        if (/@\/lib\/assistant\//.test(source)) offenders.push(rel);
+        if (/^\s*"use client";/m.test(repoRead(rel))) found.push(rel);
       }
     }
   };
   walk("app");
   walk("components");
-  // Non-vacuity: the walk must actually have found the client islands, or an
-  // empty offender list proves nothing.
-  assert.ok(clientComponents.length > 20, `expected the client islands, found ${clientComponents.length}`);
-  assert.deepEqual(offenders, [], "the provider credential must never be reachable from a client bundle");
+  return found;
+}
+
+const SERVER_ONLY = /^lib\/assistant\//;
+
+test("the import walker really traverses, more than one hop", () => {
+  // A chain that exists in this module's own graph: client -> env -> contract.
+  assert.equal(resolveInternal("@/lib/env", "lib/assistant/client.ts"), "lib/env.ts");
+  assert.ok(specifiersOf("lib/env.ts").includes("@/lib/api/v1-contract"));
+  const graph = importGraph(["lib/assistant/client.ts"]);
+  assert.ok(graph.has("lib/env.ts"), "the walker must reach lib/env.ts one hop out");
+  assert.ok(graph.has("lib/api/v1-contract.ts"), "the walker must reach the contract module two hops out");
+  // And the pattern the rail below applies really does match this module, so a
+  // hit would be reported rather than silently tolerated.
+  assert.match("lib/assistant/client.ts", SERVER_ONLY);
+});
+
+test("no client component's transitive import graph reaches the server-only assistant", () => {
+  const entries = clientComponents();
+  // Non-vacuity: the islands were found, and the walk left them.
+  assert.ok(entries.length > 20, `expected the client islands, found ${entries.length}`);
+  const graph = importGraph(entries);
+  assert.ok(graph.size > entries.length, "the walk must reach beyond the entry files");
+  assert.ok([...graph].some((module) => module.startsWith("lib/")), "the walk must reach shared lib modules");
+
+  const offenders = [...graph].filter((module) => SERVER_ONLY.test(module));
+  assert.deepEqual(
+    offenders,
+    [],
+    "the provider credential must not be reachable from a client bundle, at any depth",
+  );
 });
