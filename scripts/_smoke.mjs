@@ -685,15 +685,22 @@ try {
   const s19EmailCapEmail = "s19-email-cap@scratch.test";
   const s19EmailWindowMs = 24 * 60 * 60 * 1_000;
   const s19EmailWindowStart = new Date(Math.floor(Date.now() / s19EmailWindowMs) * s19EmailWindowMs);
-  await prisma.publicSubmissionRateBucket.create({
-    data: {
+  const s19EmailWindowStarts = [
+    s19EmailWindowStart,
+    new Date(s19EmailWindowStart.getTime() + s19EmailWindowMs),
+  ];
+  // Cover the one possible UTC-midnight rollover between fixture setup and
+  // the HTTP request. Both rows are scratch-event-owned and cleanup below
+  // removes both; whichever window is not current remains untouched.
+  await prisma.publicSubmissionRateBucket.createMany({
+    data: s19EmailWindowStarts.map((windowStart) => ({
       eventId: SCRATCH_EVENT.id,
       scope: "submit_primary_email_24h",
       fingerprint: publicSubmissionRateFingerprint("primary-email", s19EmailCapEmail),
-      windowStart: s19EmailWindowStart,
+      windowStart,
       count: 9,
-      expiresAt: new Date(s19EmailWindowStart.getTime() + s19EmailWindowMs),
-    },
+      expiresAt: new Date(windowStart.getTime() + s19EmailWindowMs),
+    })),
   });
   const s19EmailCapAttempt = (index) => j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: `S19 email cap attempt ${index}`,
@@ -1884,9 +1891,20 @@ try {
     c17SpeakerConflict.status === 409 && c17SpeakerConflict.data?.error?.code === "REVIEWER_ROLE_CONFLICT",
     `${c17SpeakerConflict.status}/${c17SpeakerConflict.data?.error?.code}`,
   );
+  const c17CapWindowStart = new Date(new Date().setUTCMinutes(0, 0, 0));
   await prisma.reviewerInvite.update({
     where: { id: c17StoredInvite.id },
-    data: { sendWindowStart: new Date(new Date().setUTCMinutes(0, 0, 0)), sendWindowCount: 20 },
+    data: { sendWindowStart: c17CapWindowStart, sendWindowCount: 20 },
+  });
+  // The second already-scratch-owned invite covers the one possible hour
+  // rollover before the route samples its clock. No identity is created for
+  // this guard row, and final scratch cleanup removes both invitations.
+  await prisma.reviewerInvite.update({
+    where: { id: c17RoleRaceStored.id },
+    data: {
+      sendWindowStart: new Date(c17CapWindowStart.getTime() + 60 * 60 * 1_000),
+      sendWindowCount: 20,
+    },
   });
   const c17CappedEmail = "capped-reviewer@scratch.test";
   const c17Capped = await j("POST", "/api/evaluations/reviewer-invites", {
