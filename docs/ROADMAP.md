@@ -70,10 +70,13 @@ demo-event scoped, so exposing it would turn every event this API can address
 into public data. Scoped credentials solve key authority; item 1 still governs
 which additional data may become reachable.
 
-1. **Read scope before read breadth.** Define event discovery, resource
-   visibility, and incremental-sync cursor semantics before adding filtered
-   submissions, individual resources, or additional session reads. Held-back
-   and unplaced talks stay private until an explicit contract says otherwise.
+1. **Read scope before read breadth.** The first post-release slice defines the
+   credential and visibility matrix before widening a response: event-scoped
+   keys cannot enumerate other events; resource reads expose only published
+   pages; held-back and unplaced talks stay private; submission filters narrow
+   the existing authorized projection; and any future incremental read must
+   prove a database-visible, stable `(updatedAt, id)` window. The decision is recorded in
+   [`DECISIONS.md`](DECISIONS.md#v1-read-scope-precedes-read-breadth).
 2. **Scoped credentials delivered; demo distribution still gated.** ADMINs can
    issue hashed, revocable per-event tokens after the reviewed schema and
    authorization window. No plaintext secret is recoverable after creation and
@@ -89,18 +92,22 @@ which additional data may become reachable.
    continues to report
    only the global value, because widening that published contract is exactly
    the "read scope before read breadth" ordering item 1 establishes.
-3. **Additional read models.** Add only the reads justified by the preceding
-   scope contract, with bounded pagination, stable ordering, event authorization,
-   and contract tests on every response.
+3. **Additional read models.** The status filter and event-scoped
+   single-submission read are the first justified additions because they retain
+   the existing projection. Incremental submissions reads remain pending a
+   database visibility proof. Event discovery, resource endpoints, and
+   accepted-but-unplaced session data remain separate changes behind their own
+   authorization and visibility proofs.
 4. **Integration and agent writes last.** Generic webhook delivery and any
    narrow agent-writable operations come only after credentials, idempotency,
    rate limits, audit records, and failure handling exist. Every decision,
    placement, or task write must reuse the same locked service path as the UI;
    no adapter may bypass abstract or schedule locks.
-5. **Operator polish and evidence.** Consider paused-when-hidden speaker
-   refresh, a `Day (rooms)` agenda label, preview-safe bulk decisions, and a
-   submission-pacing view. Complete a documented manual assistive-technology
-   pass before upgrading the accessibility claim.
+5. **Operator polish and evidence.** Add paused-when-hidden, dirty-form-safe
+   speaker refresh and an accessible submission-pacing view. `Day (rooms)`
+   clarity and preview-safe bulk decisions are already delivered. Complete a
+   documented manual assistive-technology pass before upgrading the
+   accessibility claim.
 
 ## Explicit exclusions
 

@@ -10,6 +10,8 @@ import {
   v1ListResponse,
 } from "@/lib/api/v1";
 import { serializeV1Submission } from "@/lib/api/v1-serialize";
+import { parseV1SubmissionQuery } from "@/lib/api/v1-submission-query";
+import { v1SubmissionSelect } from "@/lib/api/v1-submission-select";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -27,6 +29,8 @@ export const GET = handleV1(async (req: Request): Promise<Response> => {
 
   const query = parseV1ListQuery(new URL(req.url).searchParams);
   if (!query.ok) return v1Error(query.error);
+  const submissionQuery = parseV1SubmissionQuery(new URL(req.url).searchParams);
+  if (!submissionQuery.ok) return v1Error(submissionQuery.error);
 
   // The credential's own scope is part of this predicate, not a check applied
   // after the fact: a per-event key resolving somebody else's selector matches
@@ -40,41 +44,16 @@ export const GET = handleV1(async (req: Request): Promise<Response> => {
   if (!scoped.ok) return v1Error(scoped.error);
   const event = scoped.event;
 
-  const where = { eventId: event.id };
+  const where = { eventId: event.id, ...(submissionQuery.value ? { status: submissionQuery.value } : {}) };
   const [submissions, total] = await Promise.all([
     prisma.abstract.findMany({
       where,
-      select: {
-        id: true,
-        title: true,
-        abstract: true,
-        format: true,
-        durationMinutes: true,
-        status: true,
-        submittedAt: true,
-        createdAt: true,
-        updatedAt: true,
-        formConfig: { select: { id: true, name: true, slug: true } },
-        category: { select: { id: true, name: true } },
-        speakers: {
-          select: { isPrimary: true, user: { select: { id: true, name: true, email: true, avatarUrl: true } } },
-          orderBy: [{ isPrimary: "desc" }, { userId: "asc" }],
-        },
-        answers: {
-          select: { value: true, formField: { select: { key: true } } },
-          orderBy: { id: "asc" },
-        },
-      },
+      select: v1SubmissionSelect,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       skip: query.value.offset,
       take: query.value.limit,
     }),
     prisma.abstract.count({ where }),
   ]);
-
-  return v1ListResponse(
-    submissions.map(serializeV1Submission),
-    event,
-    getV1PaginationMeta(query.value, total),
-  );
+  return v1ListResponse(submissions.map(serializeV1Submission), event, getV1PaginationMeta(query.value, total));
 });

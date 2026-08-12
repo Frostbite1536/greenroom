@@ -81,9 +81,11 @@ part of the current release promise.
 1. **Delivered:** a public static OpenAPI contract for the existing read-only v1
    API, with drift tests, safe static examples, and a workflow-to-route evidence
    map. The deployment-wide `GREENROOM_API_KEY` is never published.
-2. Define scoped-read rules before adding discovery or breadth: event discovery,
-   resource visibility, held/unplaced-session privacy, filters, and an
-   incremental-sync cursor contract.
+2. **Delivered in the first post-release slice:** the scoped-read decision
+   defines event discovery, resource visibility, held/unplaced-session privacy,
+   narrowing filters, and the database-visibility proof a future incremental
+   cursor must satisfy before any wider response model. Incremental sync itself
+   remains unshipped.
 3. **Delivered:** hashed, revocable per-event credentials and per-event deck
    associations in one reviewed schema/authorization window. The v1 endpoints
    accept a scoped key without exposing the deployment-wide key; the global
@@ -92,9 +94,10 @@ part of the current release promise.
 4. Add generic webhook delivery and any narrow agent writes last. Writes require
    idempotency, per-token rate limits, audit records, and reuse of the existing
    abstract and schedule lock-protected service paths.
-5. Take on lower-risk operator polish afterward: hidden-tab-paused speaker
-   refresh, `Day (rooms)` clarity, preview-safe bulk decisions, pacing reports,
-   and manual assistive-technology evidence.
+5. Take on lower-risk operator polish afterward: hidden-tab-paused,
+   dirty-form-safe speaker refresh and pacing reports. `Day (rooms)` clarity and
+   preview-safe bulk decisions are delivered. Manual assistive-technology
+   evidence remains a real human gate.
 
 **Exit gate:** every added route has a documented visibility model, authorization
 and rate-limit tests, no global-key disclosure, and exact-head build plus

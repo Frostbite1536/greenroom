@@ -5,6 +5,7 @@ import {
   API_KEY_PLACEHOLDER,
   CURL_EXAMPLES,
   OPENAPI_DOCUMENT,
+  V1_ITEM_PATHS,
   V1_LIST_PATHS,
   V1_OPENAPI_PATH,
 } from "@/lib/api/openapi";
@@ -14,9 +15,11 @@ import {
   MAX_V1_EVENT_SELECTOR_LENGTH,
   MAX_V1_LIMIT,
   MAX_V1_OFFSET,
+  MAX_V1_SUBMISSION_ID_LENGTH,
   V1_API_VERSION,
   getV1PaginationMeta,
   v1Error,
+  v1ItemResponse,
   v1ListResponse,
 } from "@/lib/api/v1";
 import {
@@ -57,11 +60,30 @@ const code = (path: string) =>
 
 const V1_LIB = "lib/api/v1.ts";
 const V1_CONTRACT_LIB = "lib/api/v1-contract.ts";
-const ROUTE_FILE = (path: string) => `app${path}/route.ts`;
+const V1_SUBMISSION_QUERY_LIB = "lib/api/v1-submission-query.ts";
+const V1_KEYED_PATHS = [...V1_LIST_PATHS, ...V1_ITEM_PATHS];
+const ROUTE_FILE = (path: string) => `app${path.replace(/\{(\w+)\}/g, "[$1]")}/route.ts`;
 
-/** The four bounds the document states and the parser enforces. */
+function physicalV1Routes(
+  directory = new URL("../../app/api/v1/", import.meta.url),
+  segments: string[] = [],
+): string[] {
+  const routes: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const nextSegments = [...segments, entry.name];
+    const child = new URL(`${entry.name}/`, directory);
+    if (existsSync(new URL("route.ts", child))) {
+      routes.push(`/api/v1/${nextSegments.map((part) => part.replace(/^\[(\w+)\]$/, "{$1}")).join("/")}`);
+    }
+    routes.push(...physicalV1Routes(child, nextSegments));
+  }
+  return routes.sort();
+}
+
+/** The four shared bounds the document states and the parser enforces. */
 const BOUND_CONSTANTS = [
-  "DEFAULT_V1_LIMIT", "MAX_V1_LIMIT", "MAX_V1_OFFSET", "MAX_V1_EVENT_SELECTOR_LENGTH",
+  "DEFAULT_V1_LIMIT", "MAX_V1_LIMIT", "MAX_V1_OFFSET", "MAX_V1_EVENT_SELECTOR_LENGTH", "MAX_V1_SUBMISSION_ID_LENGTH",
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -90,17 +112,11 @@ test("every documented path is a route that exists in this repository", () => {
 });
 
 test("every v1 route that exists is documented", () => {
-  const routes = readdirSync(new URL("../../app/api/v1", import.meta.url), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && exists(`app/api/v1/${entry.name}/route.ts`))
-    .map((entry) => `/api/v1/${entry.name}`);
+  const routes = physicalV1Routes();
 
-  // Non-vacuity: the three key-gated routes plus the document endpoint.
+  // Non-vacuity: the three key-gated lists plus the document endpoint.
   assert.ok(routes.length >= 4, `expected the whole v1 surface, found ${routes.join(", ")}`);
-  assert.deepEqual(
-    routes.filter((route) => !(route in paths)),
-    [],
-    "a v1 route exists that the published contract does not describe",
-  );
+  assert.deepEqual(routes, Object.keys(paths).sort(), "physical and documented v1 route inventories differ");
   for (const path of V1_LIST_PATHS) assert.ok(routes.includes(path));
   assert.ok(routes.includes(V1_OPENAPI_PATH));
 });
@@ -115,8 +131,13 @@ test("the documented query parameters are the ones the query parser reads", () =
 
   for (const path of V1_LIST_PATHS) {
     const names = (operation(path).parameters as JsonRecord[]).map((raw) => String(resolveRef(raw).name));
-    assert.deepEqual([...names].sort(), [...parsed].sort(), `${path} documents the wrong parameters`);
+    const expected = path === "/api/v1/submissions" ? [...parsed, "status"] : [...parsed];
+    assert.deepEqual([...names].sort(), expected.sort(), `${path} documents the wrong parameters`);
   }
+  const submissionInputs = new Set([...read(V1_SUBMISSION_QUERY_LIB).matchAll(/searchParams\.get\("(\w+)"\)/g)].map(([, key]) => key));
+  assert.deepEqual([...submissionInputs], ["status"], "the submissions parser must remain a bounded status filter");
+  const itemNames = (operation(V1_ITEM_PATHS[0]).parameters as JsonRecord[]).map((raw) => String(resolveRef(raw).name));
+  assert.deepEqual(itemNames.sort(), ["event", "submissionId"], "the item route documents its exact inputs");
 });
 
 test("the documented pagination bounds are the exported constants, not copies", () => {
@@ -131,6 +152,7 @@ test("the documented pagination bounds are the exported constants, not copies", 
   assert.equal(schemaOf("Offset").default, 0);
   assert.equal(schemaOf("EventSelector").maxLength, MAX_V1_EVENT_SELECTOR_LENGTH);
   assert.equal((parameters.EventSelector as JsonRecord).required, true, "`event` is required on every v1 read");
+  assert.equal(schemaOf("SubmissionId").maxLength, MAX_V1_SUBMISSION_ID_LENGTH);
 
   // The reported pagination is bounded by the same numbers it accepts.
   const pagination = (schemas.Pagination as JsonRecord).properties as JsonRecord;
@@ -292,7 +314,7 @@ test("every documented example matches the schema it illustrates", () => {
   // The docs page prints these examples verbatim, so a stale example is a
   // published lie in exactly the same way a stale schema is.
   const before = comparisons;
-  for (const name of ["SubmissionListEnvelope", "SpeakerListEnvelope", "ScheduleListEnvelope"]) {
+  for (const name of ["SubmissionListEnvelope", "SubmissionItemEnvelope", "SpeakerListEnvelope", "ScheduleListEnvelope"]) {
     const schema = schemas[name] as JsonRecord;
     const examples = schema.examples as unknown[];
     assert.ok(Array.isArray(examples) && examples.length > 0, `${name} must carry an example`);
@@ -312,6 +334,11 @@ test("the documented envelope is the envelope the helpers really produce", async
   assert.equal(success.version, V1_API_VERSION);
   walk(success.meta, schemas.ListMeta, "ListMeta");
 
+  const item = (await v1ItemResponse(SERIALIZED.Submission, event).json()) as JsonRecord;
+  const itemEnvelope = schemas.SubmissionItemEnvelope as JsonRecord;
+  assert.deepEqual([...(itemEnvelope.required as string[])].sort(), Object.keys(item).sort());
+  walk(item.meta, schemas.ItemMeta, "ItemMeta");
+
   const failure = v1Error({ status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." });
   assert.equal(failure.status, 401);
   const body = (await failure.json()) as JsonRecord;
@@ -327,7 +354,7 @@ test("the documented envelope is the envelope the helpers really produce", async
 test("the documented event metadata is the event selection every route makes", () => {
   const properties = Object.keys((schemas.EventMeta as JsonRecord).properties as JsonRecord).sort();
   assert.deepEqual(properties, ["id", "name", "slug", "timezone"]);
-  for (const path of V1_LIST_PATHS) {
+  for (const path of V1_KEYED_PATHS) {
     assert.match(
       read(ROUTE_FILE(path)),
       /select: \{ id: true, name: true, slug: true, timezone: true \}/,
@@ -342,7 +369,7 @@ test("the documented event metadata is the event selection every route makes", (
 
 /** Every `code:` / `status:` literal reachable on this surface. */
 function sourceFailures() {
-  const sources = [read(V1_LIB), ...V1_LIST_PATHS.map((path) => read(ROUTE_FILE(path)))].join("\n");
+  const sources = [read(V1_LIB), ...V1_KEYED_PATHS.map((path) => read(ROUTE_FILE(path)))].join("\n");
   return {
     codes: new Set([...sources.matchAll(/code: "([A-Z_]+)"/g)].map(([, code]) => code)),
     statuses: new Set([...sources.matchAll(/status: (\d{3})/g)].map(([, status]) => status)),
@@ -359,7 +386,7 @@ test("the documented error codes are exactly the codes the surface can emit", ()
 test("the documented statuses are exactly the statuses the surface can return", () => {
   const { statuses } = sourceFailures();
   const documented = new Set<string>();
-  for (const path of V1_LIST_PATHS) {
+  for (const path of V1_KEYED_PATHS) {
     for (const status of Object.keys(operation(path).responses as JsonRecord)) documented.add(status);
   }
   assert.ok(documented.has("200"), "the success status must be documented");
@@ -410,7 +437,7 @@ test("every documented key-gated route really authenticates before it reads", ()
   const schemeNames = Object.keys(components.securitySchemes as JsonRecord).sort();
   assert.deepEqual(schemeNames, ["apiKeyHeader", "bearerApiKey"]);
 
-  for (const path of V1_LIST_PATHS) {
+  for (const path of V1_KEYED_PATHS) {
     const required = (operation(path).security as JsonRecord[]).flatMap((entry) => Object.keys(entry)).sort();
     assert.deepEqual(required, schemeNames, `${path} must document both accepted credential styles`);
 
@@ -515,7 +542,7 @@ test("the view layer resolves the whole document without a gap", () => {
     assert.equal(view.method, "GET");
     assert.ok(view.summary.length > 0, `${view.path} needs a summary`);
     assert.ok(view.paragraphs.length > 0, `${view.path} needs a description`);
-    assert.equal(view.parameters.length, 3);
+    assert.equal(view.parameters.length, view.path === "/api/v1/submissions" ? 4 : 3);
     assert.ok(view.parameters.every((parameter) => parameter.constraint.length > 0));
     assert.ok(view.responseExample, `${view.path} must render a response example`);
     assert.deepEqual(view.errors.map((error) => error.status).sort(), ["400", "401", "404", "500"]);
@@ -527,4 +554,14 @@ test("the view layer resolves the whole document without a gap", () => {
     [],
   );
   assert.throws(() => resolveRef({ $ref: "#/components/schemas/NotAThing" }), /unresolved ref/);
+});
+
+test("the human API page renders every document-derived operation, including item routes", () => {
+  const page = read("app/docs/api/page.tsx");
+  assert.match(page, /const endpoints = endpointViews\(\);/);
+  assert.match(page, /\{endpoints\.map\(\(view\) => \(/);
+  assert.doesNotMatch(page, /listEndpointViews\(\)/);
+  for (const path of V1_ITEM_PATHS) {
+    assert.ok(endpointViews().some((view) => view.path === path), `${path} must reach the page view set`);
+  }
 });

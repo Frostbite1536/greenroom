@@ -36,8 +36,10 @@ import {
   MAX_V1_EVENT_SELECTOR_LENGTH,
   MAX_V1_LIMIT,
   MAX_V1_OFFSET,
+  MAX_V1_SUBMISSION_ID_LENGTH,
   V1_API_KEY_MIN_LENGTH,
   V1_API_VERSION,
+  V1_SUBMISSION_STATUSES,
 } from "@/lib/api/v1-contract";
 
 /** Where the machine-readable document is served. Unauthenticated by design. */
@@ -59,6 +61,9 @@ export const V1_LIST_PATHS = [
   "/api/v1/speakers",
   "/api/v1/schedule",
 ] as const;
+
+/** Key-gated item routes, documented separately from paginated list routes. */
+export const V1_ITEM_PATHS = ["/api/v1/submissions/{submissionId}"] as const;
 
 const EVENT_EXAMPLE = "forward-2026";
 
@@ -104,6 +109,22 @@ function listEnvelope(schemaName: string, description: string, examples: unknown
   };
 }
 
+function itemEnvelope(schemaName: string, description: string, example: unknown) {
+  return {
+    type: "object",
+    description,
+    additionalProperties: false,
+    required: ["version", "data", "error", "meta"],
+    properties: {
+      version: { const: V1_API_VERSION, description: "Always the string `v1`." },
+      data: { $ref: `#/components/schemas/${schemaName}` },
+      error: { type: "null", description: "Always null on a 2xx response." },
+      meta: { $ref: "#/components/schemas/ItemMeta" },
+    },
+    examples: [{ version: V1_API_VERSION, data: example, error: null, meta: { event: eventMetaExample } }],
+  };
+}
+
 /** One key-gated list operation. Every one of the three is shaped identically. */
 function listOperation(config: {
   operationId: string;
@@ -112,6 +133,7 @@ function listOperation(config: {
   tag: string;
   envelope: string;
   ordering: string[];
+  parameters?: unknown[];
 }) {
   return {
     get: {
@@ -124,7 +146,7 @@ function listOperation(config: {
       // Machine-readable form of the ordering sentence in `description`. The
       // drift test parses the route's own `orderBy` and compares it to this.
       "x-ordering": config.ordering,
-      parameters: [
+      parameters: config.parameters ?? [
         { $ref: "#/components/parameters/EventSelector" },
         { $ref: "#/components/parameters/Limit" },
         { $ref: "#/components/parameters/Offset" },
@@ -232,13 +254,46 @@ export const OPENAPI_DOCUMENT = {
         "Review data is never part of this payload: assignments, scores, rubric criteria, and",
         "private reviewer comments have no field here and cannot be reached through it.",
         "",
-        "Ordered by `createdAt` ascending with `id` ascending as the tiebreaker, so paging",
-        "through the list with `offset` is stable.",
+        "Browse reads order by `createdAt`, `id` and may narrow with one lifecycle status.",
       ].join("\n"),
       tag: "Submissions",
       envelope: "SubmissionListEnvelope",
       ordering: ["createdAt", "id"],
+      parameters: [
+        { $ref: "#/components/parameters/EventSelector" },
+        { $ref: "#/components/parameters/Limit" },
+        { $ref: "#/components/parameters/Offset" },
+        { $ref: "#/components/parameters/SubmissionStatus" },
+      ],
     }),
+    "/api/v1/submissions/{submissionId}": {
+      get: {
+        operationId: "getSubmission",
+        summary: "Get one event-scoped proposal",
+        description: [
+          "Returns exactly the proposal projection used by the submissions list.",
+          "Review assignments, scores, rubric criteria, and private reviewer comments are excluded.",
+          "The authenticated event predicate is applied to the id lookup; a missing or cross-event id",
+          "returns the same `404 SUBMISSION_NOT_FOUND`.",
+        ].join("\n"),
+        tags: ["Submissions"],
+        security: [{ bearerApiKey: [] }, { apiKeyHeader: [] }],
+        parameters: [
+          { $ref: "#/components/parameters/EventSelector" },
+          { $ref: "#/components/parameters/SubmissionId" },
+        ],
+        responses: {
+          "200": {
+            description: "The proposal for the selected event.",
+            content: { "application/json": { schema: { $ref: "#/components/schemas/SubmissionItemEnvelope" } } },
+          },
+          "400": { $ref: "#/components/responses/BadRequest" },
+          "401": { $ref: "#/components/responses/Unauthorized" },
+          "404": { $ref: "#/components/responses/SubmissionNotFound" },
+          "500": { $ref: "#/components/responses/InternalError" },
+        },
+      },
+    },
     "/api/v1/speakers": listOperation({
       operationId: "listSpeakers",
       summary: "List this event's speakers",
@@ -357,6 +412,20 @@ export const OPENAPI_DOCUMENT = {
         description: `Rows to skip. Must be a whole number from 0 to ${MAX_V1_OFFSET}; anything else is \`400 INVALID_QUERY\`.`,
         schema: { type: "integer", minimum: 0, maximum: MAX_V1_OFFSET, default: 0 },
       },
+      SubmissionStatus: {
+        name: "status",
+        in: "query",
+        required: false,
+        description: "One exact lifecycle status that narrows the existing event-scoped submissions browse read.",
+        schema: { type: "string", enum: V1_SUBMISSION_STATUSES },
+      },
+      SubmissionId: {
+        name: "submissionId",
+        in: "path",
+        required: true,
+        description: "Proposal id. It is matched with the selected, authenticated event, so another event's id is indistinguishable from a missing one.",
+        schema: { type: "string", minLength: 1, maxLength: MAX_V1_SUBMISSION_ID_LENGTH },
+      },
     },
     responses: {
       BadRequest: errorResponse(
@@ -373,6 +442,11 @@ export const OPENAPI_DOCUMENT = {
         "No event has that slug or id. Returned after authentication, so it is not an unauthenticated probe for which events exist.",
         "EVENT_NOT_FOUND",
         "Event not found.",
+      ),
+      SubmissionNotFound: errorResponse(
+        "No proposal with that id belongs to the selected event. This also covers a cross-event id.",
+        "SUBMISSION_NOT_FOUND",
+        "Submission not found.",
       ),
       InternalError: errorResponse(
         "An unexpected failure, reported inside this envelope. The message is fixed: database text and request details are never returned to a caller.",
@@ -406,6 +480,7 @@ export const OPENAPI_DOCUMENT = {
               "INVALID_QUERY",
               "UNAUTHORIZED",
               "EVENT_NOT_FOUND",
+              "SUBMISSION_NOT_FOUND",
               "INTERNAL_ERROR",
             ],
           },
@@ -419,6 +494,14 @@ export const OPENAPI_DOCUMENT = {
         properties: {
           event: { $ref: "#/components/schemas/EventMeta" },
           pagination: { $ref: "#/components/schemas/Pagination" },
+        },
+      },
+      ItemMeta: {
+        type: "object",
+        additionalProperties: false,
+        required: ["event"],
+        properties: {
+          event: { $ref: "#/components/schemas/EventMeta" },
         },
       },
       EventMeta: {
@@ -623,6 +706,21 @@ export const OPENAPI_DOCUMENT = {
           answers: { "audience-level": "intermediate", "needs-av": true },
         },
       ]),
+      SubmissionItemEnvelope: itemEnvelope("Submission", "One event-scoped proposal.", {
+        id: "clx0abstract00000000000001",
+        title: "Scheduling a conference without losing a room",
+        description: "What placement conflicts actually cost, and how to see them early.",
+        format: "TALK",
+        durationMinutes: 30,
+        status: "ACCEPTED",
+        submittedAt: "2026-01-14T09:12:00.000Z",
+        createdAt: "2026-01-12T17:40:00.000Z",
+        updatedAt: "2026-02-02T11:05:00.000Z",
+        form: { id: "clx0form00000000000000001", name: "Call for speakers", slug: "call-for-speakers" },
+        category: { id: "clx0cat000000000000000001", name: "Operations" },
+        speakers: [speakerRefExample("clx0user00000000000000001", "Ada Lovelace", true)],
+        answers: { "audience-level": "intermediate", "needs-av": true },
+      }),
       SpeakerListEnvelope: listEnvelope("Speaker", "A page of speakers.", [
         {
           id: "clx0user00000000000000001",

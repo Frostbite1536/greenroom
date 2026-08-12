@@ -33,6 +33,7 @@ const SPEC = "lib/api/openapi.ts";
 const DOCS = ["docs/API.md", "docs/ARCHITECTURE.md"];
 const V1_ROUTES = [
   "app/api/v1/submissions/route.ts",
+  "app/api/v1/submissions/[submissionId]/route.ts",
   "app/api/v1/speakers/route.ts",
   "app/api/v1/schedule/route.ts",
 ];
