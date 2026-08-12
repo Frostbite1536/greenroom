@@ -43,7 +43,11 @@ export function ProposalAttachments({ abstractId }: { abstractId: string }) {
       setAttachments(body.data.attachments as AttachmentView[]);
       setEditable(Boolean(body.data.editable));
       setError(null);
-    } catch {
+    } catch (caught) {
+      console.warn(
+        "Supporting document list failed",
+        caught instanceof Error ? caught.name : "unknown",
+      );
       setError("Network error while loading your supporting documents.");
     }
   }, [abstractId]);
@@ -75,7 +79,11 @@ export function ProposalAttachments({ abstractId }: { abstractId: string }) {
       // refetch is the only version of it that also reflects a co-speaker's
       // concurrent attach.
       await load();
-    } catch {
+    } catch (caught) {
+      console.warn(
+        "Supporting document attach failed",
+        caught instanceof Error ? caught.name : "unknown",
+      );
       setError("Network error while attaching that document.");
     } finally {
       setAttaching(false);
@@ -95,7 +103,11 @@ export function ProposalAttachments({ abstractId }: { abstractId: string }) {
         return;
       }
       await load();
-    } catch {
+    } catch (caught) {
+      console.warn(
+        "Supporting document removal failed",
+        caught instanceof Error ? caught.name : "unknown",
+      );
       setError("Network error while removing that document.");
     } finally {
       setBusyId(null);

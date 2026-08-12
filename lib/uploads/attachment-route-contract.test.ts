@@ -164,6 +164,27 @@ test("the island renders the server's answer and never decides authorization its
   assert.match(island, /Only \{attachment\.uploadedByName\} and the/);
 });
 
+test("attachment transport failures emit bounded diagnostics without file or response data", () => {
+  for (const label of [
+    "Supporting document list failed",
+    "Supporting document attach failed",
+    "Supporting document removal failed",
+  ]) {
+    assert.match(
+      island,
+      new RegExp(`${label}\\",\\s*caught instanceof Error \\? caught\\.name : \\"unknown\\"`),
+    );
+  }
+  const warningCalls = [...island.matchAll(/console\.warn\(([\s\S]*?)\);/g)].map((match) => match[1]);
+  assert.equal(warningCalls.length, 3);
+  for (const call of warningCalls) {
+    assert.doesNotMatch(
+      call,
+      /abstractId|attachmentId|storedFileId|filename|body|caught\.message|caught\.stack/,
+    );
+  }
+});
+
 test("attachments are their own island, so the PATCH contract gained no field", () => {
   assert.match(editor, /<ProposalAttachments abstractId=\{abstractId\} \/>/);
   // The save payload is unchanged: nothing attachment-shaped is sent with it.
