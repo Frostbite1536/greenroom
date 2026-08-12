@@ -254,10 +254,16 @@ export function decodeEmailHistoryCursor(
   return { createdAt, id };
 }
 
+/**
+ * The read a request falls back to whenever it names no usable anchor: no
+ * keyset predicate, newest-first order — page one of the current view.
+ */
+export const EMAIL_HISTORY_DEFAULT_DIRECTION: EmailHistoryDirection = "older";
+
 export function parseEmailHistoryDirection(
   value: string | string[] | undefined,
 ): EmailHistoryDirection {
-  return value === "newer" ? "newer" : "older";
+  return value === "newer" ? "newer" : EMAIL_HISTORY_DEFAULT_DIRECTION;
 }
 
 /** One resolved view: what the URL asked for, after every bound is applied. */
@@ -313,17 +319,35 @@ export function parseEmailRecipientQuery(value: string | string[] | undefined): 
   return value.trim().slice(0, EMAIL_RECIPIENT_SEARCH_MAX_LENGTH);
 }
 
-/** Resolve a whole URL into the one bounded view the read and the UI share. */
+/**
+ * Resolve a whole URL into the one bounded view the read and the UI share.
+ *
+ * The anchor decides the direction, which is why the cursor is decoded once
+ * here rather than parsed independently of `?dir=`. `newer` names a side of a
+ * specific row; with no row to be newer *than*, it names nothing. Resolved
+ * independently, `?dir=newer` with a stale or hand-edited token survived the
+ * cursor's own fallback and still flipped the read to ascending — so
+ * `emailHistoryKeysetWhere` emitted no predicate, the query ordered by
+ * `createdAt asc` across the whole view, and `toEmailHistoryPage` reversed it:
+ * the panel answered "the newest emails" with the fifty *oldest* in the log.
+ * A missing anchor and a malformed one now land on the same page a bare
+ * `/admin/emails` does, which is what `decodeEmailHistoryCursor` already
+ * promises for every token it refuses.
+ */
 export function parseEmailHistoryQuery(
   params: EmailHistorySearchParams,
   templateKeys: readonly string[],
 ): EmailHistoryQuery {
+  const cursor = decodeEmailHistoryCursor(params[EMAIL_HISTORY_PARAMS.cursor]);
   return {
     status: parseEmailStatusFilter(params[EMAIL_HISTORY_PARAMS.status]),
     template: parseEmailTemplateFilter(params[EMAIL_HISTORY_PARAMS.template], templateKeys),
     query: parseEmailRecipientQuery(params[EMAIL_HISTORY_PARAMS.query]),
-    cursor: decodeEmailHistoryCursor(params[EMAIL_HISTORY_PARAMS.cursor]),
-    direction: parseEmailHistoryDirection(params[EMAIL_HISTORY_PARAMS.direction]),
+    cursor,
+    direction:
+      cursor === null
+        ? EMAIL_HISTORY_DEFAULT_DIRECTION
+        : parseEmailHistoryDirection(params[EMAIL_HISTORY_PARAMS.direction]),
   };
 }
 

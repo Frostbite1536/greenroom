@@ -5,6 +5,7 @@ import {
   EMAIL_DISPATCH_STATUS_META,
   EMAIL_HISTORY_CURSOR_ID_MAX_LENGTH,
   EMAIL_HISTORY_CURSOR_MAX_LENGTH,
+  EMAIL_HISTORY_DEFAULT_DIRECTION,
   EMAIL_HISTORY_DIRECTIONS,
   EMAIL_HISTORY_PAGE_SIZE,
   EMAIL_HISTORY_PAGE_TAKE,
@@ -405,6 +406,92 @@ test("one URL resolves into one bounded view of all four narrowings", () => {
   assert.equal(emailHistoryIsFiltered(view({ status: "failed" })), true);
   assert.equal(emailHistoryIsFiltered(view({ template: "cfp.submitted" })), true);
   assert.equal(emailHistoryIsFiltered(view({ query: "a" })), true);
+});
+
+test("a direction without a valid anchor resolves to the newest page, not an inverted one", () => {
+  // The defect (A-1916): the cursor and the direction were resolved
+  // independently, so `?dir=newer` survived a token the decoder had already
+  // refused. `newer` names a side of a specific row; with no row to be newer
+  // than, the only honest read is the one a bare `/admin/emails` performs.
+  // Left independent, the read ordered ascending with no keyset predicate and
+  // the fold reversed it — the newest page rendered as the oldest fifty rows.
+  const cursor = { createdAt: "2026-05-01T10:00:00.000Z", id: "anchor" };
+  const token = encodeEmailHistoryCursor(cursor);
+
+  // Every token `decodeEmailHistoryCursor` refuses, carrying `dir=newer`.
+  for (const bogus of [
+    "not base64!!",
+    Buffer.from("no-separator", "utf8").toString("base64url"),
+    Buffer.from("May 1 2026|abc", "utf8").toString("base64url"),
+    Buffer.from("2026-05-01T10:00:00.000Z|../../etc", "utf8").toString("base64url"),
+    "A".repeat(EMAIL_HISTORY_CURSOR_MAX_LENGTH + 1),
+    "",
+  ]) {
+    assert.deepEqual(
+      parseEmailHistoryQuery(
+        {
+          [EMAIL_HISTORY_PARAMS.cursor]: bogus,
+          [EMAIL_HISTORY_PARAMS.direction]: "newer",
+        },
+        TEMPLATE_KEYS,
+      ),
+      view(),
+      bogus.slice(0, 40),
+    );
+  }
+
+  // A repeated `?cursor=` is refused the same way, and takes the direction with it.
+  assert.deepEqual(
+    parseEmailHistoryQuery(
+      {
+        [EMAIL_HISTORY_PARAMS.cursor]: [token, token],
+        [EMAIL_HISTORY_PARAMS.direction]: "newer",
+      },
+      TEMPLATE_KEYS,
+    ),
+    view(),
+  );
+
+  // No token at all is the same request: `dir=newer` alone anchors nothing.
+  assert.deepEqual(
+    parseEmailHistoryQuery({ [EMAIL_HISTORY_PARAMS.direction]: "newer" }, TEMPLATE_KEYS),
+    view(),
+  );
+
+  // The fallback narrows nothing else: the filters on the URL still apply, it
+  // is only the anchor and its direction that are dropped.
+  assert.deepEqual(
+    parseEmailHistoryQuery(
+      {
+        [EMAIL_HISTORY_PARAMS.status]: "failed",
+        [EMAIL_HISTORY_PARAMS.query]: "nadia@",
+        [EMAIL_HISTORY_PARAMS.cursor]: "not base64!!",
+        [EMAIL_HISTORY_PARAMS.direction]: "newer",
+      },
+      TEMPLATE_KEYS,
+    ),
+    view({ status: "failed", query: "nadia@" }),
+  );
+
+  // Preserved exactly: a valid anchor still pages both ways.
+  assert.equal(
+    parseEmailHistoryQuery(
+      { [EMAIL_HISTORY_PARAMS.cursor]: token, [EMAIL_HISTORY_PARAMS.direction]: "newer" },
+      TEMPLATE_KEYS,
+    ).direction,
+    "newer",
+  );
+  assert.equal(
+    parseEmailHistoryQuery(
+      { [EMAIL_HISTORY_PARAMS.cursor]: token, [EMAIL_HISTORY_PARAMS.direction]: "older" },
+      TEMPLATE_KEYS,
+    ).direction,
+    "older",
+  );
+  // The standalone parser is unchanged — it is the composition that had to hold
+  // the anchor and the direction together.
+  assert.equal(EMAIL_HISTORY_DEFAULT_DIRECTION, "older");
+  assert.equal(parseEmailHistoryDirection("newer"), "newer");
 });
 
 test("every narrowing rides on the event scope rather than replacing it", () => {

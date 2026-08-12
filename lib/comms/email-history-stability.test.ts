@@ -25,9 +25,12 @@ import { test } from "node:test";
 import {
   EMAIL_HISTORY_PAGE_SIZE,
   EMAIL_HISTORY_PAGE_TAKE,
+  EMAIL_HISTORY_PARAMS,
   EMAIL_STATUS_ALL,
   emailHistoryOrderByFor,
   emailHistoryWhere,
+  encodeEmailHistoryCursor,
+  parseEmailHistoryQuery,
   toEmailHistoryPage,
   type EmailDispatchRow,
   type EmailHistoryQuery,
@@ -298,6 +301,72 @@ test("walking older and back newer returns to the same rows", () => {
   );
   assert.equal(returned.hasOlder, true);
   assert.equal(returned.hasNewer, false, "back at the newest end of the view");
+});
+
+test("a stale anchor asking for newer reads the newest page, not the oldest one", () => {
+  // A-1916, at the level the operator would have seen it. The cursor and the
+  // direction used to be parsed independently, so a stale or hand-edited
+  // `?cursor=` that the decoder refused left `?dir=newer` standing on its own:
+  // `emailHistoryKeysetWhere` emitted no predicate (there was no anchor),
+  // `emailHistoryOrderByFor` ordered the whole view ascending, and the fold
+  // reversed the ascending window back — so the page that says "newest first"
+  // rendered the fifty oldest emails in the log.
+  const store = makeStore(Array.from({ length: 120 }, (_, index) => storedRow(index)));
+  const newestFirst = newestFirstIds(store);
+
+  const query = parseEmailHistoryQuery(
+    {
+      [EMAIL_HISTORY_PARAMS.cursor]: "not base64!!",
+      [EMAIL_HISTORY_PARAMS.direction]: "newer",
+    },
+    [],
+  );
+  const page = toEmailHistoryPage(store.read(query), query);
+  const ids = page.entries.map((entry) => entry.id);
+
+  // Exactly the newest page: the same rows a bare `/admin/emails` would show.
+  assert.equal(ids[0], newestFirst[0], "the first row must be the newest email in the log");
+  assert.deepEqual(ids, newestFirst.slice(0, EMAIL_HISTORY_PAGE_SIZE));
+  assert.equal(ids.includes(newestFirst.at(-1) as string), false, "the oldest row is not on it");
+  const first = view();
+  assert.deepEqual(ids, toEmailHistoryPage(store.read(first), first).entries.map((e) => e.id));
+  // And the pager agrees with the rows: nothing is newer than the newest page.
+  assert.equal(page.hasNewer, false);
+  assert.equal(page.hasOlder, true);
+
+  // The defect, stated: the same URL resolved with the direction left standing
+  // returns the far end of the log — the oldest row, on what claims to be the
+  // newest page.
+  const unanchored: EmailHistoryQuery = { ...query, direction: "newer" };
+  const inverted = toEmailHistoryPage(store.read(unanchored), unanchored).entries.map((e) => e.id);
+  assert.equal(inverted.at(-1), newestFirst.at(-1), "an anchorless newer read walks the far end");
+  assert.equal(inverted.includes(newestFirst[0]), false, "and never shows the newest email at all");
+  assert.notDeepEqual(ids, inverted);
+});
+
+test("a valid anchor still pages newer, and is not swept up by the fallback", () => {
+  // The other half of the fix: forcing the fallback must only fire when there
+  // is no anchor. A real token still walks back toward the newest end.
+  const store = makeStore(Array.from({ length: 120 }, (_, index) => storedRow(index)));
+  const first = view();
+  const page1 = toEmailHistoryPage(store.read(first), first);
+  const second = view({ cursor: page1.olderCursor, direction: "older" });
+  const page2 = toEmailHistoryPage(store.read(second), second);
+  assert.ok(page2.newerCursor);
+
+  const back = parseEmailHistoryQuery(
+    {
+      [EMAIL_HISTORY_PARAMS.cursor]: encodeEmailHistoryCursor(page2.newerCursor),
+      [EMAIL_HISTORY_PARAMS.direction]: "newer",
+    },
+    [],
+  );
+  assert.deepEqual(back.cursor, page2.newerCursor, "a valid token survives the parse");
+  assert.equal(back.direction, "newer", "and keeps the direction it was given");
+  assert.deepEqual(
+    toEmailHistoryPage(store.read(back), back).entries.map((entry) => entry.id),
+    page1.entries.map((entry) => entry.id),
+  );
 });
 
 test("the store refuses any query shape it cannot honestly evaluate", () => {
