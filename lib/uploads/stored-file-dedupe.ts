@@ -5,10 +5,10 @@ import type { StoredFileKindValue } from "@/lib/uploads/stored-file";
  * Database identity for stored bytes.
  *
  * Headshots are public and keep their raw content digest, so the same person's
- * same public image remains one row across events. A slide deck is private to
- * the event authority under which it was uploaded, so its fingerprint includes
- * that event. The versioned, NUL-delimited domain prevents ambiguous string
- * concatenation and leaves room for a deliberate future policy change.
+ * same public image remains one row across events. Slide decks and supporting
+ * documents are private to the event authority under which they were uploaded,
+ * so their fingerprints include that event. The versioned, NUL-delimited
+ * domain prevents ambiguous concatenation and permits a future policy change.
  *
  * This module is server-only by dependency: `node:crypto` must not enter the
  * shared upload-policy module used by the client-side file picker.

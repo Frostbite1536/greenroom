@@ -68,6 +68,11 @@ test("oversize is 413 REQUEST_TOO_LARGE and a wrong type is 422, matching the re
   assert.match(read("lib/api/bounded-json.ts"), /413, "REQUEST_TOO_LARGE"/);
 });
 
+test("the route's published kind vocabulary includes supporting documents", () => {
+  assert.match(upload, /kind=headshot\|slide-deck\|supporting-document/);
+  assert.match(upload, /Expected `headshot`, `slide-deck`, or `supporting-document`\./);
+});
+
 test("the stored mime is the server's verdict, and the claimed header is never written", () => {
   // The only value assigned to `mime:` on the create is the verdict's.
   assert.match(upload, /mime: verdict\.mime,/);
