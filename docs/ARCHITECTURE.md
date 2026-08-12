@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-A fast program-management workspace for event admins, evaluators, and speakers. It covers CFP intake, abstract evaluation, confirmed sessions, speaker onboarding, agenda scheduling, public embeds, communications, and imports.
+A fast program-management workspace for event admins, evaluators, and speakers. It covers CFP intake, abstract evaluation, confirmed sessions, speaker onboarding, agenda scheduling, public embeds, communications, imports, and bounded authoring assistance.
 
 Explicit non-goals: CRM, marketing automation, payments, multi-language support, and AI evaluation workflows.
 
@@ -96,6 +96,8 @@ Backend ownership routes:
 - `/api/admin/*`: event/settings administration, bounded exports, speakers/tasks, and
   the environment-gated demo reset
 - `/api/integrations/*`: Accelevents webhook and CSV/JSON import
+- `/api/assistant/*`: ADMIN-only, event-context resource and decision-note
+  suggestions through one server-only provider and one durable rate stack
 - `/api/v1/*`: read-only, API-key-gated server-to-server surface (see [`API.md`](API.md))
 
 Ops ownership routes:
@@ -118,6 +120,15 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   writes both require that form to be open, use a 128 KiB bounded body plus strict bounded
   answers/roster, reject duplicate normalized speaker emails, and pass durable rate limits.
 - Resource HTML must be sanitized before persistence or rendering.
+- Assistant actions are advisory and non-retained. Resource drafting sends only
+  the selected static template plus the organizer's bounded title, summary, and
+  notes; it reads no event records. Decision-note drafting sends the event name,
+  proposal title, decision, and only the bounded comment excerpts the organizer
+  opted into. Both use code-owned strict output schemas, expose no tools or
+  memory, log no prompt/output/provider body, and return suggestions that require
+  an explicit apply action. Resource HTML is sanitized before preview and again
+  by the unchanged save path; decision output must be plain text. No assistant
+  route saves, publishes, sends mail, or changes a decision.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
   Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck` takes a raw
   authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
@@ -185,5 +196,10 @@ configuration. Schema application uses the reviewed `prisma db push` workflow, a
   names the variable to set.
 - Airtable live mode requires `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, and
   `MOCK_EXTERNAL_APIS=false`; otherwise the integration stays on its safe mock/default path.
+- Assistant generation requires a valid `OPENAI_API_KEY`. When it is absent,
+  templates, sanitized preview, manual resource HTML, save/publish, manual
+  decision notes, preview, and send all remain available. Tests may use the
+  fenced loopback-only `ASSISTANT_ENDPOINT_OVERRIDE` only with
+  `MOCK_EXTERNAL_APIS=true`; a present override fails closed on Vercel production.
 - Treat provider environment-variable changes as requiring a redeploy, then verify the exact
   deployment by behavior before recording a live claim.

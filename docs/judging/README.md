@@ -145,8 +145,13 @@ Stated plainly, because an evaluator should not have to discover them.
   Lighthouse accessibility at the recorded measurement, and the three admin
   modal overlays now use the native `<dialog>` focus model — but no manual
   screen-reader pass has been performed. That gap is real and unclosed.
-- **The Greenroom Assistant is not in the product.** It is not in the merged
-  tree and is deliberately not described anywhere in this package.
+- **The Greenroom Assistant is optional and advisory.** Without a configured
+  provider, deterministic resource templates, sanitized preview, manual HTML,
+  save/publish, manual decision notes, preview, and send continue to work. With
+  a provider, only the bounded fields disclosed beside each action are sent;
+  generated results remain separate suggestions until an administrator applies
+  them. The assistant has no tools, memory, automatic save/publish/send, or
+  proposal-evaluation authority.
 - **The demo deployment intentionally hands out admin.** The one-click personas
   are the evaluation entry point, so any visitor can become the seeded event's
   admin — including its operations console, whose live-send buttons work when

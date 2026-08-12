@@ -233,3 +233,27 @@ two PrismaClients through both interleavings against a real Postgres, gated
 behind `RACE_PROOF=1` plus a disposable `DATABASE_URL` so `npm test` needs no
 database. Pre-fix, both orders end with zero assignments; post-fix, both end with
 exactly one.
+
+## Assistant: one provider, closed projections, and explicit human control
+Greenroom's two assisted-authoring actions share one server-only Responses API
+client and one durable assistant-rate service. They are not a chat system or an
+agent: requests have no tools, memory, history, storage, streaming, or write
+capability, and provider retention is disabled. A missing or failing provider
+must leave the deterministic workflow usable rather than fabricate a fallback.
+
+Each route owns a strict structured-output schema and a closed input projection.
+Resource drafting sends only a code-owned static template structure plus the
+administrator's bounded title, optional summary, and notes; it reads no roster,
+proposal, reviewer, schedule, or contact data. Decision-note drafting may send
+the event name, proposal title, current decision, and bounded excerpts of review
+comments only when the administrator opts in. Those free-text excerpts can
+themselves contain identifying or score-like text, so the UI says so instead of
+claiming that names or addresses can never leave. Neither route logs prompts,
+outputs, provider bodies, or raw provider errors.
+
+The outputs remain suggestions. Decision notes must be plain text. Resource HTML
+is sanitized before preview and then sanitized again by the existing authoritative
+save route. Applying a suggestion never saves, publishes, sends email, or changes
+a decision; replacing non-empty organizer content requires confirmation. This
+keeps provider output outside the domain's write and locking contracts and makes
+human review a product invariant rather than prompt wording.

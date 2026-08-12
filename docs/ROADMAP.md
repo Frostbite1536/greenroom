@@ -42,6 +42,14 @@ graph away from the environment, auth, and the database, and a workflow-to-route
 map ([judging/WORKFLOW-ROUTES.md](judging/WORKFLOW-ROUTES.md)) says which
 surface answers which question. Every example uses a placeholder credential.
 
+The optional Greenroom Assistant is deliberately narrower than an agent. It
+ships two ADMIN-only suggestion actions on one non-retained, rate-limited,
+server-only provider: turn bounded organizer notes and a static template into a
+sanitized resource-page draft, or turn an explicit decision plus selected
+bounded feedback into a plain-text personal-note draft. Templates and resource
+preview do not require the provider. Suggestions never save, publish, send, or
+replace existing content without a separate human action.
+
 ## Operational hardening
 
 Deployment, authorized idempotent demo reset, review checkpoints, accessibility
@@ -86,7 +94,8 @@ into public data. That is what item 2 below has to solve first.
 
 ## Explicit exclusions
 
-CRM, marketing automation, payments, multi-language support, AI evaluation of
-proposals, production OAuth, and speculative enterprise permission models.
+CRM, marketing automation, payments, multi-language support, automated AI
+evaluation or autonomous agent workflows, production OAuth, and speculative
+enterprise permission models.
 These are deliberate boundaries rather than backlog items: adding one changes
 what this product is.

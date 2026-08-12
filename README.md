@@ -43,6 +43,13 @@ the [evaluation index](docs/judging/README.md).
    gallery, with `.ics` calendar export and copy-paste snippets at
    `/admin/embeds`.
 
+9. **Human-controlled authoring assistance** - administrators can start a
+   speaker resource from deterministic templates, inspect a sanitized preview,
+   and optionally ask the configured AI provider to turn bounded notes into a
+   reviewable HTML suggestion. The same shared assistant can draft a short,
+   plain-text decision note from explicitly selected review feedback. Neither
+   action saves, publishes, sends mail, or changes a decision automatically.
+
 ## Quickstart
 
 **Prerequisites:** Node.js **20.9+** (Next 16 requires it) and a Postgres
