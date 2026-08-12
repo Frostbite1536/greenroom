@@ -610,10 +610,13 @@ async function seedWithin(
   await db.reviewerInvite.deleteMany({ where: { eventId } });
   await db.publicSubmissionRateBucket.deleteMany({ where: { eventId } });
   await db.importJob.deleteMany({ where: { eventId } });
+  await db.apiCredential.deleteMany({ where: { eventId } });
+  await db.eventSpeakerDeck.deleteMany({ where: { eventId } });
   await db.emailDispatch.deleteMany({ where: { template: { eventId } } });
   await db.reviewScore.deleteMany({ where: { abstract: { eventId } } });
   await db.reviewAssignment.deleteMany({ where: { abstract: { eventId } } });
   await db.formAnswer.deleteMany({ where: { abstract: { eventId } } });
+  await db.abstractAttachment.deleteMany({ where: { abstract: { eventId } } });
   await db.abstractSpeaker.deleteMany({ where: { abstract: { eventId } } });
   await db.speakerTask.deleteMany({ where: { task: { eventId } } });
   await db.scheduleSlot.deleteMany({ where: { eventId } });

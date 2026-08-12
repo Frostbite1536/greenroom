@@ -9,6 +9,8 @@ test("demo reset clears every post-seed event-scoped transient table", () => {
     "reviewerInvite",
     "publicSubmissionRateBucket",
     "importJob",
+    "apiCredential",
+    "eventSpeakerDeck",
   ]) {
     assert.match(
       seedSource,
@@ -21,5 +23,16 @@ test("demo reset clears every post-seed event-scoped transient table", () => {
     seedSource.indexOf("db.reviewerInvite.deleteMany") <
       seedSource.indexOf("db.eventMember.deleteMany"),
     "reviewer invitations must be removed before demo memberships are rebuilt",
+  );
+
+  assert.match(
+    seedSource,
+    /db\.abstractAttachment\.deleteMany\(\{ where: \{ abstract: \{ eventId \} \} \}\)/,
+    "proposal attachment links must not survive the proposal reset",
+  );
+  assert.ok(
+    seedSource.indexOf("db.abstractAttachment.deleteMany") <
+      seedSource.indexOf("db.abstract.deleteMany"),
+    "attachment links must be removed before their proposals",
   );
 });
