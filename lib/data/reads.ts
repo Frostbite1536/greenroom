@@ -45,12 +45,15 @@ export type {
   AdminDecisionSummary,
 } from "@/lib/services/admin-decision-summary";
 import {
-  EMAIL_HISTORY_TAKE,
-  emailHistoryOrderBy,
+  EMAIL_HISTORY_PAGE_TAKE,
+  emailHistoryOrderByFor,
   emailHistorySelect,
   emailHistoryWhere,
-  toEmailHistory,
-  type EmailHistory,
+  parseEmailHistoryQuery,
+  toEmailHistoryPage,
+  type EmailHistoryPage,
+  type EmailHistoryQuery,
+  type EmailHistorySearchParams,
 } from "@/lib/comms/email-history";
 export type { EmailHistoryEntry } from "@/lib/comms/email-history";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
@@ -1241,9 +1244,18 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
 
 // ---- Email history --------------------------------------------------------
 
-export type EmailHistoryView = EmailHistory & {
+export type EmailHistoryView = EmailHistoryPage & {
   /** Every timestamp on the panel is rendered in the event's own timezone. */
   timezone: string;
+  /**
+   * The template keys this event has, in render order — the only values the
+   * template select offers and the only ones `?template=` will accept.
+   */
+  templateKeys: string[];
+  /** True when this event has more templates than the select could load. */
+  templatesTruncated: boolean;
+  /** What the URL asked for, after every bound was applied. */
+  query: EmailHistoryQuery;
 };
 
 /**
@@ -1257,27 +1269,65 @@ export type EmailHistoryView = EmailHistory & {
  * `lib/comms/email-history.ts`.
  *
  * Unlike the fail-closed operator reads, an oversize log is expected here: the
- * table only grows, so the page reports its truncation instead of refusing.
+ * table only grows, so the page pages through it instead of refusing.
  *
- * One cap-plus-one query answers everything the panel says about volume. It is
- * deliberately not paired with a `count()` for an exact event-wide total: the
- * two statements observe different snapshots, so a dispatch inserted between
- * them let the page print a total that disagreed with its own rows. Dropping
- * the count removes that contradiction outright rather than shrinking its
- * window behind a `RepeatableRead` transaction.
+ * One page-plus-one query answers everything the panel says about volume. It is
+ * deliberately not paired with a `count()` for an exact total: the two
+ * statements observe different snapshots, so a dispatch inserted between them
+ * let the page print a total that disagreed with its own rows. Dropping the
+ * count removes that contradiction outright rather than shrinking its window
+ * behind a `RepeatableRead` transaction — which is why the pager offers "older"
+ * and "newer" links rather than "page 3 of 9".
+ *
+ * Paging is keyset, not offset, for the same reason the total went: `skip`
+ * counts rows from the top of a set that changes while an operator reads it, so
+ * one dispatch inserted between two page requests shifts every later offset and
+ * makes the next page repeat a row or drop one. Each page is anchored to a row
+ * the operator actually saw — `(createdAt, id)`, the total order this read
+ * already used — so an insert anywhere else cannot move the boundary.
+ *
+ * The status, template, recipient and cursor narrowings are all applied by the
+ * database (`emailHistoryWhere`), not by slicing an already-read page: a chip
+ * that filtered a capped page would mean "failed among the newest 50", which is
+ * not what the chip says.
+ *
+ * The dispatch query is deliberately a second round trip rather than a member
+ * of the batch above: `?template=` is only accepted when it names a key this
+ * event actually has, and that list is what the first batch reads. Trusting the
+ * parameter instead would render an empty table that reads as "this template
+ * sent nothing" for a key naming no template at all.
  */
-export async function getEmailHistory(): Promise<EmailHistoryView> {
+export async function getEmailHistory(
+  searchParams: EmailHistorySearchParams = {},
+): Promise<EmailHistoryView> {
   const ctx = await pageContext(["ADMIN"]);
-  const [event, rows] = await Promise.all([
+  const [event, templates] = await Promise.all([
     prisma.event.findUniqueOrThrow({ where: { id: ctx.eventId }, select: { timezone: true } }),
-    prisma.emailDispatch.findMany({
-      where: emailHistoryWhere(ctx.eventId),
-      select: emailHistorySelect,
-      orderBy: emailHistoryOrderBy,
-      take: EMAIL_HISTORY_TAKE,
+    prisma.emailTemplate.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: [{ key: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.templates + 1,
+      select: { key: true },
     }),
   ]);
-  return { ...toEmailHistory(rows), timezone: event.timezone };
+  // Cap-plus-one, and reported rather than thrown: a template missing from the
+  // select is a narrower filter list, not a wrong log.
+  const templateKeys = templates.slice(0, OPERATOR_QUERY_LIMITS.templates).map((row) => row.key);
+  const query = parseEmailHistoryQuery(searchParams, templateKeys);
+
+  const rows = await prisma.emailDispatch.findMany({
+    where: emailHistoryWhere(ctx.eventId, query),
+    select: emailHistorySelect,
+    orderBy: emailHistoryOrderByFor(query.direction),
+    take: EMAIL_HISTORY_PAGE_TAKE,
+  });
+  return {
+    ...toEmailHistoryPage(rows, query),
+    timezone: event.timezone,
+    templateKeys,
+    templatesTruncated: templates.length > OPERATOR_QUERY_LIMITS.templates,
+    query,
+  };
 }
 
 // ---- Embeds ---------------------------------------------------------------

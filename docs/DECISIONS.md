@@ -257,3 +257,70 @@ save route. Applying a suggestion never saves, publishes, sends email, or change
 a decision; replacing non-empty organizer content requires confirmation. This
 keeps provider output outside the domain's write and locking contracts and makes
 human review a product invariant rather than prompt wording.
+
+## The email log filters in the database, and still states no total (EML-01)
+`/admin/emails` read the newest 100 dispatches with no filter, search or way
+past that cap. Four GET narrowings were added - status chips, a template
+select, a bounded recipient search and a 50-row page - and the decision was
+where they apply. In the query, not over an already-read page: a chip layered
+on a capped read would mean "failed among the newest 50", which is a different
+and quieter claim than the one the chip makes. That is also why the page size
+became its own limit (`adminEmailDispatchPage`) rather than a slice of the old
+`adminEmailDispatches` cap.
+
+The dropped `count()` stays dropped, and pagination did not smuggle a total
+back in as a page count. The pager offers newer/older from the page-plus-one
+probe and the copy describes only what is on screen; "page 3 of 9" would need a
+second, differently-snapshotted read - the exact contradiction this panel
+removed when it gave up its event-wide total.
+
+Paging is keyset, not offset, and that was a correctness fix rather than a
+preference (found in review of PR #97). The first cut derived Prisma `skip`
+from a `?page=` number, which is only sound over a set that holds still. This
+one does not: `EmailDispatch` grows while it is read, and a status chip's
+subset changes as rows resolve. One dispatch inserted between two page requests
+shifts every later offset by one, so page 2 repeats page 1's last row; one
+`queued` row resolving into `sent` under the queued chip shifts them the other
+way, so a row is never rendered at all. Neither failure announces itself.
+
+Each page is now anchored to a row the operator actually saw, using the
+`(createdAt, id)` total order the read already had. The predicate is the
+row-value comparison written the long way - `createdAt < a OR (createdAt = a
+AND id < b)` - because Prisma has no tuple operator, and its own `cursor:`
+wants the sort key to be a unique index, which `(createdAt, id)` is not. The
+`id` half is load-bearing rather than defensive: a bulk send writes many rows
+inside one millisecond, so a bare `createdAt <` skips every tied row after the
+anchor and `<=` repeats all of them. `email-history-stability.test.ts` proves
+all three cases against an in-memory store that executes the emitted clause
+literally, and it fails if the tie-break is removed.
+
+The cursor is base64url of `createdAt|id` - opaque, not secret. Both halves are
+already visible on the page that issued it; encoding exists so callers do not
+hand-assemble positions, which is how offset arithmetic creeps back in. It is
+length-bounded, its instant must round-trip through `toISOString` rather than
+merely parse, and any malformed token resolves to the newest page instead of
+throwing, because a stale link is a bad anchor and not a broken panel.
+
+The cost is absolute positions: no "showing 51-100" and no page numbers. That
+is the honest trade rather than a regression - a row number over a live log was
+never a stable address, and the earlier copy stating one was quietly wrong the
+moment a dispatch landed. The pager always offers "Newest" beside the
+directional links, so a page emptied by a stale anchor is never a dead end.
+
+The chips deliberately carry no counts. The speaker roster counts its chips
+from rows it already loaded, which is free and consistent; here a count per
+chip is four more queries against four more snapshots, and numbers that can
+disagree with the rows underneath them are worse than no numbers.
+
+`EmailDispatch.status` is a `String`, not an enum, so nothing in the schema
+fails when a new outcome appears. The chip list is therefore derived from one
+`EMAIL_DISPATCH_STATUS_META` record and pinned by a source contract that reads
+`DeliveryMode` out of `send.ts` and the column default out of the schema. That
+gave `queued` the filter it never had - stored, rendered, and reachable by no
+chip, the same gap the abstracts chips closed for `WITHDRAWN`. A row carrying
+some other status is still rendered honestly under the unfiltered chip; a
+filter is an equality test, and there is no name to test against.
+
+Empty states are per combination because "no failed dispatches" and "no emails
+yet" are different facts and a filtered query cannot establish the second. Only
+the unfiltered first page may say the log itself is empty.
