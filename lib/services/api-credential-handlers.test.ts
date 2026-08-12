@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import type { UserRole } from "@prisma/client";
+import { Prisma, type UserRole } from "@prisma/client";
 import type { ApiContext } from "@/lib/api/context";
 import { ApiError } from "@/lib/api/http";
 import { authorizeV1Request } from "@/lib/api/v1";
 import { OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
   createApiCredentialHandlers,
+  isApiCredentialCollision,
   type ApiCredentialDb,
   type ApiCredentialTx,
 } from "@/lib/services/api-credential-handlers";
@@ -67,7 +68,7 @@ function project(row: StoredRow, select: Record<string, unknown>): Record<string
   return out;
 }
 
-function fakeDb(seed: StoredRow[] = []) {
+function fakeDb(seed: StoredRow[] = [], createThrows?: unknown) {
   const rows: StoredRow[] = [...seed];
   const recorded: Recorded[] = [];
   let nextId = seed.length + 1;
@@ -80,6 +81,9 @@ function fakeDb(seed: StoredRow[] = []) {
       },
       async create(args) {
         recorded.push({ op: "create", args });
+        // Models the database refusing the insert: a unique-constraint
+        // violation, or anything else the client can raise.
+        if (createThrows !== undefined) throw createThrows;
         const row: StoredRow = {
           id: `credential-${nextId++}`,
           eventId: args.data.eventId,
@@ -158,8 +162,9 @@ function build(options: {
   session?: { role: UserRole } | null;
   seed?: StoredRow[];
   lockLog?: string[];
+  createThrows?: unknown;
 } = {}) {
-  const { db, rows, recorded } = fakeDb(options.seed);
+  const { db, rows, recorded } = fakeDb(options.seed, options.createThrows);
   const session = options.session === undefined ? { role: "ADMIN" as UserRole } : options.session;
   const issued: ReturnType<typeof issueApiCredential>[] = [];
   const handlers = createApiCredentialHandlers({
@@ -516,6 +521,103 @@ test("revoked wins from the moment the revocation commits, not before", async ()
   // The whole race is decided by one predicate evaluated inside one statement,
   // so there is no interleaving that yields anything but these two answers.
   assert.equal(rows.length, 1, "the raced credential is still a stored tombstone");
+});
+
+// ---------------------------------------------------------------------------
+// The lookup-id collision contract
+// ---------------------------------------------------------------------------
+
+/** A real Prisma error, not a hand-rolled shape standing in for one. */
+function prismaError(code: string, target?: string[]) {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code,
+    clientVersion: "6.19.3",
+    ...(target ? { meta: { target } } : {}),
+  });
+}
+
+test("a P2002 collision on the lookup id is 409 API_KEY_RETRY, not a 500", async () => {
+  const collision = prismaError("P2002", ["lookupId"]);
+  // The predicate is checked against the real error type, so recognising it
+  // structurally cannot drift away from what Prisma actually throws.
+  assert.equal(collision.name, "PrismaClientKnownRequestError");
+  assert.equal(collision.code, "P2002");
+  assert.equal(isApiCredentialCollision(collision), true);
+
+  const { handlers, rows, issued } = build({ createThrows: collision });
+  const response = await handlers.POST(postReq({ label: "Website mirror" }));
+
+  // The exact documented envelope.
+  assert.equal(response.status, 409);
+  const payload = await body(response);
+  assert.equal(payload.ok, false);
+  const error = payload.error as Record<string, unknown>;
+  assert.equal(error.code, "API_KEY_RETRY");
+  assert.equal(error.message, "Could not issue a key just now. Try again.");
+
+  // Nothing was persisted, and nothing about the credential that was minted
+  // for the failed attempt leaks into the refusal.
+  assert.equal(rows.length, 0, "a collided create must persist nothing");
+  const raw = JSON.stringify(payload);
+  const minted = issued[0];
+  const parsed = parseApiCredentialToken(minted.token);
+  assert.ok(parsed);
+  for (const [what, value] of [
+    ["token", minted.token],
+    ["secret", parsed.secret],
+    ["digest", minted.secretHash],
+    ["lookup id", minted.lookupId],
+  ] as const) {
+    assert.ok(!raw.includes(value), `the 409 body must not echo the ${what}`);
+  }
+  // Not even the scheme prefix: the body is a bounded named envelope only.
+  assert.ok(!raw.includes("grk_"), "the 409 body must carry no credential material at all");
+  assert.deepEqual(Object.keys(error).sort(), ["code", "message"]);
+});
+
+test("the collision catch is narrow: other failures still surface as 500", async () => {
+  // A different Prisma error code is NOT a lookup-id collision.
+  const notFound = prismaError("P2025");
+  assert.equal(isApiCredentialCollision(notFound), false);
+
+  for (const [why, thrown] of [
+    ["another Prisma code", notFound],
+    ["a plain error", new Error("connection reset")],
+    ["a non-error", "something threw a string"],
+  ] as const) {
+    const { handlers } = build({ createThrows: thrown });
+    const response = await handlers.POST(postReq({ label: "Website mirror" }));
+    assert.equal(response.status, 500, `${why} must not be mistaken for a collision`);
+    const error = (await body(response)).error as Record<string, unknown>;
+    assert.equal(error.code, "INTERNAL_ERROR");
+    // The generic failure says nothing about the database or the request.
+    assert.equal(error.message, "Something went wrong.");
+  }
+
+  // And the issuance bound's own 409 is not swallowed by the collision catch.
+  const { handlers } = build({
+    seed: Array.from({ length: MAX_ACTIVE_API_CREDENTIALS_PER_EVENT }, (_, i) =>
+      seedRow({ id: `credential-${i}`, lookupId: issueApiCredential().lookupId }),
+    ),
+  });
+  const bounded = await handlers.POST(postReq({ label: "One too many" }));
+  assert.equal(bounded.status, 409);
+  assert.equal(((await body(bounded)).error as Record<string, unknown>).code, "API_KEY_LIMIT_REACHED");
+});
+
+test("nothing but a real collision satisfies the predicate", () => {
+  for (const value of [
+    null,
+    undefined,
+    "P2002",
+    42,
+    new Error("P2002"),
+    { code: "P2002" },
+    { name: "PrismaClientKnownRequestError" },
+    { name: "SomeOtherError", code: "P2002" },
+  ]) {
+    assert.equal(isApiCredentialCollision(value), false, String(value));
+  }
 });
 
 // ---------------------------------------------------------------------------

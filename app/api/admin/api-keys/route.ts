@@ -1,7 +1,6 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireContext } from "@/lib/api/context";
-import { ApiError, toResponse } from "@/lib/api/http";
 import { issueApiCredential } from "@/lib/services/api-credential";
 import { lockEventApiCredentialIssuance } from "@/lib/services/api-credential-store";
 import {
@@ -47,28 +46,18 @@ const handlers = createApiCredentialHandlers({
 });
 
 /**
- * The only Prisma failure this route interprets: a collision on the unique
- * lookup id, which at 8 random bytes is rare enough to report as retryable
- * rather than handle with a loop. Everything else surfaces as itself.
+ * No error handling lives here, deliberately.
+ *
+ * An earlier version of this file wrapped POST to map a P2002 lookup-id
+ * collision onto `409 API_KEY_RETRY`. That wrapper could never fire: the
+ * handlers are built on `handle()`, so they RESOLVE to a Response rather than
+ * throwing, and the collision had already been turned into a 500 before this
+ * file saw it. The contract now lives inside the handler boundary, where it can
+ * actually be honoured, and `api-credential-handlers.test.ts` drives a real
+ * `PrismaClientKnownRequestError` through it to prove so.
  */
-function isUniqueViolation(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
-}
-
-async function withRetryableCollision(run: () => Promise<Response>): Promise<Response> {
-  try {
-    return await run();
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      return toResponse(new ApiError(409, "API_KEY_RETRY", "Could not issue a key just now. Try again."));
-    }
-    throw error;
-  }
-}
-
 export const GET = handlers.GET;
-export const POST = async (req: Request): Promise<Response> =>
-  withRetryableCollision(() => handlers.POST(req));
+export const POST = handlers.POST;
 export const DELETE = handlers.DELETE;
 
 export type { ApiCredentialDb, ApiCredentialTx };

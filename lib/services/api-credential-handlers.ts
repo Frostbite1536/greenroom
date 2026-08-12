@@ -136,6 +136,28 @@ export function serializeCredential(row: ApiCredentialRow) {
   };
 }
 
+/**
+ * A unique-constraint violation from the credential insert.
+ *
+ * `ApiCredential` has exactly one unique column, `lookupId`, so on this insert
+ * P2002 can only mean two issued credentials drew the same 8-byte identifier.
+ * That is rare enough to report as retryable rather than handle with a loop:
+ * the caller presses the button again and draws a fresh one.
+ *
+ * Recognised STRUCTURALLY rather than with
+ * `instanceof Prisma.PrismaClientKnownRequestError`, so this module keeps the
+ * property that makes it testable — it imports no Prisma runtime, opens no
+ * connection, and reads no environment. `api-credential-handlers.test.ts`
+ * constructs a REAL `PrismaClientKnownRequestError` and asserts both that this
+ * predicate accepts it and that a different Prisma error code is rejected, so
+ * the structural check cannot drift away from the type it stands for.
+ */
+export function isApiCredentialCollision(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return candidate.name === "PrismaClientKnownRequestError" && candidate.code === "P2002";
+}
+
 /** Never cache a listing of an event's credential metadata. */
 function noStore(response: Response): Response {
   response.headers.set("Cache-Control", "no-store");
@@ -183,31 +205,50 @@ export function createApiCredentialHandlers(deps: ApiCredentialDeps) {
     const input = await parseBody(req, createSchema);
 
     const issued = deps.issue();
-    const credential = await deps.db.$transaction(async (tx) => {
-      await deps.lockIssuance(tx, ctx.eventId);
-      const active = await tx.apiCredential.count({
-        where: { eventId: ctx.eventId, revokedAt: null },
+    let credential: ApiCredentialRow;
+    try {
+      credential = await deps.db.$transaction(async (tx) => {
+        await deps.lockIssuance(tx, ctx.eventId);
+        const active = await tx.apiCredential.count({
+          where: { eventId: ctx.eventId, revokedAt: null },
+        });
+        if (active >= MAX_ACTIVE_API_CREDENTIALS_PER_EVENT) {
+          throw new ApiError(
+            409,
+            "API_KEY_LIMIT_REACHED",
+            `This event already has ${MAX_ACTIVE_API_CREDENTIALS_PER_EVENT} active API keys. Revoke one before creating another.`,
+            { label: ["Revoke an existing key first."] },
+          );
+        }
+        // Only the lookup half and the secret's digest are persisted.
+        return tx.apiCredential.create({
+          data: {
+            eventId: ctx.eventId,
+            label: input.label,
+            lookupId: issued.lookupId,
+            secretHash: issued.secretHash,
+            createdByUserId: ctx.userId,
+          },
+          select: credentialSelect,
+        });
       });
-      if (active >= MAX_ACTIVE_API_CREDENTIALS_PER_EVENT) {
-        throw new ApiError(
-          409,
-          "API_KEY_LIMIT_REACHED",
-          `This event already has ${MAX_ACTIVE_API_CREDENTIALS_PER_EVENT} active API keys. Revoke one before creating another.`,
-          { label: ["Revoke an existing key first."] },
-        );
+    } catch (error) {
+      // The collision contract has to be honoured HERE, inside the boundary
+      // `handle()` wraps. A caller of these handlers only ever receives a
+      // Response, so an outer catch can never see this error: mapping it
+      // anywhere but here silently becomes a 500.
+      //
+      // The body is a bounded named envelope and carries no credential
+      // material — not the token, not the secret, not the digest, and not even
+      // the colliding lookup id, which would tell a caller a value they never
+      // held is already taken.
+      if (isApiCredentialCollision(error)) {
+        throw new ApiError(409, "API_KEY_RETRY", "Could not issue a key just now. Try again.");
       }
-      // Only the lookup half and the secret's digest are persisted.
-      return tx.apiCredential.create({
-        data: {
-          eventId: ctx.eventId,
-          label: input.label,
-          lookupId: issued.lookupId,
-          secretHash: issued.secretHash,
-          createdByUserId: ctx.userId,
-        },
-        select: credentialSelect,
-      });
-    });
+      // The bound's own 409, and anything genuinely unknown, fall through
+      // untouched — the latter to the generic 500, which is what it is for.
+      throw error;
+    }
 
     // `issued.token` is returned here and then forgotten by the server. No
     // later read of this row can reproduce it.
