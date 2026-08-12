@@ -19,6 +19,8 @@ import {
   type DecisionScoreSortState,
 } from "@/lib/decision-score-sort";
 import { formatAnswer } from "@/lib/answer-display";
+import { formatAttachmentSize } from "@/lib/uploads/abstract-attachment";
+import { storedFilePath } from "@/lib/uploads/stored-file";
 import { apiPost } from "@/lib/api-client";
 import { canOfferMaybeDecision } from "@/lib/abstract-decision-ui";
 import { decisionConfirmation } from "@/lib/decision-confirmation";
@@ -782,6 +784,7 @@ function AbstractDrawer({
         />
 
         <OrganizerReviewNotes id={abstract.id} reviewComments={abstract.reviewComments} />
+        <SubmissionAttachments abstract={abstract} />
         <SubmissionAnswers abstract={abstract} />
 
         {isProgrammeMismatch(abstract) ? (
@@ -975,6 +978,55 @@ function OrganizerReviewNotes({ id, reviewComments }: Pick<AbstractRow, "id" | "
  * entirely, so an admin reviewing a proposal could not see any of the custom
  * questions their own form asked.
  */
+/**
+ * Supporting documents a speaker attached from their portal.
+ *
+ * Read-only for an organizer, deliberately: removing a speaker's document is a
+ * conversation, not a button on a review drawer, and the API refuses it anyway
+ * (only the uploader may remove, and only while the proposal is editable).
+ *
+ * `canOpen` arrives already decided by the same pure matrix `/api/files/:id`
+ * enforces, so this never renders a link that would answer 404. In practice an
+ * ADMIN of this event can open every row here; the guard is what keeps that
+ * true rather than assumed.
+ */
+function SubmissionAttachments({ abstract }: { abstract: AbstractRow }) {
+  const headingId = `submission-attachments-heading-${abstract.id}`;
+
+  return (
+    <section style={{ marginTop: 18 }} aria-labelledby={headingId}>
+      <h3 id={headingId} style={{ fontSize: 13, margin: "0 0 8px" }}>
+        Supporting documents
+        {abstract.attachments.length > 0 ? (
+          <span className="hint" style={{ fontWeight: 400 }}> · {abstract.attachments.length}</span>
+        ) : null}
+      </h3>
+
+      {abstract.attachments.length === 0 ? (
+        <p className="hint">The speakers attached no supporting documents to this proposal.</p>
+      ) : (
+        <ul className="answer-list" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+          {abstract.attachments.map((attachment) => (
+            <li className="answer-item" key={attachment.id}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <FileStack size={13} aria-hidden="true" />
+                {attachment.canOpen ? (
+                  <a href={storedFilePath(attachment.storedFileId)}>{attachment.filename}</a>
+                ) : (
+                  attachment.filename
+                )}
+              </span>
+              <span className="hint">
+                {formatAttachmentSize(attachment.size)} · {attachment.uploadedByName}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function SubmissionAnswers({ abstract }: { abstract: AbstractRow }) {
   const answered = abstract.answers.filter((a) => !formatAnswer(a.value, a).empty);
 

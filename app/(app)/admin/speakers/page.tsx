@@ -22,6 +22,11 @@ import {
 } from "@/lib/speakers/status";
 import { readSpeakerRoster } from "@/lib/speakers/roster-read";
 import {
+  speakerDeckSourceHint,
+  speakerDeckSourceLabel,
+  type ResolvedSpeakerDeck,
+} from "@/lib/speakers/event-deck";
+import {
   SPEAKER_SEARCH_MAX_LENGTH,
   filterSpeakerRosterRows,
   parseSpeakerQuery,
@@ -40,6 +45,28 @@ const LIMITS = {
   templates: OPERATOR_QUERY_LIMITS.onboardingTasks,
   forms: OPERATOR_QUERY_LIMITS.importForms,
 };
+
+/**
+ * One roster row's slide deck, with its provenance stated rather than implied.
+ *
+ * The resolution itself is `lib/speakers/event-deck` — the same pure function
+ * the speaker's own portal describes their deck with — so the organizer and the
+ * speaker cannot be told two different things about one deck. The fallback case
+ * carries its explanation for a screen reader too, because "Global profile
+ * (fallback)" is a label, not a sentence.
+ */
+function SpeakerDeckCell({ deck }: { deck: ResolvedSpeakerDeck | null }) {
+  if (!deck?.url) return <div className="cell-sub muted">No slide deck</div>;
+  const hint = speakerDeckSourceHint(deck.source);
+  return (
+    <div className="cell-sub">
+      <a href={deck.url}>Slide deck</a>
+      {" · "}
+      {speakerDeckSourceLabel(deck.source)}
+      {hint ? <span className="sr-only"> {hint}</span> : null}
+    </div>
+  );
+}
 
 export default async function AdminSpeakersPage({
   searchParams,
@@ -117,7 +144,7 @@ export default async function AdminSpeakersPage({
     )
     .sort(compareOnboardingTasks);
 
-  const { rows, summary, awaitingSession, truncated } = roster;
+  const { rows, decks, summary, awaitingSession, truncated } = roster;
   const searched = filterSpeakerRosterRows(rows, query);
   const visible = filterSpeakerStatusRows(searched, filter);
 
@@ -300,6 +327,13 @@ export default async function AdminSpeakersPage({
                         <div className="cell-sub">
                           {row.profileMissing.length === 0 ? "Complete" : `Missing: ${row.profileMissing.join(", ")}`}
                         </div>
+                        {/* The deck this speaker has FOR THIS EVENT, falling
+                            back to their one global profile deck — with the
+                            source named, because a deck uploaded for another
+                            conference is not the same artefact as one uploaded
+                            for this one, and rendering the two identically is
+                            the confusion this association exists to remove. */}
+                        <SpeakerDeckCell deck={decks[row.userId] ?? null} />
                       </td>
                       <td>
                         <div className="progress-bar" role="img" aria-label={`Onboarding ${row.tasksDone} of ${row.tasksTotal} done`}>

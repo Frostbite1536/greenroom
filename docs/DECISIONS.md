@@ -324,3 +324,65 @@ filter is an equality test, and there is no name to test against.
 Empty states are per combination because "no failed dispatches" and "no emails
 yet" are different facts and a filtered query cannot establish the second. Only
 the unfiltered first page may say the log itself is empty.
+
+## Proposal attachments are a join table, not a column on `StoredFile`
+The obvious shape for "a supporting document on a proposal" is a nullable
+`abstractId` on `StoredFile`. It does not work here, and the reason is dedupe.
+`StoredFile` is unique on `(uploaderUserId, kind, sha256)`, and for every private
+kind the `sha256` is an event-scoped fingerprint, so a speaker who attaches the
+same PDF to two of their proposals in one event gets back **one** row —
+`POST /api/files` returns the existing id with `deduped: true` rather than
+inserting. A single owning column could only ever name one of those proposals;
+the second attach would silently point at the first, or would have to defeat the
+dedupe that makes private bytes event-scoped in the first place.
+
+`AbstractAttachment` also turned out to be the right thing to count and the right
+thing to delete. The "max 3 per proposal" cap counts links, and removal deletes a
+link while the bytes stay — which is not a shortcut but the behaviour the product
+already had, since clearing `slideDeckUrl` has never deleted the uploaded deck
+either. The row is still the uploader's dedupe target for their next identical
+upload. Orphaned bytes therefore accumulate; a reaper is a named follow-up rather
+than something this change smuggled in.
+
+The upload pipeline was extended, never forked. `SUPPORTING_DOCUMENT` is an enum
+value with the same 5 MiB/PDF limits as `SLIDE_DECK`, and it lands on the private
+branch of `canReadStoredFile` by being not-`HEADSHOT` — which is why no
+authorization logic changed at all. Attaching is a second call that links an
+already-stored id, so `POST /api/files` gained no proposal-authorization surface.
+
+The consequence worth stating: reading is the unwidened deck rule, so a
+**co-speaker may list a document they cannot open**. Widening it to "any speaker
+on the proposal" was the alternative and was rejected — it would have made the
+attachment rule differ from the deck rule for no stated reason. Instead
+`viewAttachments` returns `canOpen` from the same matrix the serving route
+enforces, and the row says so rather than rendering a link that answers 404.
+
+## The per-event deck is a URL column, and the global one stays
+`EventSpeakerDeck(eventId, userId, deckUrl)` closes the roadmap's own words:
+"one global profile URL cannot provide per-event-private deck access."
+`SpeakerProfile` is one row per person for the whole instance, so it can be
+neither two decks nor private to one event's organizers.
+
+`deckUrl` is a string rather than a `storedFileId` foreign key because the deck
+field has always accepted **either** an uploaded `/api/files/<id>` path **or** a
+pasted absolute link, validated by one schema. An FK cannot represent the pasted
+link, so it would either drop that capability or need two columns to say one
+thing. One column with the same validator as the global column it falls back to
+keeps the two comparable and the precedence rule trivial.
+
+Two things were deliberately not done. `speakerProfileUpdateSchema` was not given
+a sixth key: its keys are `SpeakerProfile` COLUMNS, the organizer roster editor
+`.pick()`s from it, and the v1 API's published object describes exactly those —
+so `eventSlideDeckUrl` lives on a separate `portalProfileUpdateSchema` that only
+the portal route parses. And the global field was not made read-only in the
+portal: it is what every event without an association resolves to, so removing
+the speaker's ability to set it would have replaced one gap with another. The
+form relabels it as the fallback and names which event the primary control is
+for.
+
+`SpeakerStatusRow` was not widened either. It is a pure projection shared with
+the `/admin` dashboard card, the CSV export and the report metrics, none of which
+asked for a deck, so the resolution rides beside the rows as `decks` on
+`SpeakerRosterView`. The global column is also kept out of the roster's
+`profileSelect`, because that projection is what profile-completeness counts and
+adding a fifth field would have quietly restated every percentage on the screen.

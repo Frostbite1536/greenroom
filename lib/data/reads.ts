@@ -29,6 +29,16 @@ import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { ApiError } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
+  attachmentOrderBy,
+  attachmentSelect,
+  toAttachmentSubject,
+} from "@/lib/services/abstract-attachment";
+import {
+  MAX_ATTACHMENTS_PER_ABSTRACT,
+  viewAttachments,
+  type AttachmentView,
+} from "@/lib/uploads/abstract-attachment";
+import {
   ADMIN_ABSTRACT_LIST_TAKE,
   adminAbstractListOrderBy,
   adminAbstractListWhere,
@@ -452,6 +462,15 @@ export type AbstractRow = {
    * rather than silently showing an empty section.
    */
   answersUnavailable: boolean;
+  /**
+   * Supporting documents a speaker attached from their portal, oldest first.
+   *
+   * Projected through the SAME `viewAttachments` matrix the serving route
+   * decides with, so a row rendered as an openable link is one this admin can
+   * actually fetch. `canRemove` is always false here: an organizer does not
+   * remove a speaker's document from a drawer.
+   */
+  attachments: AttachmentView[];
   /** Present only in the organizer/admin projection; evaluator payloads omit it. */
   reviewComments?: OrganizerReviewComment[];
   hasSession: boolean;
@@ -592,6 +611,16 @@ export async function getAdminAbstracts(
     where: childWhere,
     _count: { _all: true },
   });
+  // Scoped to the same at-most-101 materialized ids as every other child read.
+  // The bound is the product invariant itself — the attach route refuses a
+  // fourth link per proposal — so `3 × ids` is the exact maximum this can
+  // return, not an arbitrary page size that could silently cut a drawer's list.
+  const attachmentRowsPromise = prisma.abstractAttachment.findMany({
+    where: childWhere,
+    orderBy: [{ abstractId: "asc" }, ...attachmentOrderBy],
+    take: MAX_ATTACHMENTS_PER_ABSTRACT * materializedIds.length,
+    select: { ...attachmentSelect, abstractId: true },
+  });
   const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> = prisma.reviewScore.findMany({
     where: { ...childWhere, comment: { not: null } },
     orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
@@ -602,14 +631,27 @@ export async function getAdminAbstracts(
   // reads. An invalid explicit plan id is therefore handled by the page's 404
   // boundary immediately, never left to reject while an answer read is still
   // in flight.
-  const [answerCounts, decisionSummary, reviewCommentRows] = await Promise.all([
+  const [answerCounts, decisionSummary, reviewCommentRows, attachmentRows] = await Promise.all([
     answerCountsPromise,
     getAdminDecisionSummary(ctx, {
       abstractIds: materializedIds,
       ...(planId ? { planId } : {}),
     }),
     reviewCommentRowsPromise,
+    attachmentRowsPromise,
   ]);
+
+  // One pass, folded by proposal. `viewAttachments` is the SAME matrix
+  // `/api/files/:id` decides with, so the drawer cannot offer a link this
+  // organizer would then be refused — and it is given `editable: false`,
+  // because removing a speaker's document is not an organizer action.
+  const attachmentsByAbstract = new Map<string, AttachmentView[]>();
+  for (const row of attachmentRows) {
+    const view = viewAttachments([toAttachmentSubject(row)], ctx, { editable: false })[0];
+    const existing = attachmentsByAbstract.get(row.abstractId);
+    if (existing) existing.push(view);
+    else attachmentsByAbstract.set(row.abstractId, [view]);
+  }
 
   const answerPlan = planAdminAnswerRead(materializedIds, answerCounts);
   const answerRowsPromise: Promise<StoredAnswerProjection[]> = answerPlan.queryAbstractIds.length > 0
@@ -657,6 +699,7 @@ export async function getAdminAbstracts(
       decisionSummary: decisionSummary.summariesByAbstractId[a.id] ?? null,
       answers: answerIndex.byAbstract.get(a.id) ?? [],
       answersUnavailable: answerIndex.unavailableAbstractIds.has(a.id),
+      attachments: attachmentsByAbstract.get(a.id) ?? [],
       reviewComments: reviewCommentsByAbstract?.get(a.id) ?? [],
       hasSession: a.session !== null,
       sessionId: a.session?.id ?? null,

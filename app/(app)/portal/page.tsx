@@ -34,10 +34,17 @@ export default async function PortalPage() {
   const eventId = session.event.id;
 
   // One round trip per concern, issued in parallel to avoid a request waterfall.
-  const [profile, speakerTasks, sessionSpeakers, abstracts, resources, event, openCfp] = await Promise.all([
+  const [profile, eventDeck, speakerTasks, sessionSpeakers, abstracts, resources, event, openCfp] = await Promise.all([
     prisma.speakerProfile.findUnique({
       where: { userId: user.id },
       select: { bio: true, company: true, jobTitle: true, headshotUrl: true, slideDeckUrl: true },
+    }),
+    // This speaker's deck FOR THIS EVENT. Its own round trip inside the same
+    // batch: the association is keyed `(eventId, userId)` and the profile row is
+    // keyed `userId` alone, so no single read can return both.
+    prisma.eventSpeakerDeck.findUnique({
+      where: { eventId_userId: { eventId, userId: user.id } },
+      select: { deckUrl: true },
     }),
     prisma.speakerTask.findMany({
       where: { userId: user.id, task: { eventId } },
@@ -89,7 +96,10 @@ export default async function PortalPage() {
     status: row.status,
   }));
 
-  const initialProfile = profileFormValues(profile);
+  const initialProfile = profileFormValues({
+    ...profile,
+    eventSlideDeckUrl: eventDeck?.deckUrl ?? null,
+  });
 
   const sessions = sessionSpeakers.map((s) => s.session);
   const doneCount = tasks.filter((t) => t.status === "COMPLETED" || t.status === "WAIVED").length;
@@ -195,7 +205,7 @@ export default async function PortalPage() {
                 <p>Used on the public site and in the program.</p>
               </div>
             </div>
-            <ProfileForm profile={initialProfile} />
+            <ProfileForm profile={initialProfile} eventName={session.event.name} />
           </section>
 
           <section className={styles.card}>

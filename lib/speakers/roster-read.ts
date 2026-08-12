@@ -23,6 +23,11 @@ import {
   type SpeakerStatusRow,
   type SpeakerTaskAssignment,
 } from "@/lib/speakers/status";
+import {
+  indexEventDecks,
+  resolveRosterDecks,
+  type ResolvedSpeakerDeck,
+} from "@/lib/speakers/event-deck";
 
 /** Same bounded-read discipline as the operator API routes (INV-EVENT-001). */
 export const SPEAKER_ROSTER_LIMITS = {
@@ -41,6 +46,18 @@ export type SpeakerRosterView = {
   /** Null when the event id names no event; callers redirect rather than guess. */
   timezone: string | null;
   rows: SpeakerStatusRow[];
+  /**
+   * Each rendered speaker's deck for THIS event, with its provenance: the
+   * event's own `EventSpeakerDeck` association first, the global
+   * `SpeakerProfile.slideDeckUrl` second. One entry per row in `rows`, so a
+   * caller never has to decide what a missing key means.
+   *
+   * Deliberately beside the rows rather than a field ON them. `SpeakerStatusRow`
+   * is a pure projection shared with the `/admin` dashboard card, the CSV
+   * export, and the report metrics — none of which asked for a deck — so
+   * widening it would have made all four speak a contract only one screen needs.
+   */
+  decks: Record<string, ResolvedSpeakerDeck>;
   /** The confirmed-session cohort: everyone on at least one talk. */
   confirmed: SpeakerStatusRow[];
   /** `summarizeSpeakerStatus(confirmed)` — the five headline organizer metrics. */
@@ -140,6 +157,33 @@ export async function readSpeakerRoster(eventId: string): Promise<SpeakerRosterV
   }));
 
   const rows = buildSpeakerRosterRows(members, assignments, taskAssignments);
+
+  // A second round trip, deliberately, and keyed on the ids this read actually
+  // returns rather than on the event: grouping by event would let an oversized
+  // roster return unbounded rows behind a bounded list. Both reads are therefore
+  // bounded by `rows.length`, which the caps above already fixed.
+  const rosterUserIds = rows.map((row) => row.userId);
+  const [eventDeckRows, profileDeckRows] = rosterUserIds.length === 0
+    ? [[], []]
+    : await Promise.all([
+      prisma.eventSpeakerDeck.findMany({
+        where: { eventId, userId: { in: rosterUserIds } },
+        select: { userId: true, deckUrl: true },
+      }),
+      // The global column is NOT added to `profileSelect` above: that projection
+      // feeds `SpeakerProfileInput`, whose field list is the four prose fields
+      // profile-completeness counts. A deck is not one of them, and adding it
+      // there would quietly change what "profile complete" means.
+      prisma.speakerProfile.findMany({
+        where: { userId: { in: rosterUserIds } },
+        select: { userId: true, slideDeckUrl: true },
+      }),
+    ]);
+  const decks = resolveRosterDecks(
+    rosterUserIds,
+    indexEventDecks(eventDeckRows),
+    new Map(profileDeckRows.map((row) => [row.userId, row.slideDeckUrl])),
+  );
   // The five headline metrics stay the confirmed-session cohort they have always
   // described, and `confirmedSpeakers` is what the onboarding checklist actually
   // fans out to (C33) — widening the roster must not silently restate either
@@ -149,6 +193,7 @@ export async function readSpeakerRoster(eventId: string): Promise<SpeakerRosterV
   return {
     timezone: event?.timezone ?? null,
     rows,
+    decks,
     confirmed,
     summary: summarizeSpeakerStatus(confirmed),
     awaitingSession: rows.length - confirmed.length,

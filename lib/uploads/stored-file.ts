@@ -13,7 +13,7 @@
  * on the app's own origin.
  */
 
-export const STORED_FILE_KINDS = ["HEADSHOT", "SLIDE_DECK"] as const;
+export const STORED_FILE_KINDS = ["HEADSHOT", "SLIDE_DECK", "SUPPORTING_DOCUMENT"] as const;
 export type StoredFileKindValue = (typeof STORED_FILE_KINDS)[number];
 
 /**
@@ -27,11 +27,28 @@ export type StoredFileKindValue = (typeof STORED_FILE_KINDS)[number];
 const STORED_FILE_KIND_PARAMS = new Map<string, StoredFileKindValue>([
   ["headshot", "HEADSHOT"],
   ["slide-deck", "SLIDE_DECK"],
+  ["supporting-document", "SUPPORTING_DOCUMENT"],
 ]);
 
 /** Accepted case-insensitively; `HEADSHOT` and `headshot` are the same request. */
 export function parseStoredFileKind(value: string | null | undefined): StoredFileKindValue | null {
   return STORED_FILE_KIND_PARAMS.get(value?.trim().toLowerCase() ?? "") ?? null;
+}
+
+/**
+ * The inverse: the `?kind=` a client must send for a kind.
+ *
+ * Derived from the same map rather than restated, so the browser island cannot
+ * spell a kind the route will not parse. It replaced a hand-written ternary in
+ * `components/file-upload-field.tsx`, which was already one kind out of date the
+ * moment a third existed.
+ */
+const STORED_FILE_KIND_WIRE = new Map<StoredFileKindValue, string>(
+  [...STORED_FILE_KIND_PARAMS].map(([param, kind]) => [kind, param]),
+);
+
+export function storedFileKindParam(kind: StoredFileKindValue): string {
+  return STORED_FILE_KIND_WIRE.get(kind)!;
 }
 
 /**
@@ -49,6 +66,11 @@ export function parseStoredFileKind(value: string | null | undefined): StoredFil
 export const STORED_FILE_LIMITS = {
   HEADSHOT: { maxBytes: 1024 * 1024, mimes: ["image/png", "image/jpeg", "image/webp"] },
   SLIDE_DECK: { maxBytes: 5 * 1024 * 1024, mimes: ["application/pdf"] },
+  // A supporting document is the same artefact class as a deck — a PDF a
+  // speaker hands to the programme team — so it mirrors SLIDE_DECK's policy
+  // exactly rather than inventing a second set of numbers to drift from it.
+  // The Vercel body-ceiling note above therefore applies to this kind too.
+  SUPPORTING_DOCUMENT: { maxBytes: 5 * 1024 * 1024, mimes: ["application/pdf"] },
 } as const satisfies Record<StoredFileKindValue, { maxBytes: number; mimes: readonly string[] }>;
 
 export function storedFileMaxBytes(kind: StoredFileKindValue): number {
@@ -172,6 +194,17 @@ export type StoredFileSubject = {
  * uploader themselves, or an ADMIN whose active event is the event the file
  * was uploaded under. An upload with no event (`eventId: null`, the row
  * outliving its event) has no organizer claim left — only its owner.
+ *
+ * A SUPPORTING_DOCUMENT takes that same private branch, and the branch is not
+ * widened for it: the test is still uploader-or-event-ADMIN. It lands there by
+ * being not-HEADSHOT, which is why nothing below changed when the kind was
+ * added. Two consequences worth stating rather than discovering:
+ *   - A CO-SPEAKER on the same proposal may not open a document they did not
+ *     upload. The portal list says so per row instead of offering a link that
+ *     404s (`lib/uploads/abstract-attachment.ts`).
+ *   - The ADMIN test is against the FILE's event, not the proposal's. The
+ *     attach route only ever links a file whose event is the proposal's event
+ *     and the caller's active event, so the two cannot diverge.
  */
 export function canReadStoredFile(subject: StoredFileSubject, viewer: StoredFileViewer): boolean {
   if (subject.kind === "HEADSHOT") return true;
