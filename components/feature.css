@@ -600,6 +600,9 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .roster-toolbar { justify-content: space-between; }
 .roster-search-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .roster-search { min-width: 240px; }
+.speaker-roster-live-refresh { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.speaker-roster-live-refresh > div:first-child { display: flex; align-items: center; gap: 7px; }
+.speaker-roster-live-refresh .status-dot.muted { background: var(--muted); }
 .roster-search-form .ghost-button { white-space: nowrap; text-decoration: none; }
 .roster-search-note { padding: 10px 14px 0; }
 .roster-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }

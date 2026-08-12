@@ -10,6 +10,7 @@ import { formatEventDateTime } from "@/lib/tz";
 import { headshotAlt, initials } from "@/lib/embed-speaker-view";
 import { OnboardingTaskManager } from "@/components/onboarding-task-manager";
 import { AddSpeakerDialog, EditSpeakerDialog } from "@/components/speaker-roster-manager";
+import { SpeakerRosterLiveRefresh } from "@/components/speaker-roster-live-refresh";
 import {
   compareOnboardingTasks,
   serializeOnboardingTask,
@@ -165,6 +166,8 @@ export default async function AdminSpeakersPage({
         <div className="metric"><span>Speakers overdue</span><strong>{summary.speakersOverdue}</strong></div>
         <div className="metric"><span>Sessions unscheduled</span><strong>{summary.unscheduledSessions}</strong></div>
       </div>
+
+      <SpeakerRosterLiveRefresh />
 
       {templatesTruncated ? (
         <p className="hint" role="status">

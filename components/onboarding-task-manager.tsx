@@ -175,9 +175,19 @@ export function OnboardingTaskManager({
   }
 
   const anyBusy = busy !== null || pending;
+  const draftDirty =
+    draft.title !== EMPTY_DRAFT.title ||
+    draft.description !== EMPTY_DRAFT.description ||
+    draft.dueOn !== EMPTY_DRAFT.dueOn ||
+    draft.required !== EMPTY_DRAFT.required ||
+    draft.formConfigId !== EMPTY_DRAFT.formConfigId;
 
   return (
-    <section className="card settings-card" aria-labelledby="onboarding-tasks-heading">
+    <section
+      className="card settings-card"
+      aria-labelledby="onboarding-tasks-heading"
+      data-speaker-roster-refresh-blocker={draftDirty || editingId !== null ? "true" : undefined}
+    >
       <div className="settings-heading">
         <div className="settings-icon"><ListChecks size={18} aria-hidden="true" /></div>
         <div>
