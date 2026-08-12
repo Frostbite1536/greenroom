@@ -104,12 +104,14 @@ import {
 } from "@/lib/dashboard/metrics";
 import {
   summarizeCategoryFunnel,
+  summarizeSubmissionPacing,
   summarizeReviewLoad,
   summarizeScheduleUtilization,
   summarizeSpeakerReadiness,
   type CategoryFunnel,
   type DayUtilization,
   type ReviewLoad,
+  type SubmissionPacing,
   type SpeakerReadiness,
 } from "@/lib/reports/metrics";
 import { placementDayKeys } from "@/lib/services/agenda-autoplace";
@@ -1965,6 +1967,9 @@ export type AdminReportsView = {
   eventId: string;
   eventName: string;
   timezone: string;
+  pacing: SubmissionPacing;
+  /** True when the submitted timestamp read exceeded its explicit cap. */
+  pacingTruncated: boolean;
   /** Submissions by category and status, with acceptance where decided. */
   funnel: CategoryFunnel;
   review: ReviewLoad;
@@ -2000,7 +2005,7 @@ export type AdminReportsView = {
  * - readiness is `readSpeakerRoster()`, the read behind `/admin/speakers` and
  *   the dashboard's speaker card, folded over its own `confirmed` cohort.
  *
- * The six reads run concurrently (`readAgendaData` and `readSpeakerRoster` each
+ * The reads run concurrently (`readAgendaData` and `readSpeakerRoster` each
  * batch internally), so this is one round of parallel queries, not a waterfall.
  */
 export async function getAdminReports(): Promise<AdminReportsView> {
@@ -2008,11 +2013,17 @@ export async function getAdminReports(): Promise<AdminReportsView> {
   const eventId = ctx.eventId;
   const abstractWhere = adminAbstractListWhere({ eventId });
 
-  const [event, categoryGroups, categories, evaluatorGroups, members, agenda, roster] =
+  const [event, submittedRows, categoryGroups, categories, evaluatorGroups, members, agenda, roster] =
     await Promise.all([
       prisma.event.findUnique({
         where: { id: eventId },
         select: { name: true, timezone: true, startsAt: true, endsAt: true },
+      }),
+      prisma.abstract.findMany({
+        where: { eventId, submittedAt: { not: null } },
+        orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
+        take: OPERATOR_QUERY_LIMITS.reportSubmittedAbstracts + 1,
+        select: { submittedAt: true },
       }),
       prisma.abstract.groupBy({
         by: ["categoryId", "status"],
@@ -2049,11 +2060,19 @@ export async function getAdminReports(): Promise<AdminReportsView> {
   // 422: refusing to render a whole report because an event has many members
   // would be worse for an operator than rendering it and naming the cut.
   const reviewersTruncated = members.length > OPERATOR_QUERY_LIMITS.reviewerSetupMembers;
+  const timezone = agenda.timezone;
+  const pacing = summarizeSubmissionPacing(
+    submittedRows
+      .slice(0, OPERATOR_QUERY_LIMITS.reportSubmittedAbstracts)
+      .flatMap((row) => row.submittedAt ? [{ submittedAt: row.submittedAt }] : []),
+    timezone,
+  );
+  const pacingTruncated =
+    submittedRows.length > OPERATOR_QUERY_LIMITS.reportSubmittedAbstracts || pacing.rangeTruncated;
   const evaluators = members
     .slice(0, OPERATOR_QUERY_LIMITS.reviewerSetupMembers)
     .map((member) => ({ userId: member.userId, name: member.user.name }));
 
-  const timezone = agenda.timezone;
   const slots = agenda.sessions.flatMap((session) =>
     session.slot ? [{ roomId: session.slot.roomId, startsAt: session.slot.startsAt, endsAt: session.slot.endsAt }] : [],
   );
@@ -2062,6 +2081,8 @@ export async function getAdminReports(): Promise<AdminReportsView> {
     eventId,
     eventName: event?.name ?? "This event",
     timezone,
+    pacing,
+    pacingTruncated,
     funnel: summarizeCategoryFunnel(categoryGroups, categories),
     review: summarizeReviewLoad(evaluatorGroups, evaluators),
     reviewersTruncated,

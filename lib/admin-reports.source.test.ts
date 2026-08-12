@@ -66,6 +66,22 @@ test("the page reads once, through the one batched data function", () => {
   assert.equal(/@\/lib\/prisma|prisma\./.test(component), false);
 });
 
+test("submission pacing reads only submitted timestamps in the event and reports its bound", () => {
+  const read = reportsRead();
+  assert.match(read, /where: \{ eventId, submittedAt: \{ not: null \} \}/);
+  assert.match(read, /orderBy: \[\{ submittedAt: "desc" \}, \{ id: "desc" \}\]/);
+  assert.match(read, /take: OPERATOR_QUERY_LIMITS\.reportSubmittedAbstracts \+ 1/);
+  assert.match(read, /select: \{ submittedAt: true \}/);
+  assert.doesNotMatch(read, /select: \{ submittedAt: true, createdAt: true \}/);
+  assert.match(read, /pacingTruncated/);
+  const component = page();
+  assert.match(component, /<h2 id="reports-pacing">Submission pacing<\/h2>/);
+  assert.match(component, /Draft creation is not counted as demand/);
+  assert.match(component, /Covered range:/);
+  assert.match(component, /latest 5,000 submitted proposals across the latest 366 calendar days/);
+  assert.match(component, /Submitted proposals per event-local day with cumulative total/);
+});
+
 test("no loading boundary is introduced for the new segment", () => {
   // D-C5-11 #4 as amended: a segment loading boundary streams 200 before the
   // page's redirect() runs, which would break this page's own 307 refusal.
@@ -189,9 +205,11 @@ test("a fresh event gets an actionable empty state per section, not a wall of ze
 
 test("the charts are an enhancement over the tables, never a replacement", () => {
   const component = page();
-  // Every table this page shipped with is still rendered, above them or not.
-  assert.equal((component.match(/className="data-table report-table"/g) ?? []).length, 3);
+  // Every table this page shipped with is still rendered, plus pacing's exact
+  // table equivalent.
+  assert.equal((component.match(/className="data-table report-table"/g) ?? []).length, 4);
   for (const caption of [
+    "Submitted proposals per event-local day with cumulative total",
     "Proposals by category and status, with acceptance rate",
     "Assigned, completed and outstanding reviews per reviewer",
     "Slots and minutes booked per room, by event day",
