@@ -41,8 +41,12 @@ export const MAX_V1_OFFSET = 1_000_000;
 export const MAX_V1_EVENT_SELECTOR_LENGTH = 191;
 
 /**
- * Shortest `GREENROOM_API_KEY` the server will accept. Below this the whole v1
- * surface fails closed with `503 API_KEY_NOT_CONFIGURED` rather than
- * authenticating against a guessable secret.
+ * Shortest `GREENROOM_API_KEY` the server will accept. A shorter value is
+ * ignored entirely, exactly as though the variable were unset, rather than
+ * authenticating anyone against a guessable secret.
+ *
+ * Ignoring it does not disable the surface: per-event `ApiCredential` keys are
+ * still resolved, and a request no credential accepts is refused with
+ * `401 UNAUTHORIZED`. `lib/api/v1.ts` carries the full truth table.
  */
 export const V1_API_KEY_MIN_LENGTH = 32;

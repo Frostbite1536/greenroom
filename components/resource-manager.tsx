@@ -6,9 +6,18 @@ import { BookOpen, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { apiDelete, apiPatch, apiPost, firstFieldErrors } from "@/lib/api-client";
 import { EmptyState, Pill } from "@/components/ui";
 import {
+  RESOURCE_TEMPLATES,
+  applyResourceTemplate,
+  isResourceAssistantTemplateKey,
+  isResourceTemplateKey,
+  resourceHtmlNeedsReplacementConfirmation,
+  resourceTemplateNeedsConfirmation,
+} from "@/lib/resources/resource-templates";
+import {
   RESOURCE_SLUG_MAX_LENGTH,
   RESOURCE_SLUG_PATTERN,
   portalResourceHref,
+  prepareResourceHtml,
   resourceSlugFromTitle,
   type ResourceView,
 } from "@/lib/services/resource-wiki";
@@ -33,6 +42,14 @@ type ResourceDraft = {
   summary: string;
   htmlContent: string;
   published: boolean;
+};
+
+/** Local wire view: assistant schemas stay server-only under lib/assistant/. */
+type ResourceDraftSuggestion = {
+  html: string;
+  templateKey: "speaker-handbook" | "venue-travel" | "av-stage" | "day-of";
+  sectionsUsed: string[];
+  placeholders: string[];
 };
 
 const EMPTY_DRAFT: ResourceDraft = {
@@ -286,6 +303,7 @@ export function ResourceManager({
       </div>
 
       <ResourceDialog
+        key={editing ? `resource:${editing.id ?? "new"}` : "resource:closed"}
         editing={editing}
         errors={errors}
         submitting={busy !== null}
@@ -323,8 +341,18 @@ function ResourceDialog({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
+  const htmlTabRef = useRef<HTMLButtonElement>(null);
+  const previewTabRef = useRef<HTMLButtonElement>(null);
   const ids = useId();
   const open = editing !== null;
+  const [activeContentTab, setActiveContentTab] = useState<"html" | "preview">("html");
+  const [selectedTemplate, setSelectedTemplate] = useState("");
+  const [assistantNotes, setAssistantNotes] = useState("");
+  const [assistantSuggestion, setAssistantSuggestion] = useState<ResourceDraftSuggestion | null>(null);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [assistantStatus, setAssistantStatus] = useState<string | null>(null);
+  const [assistantBusy, setAssistantBusy] = useState(false);
+  const suggestionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -341,6 +369,88 @@ function ResourceDialog({
 
   const draft = editing?.draft ?? EMPTY_DRAFT;
   const slug = effectiveSlug(draft);
+  const selectedTemplateDetails = RESOURCE_TEMPLATES.find((template) => template.key === selectedTemplate);
+  const previewDecision = draft.htmlContent.trim() === "" ? null : prepareResourceHtml(draft.htmlContent);
+  const suggestionPreview = assistantSuggestion === null ? null : prepareResourceHtml(assistantSuggestion.html);
+
+  function selectContentTab(tab: "html" | "preview") {
+    setActiveContentTab(tab);
+    if (tab === "html") htmlTabRef.current?.focus();
+    else previewTabRef.current?.focus();
+  }
+
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    if (event.key === "Home") selectContentTab("html");
+    else if (event.key === "End") selectContentTab("preview");
+    else selectContentTab(activeContentTab === "html" ? "preview" : "html");
+  }
+
+  function handleTemplateChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    if (!isResourceTemplateKey(event.target.value)) return;
+    const key = event.target.value;
+    if (
+      resourceTemplateNeedsConfirmation(draft.htmlContent, key) &&
+      !window.confirm("Apply this template and replace the HTML currently in this editor? Page details and publish state stay unchanged.")
+    ) {
+      event.target.value = selectedTemplate;
+      return;
+    }
+    onChange(applyResourceTemplate(draft, key));
+    setSelectedTemplate(key);
+    setActiveContentTab("html");
+  }
+
+  async function generateAssistantDraft() {
+    if (!editing || editing.id !== null) return;
+    if (!isResourceAssistantTemplateKey(selectedTemplate)) {
+      setAssistantError("Choose one of the four guided templates before generating a draft.");
+      return;
+    }
+    if (draft.title.trim() === "") {
+      setAssistantError("Add a page title before generating a draft.");
+      return;
+    }
+    if (assistantNotes.trim() === "") {
+      setAssistantError("Add the facts and notes the draft may use.");
+      return;
+    }
+
+    setAssistantBusy(true);
+    setAssistantError(null);
+    setAssistantStatus(null);
+    const response = await apiPost<{ suggestion: ResourceDraftSuggestion }>("/api/assistant/resource-draft", {
+      templateKey: selectedTemplate,
+      title: draft.title.trim(),
+      ...(draft.summary.trim() === "" ? {} : { summary: draft.summary.trim() }),
+      notes: assistantNotes.trim(),
+    });
+    setAssistantBusy(false);
+    if (!response.ok) {
+      // Keep both the editor and any prior suggestion byte-for-byte intact: a
+      // failed retry cannot become an accidental destructive action.
+      setAssistantError(response.error.message);
+      return;
+    }
+    setAssistantSuggestion(response.data.suggestion);
+    setAssistantStatus("Draft suggestion ready. Review it before using it.");
+    requestAnimationFrame(() => suggestionRef.current?.focus());
+  }
+
+  function useAssistantDraft() {
+    if (!assistantSuggestion) return;
+    if (
+      resourceHtmlNeedsReplacementConfirmation(draft.htmlContent) &&
+      !window.confirm("Use this draft and replace the HTML currently in this editor? Page details and publish state stay unchanged.")
+    ) {
+      return;
+    }
+    onChange({ ...draft, htmlContent: assistantSuggestion.html });
+    setAssistantStatus("Draft applied to the HTML editor. Review and edit it before saving.");
+    setActiveContentTab("html");
+    requestAnimationFrame(() => htmlTabRef.current?.focus());
+  }
 
   return (
     <dialog
@@ -359,6 +469,7 @@ function ResourceDialog({
         method="dialog"
         onSubmit={(event) => {
           event.preventDefault();
+          if (assistantBusy) return;
           onSubmit();
         }}
       >
@@ -382,6 +493,7 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.title}
             placeholder="Speaker Handbook"
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, title: event.target.value })}
           />
           {errors.title ? <span className="field-error">{errors.title}</span> : null}
@@ -397,6 +509,7 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.slug}
             aria-describedby={`${ids}-slug-hint`}
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, slug: event.target.value, slugTouched: true })}
           />
           <span className="hint" id={`${ids}-slug-hint`}>
@@ -415,33 +528,191 @@ function ResourceDialog({
             autoComplete="off"
             aria-invalid={!!errors.summary}
             placeholder="Everything you need before you present."
+            disabled={assistantBusy}
             onChange={(event) => onChange({ ...draft, summary: event.target.value })}
           />
           <span className="hint">One line shown beside the page link in the portal.</span>
           {errors.summary ? <span className="field-error">{errors.summary}</span> : null}
         </label>
 
-        <label className="stack" style={{ marginTop: 14 }} htmlFor={`${ids}-html`}>
-          <span className="field-label">Page content (HTML)</span>
-          <textarea
-            id={`${ids}-html`}
+        <label className="stack" style={{ marginTop: 14 }} htmlFor={`${ids}-template`}>
+          <span className="field-label">Start from a template <span className="muted">(optional)</span></span>
+          <select
+            id={`${ids}-template`}
             className="text-input"
-            rows={12}
-            value={draft.htmlContent}
-            aria-invalid={!!errors.htmlContent}
-            aria-describedby={`${ids}-html-hint`}
-            placeholder="<h2>Welcome, speakers!</h2><p>This handbook covers arrival, A/V and stage logistics.</p>"
-            onChange={(event) => onChange({ ...draft, htmlContent: event.target.value })}
-          />
-          {/* An honest label, because the sanitizer is strict: an organizer who
-              pastes an embed needs to know it will not survive, before they
-              publish a page that silently lost half its content. */}
-          <span className="hint" id={`${ids}-html-hint`}>
-            HTML is supported and sanitized before it is saved. Headings, paragraphs, lists, tables, quotes, code and
-            links are kept; scripts, styles, iframes and other embeds are removed, and links open in a new tab.
+            value={selectedTemplate}
+            disabled={assistantBusy}
+            onChange={handleTemplateChange}
+          >
+            <option value="">Choose a template</option>
+            {RESOURCE_TEMPLATES.map((template) => (
+              <option key={template.key} value={template.key}>{template.label}</option>
+            ))}
+          </select>
+          <span className="hint">
+            {selectedTemplateDetails?.description ?? "Templates change only the HTML below."}{" "}
+            Existing content is never replaced without confirmation.
           </span>
-          {errors.htmlContent ? <span className="field-error">{errors.htmlContent}</span> : null}
         </label>
+
+        {editing?.id === null ? (
+          <section className="resource-assistant" aria-labelledby={`${ids}-assistant-title`}>
+            <div className="stack">
+              <h3 id={`${ids}-assistant-title`}>Turn my notes into a resource page</h3>
+              <p className="hint">
+                Optional AI help for a new page. Only the selected template structure, page title, optional summary,
+                and notes below are sent to the configured provider. Greenroom does not send event records, save the
+                suggestion, or publish it for you.
+              </p>
+            </div>
+
+            <label className="stack" htmlFor={`${ids}-assistant-notes`}>
+              <span className="field-label">Facts and notes</span>
+              <textarea
+                id={`${ids}-assistant-notes`}
+                className="text-input"
+                rows={5}
+                maxLength={8000}
+                value={assistantNotes}
+                disabled={assistantBusy}
+                placeholder="Paste only the facts this page may use. Leave unknown details out so the draft marks them as [Add …]."
+                onChange={(event) => setAssistantNotes(event.target.value)}
+              />
+              <span className="hint">{assistantNotes.length.toLocaleString("en-US")} / 8,000 characters</span>
+            </label>
+
+            <div className="row wrap resource-assistant-actions">
+              <button
+                className="ghost-button"
+                type="button"
+                disabled={assistantBusy}
+                aria-describedby={`${ids}-assistant-provider-note`}
+                onClick={() => {
+                  void generateAssistantDraft();
+                }}
+              >
+                {assistantBusy ? "Generating…" : assistantSuggestion ? "Try again" : "Generate suggestion"}
+              </button>
+              <span className="hint" id={`${ids}-assistant-provider-note`}>
+                Templates, preview, manual HTML, save, and publish still work when AI is unavailable.
+              </span>
+            </div>
+
+            {assistantError ? <p className="field-error" role="alert">{assistantError}</p> : null}
+            {assistantStatus ? <p className="settings-notice" role="status" aria-live="polite">{assistantStatus}</p> : null}
+
+            {suggestionPreview?.allowed ? (
+              <div
+                className="resource-assistant-suggestion"
+                ref={suggestionRef}
+                tabIndex={-1}
+                aria-labelledby={`${ids}-assistant-suggestion-title`}
+              >
+                <div className="row wrap resource-assistant-suggestion-heading">
+                  <div>
+                    <h4 id={`${ids}-assistant-suggestion-title`}>Generated suggestion</h4>
+                    <p className="hint">Sanitized and separate from the HTML editor until you choose to use it.</p>
+                  </div>
+                  <button className="primary-button" type="button" disabled={assistantBusy} onClick={useAssistantDraft}>
+                    Use this draft
+                  </button>
+                </div>
+                <div className="prose resource-preview" dangerouslySetInnerHTML={{ __html: suggestionPreview.html }} />
+                {assistantSuggestion && assistantSuggestion.placeholders.length > 0 ? (
+                  <p className="hint">
+                    Check these visible placeholders: {assistantSuggestion.placeholders.join(" · ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        <div className="stack" style={{ marginTop: 14 }}>
+          <div className="row" role="tablist" aria-label="Resource page content">
+            <button
+              id={`${ids}-html-tab`}
+              ref={htmlTabRef}
+              className={activeContentTab === "html" ? "primary-button" : "ghost-button"}
+              type="button"
+              role="tab"
+              aria-selected={activeContentTab === "html"}
+              aria-controls={`${ids}-html-panel`}
+              tabIndex={activeContentTab === "html" ? 0 : -1}
+              onClick={() => selectContentTab("html")}
+              onKeyDown={handleTabKeyDown}
+            >
+              HTML
+            </button>
+            <button
+              id={`${ids}-preview-tab`}
+              ref={previewTabRef}
+              className={activeContentTab === "preview" ? "primary-button" : "ghost-button"}
+              type="button"
+              role="tab"
+              aria-selected={activeContentTab === "preview"}
+              aria-controls={`${ids}-preview-panel`}
+              tabIndex={activeContentTab === "preview" ? 0 : -1}
+              onClick={() => selectContentTab("preview")}
+              onKeyDown={handleTabKeyDown}
+            >
+              Preview
+            </button>
+          </div>
+
+          <div
+            id={`${ids}-html-panel`}
+            role="tabpanel"
+            aria-labelledby={`${ids}-html-tab`}
+            hidden={activeContentTab !== "html"}
+          >
+            <label className="stack" htmlFor={`${ids}-html`}>
+              <span className="field-label">Page content (HTML)</span>
+              <textarea
+                id={`${ids}-html`}
+                className="text-input"
+                rows={12}
+                value={draft.htmlContent}
+                aria-invalid={!!errors.htmlContent}
+                aria-describedby={`${ids}-html-hint`}
+                placeholder="<h2>Welcome, speakers!</h2><p>This handbook covers arrival, A/V and stage logistics.</p>"
+                onChange={(event) => onChange({ ...draft, htmlContent: event.target.value })}
+              />
+              {/* An honest label, because the sanitizer is strict: an organizer who
+                  pastes an embed needs to know it will not survive, before they
+                  publish a page that silently lost half its content. */}
+              <span className="hint" id={`${ids}-html-hint`}>
+                HTML is supported and sanitized before it is saved. Headings, paragraphs, lists, tables, quotes, code and
+                links are kept; scripts, styles, iframes and other embeds are removed, and links open in a new tab.
+              </span>
+            </label>
+          </div>
+
+          <div
+            id={`${ids}-preview-panel`}
+            role="tabpanel"
+            aria-labelledby={`${ids}-preview-tab`}
+            hidden={activeContentTab !== "preview"}
+          >
+            <p className="field-label">Sanitized preview</p>
+            <div
+              className="prose resource-preview"
+              style={{ minHeight: 180, marginTop: 8, padding: 16, border: "1px solid var(--line)", borderRadius: 10 }}
+            >
+              {previewDecision === null ? (
+                <p className="muted" role="status">Nothing to preview yet.</p>
+              ) : previewDecision.allowed ? (
+                <div dangerouslySetInnerHTML={{ __html: previewDecision.html }} />
+              ) : (
+                <p className="muted" role="status">{previewDecision.message}</p>
+              )}
+            </div>
+            <p className="hint" style={{ marginTop: 8 }}>
+              This preview uses the same sanitizer as saved resource pages. Disallowed markup is removed before rendering.
+            </p>
+          </div>
+          {errors.htmlContent ? <span className="field-error">{errors.htmlContent}</span> : null}
+        </div>
 
         <label className="row" style={{ marginTop: 16 }} htmlFor={`${ids}-published`}>
           <input
@@ -455,7 +726,7 @@ function ResourceDialog({
 
         <div className="row wrap" style={{ justifyContent: "flex-end", marginTop: 22 }}>
           <button className="ghost-button" type="button" onClick={onClose} disabled={submitting}>Cancel</button>
-          <button className="primary-button" type="submit" disabled={submitting}>
+          <button className="primary-button" type="submit" disabled={submitting || assistantBusy}>
             {submitting ? "Saving…" : editing?.id === null ? "Create page" : "Save page"}
           </button>
         </div>

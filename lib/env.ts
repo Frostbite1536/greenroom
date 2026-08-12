@@ -9,7 +9,13 @@ const boolish = z.enum(["true", "false"]);
  */
 export { V1_API_KEY_MIN_LENGTH };
 export const SESSION_SECRET_MIN_LENGTH = 32;
+/**
+ * Length only — the provider owns its key format, and pinning a prefix here
+ * would refuse a valid credential the day that format changes.
+ */
+export const OPENAI_API_KEY_MIN_LENGTH = 20;
 const v1ApiKeySchema = z.string().trim().min(V1_API_KEY_MIN_LENGTH).optional();
+const openAiApiKeySchema = z.string().trim().min(OPENAI_API_KEY_MIN_LENGTH).optional();
 const sessionSecretSchema = z.string().trim().min(SESSION_SECRET_MIN_LENGTH).optional();
 const resendFromSchema = z.string().trim().min(3).max(320).refine((value) => {
   const match = value.match(/^(?:[^<>\r\n]+\s)?<([^<>\s]+)>$/);
@@ -36,9 +42,15 @@ const envSchema = z.object({
   ACCELEVENTS_API_KEY: z.string().min(1).optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
   AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
-  // Optional server-only key for the read-only v1 REST surface. When absent,
-  // those routes deliberately return 503 instead of becoming public.
+  // Optional server-only DEPLOYMENT-WIDE key for the read-only v1 REST surface;
+  // it reaches every event. Optional because per-event `ApiCredential` keys
+  // authenticate independently of it. With neither present those routes accept
+  // nothing and refuse with 401 rather than becoming public.
   GREENROOM_API_KEY: v1ApiKeySchema,
+  // Optional server-only credential for the AI drafting assistant. Absent is a
+  // supported configuration, not an error: the assistant reports itself
+  // disabled and every deterministic path beside it is unaffected.
+  OPENAI_API_KEY: openAiApiKeySchema,
   // Required in production for signed auth cookies; development/test gets an
   // intentionally non-production fallback so local demo tooling stays usable.
   SESSION_SECRET: sessionSecretSchema,
@@ -146,6 +158,7 @@ function readServerEnv(): Record<string, string | undefined> {
     AIRTABLE_API_KEY: process.env.AIRTABLE_API_KEY,
     AIRTABLE_BASE_ID: process.env.AIRTABLE_BASE_ID,
     GREENROOM_API_KEY: process.env.GREENROOM_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     SESSION_SECRET: process.env.SESSION_SECRET,
     APP_URL: process.env.APP_URL,
   };
@@ -182,6 +195,18 @@ export function arePersonaLoginsEnabled(): boolean {
 /** Server-only key for the optional read-only v1 REST surface. */
 export function getV1ApiKey(): string | undefined {
   const parsed = v1ApiKeySchema.safeParse(process.env.GREENROOM_API_KEY);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * Server-only credential for the AI drafting assistant.
+ *
+ * Read at request time and via `safeParse`, exactly like `getV1ApiKey`: an
+ * absent or too-short value returns `undefined`, which the assistant boundary
+ * reports as `disabled`. It never throws on a request path.
+ */
+export function getOpenAiApiKey(): string | undefined {
+  const parsed = openAiApiKeySchema.safeParse(process.env.OPENAI_API_KEY);
   return parsed.success ? parsed.data : undefined;
 }
 

@@ -22,7 +22,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/files?kind=headshot|slide-deck — store one file.
+ * POST /api/files?kind=headshot|slide-deck|supporting-document — store one file.
  *
  * The body is the raw bytes and `Content-Type` is the claim about them. That is
  * deliberately not multipart: a headshot or a deck is a single file with no
@@ -113,7 +113,7 @@ export const POST = handle(async (req) => {
   const kind = parseStoredFileKind(new URL(req.url).searchParams.get("kind"));
   if (!kind) {
     throw new ApiError(422, "FILE_KIND_UNSUPPORTED", "Say what this upload is for.", {
-      kind: ["Expected `headshot` or `slide-deck`."],
+      kind: ["Expected `headshot`, `slide-deck`, or `supporting-document`."],
     });
   }
   const maxBytes = storedFileMaxBytes(kind);
@@ -140,9 +140,9 @@ export const POST = handle(async (req) => {
   const dedupe = storedFileDedupeKey(dedupeInput);
 
   // Re-uploading under the same authorization scope returns the existing id.
-  // Headshots are public and dedupe across events; a private deck's fingerprint
-  // includes the active event, so another event can never inherit this row's
-  // organizer access merely because its bytes match.
+  // Headshots are public and dedupe across events; a private deck or supporting
+  // document includes the active event in its fingerprint, so another event
+  // can never inherit this row's organizer access merely because bytes match.
   let existing = await prisma.storedFile.findUnique({
     where: { uploaderUserId_kind_sha256: dedupe },
     select: { id: true, mime: true, size: true, eventId: true },

@@ -180,12 +180,15 @@ export const POST = handle(async (req) => {
       );
     }
 
-    const countRows = await tx.$queryRaw<{ count: bigint | number }[]>`
-      SELECT COALESCE(SUM("sendWindowCount"), 0) AS "count"
-      FROM "ReviewerInvite"
-      WHERE "eventId" = ${ctx.eventId} AND "sendWindowStart" = ${windowStart}
-    `;
-    if (!canReserveReviewerInviteSend(Number(countRows[0]?.count ?? 0))) throw rateLimited();
+    // Use Prisma's DateTime-aware predicate rather than raw timestamp equality.
+    // A local PostgreSQL session may not use UTC; raw parameter inference can
+    // otherwise compare the same instant in different timestamp domains and
+    // silently miss every row even while the event-hour lock is held.
+    const reserved = await tx.reviewerInvite.aggregate({
+      where: { eventId: ctx.eventId, sendWindowStart: windowStart },
+      _sum: { sendWindowCount: true },
+    });
+    if (!canReserveReviewerInviteSend(reserved._sum.sendWindowCount ?? 0)) throw rateLimited();
 
     const expiresAt = sendPlan.kind === "retry" ? existing!.expiresAt : reviewerInviteExpiry(now);
     const { tokenVersion, sendWindowCount } = sendPlan;

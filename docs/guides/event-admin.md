@@ -178,6 +178,24 @@ comments, and then send the exact previewed content to every listed speaker. Sco
 reviewer identities are never included. Submission receipts and reminders use the same
 audited delivery log; the page identifies mock mode before an operator sends.
 
+If an AI provider is configured, **Draft note from feedback** can suggest a short personal
+note from the event name, proposal title, decision, and the bounded comment excerpts you
+explicitly include. Comment text can itself contain names, addresses, or score-like prose,
+so read the disclosure before generating. The suggestion stays separate until you choose
+**Use this note** (and confirm replacement when you already wrote something). You must still
+preview the exact email before **Send it** unlocks. If the provider is unavailable, write the
+note yourself; preview and sending are unchanged.
+
+Use **Resources** to create speaker-facing handbook pages. Start from a deterministic
+speaker-handbook, venue/travel, A/V/stage, or day-of template, or from a blank page. The HTML
+and Preview tabs use the same sanitizer as the save path, and choosing a template never
+changes the title, address, summary, or publish state. Replacing non-empty HTML requires
+confirmation. For a new page, an optional **Turn my notes into a resource page** action sends
+only the selected template structure and the bounded title, summary, and notes to the
+configured provider. Its sanitized suggestion must be applied, edited, saved as a draft,
+and published in separate deliberate steps. Templates, preview, manual HTML, save, and
+publish continue to work with no provider.
+
 ---
 
 ## 7. Put the program on your website

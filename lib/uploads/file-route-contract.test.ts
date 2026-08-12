@@ -68,6 +68,11 @@ test("oversize is 413 REQUEST_TOO_LARGE and a wrong type is 422, matching the re
   assert.match(read("lib/api/bounded-json.ts"), /413, "REQUEST_TOO_LARGE"/);
 });
 
+test("the route's published kind vocabulary includes supporting documents", () => {
+  assert.match(upload, /kind=headshot\|slide-deck\|supporting-document/);
+  assert.match(upload, /Expected `headshot`, `slide-deck`, or `supporting-document`\./);
+});
+
 test("the stored mime is the server's verdict, and the claimed header is never written", () => {
   // The only value assigned to `mime:` on the create is the verdict's.
   assert.match(upload, /mime: verdict\.mime,/);
@@ -170,11 +175,53 @@ test("the upload field fills the URL column beside it rather than replacing the 
   // Both surfaces keep their text input: uploading is an alternative way to
   // fill one field, not a second column and not a replacement.
   assert.match(portalForm, /onUploaded=\{\(url\) => update\("headshotUrl", url\)\}/);
-  assert.match(portalForm, /onUploaded=\{\(url\) => update\("slideDeckUrl", url\)\}/);
   assert.match(portalForm, /value=\{form\.headshotUrl\}/);
-  assert.match(portalForm, /value=\{form\.slideDeckUrl\}/);
   assert.match(roster, /onUploaded=\{\(url\) => onChange\(\{ \.\.\.draft, headshotUrl: url \}\)\}/);
   assert.match(roster, /value=\{draft\.headshotUrl\}/);
+});
+
+test("the deck uploader fills THIS EVENT's deck, and the global column stays editable", () => {
+  // The primary deck control writes the per-event association, because one
+  // global URL cannot be a different deck for two events — the roadmap's own
+  // stated limitation. Its text input is still the same field, filled two ways.
+  assert.match(portalForm, /onUploaded=\{\(url\) => update\("eventSlideDeckUrl", url\)\}/);
+  assert.match(portalForm, /value=\{form\.eventSlideDeckUrl\}/);
+  // Exactly one deck uploader: the global column did not silently grow a second
+  // one that would write the wrong place.
+  assert.equal(portalForm.split('kind="SLIDE_DECK"').length - 1, 1);
+  assert.doesNotMatch(portalForm, /onUploaded=\{\(url\) => update\("slideDeckUrl", url\)\}/);
+  // The global column is still present and still writable — it is the
+  // documented fallback for events with no association, so removing the
+  // speaker's ability to set it would replace one gap with another.
+  assert.match(portalForm, /value=\{form\.slideDeckUrl\}/);
+  assert.match(portalForm, /onChange=\{\(e\) => update\("slideDeckUrl", e\.target\.value\)\}/);
+  // The copy names which event the deck is for rather than saying "this event".
+  assert.match(portalForm, /Slide deck URL for \{eventName\}/);
+  assert.match(portalForm, /Global slide deck URL \(fallback\)/);
+});
+
+test("the portal write targets the association, never the global column", () => {
+  const route = read("app/api/portal/profile/route.ts");
+  // Split out BEFORE anything reaches Prisma, so it can never be spread onto a
+  // SpeakerProfile write.
+  assert.match(route, /const \{ socialLinks, eventSlideDeckUrl, \.\.\.textFields \} = parsed\.data;/);
+  const profileWrite = route.slice(
+    route.indexOf("tx.speakerProfile.upsert("),
+    route.indexOf("if (eventSlideDeckUrl !== undefined)"),
+  );
+  assert.ok(profileWrite.length > 0);
+  assert.doesNotMatch(profileWrite, /eventSlideDeckUrl/);
+  // The association is written for the SESSION's event, never a body field.
+  assert.match(route, /const eventId = session\.event\.id;/);
+  assert.doesNotMatch(route, /body\.eventId|parsed\.data\.eventId/);
+  // A clear deletes the association only; the global column is untouched.
+  assert.match(route, /tx\.eventSpeakerDeck\.deleteMany\(\{ where: \{ eventId, userId: user\.id \} \}\)/);
+  // Profile row and association are written in ONE transaction, under the same
+  // key the organizer roster editor takes.
+  assert.ok(
+    route.indexOf("await lockSpeakerProfile(tx, user.id);") < route.indexOf("tx.eventSpeakerDeck.upsert("),
+  );
+  assert.equal(route.split("prisma.$transaction(").length - 1, 1);
 });
 
 test("the roster's headshot input cannot be blocked by native URL validation", () => {

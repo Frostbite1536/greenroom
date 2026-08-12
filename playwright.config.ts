@@ -4,13 +4,9 @@ import { assertDisposableDatabase, assertLoopbackTarget, loadRepoEnv } from "./e
 /**
  * Browser-level proof harness (D-C5-15 item 1).
  *
- * Deliberately minimal: one Chromium project, one worker, no retries. These
- * suites drive a real production build against a DISPOSABLE database and their
- * value is that the run order and the data are exactly what a judge would see,
- * so parallelism and retries would only make the evidence less legible.
- *
- * Ports 3200-3299 belong to the sprint's other lanes; this harness stays out of
- * that range. Override its owned server's port with `E2E_PORT`.
+ * One Chromium worker and no retries keep the database-writing golden path
+ * deterministic. Both the application and paid-provider replacement are owned
+ * processes; an existing listener is a hard failure.
  */
 loadRepoEnv();
 assertDisposableDatabase();
@@ -23,19 +19,24 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
 const baseURL = `http://127.0.0.1:${PORT}`;
 const validatedDatabaseUrl = process.env.DATABASE_URL!;
 
-assertLoopbackTarget(baseURL);
+const rawAssistantPort = process.env.E2E_ASSISTANT_PORT?.trim() || "3413";
+const ASSISTANT_PORT = Number(rawAssistantPort);
+if (!Number.isInteger(ASSISTANT_PORT) || ASSISTANT_PORT < 1 || ASSISTANT_PORT > 65_535) {
+  throw new Error("E2E_ASSISTANT_PORT must be an integer from 1 through 65535.");
+}
+if (ASSISTANT_PORT === PORT) {
+  throw new Error("E2E_ASSISTANT_PORT must differ from E2E_PORT.");
+}
+const assistantBaseURL = `http://127.0.0.1:${ASSISTANT_PORT}`;
+const assistantEndpoint = `${assistantBaseURL}/v1/responses`;
 
-/**
- * `next start` runs with NODE_ENV=production, where `getServerSigningSecret()`
- * fails closed without a >= 32 character secret — the one-click personas would
- * throw. A local, throwaway secret is supplied for the server this config
- * spawns; a secret already in the environment always wins.
- */
+assertLoopbackTarget(baseURL);
+assertLoopbackTarget(assistantBaseURL);
+
 const LOCAL_E2E_SESSION_SECRET = "greenroom-e2e-local-only-session-secret-not-for-production";
 
 export default defineConfig({
   testDir: "./e2e",
-  // Failure artifacts (screenshots, traces) — git-ignored, never committed.
   outputDir: "./e2e/.artifacts",
   fullyParallel: false,
   workers: 1,
@@ -49,7 +50,6 @@ export default defineConfig({
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
     video: "off",
-    // The whole point is a real journey, so nothing is stubbed.
     serviceWorkers: "block",
   },
   projects: [
@@ -58,20 +58,31 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],
-  webServer: {
-    // A production server, not `next dev`: the judged application is the built
-    // one. Requires `npm run build` first — see e2e/README.md.
-    command: `npx next start -p ${PORT}`,
-    url: baseURL,
-    // Browser writes must reach this owned process, whose validated DB URL is
-    // inherited below. A listener already on the URL is a hard failure.
-    reuseExistingServer: false,
-    timeout: 180_000,
-    stdout: "ignore",
-    stderr: "pipe",
-    env: {
-      DATABASE_URL: validatedDatabaseUrl,
-      SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
+  webServer: [
+    {
+      command: `node e2e/assistant-provider-mock.mjs ${ASSISTANT_PORT}`,
+      url: `${assistantBaseURL}/health`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: "ignore",
+      stderr: "pipe",
     },
-  },
+    {
+      // The judged application is the production build, never `next dev`.
+      command: `npx next start -p ${PORT}`,
+      url: baseURL,
+      reuseExistingServer: false,
+      timeout: 180_000,
+      stdout: "ignore",
+      stderr: "pipe",
+      env: {
+        DATABASE_URL: validatedDatabaseUrl,
+        SESSION_SECRET: process.env.SESSION_SECRET ?? LOCAL_E2E_SESSION_SECRET,
+        MOCK_EXTERNAL_APIS: "true",
+        DEMO_PERSONA_LOGIN_ENABLED: "true",
+        OPENAI_API_KEY: "greenroom-e2e-owned-provider-key-not-a-secret",
+        ASSISTANT_ENDPOINT_OVERRIDE: assistantEndpoint,
+      },
+    },
+  ],
 });

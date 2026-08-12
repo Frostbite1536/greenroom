@@ -78,17 +78,17 @@ without instructions from the authors.
 deployed golden-path verification are complete. This stage is intentionally not
 part of the current release promise.
 
-1. Ship a public static OpenAPI contract for the existing read-only v1 API, with
-   drift tests, safe static examples, and a workflow-to-route evidence map. Do
-   not publish the deployment-wide `GREENROOM_API_KEY`.
+1. **Delivered:** a public static OpenAPI contract for the existing read-only v1
+   API, with drift tests, safe static examples, and a workflow-to-route evidence
+   map. The deployment-wide `GREENROOM_API_KEY` is never published.
 2. Define scoped-read rules before adding discovery or breadth: event discovery,
    resource visibility, held/unplaced-session privacy, filters, and an
    incremental-sync cursor contract.
-3. Introduce hashed, revocable per-event credentials and scoped demo access in a
-   reviewed schema/authorization change. Only then add the approved bounded read
-   models and their contract tests. That same later window must introduce
-   per-event deck pointers or associations: `SpeakerProfile.slideDeckUrl` is
-   global and cannot itself provide per-event-private deck access.
+3. **Delivered:** hashed, revocable per-event credentials and per-event deck
+   associations in one reviewed schema/authorization window. The v1 endpoints
+   accept a scoped key without exposing the deployment-wide key; the global
+   `SpeakerProfile.slideDeckUrl` remains only the documented fallback. Safely
+   scoped demo-key distribution and additional read models remain behind item 2.
 4. Add generic webhook delivery and any narrow agent writes last. Writes require
    idempotency, per-token rate limits, audit records, and reuse of the existing
    abstract and schedule lock-protected service paths.

@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import {
+  authorizeV1EventScope,
   authorizeV1Request,
   getV1PaginationMeta,
   handleV1,
   parseV1ListQuery,
+  v1EventWhere,
   v1Error,
   v1ListResponse,
 } from "@/lib/api/v1";
@@ -14,21 +16,29 @@ export const runtime = "nodejs";
 
 /** GET /api/v1/submissions?event=<slug|id>&limit=50&offset=0 */
 export const GET = handleV1(async (req: Request): Promise<Response> => {
-  // Keep this check before parsing or querying so an untrusted request cannot
-  // probe events or cause any database work without a configured valid key.
-  const authorization = authorizeV1Request(req.headers);
+  // Keep this check before parsing and before any programme read, so an
+  // untrusted request cannot probe events or reach event data without an
+  // accepted credential. It is no longer true that the surface touches no
+  // database at all first: authenticating a per-event `grk_` credential costs
+  // one indexed point read of the credential table. That read reaches no
+  // programme data and no event row, and the published contract states it.
+  const authorization = await authorizeV1Request(req.headers);
   if (!authorization.ok) return v1Error(authorization.error);
 
   const query = parseV1ListQuery(new URL(req.url).searchParams);
   if (!query.ok) return v1Error(query.error);
 
-  const event = await prisma.event.findFirst({
-    where: { OR: [{ id: query.value.event }, { slug: query.value.event }] },
+  // The credential's own scope is part of this predicate, not a check applied
+  // after the fact: a per-event key resolving somebody else's selector matches
+  // no row, so that event's data is never read and the refusal carries no
+  // signal about whether it exists.
+  const selected = await prisma.event.findFirst({
+    where: v1EventWhere(authorization.scope, query.value.event),
     select: { id: true, name: true, slug: true, timezone: true },
   });
-  if (!event) {
-    return v1Error({ status: 404, code: "EVENT_NOT_FOUND", message: "Event not found." });
-  }
+  const scoped = authorizeV1EventScope(authorization.scope, selected);
+  if (!scoped.ok) return v1Error(scoped.error);
+  const event = scoped.event;
 
   const where = { eventId: event.id };
   const [submissions, total] = await Promise.all([

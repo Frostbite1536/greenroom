@@ -233,3 +233,156 @@ two PrismaClients through both interleavings against a real Postgres, gated
 behind `RACE_PROOF=1` plus a disposable `DATABASE_URL` so `npm test` needs no
 database. Pre-fix, both orders end with zero assignments; post-fix, both end with
 exactly one.
+
+## Assistant: one provider, closed projections, and explicit human control
+Greenroom's two assisted-authoring actions share one server-only Responses API
+client and one durable assistant-rate service. They are not a chat system or an
+agent: requests have no tools, memory, history, storage, streaming, or write
+capability, and provider retention is disabled. A missing or failing provider
+must leave the deterministic workflow usable rather than fabricate a fallback.
+
+Each route owns a strict structured-output schema and a closed input projection.
+Resource drafting sends only a code-owned static template structure plus the
+administrator's bounded title, optional summary, and notes; it reads no roster,
+proposal, reviewer, schedule, or contact data. Decision-note drafting may send
+the event name, proposal title, current decision, and bounded excerpts of review
+comments only when the administrator opts in. Those free-text excerpts can
+themselves contain identifying or score-like text, so the UI says so instead of
+claiming that names or addresses can never leave. Neither route logs prompts,
+outputs, provider bodies, or raw provider errors.
+
+The outputs remain suggestions. Decision notes must be plain text. Resource HTML
+is sanitized before preview and then sanitized again by the existing authoritative
+save route. Applying a suggestion never saves, publishes, sends email, or changes
+a decision; replacing non-empty organizer content requires confirmation. This
+keeps provider output outside the domain's write and locking contracts and makes
+human review a product invariant rather than prompt wording.
+
+## The email log filters in the database, and still states no total (EML-01)
+`/admin/emails` read the newest 100 dispatches with no filter, search or way
+past that cap. Four GET narrowings were added - status chips, a template
+select, a bounded recipient search and a 50-row page - and the decision was
+where they apply. In the query, not over an already-read page: a chip layered
+on a capped read would mean "failed among the newest 50", which is a different
+and quieter claim than the one the chip makes. That is also why the page size
+became its own limit (`adminEmailDispatchPage`) rather than a slice of the old
+`adminEmailDispatches` cap.
+
+The dropped `count()` stays dropped, and pagination did not smuggle a total
+back in as a page count. The pager offers newer/older from the page-plus-one
+probe and the copy describes only what is on screen; "page 3 of 9" would need a
+second, differently-snapshotted read - the exact contradiction this panel
+removed when it gave up its event-wide total.
+
+Paging is keyset, not offset, and that was a correctness fix rather than a
+preference (found in review of PR #97). The first cut derived Prisma `skip`
+from a `?page=` number, which is only sound over a set that holds still. This
+one does not: `EmailDispatch` grows while it is read, and a status chip's
+subset changes as rows resolve. One dispatch inserted between two page requests
+shifts every later offset by one, so page 2 repeats page 1's last row; one
+`queued` row resolving into `sent` under the queued chip shifts them the other
+way, so a row is never rendered at all. Neither failure announces itself.
+
+Each page is now anchored to a row the operator actually saw, using the
+`(createdAt, id)` total order the read already had. The predicate is the
+row-value comparison written the long way - `createdAt < a OR (createdAt = a
+AND id < b)` - because Prisma has no tuple operator, and its own `cursor:`
+wants the sort key to be a unique index, which `(createdAt, id)` is not. The
+`id` half is load-bearing rather than defensive: a bulk send writes many rows
+inside one millisecond, so a bare `createdAt <` skips every tied row after the
+anchor and `<=` repeats all of them. `email-history-stability.test.ts` proves
+all three cases against an in-memory store that executes the emitted clause
+literally, and it fails if the tie-break is removed.
+
+The cursor is base64url of `createdAt|id` - opaque, not secret. Both halves are
+already visible on the page that issued it; encoding exists so callers do not
+hand-assemble positions, which is how offset arithmetic creeps back in. It is
+length-bounded, its instant must round-trip through `toISOString` rather than
+merely parse, and any malformed token resolves to the newest page instead of
+throwing, because a stale link is a bad anchor and not a broken panel.
+
+The cost is absolute positions: no "showing 51-100" and no page numbers. That
+is the honest trade rather than a regression - a row number over a live log was
+never a stable address, and the earlier copy stating one was quietly wrong the
+moment a dispatch landed. The pager always offers "Newest" beside the
+directional links, so a page emptied by a stale anchor is never a dead end.
+
+The chips deliberately carry no counts. The speaker roster counts its chips
+from rows it already loaded, which is free and consistent; here a count per
+chip is four more queries against four more snapshots, and numbers that can
+disagree with the rows underneath them are worse than no numbers.
+
+`EmailDispatch.status` is a `String`, not an enum, so nothing in the schema
+fails when a new outcome appears. The chip list is therefore derived from one
+`EMAIL_DISPATCH_STATUS_META` record and pinned by a source contract that reads
+`DeliveryMode` out of `send.ts` and the column default out of the schema. That
+gave `queued` the filter it never had - stored, rendered, and reachable by no
+chip, the same gap the abstracts chips closed for `WITHDRAWN`. A row carrying
+some other status is still rendered honestly under the unfiltered chip; a
+filter is an equality test, and there is no name to test against.
+
+Empty states are per combination because "no failed dispatches" and "no emails
+yet" are different facts and a filtered query cannot establish the second. Only
+the unfiltered first page may say the log itself is empty.
+
+## Proposal attachments are a join table, not a column on `StoredFile`
+The obvious shape for "a supporting document on a proposal" is a nullable
+`abstractId` on `StoredFile`. It does not work here, and the reason is dedupe.
+`StoredFile` is unique on `(uploaderUserId, kind, sha256)`, and for every private
+kind the `sha256` is an event-scoped fingerprint, so a speaker who attaches the
+same PDF to two of their proposals in one event gets back **one** row —
+`POST /api/files` returns the existing id with `deduped: true` rather than
+inserting. A single owning column could only ever name one of those proposals;
+the second attach would silently point at the first, or would have to defeat the
+dedupe that makes private bytes event-scoped in the first place.
+
+`AbstractAttachment` also turned out to be the right thing to count and the right
+thing to delete. The "max 3 per proposal" cap counts links, and removal deletes a
+link while the bytes stay — which is not a shortcut but the behaviour the product
+already had, since clearing `slideDeckUrl` has never deleted the uploaded deck
+either. The row is still the uploader's dedupe target for their next identical
+upload. Orphaned bytes therefore accumulate; a reaper is a named follow-up rather
+than something this change smuggled in.
+
+The upload pipeline was extended, never forked. `SUPPORTING_DOCUMENT` is an enum
+value with the same 5 MiB/PDF limits as `SLIDE_DECK`, and it lands on the private
+branch of `canReadStoredFile` by being not-`HEADSHOT` — which is why no
+authorization logic changed at all. Attaching is a second call that links an
+already-stored id, so `POST /api/files` gained no proposal-authorization surface.
+
+The consequence worth stating: reading is the unwidened deck rule, so a
+**co-speaker may list a document they cannot open**. Widening it to "any speaker
+on the proposal" was the alternative and was rejected — it would have made the
+attachment rule differ from the deck rule for no stated reason. Instead
+`viewAttachments` returns `canOpen` from the same matrix the serving route
+enforces, and the row says so rather than rendering a link that answers 404.
+
+## The per-event deck is a URL column, and the global one stays
+`EventSpeakerDeck(eventId, userId, deckUrl)` closes the roadmap's own words:
+"one global profile URL cannot provide per-event-private deck access."
+`SpeakerProfile` is one row per person for the whole instance, so it can be
+neither two decks nor private to one event's organizers.
+
+`deckUrl` is a string rather than a `storedFileId` foreign key because the deck
+field has always accepted **either** an uploaded `/api/files/<id>` path **or** a
+pasted absolute link, validated by one schema. An FK cannot represent the pasted
+link, so it would either drop that capability or need two columns to say one
+thing. One column with the same validator as the global column it falls back to
+keeps the two comparable and the precedence rule trivial.
+
+Two things were deliberately not done. `speakerProfileUpdateSchema` was not given
+a sixth key: its keys are `SpeakerProfile` COLUMNS, the organizer roster editor
+`.pick()`s from it, and the v1 API's published object describes exactly those —
+so `eventSlideDeckUrl` lives on a separate `portalProfileUpdateSchema` that only
+the portal route parses. And the global field was not made read-only in the
+portal: it is what every event without an association resolves to, so removing
+the speaker's ability to set it would have replaced one gap with another. The
+form relabels it as the fallback and names which event the primary control is
+for.
+
+`SpeakerStatusRow` was not widened either. It is a pure projection shared with
+the `/admin` dashboard card, the CSV export and the report metrics, none of which
+asked for a deck, so the resolution rides beside the rows as `decks` on
+`SpeakerRosterView`. The global column is also kept out of the roster's
+`profileSelect`, because that projection is what profile-completeness counts and
+adding a fifth field would have quietly restated every percentage on the screen.

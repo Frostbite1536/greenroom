@@ -109,8 +109,10 @@ invariant references in [`../INVARIANTS.md`](../INVARIANTS.md).
 - Demo reset is refused unless an operator explicitly opts in with
   `ALLOW_DEMO_RESET=true` — it is not set in production, and there is no reset
   control anywhere in the UI.
-- The read-only API refuses a request without a valid key, and returns
-  `503` when no key is configured at all rather than serving data openly.
+- The read-only API refuses any request without an accepted key with `401`. Two
+  kinds reach it: a deployment-wide key the operator sets, and per-event keys an
+  organizer issues and revokes, each reaching only its own event. A deployment
+  with neither configured accepts nothing rather than serving data openly.
 
 ## Current limitations
 
@@ -127,10 +129,25 @@ Stated plainly, because an evaluator should not have to discover them.
   role is re-resolved per event, so the same person can be an admin on one and a
   speaker on another. What is *not* there: no way to join an event you were not
   added to, and no cross-event view — every screen still shows exactly one event.
-- **No file upload on proposals.** Speaker profiles do take real uploads —
-  headshots and slide decks are stored in the database and served from
-  `/api/files/<id>`, with a URL field still offered as the alternative — but a
-  proposal itself still carries no attachment.
+- **Proposal attachments are portal-only, and private to their uploader.** A
+  signed-in speaker can attach up to three PDF supporting documents (≤5 MiB
+  each) to their own proposal while it is still editable, through the same
+  upload pipeline as headshots and decks. Two limits an evaluator should know:
+  the **anonymous public CFP form takes no attachment at all** — a document can
+  only be added afterwards, from the portal — and the bytes are readable by the
+  uploader and this event's organizers only, so a **co-speaker on a shared
+  proposal sees that a document exists but cannot open it**. Each row says so
+  rather than offering a link that would fail. Removing an attachment removes
+  the link, not the stored bytes; there is no reaper for orphaned uploads.
+- **A speaker's slide deck is now per event, with the old global one as the
+  fallback.** The portal writes a deck for the event you are signed in to, and
+  the organizer roster shows it with its source named ("This event" or "Global
+  profile (fallback)"). The global `SpeakerProfile.slideDeckUrl` is unchanged
+  and still editable — it is what every event without its own association
+  resolves to. What is **not** per-event yet: the read-only v1 API's
+  `profile.slideDeckUrl` still reports only the global value, because widening
+  that published contract belongs with the scoped-credential work it is
+  sequenced behind.
 - **One topic per submission, by design.** A CFP form can offer several topic
   options, but each submitted proposal stores exactly one selected topic, which
   is what routes it to a review team. The agenda `Track` is a separate placement
@@ -139,14 +156,21 @@ Stated plainly, because an evaluator should not have to discover them.
   live provider path when one is configured. Decision mail is preview-gated: the
   send button stays disabled until the exact content has been previewed, and the
   send is bound to that content and recipient set.
-- **The read-only v1 API is off by default.** It serves data only when
-  `GREENROOM_API_KEY` is configured on the server.
+- **The read-only v1 API refuses every uncredentialed request.** It accepts the
+  deployment-wide `GREENROOM_API_KEY` or an ADMIN-issued, revocable per-event
+  `grk_...` key. A fresh install has neither and returns the same 401 without
+  serving program data.
 - **Accessibility evidence is automated only.** Every audited route scored 100 on
   Lighthouse accessibility at the recorded measurement, and the three admin
   modal overlays now use the native `<dialog>` focus model — but no manual
   screen-reader pass has been performed. That gap is real and unclosed.
-- **The Greenroom Assistant is not in the product.** It is not in the merged
-  tree and is deliberately not described anywhere in this package.
+- **The Greenroom Assistant is optional and advisory.** Without a configured
+  provider, deterministic resource templates, sanitized preview, manual HTML,
+  save/publish, manual decision notes, preview, and send continue to work. With
+  a provider, only the bounded fields disclosed beside each action are sent;
+  generated results remain separate suggestions until an administrator applies
+  them. The assistant has no tools, memory, automatic save/publish/send, or
+  proposal-evaluation authority.
 - **The demo deployment intentionally hands out admin.** The one-click personas
   are the evaluation entry point, so any visitor can become the seeded event's
   admin — including its operations console, whose live-send buttons work when
@@ -162,8 +186,9 @@ Stated plainly, because an evaluator should not have to discover them.
   modal focus management). The remaining accepted findings are recorded here as
   roadmap, not hidden: schema changes apply via audited `db push` windows rather
   than versioned migrations; email and Airtable delivery run serially in-request
-  (fine at demo scale, an outbox at real scale); the v1 API uses one
-  deployment-wide read-only key rather than scoped credentials; browser security
+  (fine at demo scale, an outbox at real scale); the v1 API still exposes only
+  its three bounded read models and does not provide a public demo credential;
+  browser security
   headers beyond framework defaults (CSP et al.) are not yet set; admin profile
   edits use last-write-wins rather than version checks.
 

@@ -58,7 +58,12 @@ Driven by `scripts/install-rehearsal.mjs` against the `npm run dev` server.
 | 5. Speaker completes onboarding | portal renders; task check-off persists → **200** |
 | 6. Admin schedules without conflicts | conflicting placement **refused 409 `SCHEDULE_CONFLICT` / `ROOM_OVERLAP`**; clean placement → **200** |
 | 7. Public embed + `.ics` | new talk visible on `/embed/schedule` **logged out**; `.ics` export → 200 and contains the talk; `/embed/speakers` → 200 |
-| guardrails | `/api/admin/reset` refused **403 `RESET_DISABLED`**; `/api/v1/*` returns **503** with no `GREENROOM_API_KEY` (fails closed, never public); a SPEAKER session is **307**-redirected away from `/admin/agenda` |
+| guardrails | `/api/admin/reset` refused **403 `RESET_DISABLED`**; `/api/v1/*` returned **503** with no `GREENROOM_API_KEY` (fails closed, never public); a SPEAKER session is **307**-redirected away from `/admin/agenda` |
+
+That 503 is the historical `f80247e` observation, preserved rather than
+rewritten. Current code and the current rehearsal harness instead require an
+uncredentialed v1 read to return 401 with no data; the final-SHA rehearsal will
+record that newer contract only after it has actually run.
 
 The run also asserts a **sentinel** before touching anything: the harness proves
 the server it is about to drive shares the disposable database the operator

@@ -11,10 +11,24 @@ Greenroom exposes two separate API surfaces:
 
 ## Read-only REST API (v1)
 
-The v1 API is an optional server-to-server, read-only surface. Set
-`GREENROOM_API_KEY` on the server to enable it. Use a random value of at least
-32 characters. When the variable is unset or too short, all v1 routes return
-`503 API_KEY_NOT_CONFIGURED`; the key is never safe to expose in browser code.
+The v1 API is a server-to-server, read-only surface. Two kinds of credential
+reach it, and they differ in reach:
+
+- **The deployment-wide key.** Set `GREENROOM_API_KEY` on the server to a random
+  value of at least 32 characters; a shorter value is ignored entirely, as
+  though unset. This key may address **any** event on the deployment.
+- **Per-event keys.** An event's ADMIN issues these from **Event settings → API
+  access**. They look like `grk_<id>_<secret>`, are stored only as a one-way
+  hash, are revocable, and may address **that one event and nothing else**.
+
+Either kind is sent the same way, and neither is ever safe to expose in browser
+code.
+
+A deployment can be fully configured with per-event keys alone, so there is no
+separate "this server is not configured" answer. **Every request without an
+accepted credential is `401 UNAUTHORIZED`**, including on a deployment that has
+set no `GREENROOM_API_KEY` at all: such a deployment refuses every request it
+cannot authenticate, and still exposes no program data.
 
 The contract for these three routes is published in two forms, both public and
 neither requiring a key: **`GET /api/v1/openapi.json`** serves a static
@@ -27,7 +41,12 @@ from the environment, auth, and the database.
 
 Authenticate with either `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 Every request must provide an explicit `event` query parameter containing the
-event's slug or id. Unknown events return `404 EVENT_NOT_FOUND`.
+event's slug or id.
+
+With the deployment-wide key, an unknown event returns `404 EVENT_NOT_FOUND`.
+With a per-event key, anything other than that key's own event returns
+`401 UNAUTHORIZED` whether or not such an event exists — a per-event key cannot
+be used to discover which other events a deployment hosts.
 
 ```bash
 export BASE_URL="https://your-app.example"
@@ -63,8 +82,7 @@ records include an id tiebreaker after their primary ordering.
 
 Errors use the same `version`, `data`, `error`, and `meta` top-level fields.
 Expected error codes are `UNAUTHORIZED` (401), `EVENT_REQUIRED` or
-`INVALID_QUERY` (400), `EVENT_NOT_FOUND` (404), and `API_KEY_NOT_CONFIGURED`
-(503).
+`INVALID_QUERY` (400), `EVENT_NOT_FOUND` (404), and `INTERNAL_ERROR` (500).
 
 ### Endpoints
 

@@ -351,7 +351,7 @@ function sourceFailures() {
 
 test("the documented error codes are exactly the codes the surface can emit", () => {
   const { codes } = sourceFailures();
-  assert.ok(codes.size >= 6, `expected the full failure set, found ${[...codes].join(", ")}`);
+  assert.ok(codes.size >= 5, `expected the full failure set, found ${[...codes].join(", ")}`);
   const documented = ((schemas.ErrorBody as JsonRecord).properties as JsonRecord).code as JsonRecord;
   assert.deepEqual([...(documented.enum as string[])].sort(), [...codes].sort());
 });
@@ -366,12 +366,29 @@ test("the documented statuses are exactly the statuses the surface can return", 
   documented.delete("200");
   assert.deepEqual([...documented].sort(), [...statuses].sort());
 
-  // Fail-closed is a promise, not an implementation detail: keep it named.
-  assert.ok(statuses.has("503"), "an unconfigured key must still fail closed");
-  assert.match(
-    read(V1_LIB),
-    /code: "API_KEY_NOT_CONFIGURED"/,
-    "the 503 the document promises must still exist",
+  // Refusing without a credential is a promise, not an implementation detail:
+  // keep it named. It is 401 — the surface authenticates rather than reporting
+  // itself unconfigured, because a deployment can be fully configured with
+  // nothing but per-event keys and no GREENROOM_API_KEY at all.
+  assert.ok(statuses.has("401"), "a missing or invalid credential must still be refused");
+  assert.match(read(V1_LIB), /code: "UNAUTHORIZED"/, "the 401 the document promises must still exist");
+
+  // The superseded "not configured" answer must not come back. It was a false
+  // claim about the server's state once scoped credentials existed, and the
+  // published document no longer advertises it on any route.
+  //
+  // Asserted against CODE, not raw source: the truth table's own comment
+  // explains at length why this refusal was removed, and that explanation is
+  // worth keeping.
+  assert.ok(!statuses.has("503"), "this surface must no longer answer 503");
+  assert.doesNotMatch(
+    code(V1_LIB),
+    /API_KEY_NOT_CONFIGURED/,
+    "the superseded unconfigured refusal must stay removed from the auth path",
+  );
+  assert.ok(
+    !JSON.stringify(document).includes("API_KEY_NOT_CONFIGURED"),
+    "the published document must not advertise a status the surface cannot return",
   );
 });
 
@@ -501,7 +518,7 @@ test("the view layer resolves the whole document without a gap", () => {
     assert.equal(view.parameters.length, 3);
     assert.ok(view.parameters.every((parameter) => parameter.constraint.length > 0));
     assert.ok(view.responseExample, `${view.path} must render a response example`);
-    assert.deepEqual(view.errors.map((error) => error.status).sort(), ["400", "401", "404", "500", "503"]);
+    assert.deepEqual(view.errors.map((error) => error.status).sort(), ["400", "401", "404", "500"]);
     assert.ok(view.errors.every((error) => error.code.length > 0), `${view.path} errors need codes`);
   }
   assert.equal(endpointViews().length, Object.keys(paths).length);

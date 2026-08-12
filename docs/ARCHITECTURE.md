@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-A fast program-management workspace for event admins, evaluators, and speakers. It covers CFP intake, abstract evaluation, confirmed sessions, speaker onboarding, agenda scheduling, public embeds, communications, and imports.
+A fast program-management workspace for event admins, evaluators, and speakers. It covers CFP intake, abstract evaluation, confirmed sessions, speaker onboarding, agenda scheduling, public embeds, communications, imports, and bounded authoring assistance.
 
 Explicit non-goals: CRM, marketing automation, payments, multi-language support, and AI evaluation workflows.
 
@@ -96,6 +96,8 @@ Backend ownership routes:
 - `/api/admin/*`: event/settings administration, bounded exports, speakers/tasks, and
   the environment-gated demo reset
 - `/api/integrations/*`: Accelevents webhook and CSV/JSON import
+- `/api/assistant/*`: ADMIN-only, event-context resource and decision-note
+  suggestions through one server-only provider and one durable rate stack
 - `/api/v1/*`: read-only, API-key-gated server-to-server surface (see [`API.md`](API.md))
 
 Ops ownership routes:
@@ -118,14 +120,23 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   writes both require that form to be open, use a 128 KiB bounded body plus strict bounded
   answers/roster, reject duplicate normalized speaker emails, and pass durable rate limits.
 - Resource HTML must be sanitized before persistence or rendering.
+- Assistant actions are advisory and non-retained. Resource drafting sends only
+  the selected static template plus the organizer's bounded title, summary, and
+  notes; it reads no event records. Decision-note drafting sends the event name,
+  proposal title, decision, and only the bounded comment excerpts the organizer
+  opted into. Both use code-owned strict output schemas, expose no tools or
+  memory, log no prompt/output/provider body, and return suggestions that require
+  an explicit apply action. Resource HTML is sanitized before preview and again
+  by the unchanged save path; decision output must be plain text. No assistant
+  route saves, publishes, sends mail, or changes a decision.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
-  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck` takes a raw
+  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck|supporting-document` takes a raw
   authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
   headshot, 5 MiB for a deck), sniffs the magic bytes and refuses anything whose real format is
   not accepted for that kind or does not match the claimed content type (`422`), then stores the
   bytes in `StoredFile` keyed by `(uploader, kind, fingerprint)` so a same-scope re-upload
   returns the id that already exists. A public headshot's fingerprint is its raw content SHA;
-  a private slide deck uses a versioned, event-scoped SHA over the event id and raw content
+  a private slide deck or supporting document uses a versioned, event-scoped SHA over the event id and raw content
   digest, so identical bytes uploaded under another event cannot inherit the first event's
   organizer access. Same-event legacy raw-digest deck rows remain reusable. The **stored,
   server-derived** mime — never the client's header — is what
@@ -134,7 +145,9 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   renders on the anonymous speaker gallery and the speakers embed (`public, max-age=31536000,
   immutable`), a `SLIDE_DECK` is the uploader's or that event's ADMIN's only (`private, no-store`,
   served as an attachment), and a file that does not exist is the same 404 as one the caller may
-  not read. The matrix, caps and sniffer are one pure module (`lib/uploads/stored-file.ts`); the
+  not read. Supporting documents use that same private/no-store rule and can be linked only to
+  the uploader's own editable proposal, up to three links per proposal. The matrix, caps and
+  sniffer are one pure module (`lib/uploads/stored-file.ts`); the
   per-user throttle reuses the S19 durable bucket table rather than counting the product table,
   which dedupe would undercount. Bytes in Postgres was chosen over a blob service deliberately: a
   headshot is small and rarely read, and the alternative was a new external credential.
@@ -159,7 +172,9 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   frame-ancestors 'none'` on everything EXCEPT `/embed/*`, which must stay frameable because
   embedding it in someone else's page is the feature. Deliberately not a full CSP — `script-src`
   needs a measured nonce migration and is a named follow-up (GRA2-08).
-- The v1 API authenticates before any database work and compares fixed-size key hashes.
+- The v1 API authenticates before any event or program-data read and compares
+  fixed-size key hashes. A per-event credential costs exactly one indexed
+  `ApiCredential` lookup; a deployment-wide key costs none.
 - Keep interactive client islands narrow and avoid serial data waterfalls.
 
 ## Environment and deployment contract
@@ -171,12 +186,17 @@ configuration. Schema application uses the reviewed `prisma db push` workflow, a
 `lib/demo/seed.ts` supplies the deterministic demo dataset.
 
 - Local setup needs `DATABASE_URL` only; everything else defaults safely (external
-  integrations mocked, demo reset disabled, v1 API disabled). See the README Quickstart and
+  integrations mocked, demo reset disabled, and the v1 API holding no deployment-wide key, so
+  it accepts nothing until a credential of either kind exists). See the README Quickstart and
   [`DEPLOY.md`](DEPLOY.md) for the full variable table.
 - `SESSION_SECRET` is required in production (see Security above) and must be configured
   separately for every deployment environment that serves authenticated traffic.
-- Configure `GREENROOM_API_KEY` to enable `/api/v1/*`; when it is absent, those routes return
-  `503 API_KEY_NOT_CONFIGURED`.
+- `/api/v1/*` accepts two credentials: the deployment-wide `GREENROOM_API_KEY`, which reaches
+  any event, and per-event `ApiCredential` keys that an event ADMIN issues from Event
+  settings, which reach one event each. Because a deployment can be configured with per-event
+  keys alone, this surface reports no "unconfigured" state — any request without an accepted
+  credential is `401 UNAUTHORIZED`, and a deployment holding neither kind refuses every
+  request while exposing no program data.
 - Unless an operator explicitly sets `ALLOW_DEMO_RESET=true`, `/api/admin/reset` refuses every
   caller (INV-RESET-001). The refusal body depends on who asks, by design (S-18):
   anyone who has not proved they are an admin gets `403 FORBIDDEN` — the same
@@ -185,5 +205,10 @@ configuration. Schema application uses the reviewed `prisma db push` workflow, a
   names the variable to set.
 - Airtable live mode requires `AIRTABLE_API_KEY`, `AIRTABLE_BASE_ID`, and
   `MOCK_EXTERNAL_APIS=false`; otherwise the integration stays on its safe mock/default path.
+- Assistant generation requires a valid `OPENAI_API_KEY`. When it is absent,
+  templates, sanitized preview, manual resource HTML, save/publish, manual
+  decision notes, preview, and send all remain available. Tests may use the
+  fenced loopback-only `ASSISTANT_ENDPOINT_OVERRIDE` only with
+  `MOCK_EXTERNAL_APIS=true`; a present override fails closed on Vercel production.
 - Treat provider environment-variable changes as requiring a redeploy, then verify the exact
   deployment by behavior before recording a live claim.

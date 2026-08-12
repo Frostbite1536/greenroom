@@ -42,6 +42,14 @@ graph away from the environment, auth, and the database, and a workflow-to-route
 map ([judging/WORKFLOW-ROUTES.md](judging/WORKFLOW-ROUTES.md)) says which
 surface answers which question. Every example uses a placeholder credential.
 
+The optional Greenroom Assistant is deliberately narrower than an agent. It
+ships two ADMIN-only suggestion actions on one non-retained, rate-limited,
+server-only provider: turn bounded organizer notes and a static template into a
+sanitized resource-page draft, or turn an explicit decision plus selected
+bounded feedback into a plain-text personal-note draft. Templates and resource
+preview do not require the provider. Suggestions never save, publish, send, or
+replace existing content without a separate human action.
+
 ## Operational hardening
 
 Deployment, authorized idempotent demo reset, review checkpoints, accessibility
@@ -54,23 +62,33 @@ This is a post-release sequence, not a claim that any item below is available
 today. It starts only after the clean-install rehearsal, final evidence capture,
 and deployed golden-path verification are complete.
 
-The first item of this queue — the public API contract and its safe examples —
-has shipped and is described under "Integration and completeness" above. One
+The public API contract, per-event credentials, and per-event deck association
+have shipped and are described under "Integration and completeness" above. One
 constraint it established governs everything still listed here: **never publish
 the global `GREENROOM_API_KEY`.** It is deployment-wide rather than
 demo-event scoped, so exposing it would turn every event this API can address
-into public data. That is what item 2 below has to solve first.
+into public data. Scoped credentials solve key authority; item 1 still governs
+which additional data may become reachable.
 
 1. **Read scope before read breadth.** Define event discovery, resource
    visibility, and incremental-sync cursor semantics before adding filtered
    submissions, individual resources, or additional session reads. Held-back
    and unplaced talks stay private until an explicit contract says otherwise.
-2. **Scoped credentials.** Add hashed, revocable per-event tokens and a safely
-   scoped demo-access mechanism before any public data demonstration. This is a
-   schema and authorization change, so it requires its own reviewed database
-   window and migration plan. The global `SpeakerProfile.slideDeckUrl` also
-   needs a later per-event deck pointer or association in that reviewed window;
-   one global profile URL cannot provide per-event-private deck access.
+2. **Scoped credentials delivered; demo distribution still gated.** ADMINs can
+   issue hashed, revocable per-event tokens after the reviewed schema and
+   authorization window. No plaintext secret is recoverable after creation and
+   every token scopes all three existing v1 reads to one event. A safely scoped
+   demo-access mechanism is still required before publishing a credential.
+
+   `EventSpeakerDeck` also holds a speaker's
+   deck for one event, the portal writes it for the event you are signed in to,
+   and every organizer surface resolves event-deck-then-global-fallback through
+   one shared function with the source labelled. The global
+   `SpeakerProfile.slideDeckUrl` is unchanged and remains the fallback for
+   events with no association. The read-only v1 API's `profile.slideDeckUrl`
+   continues to report
+   only the global value, because widening that published contract is exactly
+   the "read scope before read breadth" ordering item 1 establishes.
 3. **Additional read models.** Add only the reads justified by the preceding
    scope contract, with bounded pagination, stable ordering, event authorization,
    and contract tests on every response.
@@ -86,7 +104,8 @@ into public data. That is what item 2 below has to solve first.
 
 ## Explicit exclusions
 
-CRM, marketing automation, payments, multi-language support, AI evaluation of
-proposals, production OAuth, and speculative enterprise permission models.
+CRM, marketing automation, payments, multi-language support, automated AI
+evaluation or autonomous agent workflows, production OAuth, and speculative
+enterprise permission models.
 These are deliberate boundaries rather than backlog items: adding one changes
 what this product is.

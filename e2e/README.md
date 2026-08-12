@@ -55,11 +55,22 @@ either one twice in a row and the second run starts from the same state as the
 first. The golden path also stamps its proposal title with the run's timestamp
 so two runs can never collide on a title.
 
-`playwright.config.ts` owns the `next start` process on port **3400** (outside
-the 3200–3299 range the sprint's other lanes use). Override that port with a
-valid `E2E_PORT`. If the canonical loopback URL is already serving, Playwright
-fails before the seed or browser journey; it never reuses an independently
-started server whose database identity it cannot prove.
+`playwright.config.ts` owns the `next start` process on port **3400** and a
+deterministic assistant-provider fixture on port **3413** (outside the
+3200–3299 range the sprint's other lanes use). Override them with valid,
+distinct `E2E_PORT` and `E2E_ASSISTANT_PORT` values. If either canonical
+loopback URL is already serving, Playwright fails before the seed or browser
+journey; it never reuses an independently started server.
+
+The application and database remain real. Only the paid assistant API is
+replaced, through the server's loopback-only mock endpoint seam, by the owned
+fixture in [`assistant-provider-mock.mjs`](assistant-provider-mock.mjs). The
+config forces mock mode and supplies an obviously local fake key to the owned
+Next process; it never needs or uses a real provider credential. The fixture
+accepts only the strict, non-retained Responses payload and returns fixed
+structured output containing hostile markup so the browser journey can prove
+the product sanitizes it. Its deliberate failure marker proves that an
+unavailable provider preserves the operator's current draft.
 
 `next start` runs in production mode, where the session-cookie secret fails
 closed; the config passes the validated `DATABASE_URL` and a local-only

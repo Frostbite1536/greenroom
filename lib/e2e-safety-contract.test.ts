@@ -32,7 +32,7 @@ test("the disposable-database guard refuses missing and mismatched assertions", 
   );
 });
 
-test("the Playwright config owns one canonical server with the validated database", () => {
+test("the Playwright config owns canonical app and assistant servers", () => {
   const config = source("playwright.config.ts");
   const load = config.indexOf("loadRepoEnv();");
   const databaseGuard = config.indexOf("assertDisposableDatabase();");
@@ -40,12 +40,24 @@ test("the Playwright config owns one canonical server with the validated databas
 
   assert.ok(load >= 0 && databaseGuard > load && definition > databaseGuard);
   assert.match(config, /const rawPort = process\.env\.E2E_PORT\?\.trim\(\) \|\| "3400";/);
+  assert.match(
+    config,
+    /const rawAssistantPort = process\.env\.E2E_ASSISTANT_PORT\?\.trim\(\) \|\| "3413";/,
+  );
   assert.match(config, /Number\.isInteger\(PORT\) \|\| PORT < 1 \|\| PORT > 65_535/);
   assert.match(config, /const baseURL = `http:\/\/127\.0\.0\.1:\$\{PORT\}`;/);
+  assert.match(config, /const assistantBaseURL = `http:\/\/127\.0\.0\.1:\$\{ASSISTANT_PORT\}`;/);
+  assert.match(config, /ASSISTANT_PORT === PORT/);
   assert.doesNotMatch(config, /E2E_BASE_URL/);
   assert.match(config, /command: `npx next start -p \$\{PORT\}`/);
+  assert.match(config, /command: `node e2e\/assistant-provider-mock\.mjs \$\{ASSISTANT_PORT\}`/);
   assert.match(config, /reuseExistingServer: false/);
   assert.match(config, /DATABASE_URL: validatedDatabaseUrl/);
+  assert.match(config, /MOCK_EXTERNAL_APIS: "true"/);
+  assert.match(config, /DEMO_PERSONA_LOGIN_ENABLED: "true"/);
+  assert.match(config, /OPENAI_API_KEY: "greenroom-e2e-owned-provider-key-not-a-secret"/);
+  assert.match(config, /ASSISTANT_ENDPOINT_OVERRIDE: assistantEndpoint/);
+  assert.doesNotMatch(config, /process\.env\.OPENAI_API_KEY/);
   assert.equal((config.match(/\bbaseURL\b/g) ?? []).length >= 3, true);
 });
 
@@ -58,4 +70,5 @@ test("the destructive seed retains its own guard and the docs forbid server reus
   const readme = source("e2e/README.md");
   assert.doesNotMatch(readme, /E2E_BASE_URL|reuses an already-running server/);
   assert.match(readme, /never reuses an independently\s+started server/);
+  assert.match(readme, /Only the paid assistant API is\s+replaced/);
 });

@@ -678,36 +678,29 @@ try {
   check("S19 scratch rate buckets are explicitly cleaned after the isolated throttle assertions", rateBucketsAfterCleanup[0]?.count === 0, rateBucketsAfterCleanup[0]?.count);
 
   // S19: the primary-email submit budget is 10 per 24h, not 3 — one speaker
-  // legitimately submits several proposals plus edits in a sitting. Seed the
-  // durable bucket to one below the cap so exactly two real requests prove the
-  // boundary: the 10th clears the limiter (and is refused later, on business
-  // validation), the 11th is throttled with an honest 24h-window retry moment.
+  // legitimately submits several proposals plus edits in a sitting. Drive all
+  // eleven requests through the HTTP path so this proof cannot drift from the
+  // server's signing key, normalization, or clock-window implementation.
   const s19EmailCapEmail = "s19-email-cap@scratch.test";
   const s19EmailWindowMs = 24 * 60 * 60 * 1_000;
-  const s19EmailWindowStart = new Date(Math.floor(Date.now() / s19EmailWindowMs) * s19EmailWindowMs);
-  await prisma.publicSubmissionRateBucket.create({
-    data: {
-      eventId: SCRATCH_EVENT.id,
-      scope: "submit_primary_email_24h",
-      fingerprint: publicSubmissionRateFingerprint("primary-email", s19EmailCapEmail),
-      windowStart: s19EmailWindowStart,
-      count: 9,
-      expiresAt: new Date(s19EmailWindowStart.getTime() + s19EmailWindowMs),
-    },
-  });
   const s19EmailCapAttempt = (index) => j("POST", "/api/cfp/submissions", {
     formConfigId: formId, title: `S19 email cap attempt ${index}`,
     speakers: [{ email: s19EmailCapEmail, name: "Cap", isPrimary: true }],
     answers: {}, intent: "submit",
   });
   const s19EmailCoreBefore = await publicCoreCounts();
-  const s19EmailAtCap = await s19EmailCapAttempt(10);
-  const s19EmailOverCap = await s19EmailCapAttempt(11);
+  const s19EmailCapAttempts = [];
+  for (let index = 1; index <= 11; index++) {
+    s19EmailCapAttempts.push(await s19EmailCapAttempt(index));
+  }
+  const s19EmailAtCap = s19EmailCapAttempts[9];
+  const s19EmailOverCap = s19EmailCapAttempts[10];
   const s19EmailCoreAfter = await publicCoreCounts();
   const s19EmailRetryAfter = Number(s19EmailOverCap.headers?.get("retry-after"));
   check(
     "S19 the primary-email submit budget admits 10 per 24h and the 11th is 429 with a real retry moment and no core writes",
-    s19EmailAtCap.status === 422 && s19EmailAtCap.data?.error?.code === "FIELD_ERRORS" &&
+    s19EmailCapAttempts.slice(0, 10).every((attempt) =>
+      attempt.status === 422 && attempt.data?.error?.code === "FIELD_ERRORS") &&
       s19EmailOverCap.status === 429 && s19EmailOverCap.data?.error?.code === "PUBLIC_SUBMISSION_RATE_LIMITED" &&
       Number.isInteger(s19EmailRetryAfter) && s19EmailRetryAfter >= 1 && s19EmailRetryAfter <= s19EmailWindowMs / 1_000 &&
       s19EmailOverCap.data?.error?.retryAfterSeconds === s19EmailRetryAfter &&
@@ -1884,20 +1877,67 @@ try {
     c17SpeakerConflict.status === 409 && c17SpeakerConflict.data?.error?.code === "REVIEWER_ROLE_CONFLICT",
     `${c17SpeakerConflict.status}/${c17SpeakerConflict.data?.error?.code}`,
   );
-  await prisma.reviewerInvite.update({
-    where: { id: c17StoredInvite.id },
-    data: { sendWindowStart: new Date(new Date().setUTCMinutes(0, 0, 0)), sendWindowCount: 20 },
+  // Spend the allowance through twenty distinct real route reservations. This
+  // proves the event-wide SUM without a mirrored timestamp or a fabricated
+  // cumulative row; the exact scratch identities are deleted below.
+  await prisma.reviewerInvite.updateMany({
+    where: { eventId: SCRATCH_EVENT.id },
+    data: { sendWindowStart: null, sendWindowCount: 0 },
   });
-  const c17CappedEmail = "capped-reviewer@scratch.test";
+  const c17CapPrimers = [];
+  const c17CapPrimerEmails = [];
+  let c17CapWindowCount = 0;
+  for (let index = 0; index < 40; index++) {
+    const email = `c17-cap-${index}@scratch.test`;
+    c17CapPrimerEmails.push(email);
+    const primer = await j("POST", "/api/evaluations/reviewer-invites", {
+      email, name: `Cap Reviewer ${index}`, resend: false,
+    }, admin);
+    c17CapPrimers.push(primer);
+    const observerWindowStart = new Date(new Date().setUTCMinutes(0, 0, 0));
+    const countRows = await prisma.reviewerInvite.aggregate({
+      where: {
+        eventId: SCRATCH_EVENT.id,
+        sendWindowStart: {
+          gte: observerWindowStart,
+          lt: new Date(observerWindowStart.getTime() + 60 * 60 * 1_000),
+        },
+      },
+      _sum: { sendWindowCount: true },
+    });
+    c17CapWindowCount = countRows._sum.sendWindowCount ?? 0;
+    if (c17CapWindowCount === 20) break;
+  }
+  const c17CappedEmail = `capped-reviewer-${Date.now().toString(36)}@scratch.test`;
   const c17Capped = await j("POST", "/api/evaluations/reviewer-invites", {
     email: c17CappedEmail, name: "Capped Reviewer", resend: false,
   }, admin);
+  const c17CapStoredWindows = await prisma.reviewerInvite.groupBy({
+    by: ["sendWindowStart"],
+    where: { eventId: SCRATCH_EVENT.id, sendWindowStart: { not: null } },
+    _sum: { sendWindowCount: true },
+  });
   check(
     "C17 event-hour cap rejects a new invite atomically without creating identity or membership",
-    c17Capped.status === 429 && c17Capped.data?.error?.code === "INVITE_RATE_LIMITED" &&
+    c17CapWindowCount === 20 && c17CapPrimers.every((primer) => primer.status === 200) &&
+      c17Capped.status === 429 && c17Capped.data?.error?.code === "INVITE_RATE_LIMITED" &&
       await prisma.user.count({ where: { email: c17CappedEmail } }) === 0 &&
       await prisma.eventMember.count({ where: { eventId: SCRATCH_EVENT.id, user: { email: c17CappedEmail } } }) === 0,
-    `${c17Capped.status}/${c17Capped.data?.error?.code}`,
+    `${c17CapPrimers.length}/${c17CapWindowCount}/${c17Capped.status}/${c17Capped.data?.error?.code}/` +
+      c17CapStoredWindows.map((row) => `${row.sendWindowStart?.toISOString()}:${row._sum.sendWindowCount}`).join(","),
+  );
+  await prisma.user.deleteMany({ where: { email: c17CappedEmail } });
+  const c17CapPrimerUsers = await prisma.user.findMany({
+    where: { email: { in: c17CapPrimerEmails } },
+    select: { id: true },
+  });
+  const c17CapPrimerUserIds = c17CapPrimerUsers.map((user) => user.id);
+  await prisma.reviewerInvite.deleteMany({ where: { eventId: SCRATCH_EVENT.id, userId: { in: c17CapPrimerUserIds } } });
+  await prisma.eventMember.deleteMany({ where: { eventId: SCRATCH_EVENT.id, userId: { in: c17CapPrimerUserIds } } });
+  await prisma.user.deleteMany({ where: { id: { in: c17CapPrimerUserIds }, email: { in: c17CapPrimerEmails } } });
+  check(
+    "C17 event-hour cap primer identities are removed after the assertion",
+    await prisma.user.count({ where: { email: { in: c17CapPrimerEmails } } }) === 0,
   );
   }
 
@@ -5332,5 +5372,11 @@ try {
   await cleanup();
   const failed = results.filter(r => r.ok === false);
   console.log(`\n=== ${results.filter(r=>r.ok).length} passed, ${failed.length} failed ===`);
+  if (failed.length > 0) {
+    console.error("[smoke] failed checks:");
+    for (const result of failed) {
+      console.error(`- ${result.name}: ${String(result.extra ?? "").slice(0, 240)}`);
+    }
+  }
   process.exit(fatalError || failed.length || cleanupFailed ? 1 : 0);
 }

@@ -29,6 +29,16 @@ import { getApiContext, type ApiContext } from "@/lib/api/context";
 import { ApiError } from "@/lib/api/http";
 import { assertEventQueryBound, OPERATOR_QUERY_LIMITS } from "@/lib/api/query-limits";
 import {
+  attachmentOrderBy,
+  attachmentSelect,
+  toAttachmentSubject,
+} from "@/lib/services/abstract-attachment";
+import {
+  MAX_ATTACHMENTS_PER_ABSTRACT,
+  viewAttachments,
+  type AttachmentView,
+} from "@/lib/uploads/abstract-attachment";
+import {
   ADMIN_ABSTRACT_LIST_TAKE,
   adminAbstractListOrderBy,
   adminAbstractListWhere,
@@ -45,12 +55,15 @@ export type {
   AdminDecisionSummary,
 } from "@/lib/services/admin-decision-summary";
 import {
-  EMAIL_HISTORY_TAKE,
-  emailHistoryOrderBy,
+  EMAIL_HISTORY_PAGE_TAKE,
+  emailHistoryOrderByFor,
   emailHistorySelect,
   emailHistoryWhere,
-  toEmailHistory,
-  type EmailHistory,
+  parseEmailHistoryQuery,
+  toEmailHistoryPage,
+  type EmailHistoryPage,
+  type EmailHistoryQuery,
+  type EmailHistorySearchParams,
 } from "@/lib/comms/email-history";
 export type { EmailHistoryEntry } from "@/lib/comms/email-history";
 import { selectEvaluatorReviewComment } from "@/lib/services/review-score-comment";
@@ -449,6 +462,15 @@ export type AbstractRow = {
    * rather than silently showing an empty section.
    */
   answersUnavailable: boolean;
+  /**
+   * Supporting documents a speaker attached from their portal, oldest first.
+   *
+   * Projected through the SAME `viewAttachments` matrix the serving route
+   * decides with, so a row rendered as an openable link is one this admin can
+   * actually fetch. `canRemove` is always false here: an organizer does not
+   * remove a speaker's document from a drawer.
+   */
+  attachments: AttachmentView[];
   /** Present only in the organizer/admin projection; evaluator payloads omit it. */
   reviewComments?: OrganizerReviewComment[];
   hasSession: boolean;
@@ -589,6 +611,16 @@ export async function getAdminAbstracts(
     where: childWhere,
     _count: { _all: true },
   });
+  // Scoped to the same at-most-101 materialized ids as every other child read.
+  // The bound is the product invariant itself — the attach route refuses a
+  // fourth link per proposal — so `3 × ids` is the exact maximum this can
+  // return, not an arbitrary page size that could silently cut a drawer's list.
+  const attachmentRowsPromise = prisma.abstractAttachment.findMany({
+    where: childWhere,
+    orderBy: [{ abstractId: "asc" }, ...attachmentOrderBy],
+    take: MAX_ATTACHMENTS_PER_ABSTRACT * materializedIds.length,
+    select: { ...attachmentSelect, abstractId: true },
+  });
   const reviewCommentRowsPromise: Promise<StoredReviewCommentProjection[]> = prisma.reviewScore.findMany({
     where: { ...childWhere, comment: { not: null } },
     orderBy: [{ abstractId: "asc" }, { evaluatorId: "asc" }, { rubricKey: "asc" }, { id: "asc" }],
@@ -599,14 +631,27 @@ export async function getAdminAbstracts(
   // reads. An invalid explicit plan id is therefore handled by the page's 404
   // boundary immediately, never left to reject while an answer read is still
   // in flight.
-  const [answerCounts, decisionSummary, reviewCommentRows] = await Promise.all([
+  const [answerCounts, decisionSummary, reviewCommentRows, attachmentRows] = await Promise.all([
     answerCountsPromise,
     getAdminDecisionSummary(ctx, {
       abstractIds: materializedIds,
       ...(planId ? { planId } : {}),
     }),
     reviewCommentRowsPromise,
+    attachmentRowsPromise,
   ]);
+
+  // One pass, folded by proposal. `viewAttachments` is the SAME matrix
+  // `/api/files/:id` decides with, so the drawer cannot offer a link this
+  // organizer would then be refused — and it is given `editable: false`,
+  // because removing a speaker's document is not an organizer action.
+  const attachmentsByAbstract = new Map<string, AttachmentView[]>();
+  for (const row of attachmentRows) {
+    const view = viewAttachments([toAttachmentSubject(row)], ctx, { editable: false })[0];
+    const existing = attachmentsByAbstract.get(row.abstractId);
+    if (existing) existing.push(view);
+    else attachmentsByAbstract.set(row.abstractId, [view]);
+  }
 
   const answerPlan = planAdminAnswerRead(materializedIds, answerCounts);
   const answerRowsPromise: Promise<StoredAnswerProjection[]> = answerPlan.queryAbstractIds.length > 0
@@ -654,6 +699,7 @@ export async function getAdminAbstracts(
       decisionSummary: decisionSummary.summariesByAbstractId[a.id] ?? null,
       answers: answerIndex.byAbstract.get(a.id) ?? [],
       answersUnavailable: answerIndex.unavailableAbstractIds.has(a.id),
+      attachments: attachmentsByAbstract.get(a.id) ?? [],
       reviewComments: reviewCommentsByAbstract?.get(a.id) ?? [],
       hasSession: a.session !== null,
       sessionId: a.session?.id ?? null,
@@ -1241,9 +1287,18 @@ export const getPublicSpeakers = cache(async function getPublicSpeakers(
 
 // ---- Email history --------------------------------------------------------
 
-export type EmailHistoryView = EmailHistory & {
+export type EmailHistoryView = EmailHistoryPage & {
   /** Every timestamp on the panel is rendered in the event's own timezone. */
   timezone: string;
+  /**
+   * The template keys this event has, in render order — the only values the
+   * template select offers and the only ones `?template=` will accept.
+   */
+  templateKeys: string[];
+  /** True when this event has more templates than the select could load. */
+  templatesTruncated: boolean;
+  /** What the URL asked for, after every bound was applied. */
+  query: EmailHistoryQuery;
 };
 
 /**
@@ -1257,27 +1312,65 @@ export type EmailHistoryView = EmailHistory & {
  * `lib/comms/email-history.ts`.
  *
  * Unlike the fail-closed operator reads, an oversize log is expected here: the
- * table only grows, so the page reports its truncation instead of refusing.
+ * table only grows, so the page pages through it instead of refusing.
  *
- * One cap-plus-one query answers everything the panel says about volume. It is
- * deliberately not paired with a `count()` for an exact event-wide total: the
- * two statements observe different snapshots, so a dispatch inserted between
- * them let the page print a total that disagreed with its own rows. Dropping
- * the count removes that contradiction outright rather than shrinking its
- * window behind a `RepeatableRead` transaction.
+ * One page-plus-one query answers everything the panel says about volume. It is
+ * deliberately not paired with a `count()` for an exact total: the two
+ * statements observe different snapshots, so a dispatch inserted between them
+ * let the page print a total that disagreed with its own rows. Dropping the
+ * count removes that contradiction outright rather than shrinking its window
+ * behind a `RepeatableRead` transaction — which is why the pager offers "older"
+ * and "newer" links rather than "page 3 of 9".
+ *
+ * Paging is keyset, not offset, for the same reason the total went: `skip`
+ * counts rows from the top of a set that changes while an operator reads it, so
+ * one dispatch inserted between two page requests shifts every later offset and
+ * makes the next page repeat a row or drop one. Each page is anchored to a row
+ * the operator actually saw — `(createdAt, id)`, the total order this read
+ * already used — so an insert anywhere else cannot move the boundary.
+ *
+ * The status, template, recipient and cursor narrowings are all applied by the
+ * database (`emailHistoryWhere`), not by slicing an already-read page: a chip
+ * that filtered a capped page would mean "failed among the newest 50", which is
+ * not what the chip says.
+ *
+ * The dispatch query is deliberately a second round trip rather than a member
+ * of the batch above: `?template=` is only accepted when it names a key this
+ * event actually has, and that list is what the first batch reads. Trusting the
+ * parameter instead would render an empty table that reads as "this template
+ * sent nothing" for a key naming no template at all.
  */
-export async function getEmailHistory(): Promise<EmailHistoryView> {
+export async function getEmailHistory(
+  searchParams: EmailHistorySearchParams = {},
+): Promise<EmailHistoryView> {
   const ctx = await pageContext(["ADMIN"]);
-  const [event, rows] = await Promise.all([
+  const [event, templates] = await Promise.all([
     prisma.event.findUniqueOrThrow({ where: { id: ctx.eventId }, select: { timezone: true } }),
-    prisma.emailDispatch.findMany({
-      where: emailHistoryWhere(ctx.eventId),
-      select: emailHistorySelect,
-      orderBy: emailHistoryOrderBy,
-      take: EMAIL_HISTORY_TAKE,
+    prisma.emailTemplate.findMany({
+      where: { eventId: ctx.eventId },
+      orderBy: [{ key: "asc" }, { id: "asc" }],
+      take: OPERATOR_QUERY_LIMITS.templates + 1,
+      select: { key: true },
     }),
   ]);
-  return { ...toEmailHistory(rows), timezone: event.timezone };
+  // Cap-plus-one, and reported rather than thrown: a template missing from the
+  // select is a narrower filter list, not a wrong log.
+  const templateKeys = templates.slice(0, OPERATOR_QUERY_LIMITS.templates).map((row) => row.key);
+  const query = parseEmailHistoryQuery(searchParams, templateKeys);
+
+  const rows = await prisma.emailDispatch.findMany({
+    where: emailHistoryWhere(ctx.eventId, query),
+    select: emailHistorySelect,
+    orderBy: emailHistoryOrderByFor(query.direction),
+    take: EMAIL_HISTORY_PAGE_TAKE,
+  });
+  return {
+    ...toEmailHistoryPage(rows, query),
+    timezone: event.timezone,
+    templateKeys,
+    templatesTruncated: templates.length > OPERATOR_QUERY_LIMITS.templates,
+    query,
+  };
 }
 
 // ---- Embeds ---------------------------------------------------------------

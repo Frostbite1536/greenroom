@@ -15,3 +15,18 @@ test("the clean-install rehearsal proves acceptance provisions its Session witho
   assert.doesNotMatch(rehearsal, /\/api\/evaluations\/convert/);
   assert.doesNotMatch(rehearsal, /convert to session → 201/);
 });
+
+test("the v1 guardrail asserts the credential contract a fresh install actually has", () => {
+  // A fresh install configures no GREENROOM_API_KEY and issues no per-event
+  // key, so an anonymous read is refused for want of a credential. Since scoped
+  // credentials landed that refusal is 401, and NOT a claim that the surface is
+  // unconfigured — a deployment can be fully configured with per-event keys
+  // alone (the truth table lives in lib/api/v1.ts).
+  assert.match(rehearsal, /req\("GET", "\/api\/v1\/schedule\?event=forward-2026", null, null\)/);
+  assert.match(rehearsal, /v1\.status === 401 && v1\.data\?\.error\?\.code === "UNAUTHORIZED"/);
+  // The guarantee this guardrail exists for is that no programme data comes
+  // back, so it checks the payload rather than only the status line.
+  assert.match(rehearsal, /v1\.data\?\.data === null/);
+  // The superseded assertion must not come back.
+  assert.doesNotMatch(rehearsal, /503/);
+});

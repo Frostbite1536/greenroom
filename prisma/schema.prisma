@@ -83,6 +83,11 @@ enum SessionContentStatus {
 enum StoredFileKind {
   HEADSHOT
   SLIDE_DECK
+  /// A speaker's supporting document on one of their own proposals. Private
+  /// under exactly the SLIDE_DECK rule: the uploader, or an ADMIN whose active
+  /// event is the event the file was uploaded under. Added as an enum VALUE so
+  /// the change stays additive (M4 precedent) — no column is modified.
+  SUPPORTING_DOCUMENT
 }
 
 model Event {
@@ -111,6 +116,8 @@ model Event {
   publicSubmissionRateBuckets PublicSubmissionRateBucket[]
   reviewerInvites             ReviewerInvite[]
   storedFiles                 StoredFile[]
+  apiCredentials              ApiCredential[]
+  speakerDecks                EventSpeakerDeck[]
 
   @@index([startsAt])
 }
@@ -138,6 +145,9 @@ model User {
   sentEmails         EmailDispatch[]    @relation("EmailSender")
   reviewerInvites    ReviewerInvite[]
   storedFiles        StoredFile[]
+  apiCredentials     ApiCredential[]
+  abstractAttachments AbstractAttachment[]
+  eventSpeakerDecks   EventSpeakerDeck[]
 }
 
 model EventMember {
@@ -294,6 +304,7 @@ model Abstract {
   reviewAssignments ReviewAssignment[]
   reviewScores      ReviewScore[]
   session           Session?
+  attachments       AbstractAttachment[]
 
   @@index([eventId, status])
   @@index([formConfigId, status])
@@ -594,7 +605,7 @@ model EmailDispatch {
  * A file the product actually holds, rather than a link it hopes stays up.
  *
  * The bytes live in Postgres on purpose: the alternative was a new external
- * blob credential on deadline night, and a headshot or a slide deck is small,
+ * blob credential on deadline night, and these bounded uploads are small,
  * rarely read, and already inside the transactional backup of everything else
  * it belongs to. `mime` is only ever a value this server itself derived from
  * the magic bytes, never the string a client claimed — the serving route sets
@@ -603,12 +614,12 @@ model EmailDispatch {
  *
  * `eventId` is the event the upload happened under. It is a scoping and
  * cleanup fact, not an authorization one for headshots (they render on public
- * speaker surfaces); for slide decks it is half of the organizer's read claim.
+ * speaker surfaces); for both private kinds it is half of the organizer's read claim.
  * SetNull because deleting an event must never delete a person's own headshot.
  *
  * `@@unique([uploaderUserId, kind, sha256])` is the dedupe key. For a public
  * headshot, `sha256` is the raw content digest and re-uploading across events
- * returns the same row. For a private slide deck it is a versioned,
+ * returns the same row. For a private slide deck or supporting document it is a versioned,
  * event-scoped SHA-256 fingerprint over the event id and raw content digest,
  * so matching bytes cannot inherit another event's organizer authorization.
  * Its leftmost column is the per-uploader index — a separate
@@ -622,16 +633,90 @@ model StoredFile {
   /// Server-derived content type. Never the client's claimed value.
   mime           String
   size           Int
-  /// Raw content SHA for headshots; event-scoped dedupe fingerprint for decks.
+  /// Raw content SHA for headshots; event-scoped fingerprint for private files.
   sha256         String
   bytes          Bytes
   createdAt      DateTime       @default(now())
 
   uploader User   @relation(fields: [uploaderUserId], references: [id], onDelete: Cascade)
   event    Event? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  /// Inverse relation metadata only — no column is added to this table.
+  attachments AbstractAttachment[]
 
   @@unique([uploaderUserId, kind, sha256])
   @@index([eventId])
+}
+
+/**
+ * One supporting document linked to one proposal.
+ *
+ * A JOIN ROW rather than an `abstractId` column on `StoredFile`, because
+ * `StoredFile` is deduplicated on `@@unique([uploaderUserId, kind, sha256])`:
+ * the same speaker attaching the same PDF to two of their proposals gets ONE
+ * stored row back from `POST /api/files`, and a single owning column could then
+ * only ever point at whichever proposal claimed it first. The link is also what
+ * the per-proposal cap counts, and what "remove this attachment" deletes.
+ *
+ * Deliberate delete behaviour:
+ * - Deleting the proposal cascades the links away (the bytes are not this
+ *   table's to destroy).
+ * - Deleting the `StoredFile` cascades its links away.
+ * - Removing an attachment deletes ONLY this row. The bytes stay, exactly as
+ *   clearing `slideDeckUrl` has always left an uploaded deck in place: the same
+ *   row may be attached to another proposal and is still the dedupe target for
+ *   the uploader's next identical upload.
+ */
+model AbstractAttachment {
+  id           String   @id @default(cuid())
+  abstractId   String
+  storedFileId String
+  /// Who attached it. The only person who may remove it, and — with the event's
+  /// admins — the only person who may read the bytes back.
+  uploadedById String
+  /// The speaker's own file name, for display. Never a path, never trusted as one.
+  filename     String
+  createdAt    DateTime @default(now())
+
+  abstract   Abstract   @relation(fields: [abstractId], references: [id], onDelete: Cascade)
+  storedFile StoredFile @relation(fields: [storedFileId], references: [id], onDelete: Cascade)
+  uploadedBy User       @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@unique([abstractId, storedFileId])
+  @@index([abstractId])
+  @@index([storedFileId])
+  @@index([uploadedById])
+}
+
+/**
+ * One speaker's slide deck FOR ONE EVENT (roadmap "Scoped credentials" item:
+ * "one global profile URL cannot provide per-event-private deck access").
+ *
+ * `SpeakerProfile.slideDeckUrl` is global — one row per person for the whole
+ * instance — so it cannot hold a different deck per event and cannot be private
+ * to one event's organizers. This table holds the per-event value; the global
+ * column is untouched and remains the fallback for events with no row here.
+ *
+ * A URL column rather than a `storedFileId` FK on purpose: the product's deck
+ * field has always accepted EITHER an uploaded `/api/files/<id>` path OR a
+ * pasted absolute link, validated by one schema (`nullableProfileUrl`). An FK
+ * could not represent the pasted link, so it would either drop that capability
+ * or need both columns to say one thing.
+ */
+model EventSpeakerDeck {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  /// Same accepted shapes as `SpeakerProfile.slideDeckUrl`: an absolute URL, or
+  /// this app's own `/api/files/<id>` path. Validated by `nullableProfileUrl`.
+  deckUrl   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+  @@index([userId])
 }
 
 model ImportJob {
@@ -648,4 +733,69 @@ model ImportJob {
   event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, status])
+}
+
+/**
+ * A revocable, event-scoped credential for the read-only v1 API
+ * (docs/ROADMAP.md, "Scoped credentials").
+ *
+ * The issued token is `grk_<lookupId>_<secret>` and exists in plaintext exactly
+ * once, in the body of the response that creates it. The two halves are stored
+ * differently on purpose:
+ *
+ *   - `lookupId` is NOT a secret. It is stored in plaintext, uniquely indexed,
+ *     and shown to the organizer as the credential's visible name. It is what
+ *     authentication looks a row up by, which is what makes verification a
+ *     single indexed point read rather than a scan over the event's keys — and
+ *     it means no index here is keyed on anything derived from the secret.
+ *   - `secretHash` is the SHA-256 hex digest of the secret half, and the only
+ *     stored form of it. This table can therefore be read end to end without
+ *     recovering a single working credential (INV-SECRET-001).
+ *
+ * There is no stored display prefix: the visible form is `grk_` plus
+ * `lookupId`, derived where it is shown. A stored copy of a pure function of
+ * another column is a second source of truth with nothing keeping it in step.
+ *
+ * `revokedAt` is a tombstone, not a delete: a credential that was used against
+ * this event must stay auditable after it stops working, and keeping the row
+ * keeps its `lookupId` permanently claimed, so a revoked identifier can never
+ * be handed out again by chance.
+ *
+ * There is deliberately no `lastUsedAt`. Every authenticated v1 read is a
+ * SELECT; stamping a timestamp would turn the whole read surface into a writer,
+ * adding a row update and its WAL traffic to a path whose entire purpose is
+ * cheap mirroring. Usage telemetry, if it is ever wanted, belongs in an
+ * append-only log, not in the authenticator's own row.
+ *
+ * Delete behaviour is chosen, not defaulted:
+ *   - `event`     Cascade. The credential authorizes reads of exactly one
+ *                 event. When that event is gone the credential authorizes
+ *                 nothing, and leaving live secret material behind pointing at
+ *                 a dead scope is strictly worse than removing it. This is also
+ *                 the prevailing convention for every event-owned row here.
+ *   - `createdBy` SetNull, and the column is nullable. The credential belongs
+ *                 to the event, not to the person who happened to press the
+ *                 button: an organizer leaving the team must not silently break
+ *                 a working integration, and must not be able to erase the
+ *                 record of what they issued either. Same reasoning, and the
+ *                 same convention, as `EmailDispatch.sender`.
+ */
+model ApiCredential {
+  id              String    @id @default(cuid())
+  eventId         String
+  /// Operator-supplied display name. Bounded at the request boundary.
+  label           String
+  /// Non-secret public identifier: the indexed lookup key, and the shown value.
+  lookupId        String    @unique
+  /// SHA-256 hex digest of the secret half. Never projected, never logged.
+  secretHash      String
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  /// Set once, never cleared: revocation is permanent for this credential.
+  revokedAt       DateTime?
+
+  event     Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdBy User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([eventId])
 }

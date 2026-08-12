@@ -3,6 +3,7 @@
 import { useId, useState } from "react";
 import {
   STORED_FILE_LIMITS,
+  storedFileKindParam,
   storedFileMaxBytes,
   type StoredFileKindValue,
 } from "@/lib/uploads/stored-file";
@@ -27,13 +28,35 @@ export function FileUploadField({
   kind,
   label,
   hint,
+  pairsWithUrlField = true,
+  disabled = false,
   onUploaded,
 }: {
   kind: StoredFileKindValue;
   label: string;
   hint?: string;
-  /** Called with the served URL once the file is stored. */
-  onUploaded: (url: string) => void;
+  /**
+   * Whether this uploader sits beside a URL text input it fills. True for the
+   * two profile fields, which is why the hint has always said so. False for a
+   * proposal attachment, where there is no link field and telling the speaker
+   * there is one would simply be untrue.
+   */
+  pairsWithUrlField?: boolean;
+  /** Disabled from outside — the proposal is locked, or the cap is reached. */
+  disabled?: boolean;
+  /**
+   * Called with the served URL once the file is stored.
+   *
+   * The second argument is the stored row itself, for the one caller that needs
+   * more than a URL: attaching a supporting document links a `StoredFile` BY ID
+   * and shows its name and size, and re-parsing the id back out of the URL
+   * string would be a second, weaker copy of what the response already said.
+   * Optional, so the two profile-URL callers are untouched.
+   */
+  onUploaded: (
+    url: string,
+    stored?: { id: string; mime: string; size: number; filename: string },
+  ) => void;
 }) {
   const id = useId();
   const [busy, setBusy] = useState(false);
@@ -56,7 +79,9 @@ export function FileUploadField({
 
     setBusy(true);
     try {
-      const res = await fetch(`/api/files?kind=${kind === "HEADSHOT" ? "headshot" : "slide-deck"}`, {
+      // The wire spelling comes from the same map the route parses with, so a
+      // third kind cannot exist here under a name the server will not accept.
+      const res = await fetch(`/api/files?kind=${storedFileKindParam(kind)}`, {
         method: "POST",
         headers: { "Content-Type": file.type || "application/octet-stream" },
         body: file,
@@ -66,7 +91,12 @@ export function FileUploadField({
         setError(body?.error?.message ?? "The upload failed. Try again.");
         return;
       }
-      onUploaded(body.data.url as string);
+      onUploaded(body.data.url as string, {
+        id: body.data.id as string,
+        mime: body.data.mime as string,
+        size: body.data.size as number,
+        filename: file.name,
+      });
       setDone(file.name);
     } catch {
       setError("Network error while uploading. Check your connection and try again.");
@@ -82,7 +112,7 @@ export function FileUploadField({
         id={id}
         type="file"
         accept={accept}
-        disabled={busy}
+        disabled={busy || disabled}
         aria-describedby={`${id}-hint`}
         onChange={(change) => {
           const file = change.target.files?.[0];
@@ -93,7 +123,8 @@ export function FileUploadField({
         }}
       />
       <span className="hint" id={`${id}-hint`}>
-        {hint ? `${hint} ` : ""}Up to {maxLabel}. Uploading fills the link field above; you can still paste a link instead.
+        {hint ? `${hint} ` : ""}Up to {maxLabel}.
+        {pairsWithUrlField ? " Uploading fills the link field above; you can still paste a link instead." : ""}
       </span>
       {busy ? <span className="hint" role="status">Uploading…</span> : null}
       {done ? <span className="hint" role="status">Uploaded {done}.</span> : null}

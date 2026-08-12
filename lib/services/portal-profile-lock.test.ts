@@ -43,7 +43,21 @@ test("the portal write happens on the transaction client, never the loose one", 
   // `prisma.speakerProfile.upsert` outside the transaction would take the lock
   // and then write on a different connection, serializing nothing.
   assert.doesNotMatch(portal, /prisma\.speakerProfile\.upsert/);
-  assert.match(portal, /return tx\.speakerProfile\.upsert\(\{/);
+  assert.match(portal, /const profile = await tx\.speakerProfile\.upsert\(\{/);
+});
+
+test("the per-event deck association is written inside the same transaction", () => {
+  // The association is a second write in the same save. On its own connection
+  // it could land while the profile write rolled back, leaving the speaker
+  // looking at a fallback deck they believe they replaced.
+  assert.doesNotMatch(portal, /prisma\.eventSpeakerDeck\./);
+  for (const write of ["tx.eventSpeakerDeck.upsert(", "tx.eventSpeakerDeck.deleteMany("]) {
+    const at = portal.indexOf(write);
+    assert.ok(at > 0, `${write} must exist`);
+    assert.ok(portal.indexOf("lockSpeakerProfile(tx, user.id)") < at, `${write} must follow the lock`);
+  }
+  // One transaction for the whole save, not one per write.
+  assert.equal(portal.split("prisma.$transaction(").length - 1, 1);
 });
 
 test("the admin roster editor still takes the same lock, so the pair is closed", () => {
@@ -63,7 +77,11 @@ test("the portal route still refuses a bad body before opening a transaction", (
   // Validation and identity resolution stay outside the lock: holding a
   // database lock while rejecting garbage would let an unauthenticated caller
   // queue behind a real speaker's save.
-  assert.ok(portal.indexOf("speakerProfileUpdateSchema.safeParse") < portal.indexOf("$transaction"));
+  // Named explicitly rather than pattern-matched: an `indexOf` on a schema name
+  // that no longer appears returns -1, which is silently "before" everything.
+  const validate = portal.indexOf("portalProfileUpdateSchema.safeParse");
+  assert.ok(validate > 0, "the portal route must validate with the portal's own schema");
+  assert.ok(validate < portal.indexOf("$transaction"));
   assert.ok(portal.indexOf("resolveSessionUser(session)") < portal.indexOf("$transaction"));
   assert.match(portal, /return fail\("VALIDATION_ERROR", "Profile details are invalid\.", 422/);
 });
