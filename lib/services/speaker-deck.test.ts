@@ -192,7 +192,7 @@ test("the refusal reaches the client as this route's own envelope, and faults st
   assert.match(route, /if \(error instanceof ApiError\) \{/);
   assert.match(route, /return fail\(error\.code, error\.message, error\.status, error\.fieldErrors\);/);
   // A non-ApiError must not be flattened into a 422 the client would act on.
-  assert.match(route, /\n\s*throw error;\n\s*\}/);
+  assert.match(route, /\r?\n\s*throw error;\r?\n\s*\}/);
 });
 
 test("the pointer check is scoped to the per-event association only", () => {
