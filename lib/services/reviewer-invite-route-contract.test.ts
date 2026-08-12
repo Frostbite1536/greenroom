@@ -24,7 +24,10 @@ test("reviewer invite writer preserves the C17 lock order and never overwrites a
   assert.ok(action.indexOf("tx.user.upsert") < action.indexOf("lockEventMemberAuthorities"));
   assert.ok(action.indexOf("lockEventMemberAuthorities") < action.indexOf("lockExistingEventMembersForUpdate"));
   assert.ok(action.indexOf("lockExistingEventMembersForUpdate") < action.indexOf('FROM "ReviewerInvite"'));
-  assert.ok(action.indexOf("missingRequiredTemplateVariables") < action.indexOf('SELECT COALESCE(SUM("sendWindowCount"), 0)'));
+  assert.ok(action.indexOf("missingRequiredTemplateVariables") < action.indexOf("tx.reviewerInvite.aggregate"));
+  assert.match(route, /where: \{ eventId: ctx\.eventId, sendWindowStart: windowStart \}/);
+  assert.match(route, /_sum: \{ sendWindowCount: true \}/);
+  assert.doesNotMatch(route, /SELECT COALESCE\(SUM\("sendWindowCount"\)/);
   assert.match(route, /update:\s*\{\}/);
   assert.doesNotMatch(route, /update:\s*\{\s*name:/);
   assert.match(route, /sendWindowCount/);
