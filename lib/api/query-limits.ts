@@ -53,6 +53,13 @@ export const OPERATOR_QUERY_LIMITS = {
   // filters narrow in the database, so a page is 50 rows of the current view,
   // not 50 rows sliced out of a separately capped read.
   adminEmailDispatchPage: 50,
+  // API credentials are bounded to ten ACTIVE per event, but a revoked one is
+  // an audit tombstone that only accumulates. So this is the email-log shape,
+  // not the rooms shape: a newest-first page with an honest truncation notice.
+  // Failing closed here would eventually lock an organizer out of the panel
+  // that issues and revokes their own keys — the worst thing on this surface to
+  // break on a long-running event.
+  settingsApiCredentials: 100,
 } as const;
 
 export function assertEventQueryBound(

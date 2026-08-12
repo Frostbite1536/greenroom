@@ -13,27 +13,61 @@ import {
   serializeV1Submission,
 } from "@/lib/api/v1-serialize";
 
-test("v1 auth accepts Bearer and X-API-Key without exposing key differences", () => {
+/**
+ * No per-event credential resolves for any of these cases, so this file
+ * exercises the deployment-wide key path in isolation — which is what makes it
+ * the regression test for "the global key behaves exactly as it always did".
+ * The per-event half lives in `lib/services/api-credential.test.ts`.
+ */
+const noCredentials = async () => null;
+
+test("v1 auth accepts Bearer and X-API-Key without exposing key differences", async () => {
   assert.equal(keysMatch("secret", "secret"), true);
   assert.equal(keysMatch("secret", "different"), false);
-  assert.deepEqual(authorizeV1Request(new Headers({ authorization: "Bearer secret" }), "secret"), { ok: true });
-  assert.deepEqual(authorizeV1Request(new Headers({ "x-api-key": "secret" }), "secret"), { ok: true });
+  assert.deepEqual(
+    await authorizeV1Request(new Headers({ authorization: "Bearer secret" }), "secret", noCredentials),
+    { ok: true, scope: { kind: "global" } },
+  );
+  assert.deepEqual(
+    await authorizeV1Request(new Headers({ "x-api-key": "secret" }), "secret", noCredentials),
+    { ok: true, scope: { kind: "global" } },
+  );
   assert.equal(
-    authorizeV1Request(
+    (await authorizeV1Request(
       new Headers({ authorization: "Basic not-a-bearer-key", "x-api-key": "secret" }),
       "secret",
-    ).ok,
+      noCredentials,
+    )).ok,
     false,
   );
 
-  const wrong = authorizeV1Request(new Headers({ authorization: "Bearer wrong" }), "secret");
+  const wrong = await authorizeV1Request(new Headers({ authorization: "Bearer wrong" }), "secret", noCredentials);
   assert.deepEqual(wrong, {
     ok: false,
     error: { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." },
   });
-  const unavailable = authorizeV1Request(new Headers({ authorization: "Bearer secret" }), undefined);
-  assert.equal(unavailable.ok, false);
-  if (!unavailable.ok) assert.equal(unavailable.error.status, 503);
+
+  // Nothing presented against a deployment with nothing configured is an auth
+  // failure, not a claim about the server. A deployment can be fully set up
+  // with per-event credentials and no GREENROOM_API_KEY at all, so "not
+  // configured" would be false about this server. No 503 exists on this path.
+  const nothingAtAll = await authorizeV1Request(new Headers(), undefined, noCredentials);
+  assert.deepEqual(nothingAtAll, {
+    ok: false,
+    error: { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." },
+  });
+
+  // And the same for a value presented to that deployment: resolved against
+  // stored credentials, then plainly refused.
+  const rejected = await authorizeV1Request(
+    new Headers({ authorization: "Bearer anything" }),
+    undefined,
+    noCredentials,
+  );
+  assert.deepEqual(rejected, {
+    ok: false,
+    error: { status: 401, code: "UNAUTHORIZED", message: "A valid API key is required." },
+  });
 });
 
 test("v1 query requires an event and bounds offset pagination", () => {

@@ -42,8 +42,10 @@ const envSchema = z.object({
   ACCELEVENTS_API_KEY: z.string().min(1).optional(),
   AIRTABLE_API_KEY: z.string().min(1).optional(),
   AIRTABLE_BASE_ID: z.string().trim().min(1).optional(),
-  // Optional server-only key for the read-only v1 REST surface. When absent,
-  // those routes deliberately return 503 instead of becoming public.
+  // Optional server-only DEPLOYMENT-WIDE key for the read-only v1 REST surface;
+  // it reaches every event. Optional because per-event `ApiCredential` keys
+  // authenticate independently of it. With neither present those routes accept
+  // nothing and refuse with 401 rather than becoming public.
   GREENROOM_API_KEY: v1ApiKeySchema,
   // Optional server-only credential for the AI drafting assistant. Absent is a
   // supported configuration, not an error: the assistant reports itself

@@ -109,8 +109,10 @@ invariant references in [`../INVARIANTS.md`](../INVARIANTS.md).
 - Demo reset is refused unless an operator explicitly opts in with
   `ALLOW_DEMO_RESET=true` — it is not set in production, and there is no reset
   control anywhere in the UI.
-- The read-only API refuses a request without a valid key, and returns
-  `503` when no key is configured at all rather than serving data openly.
+- The read-only API refuses any request without an accepted key with `401`. Two
+  kinds reach it: a deployment-wide key the operator sets, and per-event keys an
+  organizer issues and revokes, each reaching only its own event. A deployment
+  with neither configured accepts nothing rather than serving data openly.
 
 ## Current limitations
 

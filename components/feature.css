@@ -736,6 +736,15 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .settings-track-form { grid-template-columns: minmax(120px, 1fr) auto auto; }
 .colour-input { width: 46px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: #fff; cursor: pointer; }
 .settings-card button:focus-visible, .settings-card input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+/* The one-time reveal of a newly issued API key. Deliberately loud: this is the
+   only moment the value exists anywhere, and the panel has to read that way. */
+.api-credential-reveal { display: grid; gap: 8px; width: 100%; min-width: 0; padding: 10px 12px; border: 1px solid #eed9b0; border-radius: 8px; background: #fdf3e0; }
+.api-credential-reveal .stack { gap: 4px; }
+.api-credential-reveal input.text-input { font-size: 12px; background: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.api-credential-reveal .link-button { display: inline-flex; align-items: center; gap: 6px; }
+.api-credential-reveal .hint { margin: 0; }
+.api-credential-prefix { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.app-dialog.api-credential-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 
 @media (max-width: 640px) {
   .settings-form, .settings-inline-form, .settings-room-editor, .settings-track-form, .settings-structure-grid { grid-template-columns: 1fr; }

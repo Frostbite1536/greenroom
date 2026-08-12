@@ -9,9 +9,11 @@ import { OPENAPI_DOCUMENT } from "@/lib/api/openapi";
  * events exist. Gating it would only stop an integrator reading the contract
  * that tells them they need a key.
  *
- * It is also the reason the surface can be advertised at all while
- * `GREENROOM_API_KEY` is unconfigured: the three list routes still fail closed
- * with 503, and this one still explains why.
+ * It is also the reason the surface can be advertised at all before an
+ * integrator holds any credential: the three list routes still refuse every
+ * uncredentialed request with 401, and this one still explains how to get a key
+ * — either the deployment-wide `GREENROOM_API_KEY` from the operator, or a
+ * per-event key from the event's own organizer.
  *
  * The segment is literally named `openapi.json` so the published URL carries
  * the extension integrators and spec tooling expect. `force-static` holds

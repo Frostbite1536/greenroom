@@ -1,5 +1,6 @@
 import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
+import { ApiCredentials } from "@/components/api-credentials";
 import { EventSettings } from "@/components/event-settings";
 import { NewEventDialog } from "@/components/new-event-dialog";
 import { getEventSettings } from "@/lib/data/reads";
@@ -21,6 +22,11 @@ export default async function SettingsPage() {
         actions={<NewEventDialog currentEventName={view.event.name} />}
       />
       <EventSettings view={view} />
+      {/* API access loads its own list rather than riding this page's payload,
+          so no render of this route carries credential metadata and the fetch
+          can be no-store. The page itself is already ADMIN-gated by
+          `getEventSettings`, and every verb behind the panel re-checks. */}
+      <ApiCredentials />
     </section>
   );
 }

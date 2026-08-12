@@ -27,7 +27,7 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
    | `ACCELEVENTS_API_KEY` | optional | Raw `Authorization` value for the configured Accelevents adapter. |
    | `AIRTABLE_BASE_ID` | optional | Required with `AIRTABLE_API_KEY` for the Airtable mirror. |
-   | `GREENROOM_API_KEY` | optional | Enables the server-only, read-only `/api/v1/*` surface; leave unset to disable it (503). |
+   | `GREENROOM_API_KEY` | optional | Deployment-wide key for the server-only, read-only `/api/v1/*` surface; it reaches **every** event. Optional because organizers can issue per-event API keys from Event settings, which authenticate independently and reach one event each. With neither configured the surface accepts nothing and refuses every request with `401`. A value under 32 characters is ignored as if unset. |
    | `SESSION_SECRET` | production required | Server-only random value (minimum 32 characters) used to sign and expire auth cookies. The app fails closed without it in production. |
 
 4. First deploy checklist:

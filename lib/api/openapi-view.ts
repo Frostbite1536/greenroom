@@ -81,8 +81,8 @@ export function paragraphsOf(value: unknown): string[] {
 
 /**
  * The one piece of markdown these descriptions use is `backtick code`. Rendering
- * it is four lines of split, so the page can show `503 API_KEY_NOT_CONFIGURED`
- * as code without a markdown dependency — and this repository does not add one.
+ * it is four lines of split, so the page can show `401 UNAUTHORIZED` as code
+ * without a markdown dependency — and this repository does not add one.
  */
 export function inlineCodeSegments(text: string): { text: string; code: boolean }[] {
   return text
