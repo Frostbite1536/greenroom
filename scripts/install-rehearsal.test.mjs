@@ -16,6 +16,15 @@ test("the clean-install rehearsal proves acceptance provisions its Session witho
   assert.doesNotMatch(rehearsal, /convert to session → 201/);
 });
 
+test("the clean-install rehearsal submits typed checkbox and multiselect answers", () => {
+  assert.match(
+    rehearsal,
+    /field\.type === "MULTISELECT"\) answers\[field\.key\] = \[field\.options\?\.\[0\]\?\.value \?\? ""\]/,
+  );
+  assert.match(rehearsal, /field\.type === "CHECKBOX"\) answers\[field\.key\] = true/);
+  assert.doesNotMatch(rehearsal, /field\.type === "MULTISELECT" \|\| field\.type === "CHECKBOX"/);
+});
+
 test("the v1 guardrail asserts the credential contract a fresh install actually has", () => {
   // A fresh install configures no GREENROOM_API_KEY and issues no per-event
   // key, so an anonymous read is refused for want of a credential. Since scoped

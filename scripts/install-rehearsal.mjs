@@ -160,7 +160,8 @@ try {
   for (const field of form?.fields ?? []) {
     if (!field.required) continue;
     if (field.type === "SELECT" || field.type === "RADIO") answers[field.key] = field.options?.[0]?.value ?? "";
-    else if (field.type === "MULTISELECT" || field.type === "CHECKBOX") answers[field.key] = [field.options?.[0]?.value ?? ""];
+    else if (field.type === "MULTISELECT") answers[field.key] = [field.options?.[0]?.value ?? ""];
+    else if (field.type === "CHECKBOX") answers[field.key] = true;
     else if (field.type === "NUMBER") answers[field.key] = 1;
     else answers[field.key] = "Rehearsal answer with enough substance to pass validation.";
   }
