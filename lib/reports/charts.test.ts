@@ -14,6 +14,7 @@ import {
   categoryFunnelChart,
   reviewLoadChart,
   scheduleUtilizationChart,
+  submissionPacingChart,
   speakerReadinessChart,
   type BarChart,
 } from "@/lib/reports/charts";
@@ -21,6 +22,7 @@ import {
   summarizeCategoryFunnel,
   summarizeReviewLoad,
   summarizeScheduleUtilization,
+  summarizeSubmissionPacing,
   summarizeSpeakerReadiness,
   type CategoryStatusCount,
   type EvaluatorAssignmentGroup,
@@ -55,6 +57,38 @@ function assertInsideTrack(chart: BarChart) {
     }
   }
 }
+
+// ---- 0. Submission pacing -------------------------------------------------
+
+test("submission pacing draws active days against the peak with exact cumulative labels", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-05-12T10:00:00.000Z" },
+    { submittedAt: "2026-05-13T10:00:00.000Z" },
+    { submittedAt: "2026-05-13T11:00:00.000Z" },
+  ], "UTC");
+  const chart = submissionPacingChart(pacing)!;
+  assert.deepEqual(chart.bars.map((bar) => [bar.key, bar.value, bar.note]), [
+    ["2026-05-12", "1", "1 total"],
+    ["2026-05-13", "2", "3 total"],
+  ]);
+  assert.equal(drawn(chart, 0), 50);
+  assert.equal(drawn(chart, 1), 100);
+  assert.match(chart.ariaLabel, /3 proposals submitted/);
+  assertInsideTrack(chart);
+});
+
+test("submission pacing has no chart without actual submissions", () => {
+  assert.equal(submissionPacingChart(summarizeSubmissionPacing([], "UTC")), null);
+});
+
+test("a truncated pacing chart announces its proposal total as a floor", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-05-12T10:00:00.000Z" },
+    { submittedAt: "2026-05-13T10:00:00.000Z" },
+  ], "UTC");
+  assert.match(submissionPacingChart(pacing, true)!.ariaLabel, /at least 2 proposals submitted in the bounded window/);
+  assert.doesNotMatch(submissionPacingChart(pacing, false)!.ariaLabel, /at least|bounded window/);
+});
 
 // ---- 1. Per-category funnel ------------------------------------------------
 

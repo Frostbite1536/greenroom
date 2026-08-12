@@ -5061,6 +5061,38 @@ try {
   };
   const fmtRate = (rate) => (rate === null ? "—" : `${Math.round(rate * 100)}%`);
 
+  // 0. Submission pacing — independent event-scoped submittedAt read. Drafts
+  //    are absent because the predicate itself requires a submission instant.
+  const repSubmitted = await prisma.abstract.findMany({
+    where: { eventId: EVENT_ID, submittedAt: { not: null } },
+    select: { submittedAt: true },
+    orderBy: [{ submittedAt: "asc" }, { id: "asc" }],
+  });
+  const repPacingEvent = await prisma.event.findUnique({
+    where: { id: EVENT_ID }, select: { timezone: true },
+  });
+  const pacingSection = reportSection("pacing", "funnel");
+  const pacedByDay = new Map();
+  for (const row of repSubmitted) {
+    const key = dayKeyOf(row.submittedAt, repPacingEvent.timezone);
+    pacedByDay.set(key, (pacedByDay.get(key) ?? 0) + 1);
+  }
+  let pacedCumulative = 0;
+  const pacingMismatch = [...pacedByDay.entries()].map(([key, submitted]) => {
+    pacedCumulative += submitted;
+    const rendered = reportRow(pacingSection, dayLabelOf(key));
+    return rendered?.join("/") === `${submitted}/${pacedCumulative}`
+      ? null
+      : `${key}: page ${rendered?.join("/") ?? "missing"} vs db ${submitted}/${pacedCumulative}`;
+  }).filter(Boolean);
+  check("C5-REPORTS submission pacing is not vacuous", repSubmitted.length > 0, `${repSubmitted.length} submitted`);
+  check("C5-REPORTS submission pacing uses event-scoped submittedAt counts",
+    pacingMismatch.length === 0 && reportMetric("Submissions received") === String(repSubmitted.length),
+    pacingMismatch.join("; ") || `metric ${reportMetric("Submissions received")} vs db ${repSubmitted.length}`);
+  check("C5-REPORTS submission pacing names its event-local covered range",
+    pacingSection.includes(`(${repPacingEvent.timezone})`) && pacingSection.includes("Covered range:"),
+    "missing timezone/range copy");
+
   // 1. Acceptance — accepted over decided, where MAYBE is not a decision.
   const [repAccepted, repRejected, repMaybe] = await Promise.all([
     prisma.abstract.count({ where: { eventId: EVENT_ID, status: "ACCEPTED" } }),

@@ -30,7 +30,7 @@ accepted credential is `401 UNAUTHORIZED`**, including on a deployment that has
 set no `GREENROOM_API_KEY` at all: such a deployment refuses every request it
 cannot authenticate, and still exposes no program data.
 
-The contract for these three routes is published in two forms, both public and
+The contract for these four keyed reads is published in two forms, both public and
 neither requiring a key: **`GET /api/v1/openapi.json`** serves a static
 OpenAPI 3.1.1 document, and **`/docs/api`** renders that same document as a page.
 They cannot disagree — the page is generated from the document, and
@@ -66,7 +66,9 @@ curl -H "Authorization: Bearer $GREENROOM_API_KEY" \
 
 Successful list responses use a stable versioned envelope. `limit` defaults to
 50 and is bounded to 1–100; `offset` defaults to 0. Results are stable: list
-records include an id tiebreaker after their primary ordering.
+records include an id tiebreaker after their primary ordering. The
+single-submission response uses the same top-level envelope with
+`meta: { "event": ... }` and an object rather than an array in `data`.
 
 ```json
 {
@@ -82,18 +84,31 @@ records include an id tiebreaker after their primary ordering.
 
 Errors use the same `version`, `data`, `error`, and `meta` top-level fields.
 Expected error codes are `UNAUTHORIZED` (401), `EVENT_REQUIRED` or
-`INVALID_QUERY` (400), `EVENT_NOT_FOUND` (404), and `INTERNAL_ERROR` (500).
+`INVALID_QUERY` (400), `EVENT_NOT_FOUND` or `SUBMISSION_NOT_FOUND` (404), and
+`INTERNAL_ERROR` (500).
 
 ### Endpoints
 
 | Endpoint | Data | Ordering |
 | --- | --- | --- |
 | `GET /api/v1/submissions` | Event-scoped proposals, form/category, speakers, and answer values. Review assignments, scores, and private comments are never returned. | `createdAt`, `id` ascending |
+| `GET /api/v1/submissions/{submissionId}` | One proposal from the selected event, using exactly the list projection. A missing or cross-event id is `404 SUBMISSION_NOT_FOUND`. | n/a |
 | `GET /api/v1/speakers` | People derived only from this event's abstract or session speaker relations, with their profile and event-local appearance counts. | `name`, `id` ascending |
 | `GET /api/v1/schedule` | Only placed sessions, including their slot, room, optional track, and session speakers. | `startsAt`, `id` ascending |
 
-All three endpoints accept `event=<slug|id>`, `limit=<1..100>`, and
-`offset=<0..1000000>`.
+All three list endpoints accept `event=<slug|id>`, `limit=<1..100>`, and
+`offset=<0..1000000>`. The item endpoint requires only `event` and its bounded
+`submissionId` path parameter.
+
+### Submission filter
+
+- `status=<DRAFT|SUBMITTED|UNDER_REVIEW|MAYBE|ACCEPTED|REJECTED|WITHDRAWN>`
+  narrows the existing event-scoped browse read. It may use `offset`, and adds
+  no record or field that the unfiltered submission route did not already show.
+
+Incremental `updatedSince`/cursor synchronization is not available. It remains
+in the planned queue until the database visibility model can prove a complete
+window under concurrent writes.
 
 ## Planned v1 expansion — not shipped
 
@@ -107,10 +122,13 @@ has shipped and is described above; what remains is below.
    addressable by the current API into public data.
 2. Event discovery and resource visibility come before new read endpoints. In
    particular, held-back or unplaced sessions must remain private unless a
-   future scoped-read contract explicitly permits them; filters and incremental
-   sync also need bounded, stable cursor semantics.
-3. Hashed, revocable per-event credentials and a safely scoped demo-access path
-   precede any broader discovery or data demonstrations.
+   future scoped-read contract explicitly permits them. The shipped submission
+   status filter only narrows the existing projection; incremental cursoring,
+   discovery, resources, and an additional session model remain held.
+3. Hashed, revocable per-event credentials are delivered. A safely scoped demo
+   access path is still separate: the current event key can reach private
+   submission fields, so publishing one would be an authority leak rather than
+   a demonstration.
 4. Generic webhook delivery and any agent-writable API come last. A write must
    carry idempotency, per-token rate limits, auditability, and the same server
    authorization, abstract locks, and schedule locks used by the application

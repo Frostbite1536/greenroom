@@ -30,6 +30,11 @@ export const MAX_V1_LIMIT = 100;
 /** Largest accepted `offset`. Bounds how deep a caller may page. */
 export const MAX_V1_OFFSET = 1_000_000;
 
+/** The existing Abstract states accepted by the submissions browse filter. */
+export const V1_SUBMISSION_STATUSES = [
+  "DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "ACCEPTED", "REJECTED", "WITHDRAWN",
+] as const;
+
 /**
  * Longest accepted `event` selector. A slug or a cuid is far shorter; this is
  * the varchar bound the column itself carries, rejected before any query runs.
@@ -39,6 +44,9 @@ export const MAX_V1_OFFSET = 1_000_000;
  * than restating the numbers.
  */
 export const MAX_V1_EVENT_SELECTOR_LENGTH = 191;
+
+/** Longest accepted proposal id on the bounded single-submission read. */
+export const MAX_V1_SUBMISSION_ID_LENGTH = 191;
 
 /**
  * Shortest `GREENROOM_API_KEY` the server will accept. A shorter value is

@@ -386,3 +386,49 @@ asked for a deck, so the resolution rides beside the rows as `decks` on
 `SpeakerRosterView`. The global column is also kept out of the roster's
 `profileSelect`, because that projection is what profile-completeness counts and
 adding a fifth field would have quietly restated every percentage on the screen.
+
+## v1 read scope precedes read breadth
+
+The v1 API has two credential authorities, and neither turns private organizer
+data into public data. The deployment-wide key may select any event. A
+per-event `grk_` key may select only its own event; a selector for anything else
+is the same opaque `401` as an invalid key, so it cannot enumerate tenants.
+There is no anonymous event-discovery route.
+
+The existing `/submissions` projection is integration-private: it includes
+proposal text, answers, and speaker contact fields. A current per-event key can
+therefore be shared with a trusted integration, but it is **not** a safe public
+demo credential. Publishing the global key would be worse because it reaches
+every event. A future demo mechanism must expose a separately constrained
+public projection or add a capability and durable-rate model; documentation
+alone cannot narrow a credential.
+
+Read breadth follows this visibility matrix:
+
+- a status filter may only narrow the existing event-scoped submissions read;
+- a single proposal may reuse exactly that existing submissions projection when
+  its id and the selected, authenticated event match. A missing, cross-event,
+  or inaccessible proposal is the same opaque `404`, so ids cannot become an
+  event-enumeration shortcut;
+- held-back sessions and accepted-but-unplaced sessions remain absent from the
+  schedule API. A single-resource route must preserve that same visibility and
+  return an opaque event-scoped refusal rather than becoming an enumeration
+  shortcut;
+- only published resource pages may enter a future integration read. Draft
+  resources remain ADMIN/speaker-session surfaces;
+- review assignments, scores, reviewer comments, assistant prompts, and
+  private file bytes never enter v1 responses.
+
+Offset pagination remains the stable browse contract. Incremental sync remains
+**unshipped**: a fixed application-time watermark alone cannot prove that a
+transaction with an earlier `updatedAt` has committed before every page query.
+It needs a database-level snapshot/visibility design before it can truthfully
+promise a complete delta. A future cursor must include a server-fixed upper
+watermark and an `(updatedAt, id)` tiebreaker, reject future caller watermarks,
+and reapply the authenticated event predicate on every continuation; none of
+those requirements authorizes it today.
+
+Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
+and agent writes remain explicitly held by the post-release roadmap. In
+particular, no single-session read has been added: a placed-and-published
+schedule entry continues to be the only way a held or unplaced talk is exposed.

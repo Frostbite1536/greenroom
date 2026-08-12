@@ -9,11 +9,73 @@ import {
   summarizeCategoryFunnel,
   summarizeReviewLoad,
   summarizeScheduleUtilization,
+  summarizeSubmissionPacing,
   summarizeSpeakerReadiness,
   type CategoryStatusCount,
 } from "@/lib/reports/metrics";
 import { ABSTRACT_FUNNEL_STATUSES } from "@/lib/abstract-status";
 import type { SpeakerStatusRow } from "@/lib/speakers/status";
+
+// ---- submission pacing ----------------------------------------------------
+
+test("submission pacing groups submitted timestamps in the event timezone", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-05-12T06:30:00.000Z" }, // May 11 in Los Angeles
+    { submittedAt: "2026-05-12T07:30:00.000Z" },
+    { submittedAt: new Date("2026-05-13T18:00:00.000Z") },
+  ], "America/Los_Angeles");
+  assert.deepEqual(pacing, {
+    rows: [
+      { dateKey: "2026-05-11", submitted: 1, cumulative: 1 },
+      { dateKey: "2026-05-12", submitted: 1, cumulative: 2 },
+      { dateKey: "2026-05-13", submitted: 1, cumulative: 3 },
+    ],
+    total: 3,
+    peak: 1,
+    rangeTruncated: false,
+  });
+});
+
+test("submission pacing sorts days, accumulates counts and stays empty without submissions", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-05-14T12:00:00.000Z" },
+    { submittedAt: "2026-05-12T12:00:00.000Z" },
+    { submittedAt: "2026-05-14T13:00:00.000Z" },
+  ], "UTC");
+  assert.deepEqual(pacing.rows, [
+    { dateKey: "2026-05-12", submitted: 1, cumulative: 1 },
+    { dateKey: "2026-05-13", submitted: 0, cumulative: 1 },
+    { dateKey: "2026-05-14", submitted: 2, cumulative: 3 },
+  ]);
+  assert.equal(pacing.total, 3);
+  assert.equal(pacing.peak, 2);
+  assert.deepEqual(summarizeSubmissionPacing([], "UTC"), { rows: [], total: 0, peak: 0, rangeTruncated: false });
+});
+
+test("submission pacing bounds a multi-year range to the latest 366 calendar days", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2020-01-01T12:00:00.000Z" },
+    { submittedAt: "2026-01-01T12:00:00.000Z" },
+  ], "UTC");
+  assert.equal(pacing.rangeTruncated, true);
+  assert.equal(pacing.rows.length, 366);
+  assert.equal(pacing.rows[0].dateKey, "2025-01-01");
+  assert.equal(pacing.rows.at(-1)?.dateKey, "2026-01-01");
+  assert.equal(pacing.total, 1);
+});
+
+test("submission pacing keeps zero days across a daylight-saving boundary", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-03-07T20:00:00.000Z" },
+    { submittedAt: "2026-03-10T20:00:00.000Z" },
+  ], "America/Chicago");
+  assert.deepEqual(pacing.rows, [
+    { dateKey: "2026-03-07", submitted: 1, cumulative: 1 },
+    { dateKey: "2026-03-08", submitted: 0, cumulative: 1 },
+    { dateKey: "2026-03-09", submitted: 0, cumulative: 1 },
+    { dateKey: "2026-03-10", submitted: 1, cumulative: 2 },
+  ]);
+});
 
 // ---- per-category funnel ---------------------------------------------------
 

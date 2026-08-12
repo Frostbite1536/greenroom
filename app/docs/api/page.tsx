@@ -24,7 +24,6 @@ import {
 import {
   endpointViews,
   inlineCodeSegments,
-  listEndpointViews,
   paragraphsOf,
   securitySchemeViews,
   type EndpointView,
@@ -161,8 +160,7 @@ function Endpoint({ view }: { view: EndpointView }) {
 
 export default function ApiDocsPage() {
   const { info } = OPENAPI_DOCUMENT;
-  const lists = listEndpointViews();
-  const meta = endpointViews().filter((view) => view.path === V1_OPENAPI_PATH);
+  const endpoints = endpointViews();
 
   return (
     <PublicChrome active="api">
@@ -243,10 +241,7 @@ export default function ApiDocsPage() {
 
         <section aria-labelledby="api-endpoints">
           <h2 className="api-heading" id="api-endpoints">Endpoints</h2>
-          {lists.map((view) => (
-            <Endpoint key={view.path} view={view} />
-          ))}
-          {meta.map((view) => (
+          {endpoints.map((view) => (
             <Endpoint key={view.path} view={view} />
           ))}
         </section>

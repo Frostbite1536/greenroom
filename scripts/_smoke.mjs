@@ -3557,6 +3557,40 @@ try {
   // the intended read models (no reviewer data or unplaced sessions).
   const v1Submissions = await v1(`/api/v1/submissions?event=${SCRATCH_EVENT.slug}`);
   check("v1 submissions read is key-gated and event-scoped", v1Submissions.status === 200 && v1Submissions.data?.version === "v1" && v1Submissions.data?.data?.some((item) => item.id === abstractId), v1Submissions.status);
+  const v1ListedSubmission = v1Submissions.data?.data?.find((item) => item.id === abstractId);
+  const v1ListedStatus = v1ListedSubmission?.status ?? "ACCEPTED";
+  const v1FilteredSubmissions = await v1(
+    `/api/v1/submissions?event=${SCRATCH_EVENT.slug}&status=${v1ListedStatus}`,
+  );
+  check("v1 submission status narrows the same event-scoped projection",
+    v1FilteredSubmissions.status === 200
+      && v1FilteredSubmissions.data?.data?.some((item) => item.id === abstractId)
+      && v1FilteredSubmissions.data.data.every((item) => item.status === v1ListedStatus),
+    v1FilteredSubmissions.status);
+  const v1SubmissionItem = await v1(
+    `/api/v1/submissions/${encodeURIComponent(abstractId)}?event=${SCRATCH_EVENT.slug}`,
+  );
+  check("v1 single submission is byte-for-byte the list projection",
+    v1SubmissionItem.status === 200
+      && JSON.stringify(v1SubmissionItem.data?.data) === JSON.stringify(v1ListedSubmission),
+    v1SubmissionItem.status);
+  const foreignSubmission = await prisma.abstract.findFirst({
+    where: { eventId: { not: SCRATCH_EVENT.id } }, select: { id: true },
+  });
+  check("v1 cross-event submission fixture exists", Boolean(foreignSubmission?.id));
+  const [v1MissingItem, v1ForeignItem, v1MalformedItem] = await Promise.all([
+    v1(`/api/v1/submissions/not-a-real-submission?event=${SCRATCH_EVENT.slug}`),
+    v1(`/api/v1/submissions/${encodeURIComponent(foreignSubmission?.id ?? "not-a-real-submission")}?event=${SCRATCH_EVENT.slug}`),
+    v1(`/api/v1/submissions/${"x".repeat(192)}?event=${SCRATCH_EVENT.slug}`),
+  ]);
+  check("v1 missing and cross-event submission ids are indistinguishable opaque 404s",
+    v1MissingItem.status === 404
+      && v1ForeignItem.status === 404
+      && JSON.stringify(v1MissingItem.data) === JSON.stringify(v1ForeignItem.data),
+    `${v1MissingItem.status}/${v1ForeignItem.status}`);
+  check("v1 submission id is bounded before the item lookup",
+    v1MalformedItem.status === 400 && v1MalformedItem.data?.error?.code === "INVALID_QUERY",
+    v1MalformedItem.status);
   const v1Speakers = await v1(`/api/v1/speakers?event=${SCRATCH_EVENT.slug}`);
   check("v1 speakers are derived from scratch event records", v1Speakers.status === 200 && v1Speakers.data?.data?.some((item) => item.email === "spk@x.com"), v1Speakers.status);
   const v1Schedule = await v1(`/api/v1/schedule?event=${SCRATCH_EVENT.slug}`);

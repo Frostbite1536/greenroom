@@ -192,8 +192,8 @@ Stated plainly, because an evaluator should not have to discover them.
   than versioned migrations; email and Airtable delivery run serially in-request
   (fine at demo scale, an outbox at real scale); the v1 API still exposes only
   its three bounded read models and does not provide a public demo credential;
-  browser security
-  headers beyond framework defaults (CSP et al.) are not yet set; admin profile
+  route-aware `nosniff`, HSTS, referrer, permissions, and frame-ancestor
+  headers are set; a full script/style/default/connect CSP is not; admin profile
   edits use last-write-wins rather than version checks.
 
 ## Beyond the minimum
@@ -228,9 +228,9 @@ placeholders, not planned work.
   and per-session publication control, so a confirmed talk can be held back from
   the public program without losing its slot, speakers, or tasks. The
   deterministic demo also includes a source-less guaranteed keynote — the
-  opening keynote, Grand Ballroom, 09:00 on 12 May — which the schema supports
-  but no route creates, so direct UI creation of that special case is not
-  claimed here. The seeded program itself is conflict-free across all three
+  opening keynote, Grand Ballroom, 09:00 on 12 May — and organizers can now
+  create the same kind of draft session directly from the agenda. The seeded
+  program itself is conflict-free across all three
   event days and the Conflicts view reads zero: the walkthrough demonstrates a
   refusal live, which is stronger proof than shipping a standing mistake to
   point at.

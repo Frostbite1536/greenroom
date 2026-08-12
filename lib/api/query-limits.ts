@@ -46,6 +46,10 @@ export const OPERATOR_QUERY_LIMITS = {
   adminDecisionAssignments: 5_000,
   adminDecisionScores: 25_000,
   adminReviewComments: 5_000,
+  // Reporting may span the whole call. Read submitted timestamps only, cap
+  // plus one, then state that the curve is a floor rather than silently
+  // presenting a partial history as complete.
+  reportSubmittedAbstracts: 5_000,
   reviewerSetupMembers: 500,
   // The email log only grows, so its panel is a paged newest-first read rather
   // than a fail-closed one: running past one page is normal and is reported

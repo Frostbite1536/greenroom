@@ -19,6 +19,72 @@ import {
 import type { SpeakerStatusRow } from "@/lib/speakers/status";
 import { zonedParts } from "@/lib/tz";
 
+// ---- 0. Submission pacing -------------------------------------------------
+
+export type SubmissionPacingRow = {
+  dateKey: string;
+  submitted: number;
+  cumulative: number;
+};
+
+export type SubmissionPacing = {
+  rows: SubmissionPacingRow[];
+  total: number;
+  peak: number;
+  rangeTruncated: boolean;
+};
+
+/** Maximum calendar rows the server-rendered pacing table may materialize. */
+export const MAX_SUBMISSION_PACING_DAYS = 366;
+
+function nextCalendarDateKey(dateKey: string): string {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + 1, 12));
+  return next.toISOString().slice(0, 10);
+}
+
+function addCalendarDays(dateKey: string, days: number): string {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days, 12)).toISOString().slice(0, 10);
+}
+
+/**
+ * Counts actual submissions by the event-local day on which `submittedAt`
+ * occurred. Draft creation is deliberately absent: `createdAt` measures when
+ * somebody started typing, not when the organizer received a proposal.
+ */
+export function summarizeSubmissionPacing(
+  rows: readonly { submittedAt: Date | string }[],
+  timezone: string,
+): SubmissionPacing {
+  const byDay = new Map<string, number>();
+  for (const row of rows) {
+    const iso = row.submittedAt instanceof Date ? row.submittedAt.toISOString() : row.submittedAt;
+    const dateKey = zonedParts(iso, timezone).dateKey;
+    byDay.set(dateKey, (byDay.get(dateKey) ?? 0) + 1);
+  }
+
+  let cumulative = 0;
+  let peak = 0;
+  const observedDays = [...byDay.keys()].sort((left, right) => left.localeCompare(right));
+  const paced: SubmissionPacingRow[] = [];
+  let rangeTruncated = false;
+  if (observedDays.length > 0) {
+    const last = observedDays.at(-1)!;
+    const boundedFirst = addCalendarDays(last, -(MAX_SUBMISSION_PACING_DAYS - 1));
+    const first = observedDays[0] < boundedFirst ? boundedFirst : observedDays[0];
+    rangeTruncated = observedDays[0] < first;
+    for (let dateKey = first; dateKey <= last; dateKey = nextCalendarDateKey(dateKey)) {
+      const submitted = byDay.get(dateKey) ?? 0;
+      cumulative += submitted;
+      peak = Math.max(peak, submitted);
+      paced.push({ dateKey, submitted, cumulative });
+    }
+  }
+
+  return { rows: paced, total: cumulative, peak, rangeTruncated };
+}
+
 // ---- 1. Per-category funnel ------------------------------------------------
 
 export type CategoryStatusCount = {

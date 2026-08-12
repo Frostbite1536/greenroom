@@ -4,6 +4,7 @@ import {
   MAX_V1_EVENT_SELECTOR_LENGTH,
   MAX_V1_LIMIT,
   MAX_V1_OFFSET,
+  MAX_V1_SUBMISSION_ID_LENGTH,
   V1_API_VERSION,
 } from "@/lib/api/v1-contract";
 import { getV1ApiKey } from "@/lib/env";
@@ -22,6 +23,7 @@ export {
   MAX_V1_EVENT_SELECTOR_LENGTH,
   MAX_V1_LIMIT,
   MAX_V1_OFFSET,
+  MAX_V1_SUBMISSION_ID_LENGTH,
   V1_API_VERSION,
 };
 
@@ -30,6 +32,8 @@ export type V1ListQuery = {
   limit: number;
   offset: number;
 };
+
+export type V1EventQuery = { event: string };
 
 type V1Failure = {
   status: number;
@@ -263,19 +267,8 @@ export function authorizeV1EventScope<T extends { id: string }>(
 export function parseV1ListQuery(searchParams: URLSearchParams):
   | { ok: true; value: V1ListQuery }
   | { ok: false; error: V1Failure } {
-  const event = searchParams.get("event")?.trim();
-  if (!event) {
-    return {
-      ok: false,
-      error: { status: 400, code: "EVENT_REQUIRED", message: "Query parameter 'event' is required." },
-    };
-  }
-  if (event.length > MAX_V1_EVENT_SELECTOR_LENGTH) {
-    return {
-      ok: false,
-      error: { status: 400, code: "INVALID_QUERY", message: "Query parameter 'event' is too long." },
-    };
-  }
+  const event = parseV1EventQuery(searchParams);
+  if (!event.ok) return event;
 
   const limit = parseBoundedInteger(searchParams.get("limit"), DEFAULT_V1_LIMIT, 1, MAX_V1_LIMIT);
   if (limit === null) {
@@ -301,7 +294,21 @@ export function parseV1ListQuery(searchParams: URLSearchParams):
     };
   }
 
-  return { ok: true, value: { event, limit, offset } };
+  return { ok: true, value: { event: event.value.event, limit, offset } };
+}
+
+/** Parse only the required event selector for a non-list v1 route. */
+export function parseV1EventQuery(searchParams: URLSearchParams):
+  | { ok: true; value: V1EventQuery }
+  | { ok: false; error: V1Failure } {
+  const event = searchParams.get("event")?.trim();
+  if (!event) {
+    return { ok: false, error: { status: 400, code: "EVENT_REQUIRED", message: "Query parameter 'event' is required." } };
+  }
+  if (event.length > MAX_V1_EVENT_SELECTOR_LENGTH) {
+    return { ok: false, error: { status: 400, code: "INVALID_QUERY", message: "Query parameter 'event' is too long." } };
+  }
+  return { ok: true, value: { event } };
 }
 
 function parseBoundedInteger(raw: string | null, fallback: number, min: number, max: number): number | null {
@@ -324,10 +331,16 @@ export function v1Error(error: V1Failure): Response {
  */
 export function handleV1(
   fn: (req: Request) => Promise<Response>,
-): (req: Request) => Promise<Response> {
-  return async (req) => {
+): (req: Request) => Promise<Response>;
+export function handleV1<TContext>(
+  fn: (req: Request, context: TContext) => Promise<Response>,
+): (req: Request, context: TContext) => Promise<Response>;
+export function handleV1<TContext>(
+  fn: (req: Request, context?: TContext) => Promise<Response>,
+): (req: Request, context?: TContext) => Promise<Response> {
+  return async (req, context) => {
     try {
-      return await fn(req);
+      return await fn(req, context);
     } catch (error) {
       const name = error instanceof Error ? error.name : typeof error;
       console.error(`[api:v1] unexpected request failure (${name})`);
@@ -365,4 +378,14 @@ export function getV1PaginationMeta(
     hasMore,
     nextOffset: hasMore ? query.offset + query.limit : null,
   };
+}
+
+/** A single item from an already event-scoped v1 route. */
+export function v1ItemResponse<T>(data: T, event: V1EventMeta): Response {
+  return Response.json({
+    version: V1_API_VERSION,
+    data,
+    error: null,
+    meta: { event },
+  });
 }

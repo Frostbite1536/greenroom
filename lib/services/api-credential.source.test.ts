@@ -36,6 +36,7 @@ const V1_ROUTES = [
   "app/api/v1/speakers/route.ts",
   "app/api/v1/schedule/route.ts",
 ];
+const V1_ITEM_ROUTE = "app/api/v1/submissions/[submissionId]/route.ts";
 
 // ---------------------------------------------------------------------------
 // The stored shape
@@ -216,6 +217,13 @@ test("a per-event credential narrows the event query rather than filtering its r
     const listAt = route.indexOf("Promise.all([");
     assert.ok(scopeAt > 0 && scopeAt < listAt, `${path} must bind the scope before it lists anything`);
   }
+
+  const itemRoute = code(V1_ITEM_ROUTE);
+  assert.match(itemRoute, /where: v1EventWhere\(authorization\.scope, query\.value\.event\)/);
+  assert.match(itemRoute, /where: \{ id: parsedId\.value, eventId: scoped\.event\.id \}/);
+  const itemAuthAt = itemRoute.indexOf("authorizeV1Request(req.headers)");
+  const itemPrismaAt = itemRoute.indexOf("await prisma");
+  assert.ok(itemAuthAt > 0 && itemAuthAt < itemPrismaAt, `${V1_ITEM_ROUTE} must authorize before it queries`);
 });
 
 // ---------------------------------------------------------------------------

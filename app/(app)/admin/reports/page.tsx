@@ -14,6 +14,7 @@ import {
   categoryFunnelChart,
   reviewLoadChart,
   scheduleUtilizationChart,
+  submissionPacingChart,
   speakerReadinessChart,
 } from "@/lib/reports/charts";
 import {
@@ -48,7 +49,7 @@ export const dynamic = "force-dynamic";
  */
 export default async function AdminReportsPage() {
   const view = await getAdminReports();
-  const { funnel, review, utilization, readiness } = view;
+  const { pacing, funnel, review, utilization, readiness } = view;
 
   const hasSubmissions = funnel.totals.total > 0;
   const bookedMinutes = utilization.reduce((sum, day) => sum + day.bookedMinutes, 0);
@@ -58,6 +59,10 @@ export default async function AdminReportsPage() {
   // its own empty state rather than a row of zero-width bars. Each one sits
   // above the table holding the same numbers; the table stays the truth.
   const funnelChart = categoryFunnelChart(funnel);
+  const pacingChart = submissionPacingChart(pacing, view.pacingTruncated);
+  const pacingRange = pacing.rows.length === 0
+    ? null
+    : `${formatDayLabel(pacing.rows[0].dateKey, view.timezone)}–${formatDayLabel(pacing.rows.at(-1)!.dateKey, view.timezone)}`;
   const reviewChart = reviewLoadChart(review);
   const readinessChart = speakerReadinessChart(readiness);
   const utilizationCharts = utilization.flatMap((day) => {
@@ -75,10 +80,14 @@ export default async function AdminReportsPage() {
       <PageHeader
         eyebrow="Process reporting"
         title="Reports"
-        description={`How ${view.eventName} ran: acceptance by topic, review load by reviewer, room time by day, and speaker readiness — each section exportable as CSV.`}
+        description={`How ${view.eventName} ran: submission pacing, acceptance by topic, review load by reviewer, room time by day, and speaker readiness.`}
       />
 
       <div className="metric-grid">
+        <div className="metric">
+          <span>Submissions received</span>
+          <strong>{view.pacingTruncated ? `${pacing.total}+` : pacing.total}</strong>
+        </div>
         <div className="metric">
           <span>Acceptance rate</span>
           <strong>{formatRate(funnel.totals.acceptanceRate)}</strong>
@@ -92,6 +101,53 @@ export default async function AdminReportsPage() {
           <strong>{formatMinutes(bookedMinutes)}</strong>
         </div>
       </div>
+
+      {/* ---- 0. Submission pacing ---- */}
+      <section className="work-panel" aria-labelledby="reports-pacing">
+        <div className="panel-heading">
+          <div>
+            <h2 id="reports-pacing">Submission pacing</h2>
+            <p>
+              Proposals received per event-local day, based only on their submission timestamp.
+              Draft creation is not counted as demand, and the cumulative column shows how the call built over time.
+            </p>
+            {pacingRange ? <p className="hint">Covered range: {pacingRange} ({view.timezone}).</p> : null}
+          </div>
+          <Link className="ghost-button" href="/admin/abstracts">All proposals</Link>
+        </div>
+        {pacingChart ? (
+          <ReportChart
+            chart={pacingChart}
+            caption="Bar length compares each day’s received proposals with the peak day; the exact daily and cumulative figures remain in the table."
+          />
+        ) : (
+          <EmptyState icon={<FileStack aria-hidden="true" size={22} />} title="No submitted proposals yet">
+            Saved drafts do not count as received work. The first submitted proposal starts this timeline.
+          </EmptyState>
+        )}
+        {pacing.rows.length === 0 ? null : (
+          <div className="table-scroll">
+            <table className="data-table report-table">
+              <caption className="sr-only">Submitted proposals per event-local day with cumulative total</caption>
+              <thead><tr><th scope="col">Day</th><th scope="col">Submitted</th><th scope="col">Cumulative</th></tr></thead>
+              <tbody>
+                {pacing.rows.map((row) => (
+                  <tr key={row.dateKey}>
+                    <th scope="row">{formatDayLabel(row.dateKey, view.timezone)}</th>
+                    <td className="report-number">{row.submitted}</td>
+                    <td className="report-number">{row.cumulative}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {view.pacingTruncated ? (
+          <p className="hint dashboard-note" role="status">
+            Showing at most the latest 5,000 submitted proposals across the latest 366 calendar days. This pacing curve and cumulative total are floors; earlier activity is not shown.
+          </p>
+        ) : null}
+      </section>
 
       {/* ---- 1. Per-category funnel ---- */}
       <section className="work-panel" aria-labelledby="reports-funnel">

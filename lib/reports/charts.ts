@@ -34,6 +34,7 @@ import {
   type CategoryFunnel,
   type DayUtilization,
   type ReviewLoad,
+  type SubmissionPacing,
   type SpeakerReadiness,
 } from "@/lib/reports/metrics";
 
@@ -186,6 +187,35 @@ function stack(
     x += width;
   }
   return segments;
+}
+
+// ---- 0. Submission pacing -------------------------------------------------
+
+export function submissionPacingChart(
+  pacing: SubmissionPacing,
+  truncated = pacing.rangeTruncated,
+): BarChart | null {
+  if (pacing.rows.length === 0 || pacing.peak <= 0) return null;
+  const bars = pacing.rows.map((row) => ({
+    key: row.dateKey,
+    label: row.dateKey,
+    display: row.dateKey,
+    truncated: false,
+    segments: stack(
+      [{ key: "submitted", label: "Submitted", value: row.submitted, tone: "strong" }],
+      pacing.peak,
+    ),
+    value: String(row.submitted),
+    note: `${row.cumulative} total`,
+  }));
+  return {
+    bars,
+    legend: [],
+    ariaLabel:
+      `Bar chart of submission pacing across ${plural(bars.length, "day", "days")}: ` +
+      `${truncated ? "at least " : ""}${plural(pacing.total, "proposal", "proposals")} submitted` +
+      `${truncated ? " in the bounded window" : ""}. The table below lists every visible figure.`,
+  };
 }
 
 // ---- 1. Per-category funnel ------------------------------------------------
