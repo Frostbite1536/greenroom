@@ -62,29 +62,31 @@ This is a post-release sequence, not a claim that any item below is available
 today. It starts only after the clean-install rehearsal, final evidence capture,
 and deployed golden-path verification are complete.
 
-The first item of this queue — the public API contract and its safe examples —
-has shipped and is described under "Integration and completeness" above. One
+The public API contract, per-event credentials, and per-event deck association
+have shipped and are described under "Integration and completeness" above. One
 constraint it established governs everything still listed here: **never publish
 the global `GREENROOM_API_KEY`.** It is deployment-wide rather than
 demo-event scoped, so exposing it would turn every event this API can address
-into public data. That is what item 2 below has to solve first.
+into public data. Scoped credentials solve key authority; item 1 still governs
+which additional data may become reachable.
 
 1. **Read scope before read breadth.** Define event discovery, resource
    visibility, and incremental-sync cursor semantics before adding filtered
    submissions, individual resources, or additional session reads. Held-back
    and unplaced talks stay private until an explicit contract says otherwise.
-2. **Scoped credentials.** Add hashed, revocable per-event tokens and a safely
-   scoped demo-access mechanism before any public data demonstration. This is a
-   schema and authorization change, so it requires its own reviewed database
-   window and migration plan.
+2. **Scoped credentials delivered; demo distribution still gated.** ADMINs can
+   issue hashed, revocable per-event tokens after the reviewed schema and
+   authorization window. No plaintext secret is recoverable after creation and
+   every token scopes all three existing v1 reads to one event. A safely scoped
+   demo-access mechanism is still required before publishing a credential.
 
-   The deck half of this item has shipped: `EventSpeakerDeck` holds a speaker's
+   `EventSpeakerDeck` also holds a speaker's
    deck for one event, the portal writes it for the event you are signed in to,
    and every organizer surface resolves event-deck-then-global-fallback through
    one shared function with the source labelled. The global
    `SpeakerProfile.slideDeckUrl` is unchanged and remains the fallback for
-   events with no association. What still waits on the scoped-credential work
-   itself: the read-only v1 API's `profile.slideDeckUrl` continues to report
+   events with no association. The read-only v1 API's `profile.slideDeckUrl`
+   continues to report
    only the global value, because widening that published contract is exactly
    the "read scope before read breadth" ordering item 1 establishes.
 3. **Additional read models.** Add only the reads justified by the preceding

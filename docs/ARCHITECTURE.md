@@ -130,13 +130,13 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   by the unchanged save path; decision output must be plain text. No assistant
   route saves, publishes, sends mail, or changes a decision.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
-  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck` takes a raw
+  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck|supporting-document` takes a raw
   authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
   headshot, 5 MiB for a deck), sniffs the magic bytes and refuses anything whose real format is
   not accepted for that kind or does not match the claimed content type (`422`), then stores the
   bytes in `StoredFile` keyed by `(uploader, kind, fingerprint)` so a same-scope re-upload
   returns the id that already exists. A public headshot's fingerprint is its raw content SHA;
-  a private slide deck uses a versioned, event-scoped SHA over the event id and raw content
+  a private slide deck or supporting document uses a versioned, event-scoped SHA over the event id and raw content
   digest, so identical bytes uploaded under another event cannot inherit the first event's
   organizer access. Same-event legacy raw-digest deck rows remain reusable. The **stored,
   server-derived** mime — never the client's header — is what
@@ -145,7 +145,9 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   renders on the anonymous speaker gallery and the speakers embed (`public, max-age=31536000,
   immutable`), a `SLIDE_DECK` is the uploader's or that event's ADMIN's only (`private, no-store`,
   served as an attachment), and a file that does not exist is the same 404 as one the caller may
-  not read. The matrix, caps and sniffer are one pure module (`lib/uploads/stored-file.ts`); the
+  not read. Supporting documents use that same private/no-store rule and can be linked only to
+  the uploader's own editable proposal, up to three links per proposal. The matrix, caps and
+  sniffer are one pure module (`lib/uploads/stored-file.ts`); the
   per-user throttle reuses the S19 durable bucket table rather than counting the product table,
   which dedupe would undercount. Bytes in Postgres was chosen over a blob service deliberately: a
   headshot is small and rarely read, and the alternative was a new external credential.
@@ -170,7 +172,9 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   frame-ancestors 'none'` on everything EXCEPT `/embed/*`, which must stay frameable because
   embedding it in someone else's page is the feature. Deliberately not a full CSP — `script-src`
   needs a measured nonce migration and is a named follow-up (GRA2-08).
-- The v1 API authenticates before any database work and compares fixed-size key hashes.
+- The v1 API authenticates before any event or program-data read and compares
+  fixed-size key hashes. A per-event credential costs exactly one indexed
+  `ApiCredential` lookup; a deployment-wide key costs none.
 - Keep interactive client islands narrow and avoid serial data waterfalls.
 
 ## Environment and deployment contract

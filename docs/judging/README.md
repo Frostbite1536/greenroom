@@ -156,8 +156,10 @@ Stated plainly, because an evaluator should not have to discover them.
   live provider path when one is configured. Decision mail is preview-gated: the
   send button stays disabled until the exact content has been previewed, and the
   send is bound to that content and recipient set.
-- **The read-only v1 API is off by default.** It serves data only when
-  `GREENROOM_API_KEY` is configured on the server.
+- **The read-only v1 API refuses every uncredentialed request.** It accepts the
+  deployment-wide `GREENROOM_API_KEY` or an ADMIN-issued, revocable per-event
+  `grk_...` key. A fresh install has neither and returns the same 401 without
+  serving program data.
 - **Accessibility evidence is automated only.** Every audited route scored 100 on
   Lighthouse accessibility at the recorded measurement, and the three admin
   modal overlays now use the native `<dialog>` focus model — but no manual
@@ -184,8 +186,9 @@ Stated plainly, because an evaluator should not have to discover them.
   modal focus management). The remaining accepted findings are recorded here as
   roadmap, not hidden: schema changes apply via audited `db push` windows rather
   than versioned migrations; email and Airtable delivery run serially in-request
-  (fine at demo scale, an outbox at real scale); the v1 API uses one
-  deployment-wide read-only key rather than scoped credentials; browser security
+  (fine at demo scale, an outbox at real scale); the v1 API still exposes only
+  its three bounded read models and does not provide a public demo credential;
+  browser security
   headers beyond framework defaults (CSP et al.) are not yet set; admin profile
   edits use last-write-wins rather than version checks.
 
