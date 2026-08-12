@@ -336,12 +336,28 @@ test("the published spec documents both key kinds, the scoped refusal, and the o
   assert.doesNotMatch(spec, /from "@\/lib\/prisma"/);
 });
 
-test("nothing published still claims this surface can report itself unconfigured", () => {
+test("nothing anywhere still claims this surface can report itself unconfigured", () => {
   // Once an event can hold its own credentials, a deployment with no
   // GREENROOM_API_KEY is not "unconfigured" — it may be serving per-event keys
-  // perfectly. Every surface that used to say otherwise had to change together,
-  // so none of them can drift back on its own.
-  for (const path of [SPEC, V1, "lib/api/v1-contract.ts", "lib/api/openapi-view.ts", ...DOCS]) {
+  // perfectly. Every artifact that said otherwise had to change together, so
+  // none can drift back on its own. The rehearsal script is in this list
+  // because a stale assertion there fails the clean-install run outright.
+  const SWEPT = [
+    SPEC,
+    V1,
+    "lib/api/v1-contract.ts",
+    "lib/api/openapi-view.ts",
+    "lib/env.ts",
+    "app/api/v1/openapi.json/route.ts",
+    "scripts/install-rehearsal.mjs",
+    ".env.example",
+    // The judging receipts are the highest-stakes copy here: a stale one is a
+    // published claim about a run that did not happen that way.
+    "docs/judging/README.md",
+    "docs/judging/INSTALL-REHEARSAL.md",
+    ...DOCS,
+  ];
+  for (const path of SWEPT) {
     assert.doesNotMatch(
       code(path),
       /API_KEY_NOT_CONFIGURED/,
@@ -349,14 +365,55 @@ test("nothing published still claims this surface can report itself unconfigured
     );
     assert.doesNotMatch(code(path), /503/, `${path} must not advertise 503 on this surface`);
   }
+  // For the prose artifacts, comments count too: a stale explanation is a lie a
+  // reader acts on even when no code depends on it.
+  for (const path of [
+    ".env.example",
+    "scripts/install-rehearsal.mjs",
+    "docs/judging/README.md",
+    "docs/judging/INSTALL-REHEARSAL.md",
+    ...DOCS,
+  ]) {
+    assert.doesNotMatch(read(path), /503/, `${path} must not mention 503 for the v1 surface at all`);
+  }
+
+  // The rehearsal's published receipt must describe the run the harness now
+  // actually performs, or the evidence pack asserts something that never
+  // happened.
+  assert.match(
+    read("docs/judging/INSTALL-REHEARSAL.md"),
+    /401 `UNAUTHORIZED`/,
+    "the rehearsal receipt must state the refusal the harness now asserts",
+  );
 
   // What each of them says instead.
   assert.match(read(SPEC), /every request without an accepted one is/, "the spec must state the 401 rule");
   assert.match(read(V1), /every missing-or-invalid credential on this surface is now 401/);
   for (const path of DOCS) {
-    assert.match(read(path), /401 UNAUTHORIZED/, `${path} must document the refusal that replaced it`);
+    assert.match(read(path), /401/, `${path} must document the refusal that replaced it`);
   }
-  // The docs describe both credential kinds, not just the deployment-wide one.
+  // Each artifact names the per-event mechanism, not just the global key.
   assert.match(read("docs/API.md"), /grk_<id>_<secret>/);
   assert.match(read("docs/ARCHITECTURE.md"), /per-event `ApiCredential` keys/);
+  assert.match(read("docs/DEPLOY.md"), /per-event API keys/);
+  assert.match(read(".env.example"), /per-event API keys/);
+
+  // The rehearsal asserts the NEW contract, and asserts it precisely: the
+  // status, the code, and that no programme data came back with the refusal.
+  const rehearsal = read("scripts/install-rehearsal.mjs");
+  assert.match(rehearsal, /v1\.status === 401 && v1\.data\?\.error\?\.code === "UNAUTHORIZED"/);
+  assert.match(rehearsal, /v1\.data\?\.data === null/, "the guard must prove no data came back");
+});
+
+test("the unrelated reviewer-invite 503 survives this sweep untouched", () => {
+  // The sweep above is scoped to the v1 credential surface. A different surface
+  // fails closed with 503 for a genuinely different reason — no signing secret
+  // or app URL is configured, so no invite can be produced at all — and that
+  // statement is still true. It must not become collateral damage.
+  const reveal = read("app/api/evaluations/reviewer-invites/link/route.ts");
+  assert.match(
+    reveal,
+    /throw new ApiError\(503, "INVITE_UNAVAILABLE", "Reviewer invites are temporarily unavailable\."\);/,
+    "the reviewer-invite fail-closed 503 must survive this sweep",
+  );
 });

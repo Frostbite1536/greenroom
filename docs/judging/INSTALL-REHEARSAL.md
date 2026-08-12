@@ -58,7 +58,7 @@ Driven by `scripts/install-rehearsal.mjs` against the `npm run dev` server.
 | 5. Speaker completes onboarding | portal renders; task check-off persists → **200** |
 | 6. Admin schedules without conflicts | conflicting placement **refused 409 `SCHEDULE_CONFLICT` / `ROOM_OVERLAP`**; clean placement → **200** |
 | 7. Public embed + `.ics` | new talk visible on `/embed/schedule` **logged out**; `.ics` export → 200 and contains the talk; `/embed/speakers` → 200 |
-| guardrails | `/api/admin/reset` refused **403 `RESET_DISABLED`**; `/api/v1/*` returns **503** with no `GREENROOM_API_KEY` (fails closed, never public); a SPEAKER session is **307**-redirected away from `/admin/agenda` |
+| guardrails | `/api/admin/reset` refused **403 `RESET_DISABLED`**; `/api/v1/*` refuses an uncredentialed read **401 `UNAUTHORIZED`** with `data: null` — a fresh install holds neither a `GREENROOM_API_KEY` nor any per-event key, so nothing is accepted and no programme data is served; a SPEAKER session is **307**-redirected away from `/admin/agenda` |
 
 The run also asserts a **sentinel** before touching anything: the harness proves
 the server it is about to drive shares the disposable database the operator

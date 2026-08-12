@@ -245,8 +245,17 @@ try {
   // Guardrails that must hold on a fresh install.
   const reset = await req("POST", "/api/admin/reset", {}, admin);
   check("guard: demo reset refused without ALLOW_DEMO_RESET", reset.status === 403 && reset.data?.error?.code === "RESET_DISABLED", `${reset.status} ${reset.data?.error?.code}`);
+  // A fresh install has no GREENROOM_API_KEY and no per-event credentials, so an
+  // anonymous read of the programme is refused and carries no data. That refusal
+  // is an authentication failure, NOT a claim that the surface is unconfigured:
+  // since scoped credentials landed a deployment can be fully configured with
+  // per-event keys alone (docs/API.md, and the truth table in lib/api/v1.ts).
   const v1 = await req("GET", "/api/v1/schedule?event=forward-2026", null, null);
-  check("guard: v1 API returns 503 without GREENROOM_API_KEY", v1.status === 503, `got ${v1.status}`);
+  check(
+    "guard: v1 API refuses an uncredentialed read with 401 and returns no data",
+    v1.status === 401 && v1.data?.error?.code === "UNAUTHORIZED" && v1.data?.data === null,
+    `got ${v1.status} ${v1.data?.error?.code ?? "no code"}`,
+  );
   const adminAsSpeaker = await req("GET", "/admin/agenda", null, speaker);
   check("guard: speaker blocked from /admin/agenda", adminAsSpeaker.status === 307, `got ${adminAsSpeaker.status}`);
 } catch (error) {
