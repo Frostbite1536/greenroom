@@ -37,6 +37,7 @@ test("the roster refresh pauses for browser state, dialogs, focused editors, dir
 });
 
 test("the page mounts the refresh island and the inline task editor marks itself unsafe to refresh", () => {
+  assert.match(speakersPage, /className="page-stack speaker-roster-page"/);
   assert.match(speakersPage, /<SpeakerRosterLiveRefresh \/>/);
   assert.match(taskManager, /data-speaker-roster-refresh-blocker=\{draftDirty \|\| editingId !== null \? "true" : undefined\}/);
 });

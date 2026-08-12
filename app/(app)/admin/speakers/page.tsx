@@ -150,7 +150,7 @@ export default async function AdminSpeakersPage({
   const visible = filterSpeakerStatusRows(searched, filter);
 
   return (
-    <section className="page-stack">
+    <section className="page-stack speaker-roster-page">
       <PageHeader
         eyebrow="Speaker operations"
         title="Speaker onboarding"

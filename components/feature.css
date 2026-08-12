@@ -597,6 +597,7 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 .agenda-dialog.agenda-preview-dialog .agenda-dialog-body { max-height: 85vh; }
 
 /* ---- Speaker roster (/admin/speakers) ---- */
+.speaker-roster-page { grid-template-columns: minmax(0, 1fr); }
 .roster-toolbar { justify-content: space-between; }
 .roster-search-form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .roster-search { min-width: 240px; }

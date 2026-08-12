@@ -6,7 +6,7 @@ test.describe("post-release operator additions", () => {
 
   test("documents the scoped item read and renders bounded pacing", async ({ page }) => {
     await page.goto("/docs/api");
-    await expect(page.getByRole("heading", { name: "Greenroom API v1" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Greenroom read-only API" })).toBeVisible();
     await expect(page.getByText("/api/v1/submissions/{submissionId}", { exact: true })).toBeVisible();
 
     await signInAs(page, "admin");
@@ -28,7 +28,22 @@ test.describe("post-release operator additions", () => {
     const refresh = refreshGroup.getByRole("button", { name: "Refresh", exact: true });
     await expect(refreshGroup).toBeVisible();
     await expect(refreshGroup.getByRole("button", { name: "Pause live refresh" })).toBeVisible();
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const pageWidths = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+      stack: document.querySelector<HTMLElement>(".speaker-roster-page")?.scrollWidth,
+      settings: document.querySelector<HTMLElement>(".settings-card")?.scrollWidth,
+      scrollboxes: [...document.querySelectorAll<HTMLElement>(".table-scroll")].map((node) => ({
+        client: node.clientWidth,
+        scroll: node.scrollWidth,
+      })),
+    }));
+    expect(pageWidths.body, JSON.stringify(pageWidths)).toBeLessThanOrEqual(pageWidths.viewport);
+    expect(pageWidths.stack, JSON.stringify(pageWidths)).toBeLessThanOrEqual(pageWidths.viewport);
+    expect(pageWidths.settings, JSON.stringify(pageWidths)).toBeLessThanOrEqual(pageWidths.viewport);
+    expect(pageWidths.scrollboxes.every((box) => box.client <= pageWidths.viewport)).toBe(true);
+    expect(pageWidths.scrollboxes.some((box) => box.scroll > box.client)).toBe(true);
 
     const taskTitle = page.getByRole("textbox", { name: "Task title" }).first();
     await taskTitle.fill("Unsaved browser proof");
