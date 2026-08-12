@@ -115,7 +115,8 @@ test.describe("judging screenshots", () => {
     // 1 — sign-in
     await page.goto("/login");
     await expect(page.getByRole("button", { name: /^Event admin/ })).toBeVisible();
-    await expect(page.getByText("Self-service sign-up is on the roadmap")).toBeVisible();
+    await expect(page.getByRole("link", { name: "Create one" })).toHaveAttribute("href", "/signup");
+    await expect(page.getByRole("link", { name: "Reset it" })).toHaveAttribute("href", "/forgot");
     await shoot(page, "login.png", { access: "logged out" });
 
     // 2 — public landing page

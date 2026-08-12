@@ -377,12 +377,13 @@ test("nothing anywhere still claims this surface can report itself unconfigured"
     assert.doesNotMatch(read(path), /503/, `${path} must not mention 503 for the v1 surface at all`);
   }
 
-  // Historical evidence stays historical. The final-SHA rehearsal may add a
-  // new 401 receipt only after that run actually happens.
+  // Historical evidence stays historical. The completed final-product section
+  // carries its separate 401 receipt without rewriting the earlier 503 row.
   const historicalRehearsal = read("docs/judging/INSTALL-REHEARSAL.md");
   assert.match(historicalRehearsal, /f80247e/);
   assert.match(historicalRehearsal, /returned \*\*503\*\*/);
-  assert.match(historicalRehearsal, /final-SHA rehearsal/);
+  assert.match(historicalRehearsal, /Final product rehearsal/);
+  assert.match(historicalRehearsal, /uncredentialed v1 refusal \(401 with no data\)/);
 
   // What each of them says instead.
   assert.match(read(SPEC), /every request without an accepted one is/, "the spec must state the 401 rule");
