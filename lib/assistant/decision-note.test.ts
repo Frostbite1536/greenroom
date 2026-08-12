@@ -5,6 +5,7 @@ import {
   ASSISTANT_MAX_INSTRUCTION_CHARS,
   ASSISTANT_MAX_TOTAL_INPUT_CHARS,
   boundAssistantInput,
+  runAssistant,
 } from "./client";
 import {
   buildDecisionNoteProjection,
@@ -54,8 +55,6 @@ const FORBIDDEN = [
 ];
 
 const abstract = (over: Partial<DecisionNoteAbstract> = {}): DecisionNoteAbstract => ({
-  id: "abstract-1",
-  eventId: "event-1",
   title: TITLE,
   status: "ACCEPTED",
   event: { name: EVENT },
@@ -108,35 +107,41 @@ test("the request contract is assistant-local, strict, and bounded", () => {
 /* Authorization and scope                                                    */
 /* -------------------------------------------------------------------------- */
 
-test("an unknown id and another event's id are indistinguishable refusals", () => {
-  const missing = resolveDecisionNoteTarget(null, "event-1");
-  const foreign = resolveDecisionNoteTarget(abstract({ eventId: "event-2" }), "event-1");
+test("a row that did not match is one 404 that describes nothing", () => {
+  // Scope now lives in the WHERE clause, so a missing id and a foreign id both
+  // arrive here as the same `null` — the two cases cannot diverge because there
+  // is only one branch left. That the query really carries `ctx.eventId` is
+  // asserted at runtime in `decision-note-route.test.ts`, where the fake
+  // database records the where-clause it was handed.
+  const missing = resolveDecisionNoteTarget(null);
   assert.equal(missing.ok, false);
-  assert.equal(foreign.ok, false);
-  const left = (missing as { ok: false; error: ApiError }).error;
-  const right = (foreign as { ok: false; error: ApiError }).error;
-  assert.equal(left.status, 404);
-  assert.equal(right.status, 404);
-  assert.equal(left.code, DECISION_NOTE_NOT_FOUND_CODE);
-  assert.equal(right.code, DECISION_NOTE_NOT_FOUND_CODE);
-  // Byte-identical: a different message would be the oracle the same status
-  // was chosen to avoid.
-  assert.equal(left.message, right.message);
-  // And it names nothing about the proposal that does exist elsewhere.
-  assert.doesNotMatch(right.message, new RegExp(TITLE));
-  assert.doesNotMatch(right.message, /event-2/);
+  const error = (missing as { ok: false; error: ApiError }).error;
+  assert.equal(error.status, 404);
+  assert.equal(error.code, DECISION_NOTE_NOT_FOUND_CODE);
+  // It names nothing about any proposal, in this event or another.
+  assert.doesNotMatch(error.message, new RegExp(TITLE));
+  assert.doesNotMatch(error.message, /event-\d/);
+});
+
+test("the loaded row carries no proposal or event id for the projection to leak", () => {
+  // The type is the enforcement: there is no `id` or `eventId` field to read,
+  // so nothing downstream can put one in the prompt by accident.
+  const loaded = abstract();
+  assert.deepEqual(Object.keys(loaded).sort(), ["event", "status", "title"]);
+  assert.equal("id" in loaded, false);
+  assert.equal("eventId" in loaded, false);
 });
 
 test("only a decided proposal can be drafted for, and the refusal names why", () => {
   for (const status of ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "MAYBE", "WITHDRAWN"]) {
-    const resolved = resolveDecisionNoteTarget(abstract({ status }), "event-1");
+    const resolved = resolveDecisionNoteTarget(abstract({ status }));
     assert.equal(resolved.ok, false, `${status} must be refused`);
     const error = (resolved as { ok: false; error: ApiError }).error;
     assert.equal(error.status, 409);
     assert.equal(error.code, DECISION_NOTE_NOT_DECIDED_CODE);
   }
   for (const status of ["ACCEPTED", "REJECTED"] as const) {
-    const resolved = resolveDecisionNoteTarget(abstract({ status }), "event-1");
+    const resolved = resolveDecisionNoteTarget(abstract({ status }));
     assert.equal(resolved.ok, true, `${status} must be allowed`);
     assert.equal((resolved as { ok: true; target: { decision: string } }).target.decision, status);
   }
@@ -372,7 +377,11 @@ test("markup in a draft is REFUSED, not sanitized — including benign formattin
     ["a link", 'Congratulations! <a href="https://evil.test">Confirm your talk here</a>'],
     ["benign bold", "Congratulations — we loved <strong>the structure</strong> of this one."],
     ["a closing tag alone", "Congratulations!</p>"],
-    ["an escaped tag", "Congratulations! &lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["an escaped script tag", "Congratulations! &lt;script&gt;alert(1)&lt;/script&gt;"],
+    ["an escaped bold tag", "We loved &lt;strong&gt;bold&lt;/strong&gt; framing."],
+    ["an escaped closing tag", "Congratulations!&lt;/p&gt;"],
+    ["an escaped link", 'Confirm at &lt;a href="https://evil.test"&gt;here&lt;/a&gt;'],
+    ["an escaped void tag", "Congratulations!&lt;br&gt;"],
     ["a numeric escaped bracket", "Congratulations! &#60;b&#62;bold&#60;/b&#62;"],
     ["a hex escaped bracket", "Congratulations! &#x3C;b&#x3E;bold"],
     ["a bare tag with no content", "<br>"],
@@ -390,16 +399,113 @@ test("the markup rule does not refuse honest prose that merely contains punctuat
   // Non-vacuity in the other direction: an over-broad rule would refuse real
   // drafts and quietly make the feature useless.
   for (const [label, draft] of [
-    ["a comparison", "We had fewer than 5 < 10 slots for this track, so competition was fierce."],
+    ["a raw comparison", "We had fewer than 5 < 10 slots for this track, so competition was fierce."],
     ["an ampersand", "Your work on AT&T and R&D case studies is exactly what we wanted."],
     ["an arrow", "The flow you describe — intake -> review -> stage — is the useful part."],
     ["quotes and dashes", 'We loved the "war story" framing — it is concrete and honest.'],
     ["a bare angle at the end", "Rated highly on depth <"],
+    // The encoded forms of the same prose. The first version of this rule
+    // rejected every `&lt;`/`&gt;`, which turned these honest drafts into
+    // invalid_output — an over-rejection, not a security property.
+    ["an encoded greater-than", "Your score of 3 &gt; 2 put this comfortably in range."],
+    ["an encoded less-than", "We had fewer than &lt; 10 slots, so competition was fierce."],
+    ["an encoded ampersand", "Your work on AT&amp;T and R&amp;D case studies stood out."],
+    ["an encoded bracket before a digit", "Rated &lt;5 on novelty but strong on craft."],
+    ["encoded brackets around a number", "We ran &lt;30&gt; minute slots this year."],
   ] as Array<[string, string]>) {
     assert.equal(containsMarkup(draft), false, `${label} must not read as markup`);
     const parsed = parseDecisionNoteDraft(JSON.stringify({ draft }));
     assert.equal(parsed.ok, true, `${label} must still be accepted`);
   }
+});
+
+/* -------------------------------------------------------------------------- */
+/* The raw-output slice: worst-case JSON, through the REAL boundary            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Drive the actual `runAssistant` slice with a stubbed provider.
+ *
+ * Deliberately not a pure-function test. The bug this guards against lives in
+ * the seam: the foundation truncates the RAW string at `maxOutputChars` before
+ * any caller parses it, so a cap computed against typical output slices valid
+ * JSON in half. Only a test that crosses that boundary can see it.
+ */
+async function throughProviderBoundary(draft: string): Promise<{ raw: string; parsed: ReturnType<typeof parseDecisionNoteDraft> }> {
+  const payload = JSON.stringify({ draft });
+  const savedKey = process.env.OPENAI_API_KEY;
+  const savedInfo = console.info;
+  process.env.OPENAI_API_KEY = "sk-test-not-a-real-key-000000000000";
+  console.info = () => {};
+  try {
+    const result = await runAssistant({
+      instructions: DECISION_NOTE_INSTRUCTIONS,
+      input: "d",
+      textFormat: { ...DECISION_NOTE_TEXT_FORMAT },
+      maxOutputChars: DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS,
+      fetcher: (async () =>
+        Response.json({
+          status: "completed",
+          output: [{ type: "message", content: [{ type: "output_text", text: payload }] }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        })) as unknown as typeof fetch,
+    });
+    assert.equal(result.ok, true, "the stub always answers");
+    const raw = result.ok ? result.text : "";
+    return { raw, parsed: parseDecisionNoteDraft(raw) };
+  } finally {
+    console.info = savedInfo;
+    if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = savedKey;
+  }
+}
+
+test("a schema-valid worst-case draft survives the raw slice instead of being falsely refused", async () => {
+  // Every earlier fixture here was x-filled, which serializes one-to-one and so
+  // passed this axis vacuously. These are the two shapes that actually blow the
+  // envelope up.
+  const quoteHeavy = Array.from({ length: DECISION_NOTE_MAX_DRAFT_CHARS }, (_, i) => (i % 2 ? '"' : "\\")).join("");
+  // U+0001 built by code point, so this file holds no literal control
+  // character. JSON.stringify renders each one as six characters.
+  const escapeHeavy = String.fromCharCode(1).repeat(DECISION_NOTE_MAX_DRAFT_CHARS);
+
+  assert.equal(quoteHeavy.length, DECISION_NOTE_MAX_DRAFT_CHARS);
+  assert.equal(escapeHeavy.length, DECISION_NOTE_MAX_DRAFT_CHARS);
+  // The arithmetic the old 1,600 cap got wrong, stated as an assertion.
+  assert.ok(JSON.stringify({ draft: quoteHeavy }).length > 2_400, "two-character escaping doubles it");
+  assert.ok(JSON.stringify({ draft: escapeHeavy }).length > 7_200, "six-character escaping sextuples it");
+  assert.ok(
+    JSON.stringify({ draft: escapeHeavy }).length <= DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS,
+    "the raw cap must cover the six-character worst case",
+  );
+
+  for (const [label, draft] of [
+    ["quotes and backslashes", quoteHeavy],
+    ["unicode-escaped units", escapeHeavy],
+  ] as Array<[string, string]>) {
+    const { raw, parsed } = await throughProviderBoundary(draft);
+    // The envelope arrived whole — not sliced mid-string.
+    assert.equal(raw, JSON.stringify({ draft }), `${label}: the raw JSON must survive the slice`);
+    assert.equal(parsed.ok, true, `${label}: a schema-valid draft must not be refused`);
+    assert.equal(parsed.ok && parsed.draft.length, DECISION_NOTE_MAX_DRAFT_CHARS);
+  }
+});
+
+test("genuinely oversized raw output is still refused", async () => {
+  // Past the raw cap the slice does cut, the envelope is unparseable, and the
+  // answer is refused — which is the correct outcome for output this far out.
+  const huge = String.fromCharCode(1).repeat(2_000);
+  assert.ok(JSON.stringify({ draft: huge }).length > DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS);
+  const { raw, parsed } = await throughProviderBoundary(huge);
+  assert.equal(raw.length, DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS);
+  assert.deepEqual(parsed, { ok: false, reason: "invalid_output" });
+
+  // And a draft that parses but exceeds the DRAFT cap is refused on length,
+  // which is a different rule from the raw slice and still 1,200.
+  const overlong = "a".repeat(DECISION_NOTE_MAX_DRAFT_CHARS + 1);
+  const readable = await throughProviderBoundary(overlong);
+  assert.equal(readable.raw, JSON.stringify({ draft: overlong }), "it was readable, not sliced");
+  assert.deepEqual(readable.parsed, { ok: false, reason: "invalid_output" });
 });
 
 test("every assistant reason maps to a stable refusal that keeps the manual path open", () => {

@@ -41,20 +41,29 @@ const ADMIN: ApiContext = {
 };
 
 const OTHER_EVENT_ABSTRACT: DecisionNoteAbstract = {
-  id: "abstract-foreign",
-  eventId: "event-2",
   title: "Someone else's talk",
   status: "ACCEPTED",
   event: { name: "Other Conf" },
 };
 
 const OWN_ABSTRACT: DecisionNoteAbstract = {
-  id: "abstract-1",
-  eventId: "event-1",
   title: "Backstage: Running a 3,000-Person Conference",
   status: "ACCEPTED",
   event: { name: "Forward 2026" },
 };
+
+/**
+ * A fake that really enforces scope.
+ *
+ * The rows carry the ids the route has to match on, and the fake honours the
+ * WHOLE where-clause. If the route ever stopped sending `eventId`, the foreign
+ * row would come back and the indistinguishability test below would fail rather
+ * than quietly keep passing on a fake that ignored the clause.
+ */
+const SCOPED_ROWS: Array<{ id: string; eventId: string; row: DecisionNoteAbstract }> = [
+  { id: "abstract-1", eventId: "event-1", row: OWN_ABSTRACT },
+  { id: "abstract-foreign", eventId: "event-2", row: OTHER_EVENT_ABSTRACT },
+];
 
 type Recorder = {
   roles: UserRole[][];
@@ -103,7 +112,13 @@ function harness(over: {
       findAbstract: async (query) => {
         seen.abstractQueries.push(query);
         seen.order.push("findAbstract");
-        return over.abstract === undefined ? OWN_ABSTRACT : over.abstract;
+        if (over.abstract !== undefined) return over.abstract;
+        // Honour the whole clause, so dropping `eventId` from the route would
+        // surface here as a foreign row rather than as a silent pass.
+        const match = SCOPED_ROWS.find(
+          (candidate) => candidate.id === query.where.id && candidate.eventId === query.where.eventId,
+        );
+        return match?.row ?? null;
       },
       findComments: async (query) => {
         seen.commentQueries.push(query);
@@ -173,12 +188,22 @@ test("the route demands exactly ADMIN", async () => {
 /* Scope and lifecycle                                                        */
 /* -------------------------------------------------------------------------- */
 
-test("an unknown id and another event's id are byte-identical 404s", async () => {
-  const missing = harness({ abstract: null });
-  const foreign = harness({ abstract: OTHER_EVENT_ABSTRACT });
+test("an unknown id and another event's id are byte-identical 404s, and neither is read", async () => {
+  // No `abstract` override: both go through the scope-honouring fake, so the
+  // foreign row is refused by the WHERE clause rather than by a comparison the
+  // route makes after loading it.
+  const missing = harness();
+  const foreign = harness();
 
   const missingResponse = await missing.post(request({ ...VALID, abstractId: "nope" }));
   const foreignResponse = await foreign.post(request({ ...VALID, abstractId: "abstract-foreign" }));
+
+  // The query really carried both halves of the scope.
+  assert.deepEqual(foreign.seen.abstractQueries[0]!.where, {
+    id: "abstract-foreign",
+    eventId: "event-1",
+  });
+  assert.deepEqual(missing.seen.abstractQueries[0]!.where, { id: "nope", eventId: "event-1" });
 
   assert.equal(missingResponse.status, 404);
   assert.equal(foreignResponse.status, 404);
@@ -281,9 +306,9 @@ test("the event comes from the session, never from the request", async () => {
   const { post, seen } = harness();
   await post(request(VALID));
   assert.deepEqual(seen.rateCalls, [{ userId: "user-admin", eventId: "event-1" }]);
-  // The abstract lookup is by id alone; scope is decided against ctx.eventId
-  // after the read, which is what makes unknown and foreign indistinguishable.
-  assert.deepEqual(seen.abstractQueries[0]!.where, { id: "abstract-1" });
+  // The lookup is pinned to the session's event, so a foreign row never
+  // matches and its content is never read.
+  assert.deepEqual(seen.abstractQueries[0]!.where, { id: "abstract-1", eventId: "event-1" });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -297,12 +322,17 @@ test("the route reads exactly the allowed columns, and no identity column at all
   // Asserted against an INLINE literal, not against the exported constant, so
   // widening the constant cannot silently widen the assertion with it.
   assert.deepEqual(seen.abstractQueries[0]!.select, {
-    id: true,
-    eventId: true,
     title: true,
     status: true,
     event: { select: { name: true } },
   });
+  // Neither identifier is selected. The request already carries the id, and
+  // scope is enforced by the where-clause — so "no proposal or event id is
+  // selected into the provider projection" is a fact about the query.
+  assert.equal("id" in seen.abstractQueries[0]!.select, false);
+  assert.equal("eventId" in seen.abstractQueries[0]!.select, false);
+  // And the scope really is in the clause instead.
+  assert.deepEqual(seen.abstractQueries[0]!.where, { id: "abstract-1", eventId: "event-1" });
   assert.deepEqual(seen.commentQueries[0]!.select, { comment: true });
   assert.equal(seen.commentQueries[0]!.take, 50);
   assert.deepEqual(seen.commentQueries[0]!.where, { abstractId: "abstract-1", comment: { not: null } });

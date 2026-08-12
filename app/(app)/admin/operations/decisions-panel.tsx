@@ -5,6 +5,7 @@ import { Mails, Send, Sparkles } from "lucide-react";
 import {
   applyDraftToNote,
   describeApplyAction,
+  describeCommentDisclosure,
   describeDraftFailure,
   describeDraftGrounding,
   isDraftResponseCurrent,
@@ -243,15 +244,18 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
               </button>
               <span className={styles.hintText}>
                 {includeFeedback
-                  ? "Sends the proposal title, your decision, and the reviewer comments above to the configured AI provider."
-                  : "Sends the proposal title and your decision to the configured AI provider. No reviewer comments."}
+                  ? "Sends the event name, the proposal title, your decision, and excerpts of the reviewer comments above to the configured AI provider."
+                  : "Sends the event name, the proposal title, and your decision to the configured AI provider. No reviewer comments."}
               </span>
             </div>
             <p className={styles.hintText}>
-              Those four things are all that is sent: no speaker or reviewer name, email address,
-              score, or ID is looked up or added as a separate field.{" "}
               {includeFeedback
-                ? "Reviewer comments are sent word for word, so if a reviewer wrote a name, an address, or a score inside a comment, that text goes too. Uncheck the box above to send none of them."
+                ? "Those four things — the event name, the proposal title, your decision, and comment excerpts — are all that leaves this deployment."
+                : "Those three things — the event name, the proposal title, and your decision — are all that leaves this deployment."}{" "}
+              No speaker or reviewer name, email address, score, or ID is looked up or added as a
+              separate field, and no proposal or event ID is sent.{" "}
+              {includeFeedback
+                ? describeCommentDisclosure()
                 : "No comment text leaves this deployment while that box is unchecked."}{" "}
               You always choose whether to use what comes back.
             </p>

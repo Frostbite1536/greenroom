@@ -59,19 +59,28 @@ test("the disclosure is TRUE, not merely reassuring", () => {
   assert.match(it, /reviewer comments above to the configured AI provider/);
   assert.match(it, /No reviewer comments\./);
 
-  // The precise, true claim: no identity or score FIELD is looked up or added.
-  assert.match(it, /no speaker or reviewer name, email address,/);
-  assert.match(it, /score, or ID is looked up or added as a separate field/);
-  // And the part that makes it honest rather than merely narrower — comment
-  // text is user-written and may itself contain exactly those things.
-  assert.match(it, /Reviewer comments are sent word for word/);
-  assert.match(it, /that text goes too/);
+  // All four categories are ENUMERATED, event name included. An earlier
+  // version said "those four things" while listing only three of them.
+  assert.match(it, /the event name, the proposal title, your decision, and comment excerpts/);
+  assert.match(it, /the event name, the proposal title, and your decision/);
+  assert.match(it, /Sends the event name, the proposal title, your decision, and excerpts/);
+
+  // The precise, true claim: no identity or score FIELD is looked up or added,
+  // and no identifier is sent at all now that neither one is selected.
+  assert.match(it, /No speaker or reviewer name, email address, score, or ID is looked up or added as a/);
+  assert.match(it, /separate field, and no proposal or event ID is sent/);
+
+  // The comment sentence is built from the real bounds rather than written out
+  // here, so the numbers an organizer reads cannot drift from the projection.
+  assert.match(it, /describeCommentDisclosure\(\)/);
   assert.match(it, /No comment text leaves this deployment while that box is unchecked/);
 
-  // The overclaim must not come back. "Never sent" was false the moment a
-  // reviewer typed a name or a number into a comment the organizer includes.
+  // Neither overclaim may come back. "Never sent" was false the moment a
+  // reviewer typed a name into an included comment; "word for word" was false
+  // in the other direction, because the projection normalizes and truncates.
   assert.doesNotMatch(it, /are never sent/);
   assert.doesNotMatch(it, /are never included/);
+  assert.doesNotMatch(it, /word for word/);
 
   // The include-feedback choice is stated to govern the draft too, so one
   // checkbox cannot silently mean two different things.

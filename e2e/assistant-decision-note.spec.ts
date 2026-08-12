@@ -192,10 +192,18 @@ test.describe("decision-note drafting", () => {
       await expect(panel().getByRole("button", { name: DRAFT_BUTTON })).toBeVisible();
       // The disclosure is readable before anything is sent.
       await expect(panel().getByText(/to the configured AI provider/)).toBeVisible();
-      // The truthful disclosure, both halves: what is never added as a field,
-      // and that comment text itself travels word for word.
+      // The truthful disclosure, all three parts: the four categories that
+      // leave (event name included), what is never added as a field or sent as
+      // an id, and the real treatment of comment text — normalized and bounded,
+      // neither "verbatim" nor "never sent".
+      await expect(
+        panel().getByText(/the event name, the proposal title, your decision, and comment excerpts/),
+      ).toBeVisible();
       await expect(panel().getByText(/is looked up or added as a separate field/)).toBeVisible();
-      await expect(panel().getByText(/Reviewer comments are sent word for word/)).toBeVisible();
+      await expect(panel().getByText(/no proposal or event ID is sent/)).toBeVisible();
+      await expect(
+        panel().getByText(/Reviewer comments are sent after safety normalization and length limits/),
+      ).toBeVisible();
     });
 
     await journeyStep(page, "b. generating produces a labelled suggestion, not a filled field", async () => {

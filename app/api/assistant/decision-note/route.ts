@@ -62,11 +62,16 @@ export type DecisionNoteDeps = {
  * everything at preview time regardless.
  *
  * The privacy surface is the projection built in `lib/assistant/decision-note`.
- * No identity, address, score, rubric, or id column is loaded at all: the two
- * `select`s below are the enforcement, not a filter applied downstream. What
- * they cannot bound is the CONTENT of a reviewer comment, which is sent
- * verbatim when the organizer opts in and may itself name a person or a score —
- * the panel's disclosure says exactly that.
+ * No identity, address, score, or rubric column is loaded, and no proposal or
+ * event id is selected into or passed to the provider: the server uses the
+ * request's id only to locate a row already pinned to the caller's own event.
+ * The two `select`s below are the enforcement, not a filter applied downstream.
+ *
+ * What a `select` cannot bound is the CONTENT of a reviewer comment. When the
+ * organizer opts in, comment text is sent after safety normalization and length
+ * bounds — controls and newlines flattened, per-comment and total caps applied
+ * — and what survives that may still name a person or read like a score. The
+ * panel's disclosure says exactly that, in those terms.
  */
 export function createDecisionNotePost(deps: DecisionNoteDeps): (req: Request) => Promise<Response> {
   return handle(async (req) => {
@@ -77,11 +82,16 @@ export function createDecisionNotePost(deps: DecisionNoteDeps): (req: Request) =
     await deps.enforceRateLimit({ userId: ctx.userId, eventId: ctx.eventId });
     const input = await parseBoundedJson(req, decisionNoteRequestSchema, DECISION_NOTE_MAX_BODY_BYTES);
 
+    // Scoped in the WHERE clause, not by reading a row and comparing its event
+    // afterwards. A foreign proposal simply does not match, so its title never
+    // leaves the database — and a missing id and a foreign id are the same
+    // `null` here, which is what makes their refusals identical by
+    // construction rather than by two branches that must be kept in step.
     const abstract = await deps.db.findAbstract({
-      where: { id: input.abstractId },
+      where: { id: input.abstractId, eventId: ctx.eventId },
       select: { ...DECISION_NOTE_ABSTRACT_SELECT },
     });
-    const resolved = resolveDecisionNoteTarget(abstract, ctx.eventId);
+    const resolved = resolveDecisionNoteTarget(abstract);
     if (!resolved.ok) throw resolved.error;
 
     // Read regardless of the organizer's choice, so `commentsAvailable` reports

@@ -14,6 +14,42 @@
  * rather than by a component remembering to check.
  */
 
+/**
+ * The comment bounds the server applies, owned here because the disclosure
+ * quotes them.
+ *
+ * Single-sourced deliberately: `lib/assistant/decision-note.ts` imports these
+ * rather than declaring its own, so the numbers an organizer reads and the
+ * numbers the projection enforces cannot drift apart. A pure, client-safe
+ * module is the one place both a server module and a client component may read
+ * from without breaking the server-only rail.
+ */
+export const DRAFT_COMMENT_LIMITS = {
+  maxComments: 8,
+  maxCommentChars: 600,
+  maxTotalCommentChars: 3_000,
+} as const;
+
+/**
+ * The disclosure sentence about comment text, built from the real bounds.
+ *
+ * The wording this replaces said comments are sent "word for word", which was
+ * wrong in the opposite direction from the claim before it: the projection
+ * flattens control characters and newlines, neutralizes delimiter runs, and
+ * truncates both per comment and in total. "Never sent" understated what
+ * leaves; "word for word" overstated it. This states the contract.
+ */
+export function describeCommentDisclosure(): string {
+  return (
+    "Reviewer comments are sent after safety normalization and length limits: line breaks and " +
+    `control characters are flattened, and up to ${DRAFT_COMMENT_LIMITS.maxComments} comments are ` +
+    `trimmed to ${DRAFT_COMMENT_LIMITS.maxCommentChars} characters each ` +
+    `(${DRAFT_COMMENT_LIMITS.maxTotalCommentChars.toLocaleString("en-US")} in total). ` +
+    "What is sent may still contain a name, an email address, or score-like wording a reviewer typed. " +
+    "Uncheck the box above to send none of it."
+  );
+}
+
 export type DraftSuggestion = {
   draft: string;
   commentsAvailable: number;

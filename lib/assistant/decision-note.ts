@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ApiError, fromZod } from "@/lib/api/http";
+import { DRAFT_COMMENT_LIMITS } from "@/lib/decision-note-ui";
 import type { AssistantFailureReason } from "@/lib/assistant/client";
 
 /**
@@ -32,26 +33,44 @@ export type DecisionNoteRequest = z.infer<typeof decisionNoteRequestSchema>;
 
 /** How many comment rows the route reads before it stops counting. */
 export const DECISION_NOTE_COMMENT_READ_LIMIT = 50;
-/** How many of those may reach the provider. */
-export const DECISION_NOTE_MAX_COMMENTS = 8;
-export const DECISION_NOTE_MAX_COMMENT_CHARS = 600;
-export const DECISION_NOTE_MAX_TOTAL_COMMENT_CHARS = 3_000;
+/**
+ * How many of those may reach the provider, and how much of each.
+ *
+ * Imported rather than declared: the panel's disclosure quotes these numbers to
+ * the organizer, so one definition is what stops the promise and the projection
+ * drifting apart. `lib/decision-note-ui.ts` is pure and client-safe, which is
+ * why it can be the shared owner without breaking the server-only rail.
+ */
+export const DECISION_NOTE_MAX_COMMENTS = DRAFT_COMMENT_LIMITS.maxComments;
+export const DECISION_NOTE_MAX_COMMENT_CHARS = DRAFT_COMMENT_LIMITS.maxCommentChars;
+export const DECISION_NOTE_MAX_TOTAL_COMMENT_CHARS = DRAFT_COMMENT_LIMITS.maxTotalCommentChars;
 export const DECISION_NOTE_MAX_TITLE_CHARS = 300;
 export const DECISION_NOTE_MAX_EVENT_NAME_CHARS = 200;
 /** The assessment's cap on the suggestion itself, enforced after parsing. */
 export const DECISION_NOTE_MAX_DRAFT_CHARS = 1_200;
 
 /**
- * What the provider is allowed to return, in characters.
+ * The RAW provider output this feature will accept, in characters, before any
+ * parsing. Not the draft cap — `DECISION_NOTE_MAX_DRAFT_CHARS` is still 1,200
+ * and is enforced after `JSON.parse`.
  *
- * Deliberately above `DECISION_NOTE_MAX_DRAFT_CHARS`: the model answers with a
- * JSON envelope, so a draft exactly at the 1,200 cap arrives as roughly
- * `{"draft":"…1200 chars…"}` plus whatever escaping the text needs. Sizing the
- * request at the draft cap would let the foundation truncate the closing brace
- * off a perfectly good answer, and a truncated envelope is unparseable — the
- * failure would look like a bad model rather than a bad constant.
+ * The foundation slices raw output at this length BEFORE the caller sees it, so
+ * this number has to cover the worst-case JSON serialization of a
+ * schema-VALID 1,200-unit draft, not its typical one. The first version used
+ * 1,600, which was arithmetic done against the typical case:
+ *
+ *   - 1,200 code units of `"` or `\` each serialize to two characters — about
+ *     2,412 with the `{"draft":"…"}` wrapper.
+ *   - 1,200 code units that need `\uXXXX` (control characters, lone
+ *     surrogates) each serialize to six — about 7,211.
+ *
+ * At 1,600 both were sliced mid-string, so a perfectly valid answer came back
+ * as unparseable and was reported as `invalid_output`: a constant's bug wearing
+ * a model's costume, and invisible to any test whose fixture is x-filled.
+ * 8,000 covers the six-character worst case with room to spare and stays well
+ * inside the foundation's own 24,000 ceiling.
  */
-export const DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS = 1_600;
+export const DECISION_NOTE_REQUEST_MAX_OUTPUT_CHARS = 8_000;
 
 /** The one body size this route will read. A draft request is two short fields. */
 export const DECISION_NOTE_MAX_BODY_BYTES = 4_096;
@@ -59,10 +78,15 @@ export const DECISION_NOTE_MAX_BODY_BYTES = 4_096;
 /**
  * The exact columns this feature may load. Exported so the route and its
  * runtime test name the same thing, and widening one is a visible edit.
+ *
+ * Deliberately WITHOUT `id` and `eventId`. The caller already knows the id — it
+ * sent it — and scope is enforced by the where-clause that pins the row to
+ * `ctx.eventId`, not by selecting the column and comparing it afterwards.
+ * Selecting neither is what makes "no proposal or event id is selected into the
+ * provider projection" a fact about the query rather than a promise about the
+ * code downstream of it.
  */
 export const DECISION_NOTE_ABSTRACT_SELECT = {
-  id: true,
-  eventId: true,
   title: true,
   status: true,
   event: { select: { name: true } },
@@ -113,24 +137,33 @@ const decisionNotePayloadSchema = z.object({ draft: z.string() }).strict();
 const MARKUP_TAG = /<[a-zA-Z/]/;
 
 /**
- * An angle bracket the model escaped on its way out.
+ * An encoded opening bracket that begins a TAG, not an encoded comparison.
  *
- * Only the encodings of `<` and `>`, never ampersands in general: a plain-text
- * note may legitimately say "AT&T" or "R&D", and refusing those would reject
- * honest prose. `&lt;` in a draft means the model produced markup and then
- * escaped it, which is the same contract violation wearing a disguise.
+ * The first version of this rule rejected every `&lt;` and `&gt;`, which was
+ * too wide in exactly the way a bare `<` rule would be: `3 &gt; 2` and "fewer
+ * than &lt; 10" are ordinary prose that happens to be entity-encoded, and
+ * refusing them turned honest drafts into `invalid_output`.
+ *
+ * The encoded form is therefore held to the same shape as the raw one — an
+ * opening bracket, an optional closing slash, then a LETTER. `&lt;strong&gt;`,
+ * `&lt;/p&gt;` and `&lt;br&gt;` match; `&gt;` alone never can, because a
+ * closing bracket cannot begin a tag.
+ *
+ * Only the encodings of `<`, never ampersands in general: a plain-text note may
+ * legitimately say "AT&T" or "R&D".
  */
-const ESCAPED_ANGLE = /&(?:lt|gt|#0*(?:60|62)|#x0*3[ce]);/i;
+const ENCODED_TAG = /&(?:lt|#0*60|#x0*3c);\/?[a-zA-Z]/i;
 
 /**
  * Whether a draft contains markup, which the plain-text contract forbids.
  *
- * Conservative by design. `<` followed by a space or a digit — "fewer than
- * 5 < 10 attendees" — is prose and passes; `<strong`, `</p`, and `<script` do
- * not.
+ * Conservative by design, and identically so in both forms. An opening bracket
+ * followed by a space or a digit is prose and passes — "fewer than 5 < 10
+ * attendees", "3 &gt; 2". `<strong`, `</p`, `<script`, `&lt;strong` and
+ * `&#60;/b` do not.
  */
 export function containsMarkup(value: string): boolean {
-  return MARKUP_TAG.test(value) || ESCAPED_ANGLE.test(value);
+  return MARKUP_TAG.test(value) || ENCODED_TAG.test(value);
 }
 
 /**
@@ -374,10 +407,14 @@ export function renderDecisionNoteInput(projection: DecisionNoteProjection): str
   ].join("\n");
 }
 
-/** The abstract fields this feature is allowed to load. */
+/**
+ * The abstract fields this feature is allowed to load.
+ *
+ * No `id` and no `eventId`: the row arrives from a query already pinned to the
+ * caller's event, so there is nothing left to compare and no identifier for the
+ * projection to carry by accident.
+ */
 export type DecisionNoteAbstract = {
-  id: string;
-  eventId: string;
   title: string;
   status: string;
   event: { name: string };
@@ -393,18 +430,19 @@ export const DECISION_NOTE_NOT_FOUND_CODE = "ABSTRACT_NOT_FOUND";
 export const DECISION_NOTE_NOT_DECIDED_CODE = "DECISION_NOT_MADE";
 
 /**
- * Resolve the request to a drafting target, or to the refusal it earns.
+ * Resolve a scoped row to a drafting target, or to the refusal it earns.
  *
- * An abstract that does not exist and one belonging to another event produce
- * the **identical** 404 — same status, same code, same message — so the
- * endpoint cannot be used to enumerate proposal ids across events. The event
- * comes from the caller's resolved session; nothing here reads a client value.
+ * `null` means the query — which is pinned to BOTH the requested id and the
+ * caller's own `eventId` — matched nothing. An abstract that does not exist and
+ * one belonging to another event are therefore the same `null` here, and get
+ * the identical 404: same status, same code, same message. The endpoint cannot
+ * be used to enumerate proposal ids across events, and, unlike the earlier
+ * read-then-compare, another event's title never leaves the database at all.
  */
 export function resolveDecisionNoteTarget(
   abstract: DecisionNoteAbstract | null,
-  ctxEventId: string,
 ): { ok: true; target: DecisionNoteTarget } | { ok: false; error: ApiError } {
-  if (!abstract || abstract.eventId !== ctxEventId) {
+  if (!abstract) {
     return {
       ok: false,
       error: new ApiError(404, DECISION_NOTE_NOT_FOUND_CODE, "That proposal does not exist for this event."),

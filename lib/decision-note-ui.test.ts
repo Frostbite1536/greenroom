@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   applyDraftToNote,
   describeApplyAction,
+  describeCommentDisclosure,
   describeDraftFailure,
   describeDraftGrounding,
+  DRAFT_COMMENT_LIMITS,
   isDraftResponseCurrent,
   type DraftSuggestion,
 } from "./decision-note-ui";
@@ -102,6 +104,27 @@ test("no comments used is distinguished from no comments existing", () => {
       /Based on/,
     );
   }
+});
+
+test("the comment disclosure states normalization and the real bounds, not 'verbatim'", () => {
+  const copy = describeCommentDisclosure();
+  // The contract, in the organizer's terms.
+  assert.match(copy, /after safety normalization and length limits/);
+  assert.match(copy, /line breaks and control characters are flattened/);
+  assert.match(copy, /may still contain a name, an email address, or score-like wording/);
+  assert.match(copy, /Uncheck the box above to send none of it\./);
+
+  // The numbers come from the bounds the projection actually applies, so the
+  // promise an organizer reads and the enforcement are one definition.
+  assert.match(copy, new RegExp(`up to ${DRAFT_COMMENT_LIMITS.maxComments} comments`));
+  assert.match(copy, new RegExp(`${DRAFT_COMMENT_LIMITS.maxCommentChars} characters each`));
+  assert.match(copy, /3,000 in total/);
+  assert.equal(DRAFT_COMMENT_LIMITS.maxTotalCommentChars, 3_000);
+
+  // Neither overclaim survives: comments are not sent "word for word", and
+  // they are not "never sent" either.
+  assert.doesNotMatch(copy, /word for word|verbatim/i);
+  assert.doesNotMatch(copy, /never sent/i);
 });
 
 test("a response is current only when nothing about the request has moved on", () => {
