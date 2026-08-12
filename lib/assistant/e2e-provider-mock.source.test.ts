@@ -28,6 +28,17 @@ test("the mock refuses retention, tools, unknown input fields, and a missing str
   );
 });
 
+test("one suite-owned provider dispatches both strict schemas with bounded decision controls", () => {
+  assert.match(source, /"greenroom_resource_draft"/);
+  assert.match(source, /const DECISION_SCHEMA = "greenroom_decision_note"/);
+  assert.match(source, /request\.url === "\/_control\/decision" && request\.method === "POST"/);
+  assert.match(source, /value\.modes\.length > 5/);
+  assert.match(source, /\["success", "slow", "server-error"\]\.includes\(mode\)/);
+  assert.match(source, /const mode = decisionState\.modes\.shift\(\) \?\? "success"/);
+  assert.match(source, /authorizationOwned: request\.headers\.authorization === OWNED_AUTHORIZATION/);
+  assert.match(source, /if \(decisionState\.requests\.length > 10\) decisionState\.requests\.shift\(\)/);
+});
+
 test("the mock logs no request, prompt, generated output, credential, or exception", () => {
   const logCalls = [...source.matchAll(/console\.(?:log|info|warn|error|debug)\(([^\r\n]*)\)/g)].map((match) => match[1]);
   assert.deepEqual(logCalls, ["`[assistant-mock] ready on loopback port ${port}`"]);

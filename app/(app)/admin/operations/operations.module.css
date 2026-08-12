@@ -155,3 +155,45 @@
   .grid { grid-template-columns: 1fr; }
   .mappingRow { grid-template-columns: 1fr; }
 }
+
+/* Decision-note drafting suggestion. Sits beside the personal-note field and
+   stays visually distinct from it: the draft is a suggestion until the
+   organizer applies it, so it must never look like their own text. */
+.assist {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.assistHead {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.assistTag {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.assistDraft {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--ink);
+  max-height: 220px;
+  overflow-y: auto;
+}
+.assistActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}

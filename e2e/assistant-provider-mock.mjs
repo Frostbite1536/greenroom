@@ -10,6 +10,12 @@ const HOST = "127.0.0.1";
 const MAX_BODY_BYTES = 64 * 1_024;
 const FAILURE_MARKER = "[mock:provider-error]";
 const MALFORMED_MARKER = "[mock:malformed-output]";
+const DECISION_SCHEMA = "greenroom_decision_note";
+const OWNED_AUTHORIZATION = "Bearer greenroom-e2e-owned-provider-key-not-a-secret";
+const DECISION_DRAFT =
+  "Your session stood out for how concretely it treats the day-to-day of running a large event, and the program team is glad to have it.";
+const DECISION_SLOW_MS = 2_000;
+const decisionState = { modes: [], requests: [] };
 
 function json(response, status, body) {
   const bytes = Buffer.from(JSON.stringify(body));
@@ -66,9 +72,55 @@ function resourceInput(body) {
   return input;
 }
 
+function decisionInput(body) {
+  if (body?.store !== false || "tools" in body || "tool_choice" in body || "previous_response_id" in body) return null;
+  if (body?.text?.format?.name !== DECISION_SCHEMA || body.text.format.strict !== true) return null;
+  if (typeof body.instructions !== "string" || typeof body.input !== "string") return null;
+  return body.input;
+}
+
+function responsePayload(outputText) {
+  return {
+    id: "resp_greenroom_e2e",
+    object: "response",
+    status: "completed",
+    output: [
+      { id: "reasoning_greenroom_e2e", type: "reasoning", summary: [] },
+      {
+        id: "message_greenroom_e2e",
+        type: "message",
+        status: "completed",
+        role: "assistant",
+        content: [{ type: "output_text", text: outputText, annotations: [] }],
+      },
+    ],
+    usage: { input_tokens: 100, output_tokens: 100 },
+  };
+}
+
+function validDecisionControl(value) {
+  if (!exactKeys(value, ["modes"]) || !Array.isArray(value.modes) || value.modes.length > 5) return false;
+  return value.modes.every((mode) => ["success", "slow", "server-error"].includes(mode));
+}
+
 const server = createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/health") {
     json(response, 200, { ok: true });
+    return;
+  }
+  if (request.url === "/_control/decision" && request.method === "POST") {
+    const control = await readJson(request);
+    if (!validDecisionControl(control)) {
+      json(response, 400, { error: "invalid_control" });
+      return;
+    }
+    decisionState.modes = [...control.modes];
+    decisionState.requests = [];
+    json(response, 200, { ok: true });
+    return;
+  }
+  if (request.url === "/_control/decision" && request.method === "GET") {
+    json(response, 200, { ok: true, requests: decisionState.requests });
     return;
   }
   if (request.method !== "POST" || request.url !== "/v1/responses") {
@@ -81,6 +133,25 @@ const server = createServer(async (request, response) => {
   }
 
   const body = await readJson(request);
+  const decision = decisionInput(body);
+  if (decision !== null) {
+    decisionState.requests.push({
+      body,
+      authorizationOwned: request.headers.authorization === OWNED_AUTHORIZATION,
+    });
+    if (decisionState.requests.length > 10) decisionState.requests.shift();
+    const mode = decisionState.modes.shift() ?? "success";
+    if (mode === "server-error") {
+      json(response, 500, { error: "mock_provider_unavailable" });
+      return;
+    }
+    if (mode === "slow") {
+      await new Promise((resolve) => setTimeout(resolve, DECISION_SLOW_MS));
+    }
+    json(response, 200, responsePayload(JSON.stringify({ draft: DECISION_DRAFT })));
+    return;
+  }
+
   const input = resourceInput(body);
   if (!input) {
     json(response, 400, { error: "contract_refused" });
@@ -120,22 +191,7 @@ const server = createServer(async (request, response) => {
         },
       });
 
-  json(response, 200, {
-    id: "resp_greenroom_e2e",
-    object: "response",
-    status: "completed",
-    output: [
-      { id: "reasoning_greenroom_e2e", type: "reasoning", summary: [] },
-      {
-        id: "message_greenroom_e2e",
-        type: "message",
-        status: "completed",
-        role: "assistant",
-        content: [{ type: "output_text", text: outputText, annotations: [] }],
-      },
-    ],
-    usage: { input_tokens: 100, output_tokens: 100 },
-  });
+  json(response, 200, responsePayload(outputText));
 });
 
 server.listen(port, HOST, () => {

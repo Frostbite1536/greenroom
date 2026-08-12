@@ -1,7 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { Mails, Send } from "lucide-react";
+import { useRef, useState } from "react";
+import { Mails, Send, Sparkles } from "lucide-react";
+import {
+  applyDraftToNote,
+  describeApplyAction,
+  describeCommentDisclosure,
+  describeDraftFailure,
+  describeDraftGrounding,
+  isDraftResponseCurrent,
+  type DraftSuggestion,
+} from "@/lib/decision-note-ui";
 import styles from "./operations.module.css";
 
 type DecidedAbstract = {
@@ -41,8 +50,97 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
+  const [suggestion, setSuggestion] = useState<DraftSuggestion | null>(null);
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [confirmReplace, setConfirmReplace] = useState(false);
 
   const selected = decided.find((item) => item.id === selectedId) ?? null;
+
+  // Latest-value refs, so a response that resolves after the organizer moved on
+  // can be compared against what is selected NOW rather than against the values
+  // its own closure captured.
+  const draftSeq = useRef(0);
+  const selectedIdRef = useRef(selectedId);
+  const includeFeedbackRef = useRef(includeFeedback);
+  selectedIdRef.current = selectedId;
+  includeFeedbackRef.current = includeFeedback;
+
+  /**
+   * Drop a suggestion whose grounding no longer matches what is selected, and
+   * retire any request still in flight by bumping the counter its response will
+   * be checked against.
+   */
+  function clearSuggestion() {
+    draftSeq.current += 1;
+    setSuggestion(null);
+    setDraftError(null);
+    setConfirmReplace(false);
+  }
+
+  /**
+   * Ask for a draft. Nothing here writes to `personalNote`: a failure, a retry,
+   * or a second generation leaves whatever the organizer has written exactly
+   * where it was, and only `applyDraft` can change it.
+   *
+   * Every state write below is gated on the response still being the current
+   * one. A slow draft for one proposal must never install under another: that
+   * is a suggestion about the wrong talk, one click from a speaker's inbox.
+   */
+  async function draftNote() {
+    clearSuggestion();
+    const token = { seq: draftSeq.current, abstractId: selectedId, includeFeedback };
+    const current = () => ({
+      seq: draftSeq.current,
+      abstractId: selectedIdRef.current,
+      includeFeedback: includeFeedbackRef.current,
+    });
+    setDrafting(true);
+    try {
+      const res = await fetch("/api/assistant/decision-note", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ abstractId: token.abstractId, includeFeedback: token.includeFeedback }),
+      });
+      const body = await res.json();
+      // Superseded: drop it silently. The organizer abandoned this request by
+      // navigating away, so an error about it would be noise they cannot act on.
+      if (!isDraftResponseCurrent(token, current())) return;
+      if (!body?.ok) {
+        setDraftError(describeDraftFailure(body?.error?.message));
+        return;
+      }
+      setSuggestion({
+        draft: body.data.draft,
+        commentsAvailable: body.data.grounding.commentsAvailable,
+        commentIndexesUsed: body.data.grounding.commentIndexesUsed,
+      });
+    } catch {
+      // Deliberately not logged: a failed draft request is not worth a console
+      // entry that could carry the request or response near a prompt.
+      if (isDraftResponseCurrent(token, current())) setDraftError(describeDraftFailure(null));
+    } finally {
+      setDrafting(false);
+    }
+  }
+
+  /**
+   * Move a suggestion into the note. Over a non-empty note this needs a second,
+   * explicit click — the panel never silently replaces organizer-authored text.
+   * Applying invalidates any preview, exactly as typing in the field does.
+   */
+  function applyDraft(confirmed: boolean) {
+    if (!suggestion) return;
+    const outcome = applyDraftToNote({ note: personalNote, draft: suggestion.draft, confirmed });
+    if (outcome.status === "needs-confirmation") {
+      setConfirmReplace(true);
+      return;
+    }
+    if (outcome.status === "empty") return;
+    setPersonalNote(outcome.note);
+    setPreview(null);
+    clearSuggestion();
+  }
 
   async function call(previewOnly: boolean) {
     setBusy(true);
@@ -100,7 +198,7 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
             <label className="field-label" htmlFor="ops-decision-abstract">Proposal</label>
             <select
               className="text-input" id="ops-decision-abstract" value={selectedId} disabled={busy}
-              onChange={(e) => { setSelectedId(e.target.value); setPreview(null); setResult(null); }}
+              onChange={(e) => { setSelectedId(e.target.value); setPreview(null); setResult(null); clearSuggestion(); }}
             >
               {decided.map((item) => (
                 <option key={item.id} value={item.id}>
@@ -121,12 +219,13 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
           <label className={styles.recipient}>
             <input
               type="checkbox" checked={includeFeedback} disabled={busy}
-              onChange={(e) => { setIncludeFeedback(e.target.checked); setPreview(null); }}
+              onChange={(e) => { setIncludeFeedback(e.target.checked); setPreview(null); clearSuggestion(); }}
             />
             Include the review team&apos;s comments
           </label>
           <p className={styles.hintText}>
-            Comments only — scores and reviewer names are never included.
+            Comment text only — no scores or reviewer names are attached. This choice also decides
+            whether that comment text is sent to the AI provider when you ask for a draft below.
           </p>
 
           <div className={styles.field}>
@@ -135,6 +234,79 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
               className="text-input" id="ops-decision-note" rows={3} value={personalNote} disabled={busy}
               onChange={(e) => { setPersonalNote(e.target.value); setPreview(null); }}
             />
+            <div className={styles.assistActions}>
+              <button
+                className="ghost-button" type="button" onClick={draftNote}
+                disabled={busy || drafting || !selectedId} aria-busy={drafting}
+              >
+                <Sparkles size={15} aria-hidden="true" />
+                {drafting ? "Drafting…" : "Draft note from feedback"}
+              </button>
+              <span className={styles.hintText}>
+                {includeFeedback
+                  ? "Sends the event name, the proposal title, your decision, and excerpts of the reviewer comments above to the configured AI provider."
+                  : "Sends the event name, the proposal title, and your decision to the configured AI provider. No reviewer comments."}
+              </span>
+            </div>
+            <p className={styles.hintText}>
+              {includeFeedback
+                ? "Those four things — the event name, the proposal title, your decision, and comment excerpts — are all that leaves this deployment."
+                : "Those three things — the event name, the proposal title, and your decision — are all that leaves this deployment."}{" "}
+              No speaker or reviewer name, email address, score, or ID is looked up or added as a
+              separate field, and no proposal or event ID is sent.{" "}
+              {includeFeedback
+                ? describeCommentDisclosure()
+                : "No comment text leaves this deployment while that box is unchecked."}{" "}
+              You always choose whether to use what comes back.
+            </p>
+
+            {/* One live region for the whole drafting interaction, so a screen
+                reader hears the outcome without the panel announcing twice. */}
+            <div role="status" aria-live="polite">
+              {drafting ? <p className={styles.hintText}>Drafting a note…</p> : null}
+
+              {draftError ? (
+                <div className={`${styles.result} ${styles.resultWarn}`}>
+                  <span className={styles.resultHead}>Drafting unavailable</span>
+                  <p className={styles.resultAdvice}>{draftError}</p>
+                </div>
+              ) : null}
+
+              {suggestion ? (
+                <div className={styles.assist}>
+                  <div className={styles.assistHead}>
+                    <span className={styles.assistTag}>Suggested draft</span>
+                    <span className={styles.hintText}>Generated by AI — read it before you use it.</span>
+                  </div>
+                  <p className={styles.assistDraft}>{suggestion.draft}</p>
+                  <p className={styles.hintText}>{describeDraftGrounding(suggestion)}</p>
+                  {confirmReplace ? (
+                    <>
+                      <p className={styles.hintText}>
+                        This will replace the note you have already written. That cannot be undone.
+                      </p>
+                      <div className={styles.assistActions}>
+                        <button className="primary-button" type="button" onClick={() => applyDraft(true)}>
+                          Yes, replace my note
+                        </button>
+                        <button className="ghost-button" type="button" onClick={() => setConfirmReplace(false)}>
+                          Keep what I wrote
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className={styles.assistActions}>
+                      <button className="ghost-button" type="button" onClick={() => applyDraft(false)}>
+                        {describeApplyAction(personalNote)}
+                      </button>
+                      <button className="ghost-button" type="button" onClick={clearSuggestion}>
+                        Discard
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className={styles.actions}>
@@ -157,7 +329,9 @@ export function DecisionsPanel({ decided }: { decided: DecidedAbstract[] }) {
               {preview.recipients.length > 1 ? (
                 <p className={styles.hintText}>Each recipient gets this message with their own greeting.</p>
               ) : null}
-              <div className={styles.templatePreview}>
+              {/* Named so the rendered email is one addressable region rather
+                  than loose text beside the field that produced it. */}
+              <div className={styles.templatePreview} role="group" aria-label="Email preview">
                 <strong>{preview.subject}</strong>
                 {/* Server-rendered from escaped/sanitized parts (lib/comms/notifications.ts). */}
                 <div dangerouslySetInnerHTML={{ __html: preview.html }} />
