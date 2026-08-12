@@ -6,13 +6,20 @@
 > program.
 
 **Deployed application:** <https://greenroom-hq.com>
-**Deployed product commit this evidence describes:** `7f34b6ec14005f4e185722b09d894342da52383c`
+**Current deployed commit:** `8b2a1cf0b7aa95185a8a530e6e0adce8405fe0d0`
+
+**Captured evidence product commit:** `7f34b6ec14005f4e185722b09d894342da52383c`
 
 **Evidence tooling/artifact commit:** `db00ff88bcba043d13aba76daa7876e112e49c29`
 
-Every primary artifact in this directory describes that one commit. Anything
-measured or captured on an earlier build is labeled **historical** and is not
-presented as current evidence.
+Every primary screenshot, walkthrough, rehearsal, and golden-path artifact in
+this directory describes the captured evidence product commit. Those artifacts
+are preserved rather than relabeled. The current deployment adds only the
+reviewed, additive PR #100 tranche described in
+[Post-release deployment provenance](#post-release-deployment-provenance); its
+separate receipts do not imply that the earlier screenshots depict those new
+surfaces. Anything measured or captured on an older build remains labeled
+**historical** and is not presented as current evidence.
 
 ## Start here
 
@@ -76,8 +83,8 @@ node --env-file=.env scripts/_frontend-smoke.mjs
 node scripts/prod-verify.mjs https://greenroom-hq.com
 ```
 
-Recorded results for the current commit are captured during the coordinated
-evidence window and belong here:
+Recorded results for the captured evidence product are from its coordinated
+evidence window:
 
 | Gate | Commit | Result | Recorded |
 | --- | --- | --- | --- |
@@ -89,6 +96,26 @@ evidence window and belong here:
 | screenshot capture | product `7f34b6e`, artifacts `db00ff8` | **27 files; 5/5 Playwright cases** | 2026-08-11 CDT |
 | golden-path E2E, run 1 + run 2 | product `7f34b6e`, harness `db00ff8` | **1/1 + 1/1** | 2026-08-11 CDT |
 | `scripts/prod-verify.mjs` | deployed `7f34b6e` | **5/5** | 2026-08-11 CDT |
+
+### Post-release deployment provenance
+
+Production now serves merge `8b2a1cf`, whose first parent is the prior deployed
+evidence closure `53bddcf` and whose second parent is reviewed PR #100 head
+`e259d5a`. Relative to the captured product tree, the later release history adds
+the final evidence tooling and artifact closure documented above and then PR
+#100's additive scoped v1 reads, bounded submission-pacing report, and
+dirty-form-safe speaker-roster refresh. It does not rewrite or invalidate the
+27 screenshots, the clean-install receipt, or the twice-run golden-path
+evidence; those remain truthfully attributed to `7f34b6e`.
+
+| Post-release gate | Tested/reviewed commit | Result | Recorded |
+| --- | --- | --- | --- |
+| `npm test` | reviewed `e259d5a` | **1,960 pass / 0 fail / 5 gated skips** | 2026-08-12 CDT |
+| app + E2E typechecks and fresh build | reviewed `e259d5a` | **pass**, Next 16.3.0 | 2026-08-12 CDT |
+| backend / frontend smokes | reviewed `e259d5a` | **446/446 + 594/594** | 2026-08-12 CDT |
+| focused Chromium proof | reviewed `e259d5a` | **2/2**, including 390px and dirty-draft preservation | 2026-08-12 CDT |
+| external review | reviewed `e259d5a` | **Greptile 5/5**, no remaining finding | 2026-08-12 CDT |
+| deployment + bounded production GET verification | deployed `8b2a1cf` | **success** | 2026-08-12 CDT |
 
 The frontend smoke creates and removes only its own `scratch-frontend` event.
 [A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) and
@@ -190,8 +217,9 @@ Stated plainly, because an evaluator should not have to discover them.
   modal focus management). The remaining accepted findings are recorded here as
   roadmap, not hidden: schema changes apply via audited `db push` windows rather
   than versioned migrations; email and Airtable delivery run serially in-request
-  (fine at demo scale, an outbox at real scale); the v1 API still exposes only
-  its three bounded read models and does not provide a public demo credential;
+  (fine at demo scale, an outbox at real scale); the v1 API exposes three bounded
+  collection reads plus a keyed submission read and does not provide a public
+  demo credential;
   route-aware `nosniff`, HSTS, referrer, permissions, and frame-ancestor
   headers are set; a full script/style/default/connect CSP is not; admin profile
   edits use last-write-wins rather than version checks.
