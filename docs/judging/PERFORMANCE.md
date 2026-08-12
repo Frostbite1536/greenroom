@@ -82,8 +82,40 @@ re-measured:
 | `/admin/agenda` | 95 — white text at 2.14:1 on amber track chips | chip text colour now derived from background luminance | **100** |
 | `/admin/speakers` | 94 — `aria-pressed` on anchors | filter links use `aria-current="page"` | **100** |
 
-Automated tooling is not a complete accessibility review; no manual
-screen-reader pass has been performed, and that remains the honest gap.
+Automated tooling is not a complete accessibility review.
+
+### Manual screen-reader pass — partial
+
+A manual screen-reader pass was performed on production on **2026-08-12** by the
+project owner, using **NVDA with Chrome on Windows**. It is **partial**: three of
+ten planned journeys were started, and not all of those completed. The results
+are recorded exactly as run.
+
+| Journey | Result |
+| --- | --- |
+| 1 — public landing → schedule | **6 of 6 checkpoints PASS** |
+| 2 — admin sign-in → dashboard | **6 PASS, 1 minor FAIL** |
+| 3 — review queue → accept a proposal | **3.1–3.7 PASS; 3.8 NOT CONFIRMED; 3.9 NOT RUN** |
+| 4–10 | **NOT RUN** |
+
+Two entries need their labels read literally rather than rounded:
+
+- **Journey 2's failing checkpoint was not identified by the runner.** Severity
+  was reported as minor and non-blocking, but which checkpoint failed is not
+  recorded, so it cannot be pointed at a fix or a regression test.
+- **NOT CONFIRMED is not a pass.** Checkpoint 3.8 was reached but its outcome
+  was not established. Checkpoint 3.9 and journeys 4 through 10 were **NOT
+  RUN** — no evidence exists for them in either direction.
+
+Scope limits that still stand:
+
+- NVDA on Chrome on Windows only.
+- No VoiceOver, no JAWS, no real mobile screen reader, no braille display.
+- This is **not a WCAG conformance audit**.
+
+So the honest position is narrower than "manually tested": one journey is fully
+covered, one has an unlocated minor defect, one is incomplete, and seven were
+never attempted.
 
 ## Reproduce
 
