@@ -16,6 +16,8 @@ test("rate-boundary smoke proofs use real HTTP writers without mirrored windows"
   assert.match(smoke, /c17CapWindowCount = countRows\._sum\.sendWindowCount \?\? 0/);
   assert.match(smoke, /if \(c17CapWindowCount === 20\) break/);
   assert.match(smoke, /c17CapWindowCount === 20/);
+  assert.match(smoke, /`capped-reviewer-\$\{Date\.now\(\)\.toString\(36\)\}@scratch\.test`/);
+  assert.match(smoke, /prisma\.user\.deleteMany\(\{ where: \{ email: c17CappedEmail \} \}\)/);
   assert.match(smoke, /event-hour cap primer identities are removed after the assertion/);
   assert.doesNotMatch(smoke, /c17CapWindowStart/);
   assert.match(smoke, /scratch-owned reviewer invite rows are cleared at final teardown/);

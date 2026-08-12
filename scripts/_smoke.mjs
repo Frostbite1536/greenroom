@@ -1908,7 +1908,7 @@ try {
     c17CapWindowCount = countRows._sum.sendWindowCount ?? 0;
     if (c17CapWindowCount === 20) break;
   }
-  const c17CappedEmail = "capped-reviewer@scratch.test";
+  const c17CappedEmail = `capped-reviewer-${Date.now().toString(36)}@scratch.test`;
   const c17Capped = await j("POST", "/api/evaluations/reviewer-invites", {
     email: c17CappedEmail, name: "Capped Reviewer", resend: false,
   }, admin);
@@ -1926,6 +1926,7 @@ try {
     `${c17CapPrimers.length}/${c17CapWindowCount}/${c17Capped.status}/${c17Capped.data?.error?.code}/` +
       c17CapStoredWindows.map((row) => `${row.sendWindowStart?.toISOString()}:${row._sum.sendWindowCount}`).join(","),
   );
+  await prisma.user.deleteMany({ where: { email: c17CappedEmail } });
   const c17CapPrimerUsers = await prisma.user.findMany({
     where: { email: { in: c17CapPrimerEmails } },
     select: { id: true },
