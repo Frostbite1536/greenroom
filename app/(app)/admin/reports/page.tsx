@@ -59,7 +59,7 @@ export default async function AdminReportsPage() {
   // its own empty state rather than a row of zero-width bars. Each one sits
   // above the table holding the same numbers; the table stays the truth.
   const funnelChart = categoryFunnelChart(funnel);
-  const pacingChart = submissionPacingChart(pacing);
+  const pacingChart = submissionPacingChart(pacing, view.pacingTruncated);
   const pacingRange = pacing.rows.length === 0
     ? null
     : `${formatDayLabel(pacing.rows[0].dateKey, view.timezone)}–${formatDayLabel(pacing.rows.at(-1)!.dateKey, view.timezone)}`;

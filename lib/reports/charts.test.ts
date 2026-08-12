@@ -81,6 +81,15 @@ test("submission pacing has no chart without actual submissions", () => {
   assert.equal(submissionPacingChart(summarizeSubmissionPacing([], "UTC")), null);
 });
 
+test("a truncated pacing chart announces its proposal total as a floor", () => {
+  const pacing = summarizeSubmissionPacing([
+    { submittedAt: "2026-05-12T10:00:00.000Z" },
+    { submittedAt: "2026-05-13T10:00:00.000Z" },
+  ], "UTC");
+  assert.match(submissionPacingChart(pacing, true)!.ariaLabel, /at least 2 proposals submitted in the bounded window/);
+  assert.doesNotMatch(submissionPacingChart(pacing, false)!.ariaLabel, /at least|bounded window/);
+});
+
 // ---- 1. Per-category funnel ------------------------------------------------
 
 test("the funnel draws one bar per category row, in the fold's order", () => {

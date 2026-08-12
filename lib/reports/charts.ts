@@ -191,7 +191,10 @@ function stack(
 
 // ---- 0. Submission pacing -------------------------------------------------
 
-export function submissionPacingChart(pacing: SubmissionPacing): BarChart | null {
+export function submissionPacingChart(
+  pacing: SubmissionPacing,
+  truncated = pacing.rangeTruncated,
+): BarChart | null {
   if (pacing.rows.length === 0 || pacing.peak <= 0) return null;
   const bars = pacing.rows.map((row) => ({
     key: row.dateKey,
@@ -210,7 +213,8 @@ export function submissionPacingChart(pacing: SubmissionPacing): BarChart | null
     legend: [],
     ariaLabel:
       `Bar chart of submission pacing across ${plural(bars.length, "day", "days")}: ` +
-      `${plural(pacing.total, "proposal", "proposals")} submitted. The table below lists every figure.`,
+      `${truncated ? "at least " : ""}${plural(pacing.total, "proposal", "proposals")} submitted` +
+      `${truncated ? " in the bounded window" : ""}. The table below lists every visible figure.`,
   };
 }
 
