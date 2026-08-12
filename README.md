@@ -35,7 +35,8 @@ the [evaluation index](docs/judging/README.md).
 6. **Speaker onboarding** — a speaker portal with profile, status, and task
    checklists (tasks can carry forms), plus an admin dashboard at
    `/admin/speakers` showing who is behind.
-7. **Agenda builder** — List / Day / Week / Tracks / Conflicts views, with
+7. **Agenda builder** — List / Day (rooms) / Week / Track grid / Tracks /
+   Conflicts views, with
    drag-and-drop moves in the day grid and transactional room-overlap and
    speaker double-booking conflict detection.
 8. **Public embeds** — a public landing page at `/`, plus a mobile-friendly
