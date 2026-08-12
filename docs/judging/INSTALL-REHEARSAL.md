@@ -1,5 +1,39 @@
 # Clean-database installation rehearsal
 
+## Final product rehearsal — `7f34b6e` (2026-08-11 CDT)
+
+The final product merge was rehearsed from a fresh detached worktree and a
+uniquely named, provably absent local PostgreSQL 16 database on loopback. The
+evidence-tooling correction is `b312ac1`; it changes only the rehearsal's typed
+checkbox fixture and its test, while the application/build under test remains
+the deployed product tree `7f34b6e`.
+
+| Step | Result |
+| --- | --- |
+| `npm ci` | 72 packages, 0 vulnerabilities |
+| `prisma db push --skip-generate` | schema created from empty database; post-apply diff empty |
+| `npm run db:generate` | Prisma Client 6.19.3 generated (required after the explicit `--skip-generate`) |
+| `npm run db:seed` | 51 users, 40 abstracts, 13 sessions, 11 slots |
+| `npm test` | 1,939 pass, 0 fail, 5 intentionally gated skips |
+| app + E2E typechecks | pass |
+| fresh `npm run build` | pass, Next 16.3.0 |
+| guarded golden-path rehearsal | **20/20** |
+
+The rehearsal proved the server and harness shared the asserted disposable
+database with a sentinel before any server-mediated write. It then covered
+anonymous submission, scoring, atomic acceptance/session provisioning,
+onboarding, conflict refusal, clean placement, public schedule/ICS/speakers,
+reset refusal, uncredentialed v1 refusal (401 with no data), and speaker/admin
+authorization. The owned server stopped, its port was free, and database client
+connections returned to zero.
+
+One first attempt stopped safely before any submission was accepted: the
+historical harness represented a required checkbox as an array, and the current
+typed form contract correctly returned 422. The fixture was corrected to send
+boolean `true`, focused 4/4 and full tests passed, the disposable database was
+reseeded, and the complete 20/20 run above then passed. This does not rewrite
+the historical `f80247e` receipt below.
+
 Evidence that the README Quickstart works verbatim on a machine that has never
 seen this project. Performed by the Ops worker against a **separate, disposable
 Neon project** (its own host, never the shared demo database, never added to
@@ -62,8 +96,8 @@ Driven by `scripts/install-rehearsal.mjs` against the `npm run dev` server.
 
 That 503 is the historical `f80247e` observation, preserved rather than
 rewritten. Current code and the current rehearsal harness instead require an
-uncredentialed v1 read to return 401 with no data; the final-SHA rehearsal will
-record that newer contract only after it has actually run.
+uncredentialed v1 read to return 401 with no data; the final-product rehearsal
+above records that newer contract separately.
 
 The run also asserts a **sentinel** before touching anything: the harness proves
 the server it is about to drive shares the disposable database the operator

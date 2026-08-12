@@ -9,7 +9,7 @@ min). No local setup appears on camera.
 | Field | Value |
 | --- | --- |
 | Application | <https://greenroom-hq.com> |
-| Deployed commit | `9e058f3560a398352bbd48277ef80cb16e8550dc` |
+| Deployed commit | `7f34b6ec14005f4e185722b09d894342da52383c` |
 | Demo event | **Forward 2026** (`forward-2026`), 12–14 May 2026, `America/Los_Angeles` |
 | Public CFP | `/cfp/forward-2026/call-for-speakers` |
 | Recorded by | Jeremy |

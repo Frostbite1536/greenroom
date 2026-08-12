@@ -6,7 +6,9 @@
 > program.
 
 **Deployed application:** <https://greenroom-hq.com>
-**Commit this evidence describes:** `9e058f3560a398352bbd48277ef80cb16e8550dc`
+**Deployed product commit this evidence describes:** `7f34b6ec14005f4e185722b09d894342da52383c`
+
+**Evidence tooling/artifact commit:** `db00ff88bcba043d13aba76daa7876e112e49c29`
 
 Every primary artifact in this directory describes that one commit. Anything
 measured or captured on an earlier build is labeled **historical** and is not
@@ -19,7 +21,7 @@ presented as current evidence.
 | [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) | Shot list and narration for the walkthrough video: the full operating loop, one deliberate conflict refusal, and the greenfield event/CFP proof |
 | [SCREENSHOT-INDEX.md](SCREENSHOT-INDEX.md) | The current screenshot set, organized by role and workflow, with per-artifact commit, URL, timestamp, viewport, access role, and read-only/mutation status |
 | [WORKFLOW-ROUTES.md](WORKFLOW-ROUTES.md) | Current shipped workflow-to-route map for admins, evaluators, speakers, and the public, linked to the applicable evidence rows |
-| [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) | Clean-install rehearsal from a fresh clone and an empty database (**historical** — recorded at `f80247e`) |
+| [INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) | Historical rehearsal at `f80247e`, plus the final-product clean-worktree/empty-database rehearsal at `7f34b6e` |
 | [PERFORMANCE.md](PERFORMANCE.md) | Lighthouse performance and accessibility results for ten routes (**historical** — measured 2026-08-08 on the pre-cutover deployment) |
 | [A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) | An authenticated production verification receipt, 14/14 (**historical** — recorded at `0bb4aad`) |
 | [COSTS.md](COSTS.md) | Reimbursement claim structure and token telemetry (estimates, not invoices) |
@@ -56,7 +58,7 @@ boundary, domain model, routes, security), [`../INVARIANTS.md`](../INVARIANTS.md
   public form uses (INV-TASK-001).
 - **Public schedule and speaker surfaces, embeds, calendar export, and a
   read-only API** — all reachable without an account, except the API, which is
-  key-gated and off by default.
+  key-gated and refuses every uncredentialed request by default.
 - **Explicit verification, accessibility, and performance evidence**, each
   labeled with what was measured and on which commit.
 
@@ -79,16 +81,19 @@ evidence window and belong here:
 
 | Gate | Commit | Result | Recorded |
 | --- | --- | --- | --- |
-| `npm test` | `9e058f3` | *fill in* | *fill in* |
-| `npm run typecheck` | `9e058f3` | *fill in* | *fill in* |
-| `npm run build` | `9e058f3` | *fill in* | *fill in* |
-| frontend smoke | `9e058f3` | *fill in* | *fill in* |
-| `scripts/prod-verify.mjs` | `9e058f3` | *fill in* | *fill in* |
+| `npm test` | `7f34b6e` + evidence-tool fix `b312ac1` | **1,939 pass / 0 fail / 5 gated skips** | 2026-08-11 CDT |
+| `npm run typecheck` + E2E typecheck | `7f34b6e` + evidence-tool fix `b312ac1` | **pass** | 2026-08-11 CDT |
+| fresh `npm run build` | `7f34b6e` | **pass**, Next 16.3.0 | 2026-08-11 CDT |
+| backend / frontend smokes | `fe9cae0` product tree | **441/441 + 591/591** | 2026-08-11 CDT |
+| clean-install rehearsal | product `7f34b6e`, harness `b312ac1` | **20/20** | 2026-08-11 CDT |
+| screenshot capture | product `7f34b6e`, artifacts `db00ff8` | **27 files; 5/5 Playwright cases** | 2026-08-11 CDT |
+| golden-path E2E, run 1 + run 2 | product `7f34b6e`, harness `db00ff8` | **1/1 + 1/1** | 2026-08-11 CDT |
+| `scripts/prod-verify.mjs` | deployed `7f34b6e` | **5/5** | 2026-08-11 CDT |
 
 The frontend smoke creates and removes only its own `scratch-frontend` event.
 [A3-PRODUCTION-WALKTHROUGH.md](A3-PRODUCTION-WALKTHROUGH.md) and
-[INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) are the same kind of receipt,
-recorded on earlier commits and labeled as such.
+[INSTALL-REHEARSAL.md](INSTALL-REHEARSAL.md) preserves the earlier receipt and
+adds the final-product run as a separate section.
 
 ## Enforced rules you can check
 
@@ -145,9 +150,8 @@ Stated plainly, because an evaluator should not have to discover them.
   profile (fallback)"). The global `SpeakerProfile.slideDeckUrl` is unchanged
   and still editable — it is what every event without its own association
   resolves to. What is **not** per-event yet: the read-only v1 API's
-  `profile.slideDeckUrl` still reports only the global value, because widening
-  that published contract belongs with the scoped-credential work it is
-  sequenced behind.
+  `profile.slideDeckUrl` still reports only the global value. Widening that
+  published response is a separately versioned API-contract change.
 - **One topic per submission, by design.** A CFP form can offer several topic
   options, but each submitted proposal stores exactly one selected topic, which
   is what routes it to a review team. The agenda `Track` is a separate placement
