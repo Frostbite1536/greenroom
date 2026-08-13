@@ -93,11 +93,16 @@ async function loadLandingProgramme(searchParams: SearchParams) {
 
 export async function generateMetadata({ searchParams }: { searchParams: SearchParams }) {
   const { agenda } = await loadLandingProgramme(searchParams);
+  // The tab and the search result now say what the page says. Titling this
+  // page with only the event name read as a single conference's microsite to
+  // anyone who had not heard of the product, which is exactly the reader this
+  // page exists for. The event name stays in the title because the programme
+  // it links is real and worth finding.
   return {
-    title: agenda ? agenda.event.name : "Conference program",
+    title: agenda ? `Greenroom — ${agenda.event.name}` : "Greenroom",
     description: agenda
-      ? `Schedule, speakers, and the call for proposals for ${agenda.event.name}.`
-      : "Schedule, speakers, and the call for proposals.",
+      ? `Greenroom runs conference programs: reviewer queues, rubric scoring, accept and reject decisions, scheduling, and speaker email. Includes the public program for ${agenda.event.name}.`
+      : "Greenroom runs conference programs: reviewer queues, rubric scoring, accept and reject decisions, scheduling, and speaker email.",
   };
 }
 
