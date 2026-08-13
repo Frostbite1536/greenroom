@@ -74,16 +74,23 @@ is.
 
 ## 2. The gate stack
 
-Once this stack was established, every change admitted through it passed these
-gates in this order:
+Once this stack was established, every change admitted through PR #103 passed
+these gates in this order:
 
 1. Full unit suite
 2. Fresh production build
 3. Typecheck (application and E2E)
 4. Backend and frontend smokes, serialized
 5. Browser proof (Playwright / Chromium)
-6. Automated review pinned to the exact head
+6. Automated review pinned to the exact head (through PR #103)
 7. Cross-track admission
+
+After PR #103, Jeremy disabled the automated-review service because its cost no
+longer justified a third opinion. PRs #104 and #105 retained the rest of the
+stack and replaced that unavailable step with an independent exact-head xhigh
+reviewer distinct from the author lane, followed by Track A's separate binding
+gate. This is a dated process boundary, not a retroactive claim that the earlier
+automated reviews did not run.
 
 The scoping in that first sentence is deliberate. The stack was not complete
 from the first commit, and PR #78 is the receipt for the gap: the schema-window
