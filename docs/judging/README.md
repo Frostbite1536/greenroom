@@ -25,6 +25,7 @@ surfaces. Anything measured or captured on an older build remains labeled
 
 | Artifact | What it is |
 | --- | --- |
+| [PROCESS.md](PROCESS.md) | How this was built: the two-track adversarial review, the gate stack and why it is ordered that way, evidence provenance, and per-pattern `file:line`/test receipts an auditor can check |
 | [VIDEO-SCRIPT.md](VIDEO-SCRIPT.md) | Shot list and narration for the walkthrough video: the full operating loop, one deliberate conflict refusal, and the greenfield event/CFP proof |
 | [SCREENSHOT-INDEX.md](SCREENSHOT-INDEX.md) | The current screenshot set, organized by role and workflow, with per-artifact commit, URL, timestamp, viewport, access role, and read-only/mutation status |
 | [WORKFLOW-ROUTES.md](WORKFLOW-ROUTES.md) | Current shipped workflow-to-route map for admins, evaluators, speakers, and the public, linked to the applicable evidence rows |
@@ -191,10 +192,20 @@ Stated plainly, because an evaluator should not have to discover them.
   deployment-wide `GREENROOM_API_KEY` or an ADMIN-issued, revocable per-event
   `grk_...` key. A fresh install has neither and returns the same 401 without
   serving program data.
-- **Accessibility evidence is automated only.** Every audited route scored 100 on
-  Lighthouse accessibility at the recorded measurement, and the three admin
-  modal overlays now use the native `<dialog>` focus model — but no manual
-  screen-reader pass has been performed. That gap is real and unclosed.
+- **Accessibility evidence is automated plus one partial manual pass.** Every
+  audited route scored 100 on Lighthouse accessibility at the recorded
+  measurement, and the three admin modal overlays now use the native `<dialog>`
+  focus model. A manual NVDA + Brave pass was run on production on 2026-08-12
+  and covered three of ten planned journeys: journey 1 (sign-in through to the
+  admin dashboard) passed 6 of 6; journey 2 (admin shell landmarks and
+  navigation) passed CP2.1–CP2.2 and CP2.4–CP2.7, with CP2.3 a minor FAIL
+  because reaching the main landmark took 6 `D` presses against a threshold of
+  5 or fewer; journey 3 passed CP3.1–CP3.7 with CP3.8 not confirmed and CP3.9
+  not run; journeys 4–10 were not run. The CP2.3 cause is that the application
+  ships no skip link on any route, so landmarks are the only bypass. No
+  VoiceOver, JAWS, mobile screen reader, or braille testing, and this is not a
+  WCAG conformance audit. The gap is narrowed, not closed —
+  see [PERFORMANCE.md](PERFORMANCE.md#manual-screen-reader-pass--partial).
 - **The Greenroom Assistant is optional and advisory.** Without a configured
   provider, deterministic resource templates, sanitized preview, manual HTML,
   save/publish, manual decision notes, preview, and send continue to work. With
