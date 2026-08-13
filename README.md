@@ -1,83 +1,70 @@
-# Greenroom
+# Greenroom — from a pile of proposals to defensible program decisions
 
-Greenroom is an open-source, self-hostable conference program platform that
-takes an organizer from an open CFP through structured review, atomic
-acceptance, speaker readiness, conflict-safe scheduling, and a published
-program.
+### ▶ Try it live: <https://greenroom-hq.com> — one click signs you in as the event admin. No signup, no password.
 
-An alternative to closed CFP/speaker-ops SaaS: CFP forms, abstract evaluation,
-speaker onboarding, and a conflict-aware agenda, with public embeds for your
-event site.
+Program committees drown after the CFP deadline closes. Greenroom is the
+review-and-decide workspace for that moment: route every proposal to a reviewer
+team by its category, score it against a weighted rubric, and accept it — where
+"accept" is a single transaction that creates the talk's one session, assigns
+every speaker's onboarding tasks, and leaves it unscheduled. Scheduling is then
+its own guarded step: the server re-checks room and speaker overlap inside the
+write and refuses a placement that double-books, unless an admin deliberately
+overrides it.
 
-The repository includes reproducible demo data, deployment instructions,
-verification scripts, and role-based walkthroughs so contributors and evaluators
-can validate the complete program workflow. Evaluating this project? Start at
-the [evaluation index](docs/judging/README.md).
+For conference and meetup organizers who run a program committee. Closed
+CFP/speaker-ops SaaS optimizes the intake form; Greenroom optimizes what happens
+after the deadline closes.
 
-## Features (the golden path)
+Open source (AGPL-3.0), self-hostable, one required environment variable to run
+it locally (`DATABASE_URL`); a production deployment adds one more
+(`SESSION_SECRET`).
 
-1. **CFP forms** — build a submission form (custom fields, conditional logic,
-   submission limits, welcome/thank-you pages) and publish it at a public,
-   event-scoped URL (`/cfp/{event}/{form}`). An unpublished form has no public
-   page at all.
-2. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
-   email); drafts and validation included.
-3. **Evaluation** — review teams score abstracts against a weighted rubric
-   through evaluation plans, routed by category. A round can be marked blind;
-   assigned evaluators then lose speaker profiles, while the UI warns that
-   proposal text can still identify its author.
-4. **Accept → Session** — accepting an abstract atomically provisions its one
+- **Watch it decide (60s):** [`/login`](https://greenroom-hq.com/login) → **Event admin** → **Abstracts** → pick a row → **Accept** → **Agenda** → drag a talk onto an occupied room slot and watch the server refuse the move.
+- **See the published output:** [schedule](https://greenroom-hq.com/schedule) · [speakers](https://greenroom-hq.com/speakers) · [read-only API](https://greenroom-hq.com/docs/api)
+- **Evaluating this project?** Start at the [evaluation index](docs/judging/README.md).
+- **Run it locally:** [Quickstart](#quickstart) — five commands, one variable.
+
+## What it does, in decision order
+
+1. **Routed evaluation** — review teams score abstracts against a weighted
+   rubric inside an evaluation round (plan). Assignments are routed to a
+   reviewer team by the proposal's category, and reviewer eligibility is
+   re-checked server-side under a lock. A round can be marked blind; assigned
+   evaluators then lose speaker profiles, while the UI warns that proposal text
+   can still identify its author.
+2. **Accept → Session** — accepting an abstract atomically provisions its one
    confirmed, unscheduled session and every onboarding-task assignment for its
-   speakers. The legacy conversion endpoint safely backfills older records.
+   speakers, co-speakers included. Re-accepting tops up what is missing instead
+   of duplicating. The legacy conversion endpoint safely backfills older
+   records.
+3. **Agenda builder** — List / Day (rooms) / Week / Track grid / Tracks /
+   Conflicts views, with drag-and-drop moves in the day grid. Room-overlap and
+   speaker double-booking detection runs inside the same transaction as the
+   write, under an event-wide lock, and a refused move snaps back. The drag path
+   has no override; the schedule dialog offers an explicit "Schedule anyway" to
+   an admin who means it.
+4. **Speaker onboarding** — a speaker portal with profile, status, and task
+   checklists (tasks can carry forms), plus an admin dashboard at
+   `/admin/speakers` showing who is behind.
 5. **Speaker edits after acceptance** — speakers keep editing their own proposal
    while it is in draft, in review, or accepted; rejected and withdrawn
    proposals are read-only, and a confirmed talk's speaker list is fixed.
-6. **Speaker onboarding** — a speaker portal with profile, status, and task
-   checklists (tasks can carry forms), plus an admin dashboard at
-   `/admin/speakers` showing who is behind.
-7. **Agenda builder** — List / Day (rooms) / Week / Track grid / Tracks /
-   Conflicts views, with
-   drag-and-drop moves in the day grid and transactional room-overlap and
-   speaker double-booking conflict detection.
-8. **Public embeds** — a public landing page at `/`, plus a mobile-friendly
-   schedule (day tabs, search, track filters, session details) and speaker
-   gallery, with `.ics` calendar export and copy-paste snippets at
-   `/admin/embeds`.
-
-9. **Human-controlled authoring assistance** - administrators can start a
+6. **CFP forms** — build a submission form (custom fields, conditional logic,
+   submission limits, welcome/thank-you pages) and publish it at a public,
+   event-scoped URL (`/cfp/{event}/{form}`). An unpublished form has no public
+   page at all.
+7. **Abstract intake** — speakers submit proposals with co-speakers (upserted by
+   email); drafts and validation included.
+8. **Public embeds** — a mobile-friendly schedule (day tabs, search, track
+   filters, session details) and speaker gallery, published at `/schedule` and
+   `/speakers` and embeddable chrome-free at `/embed/*`, with `.ics` calendar
+   export and copy-paste snippets at `/admin/embeds`.
+9. **Human-controlled authoring assistance** — administrators can start a
    speaker resource from deterministic templates, inspect a sanitized preview,
    and optionally ask the configured AI provider to turn bounded notes into a
    reviewable HTML suggestion. The same shared assistant can draft a short,
    plain-text decision note from explicitly selected review feedback. Neither
    action saves, publishes, sends mail, or changes a decision automatically.
-
-## Quickstart
-
-**Prerequisites:** Node.js **20.9+** (Next 16 requires it) and a Postgres
-database you can point at — a free [Neon](https://neon.tech) project works and is
-what the hosted demo uses.
-
-```bash
-npm install
-cp .env.example .env       # set DATABASE_URL (Postgres, e.g. Neon)
-npm run db:push            # apply the Prisma schema (also generates Prisma Client)
-npm run db:seed            # deterministic demo data (event, forms, 40 abstracts, schedule)
-npm run dev
-```
-
-Then open http://localhost:3000/login. Sign in with an email and password, or
-use the one-click demo personas (Admin / Evaluator / Speaker). You can also
-create an account at `/signup` and recover one at `/forgot`. A brand-new account
-belongs to no event yet, so it lands on `/welcome` to create its first event or
-wait for an organizer to add it.
-
-Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
-`sofia@greenroom-hq.com` (speaker).
-
-`DATABASE_URL` is the only variable you must set; everything else defaults
-safely (external integrations mocked, demo reset disabled, public REST API off).
-This path is rehearsed end-to-end from a clean clone and empty database in
-[`docs/judging/INSTALL-REHEARSAL.md`](docs/judging/INSTALL-REHEARSAL.md).
 
 ## Deployed demo
 
@@ -124,16 +111,22 @@ Non-technical walkthroughs of the same ground, one per role, live in
 
 ### Demo personas
 
-The one-click buttons on `/login` sign these three in without a password. The
-credential form beside them accepts the same identities with the seeded demo
-password — a deliberately public constant (`DEMO_PERSONA_PASSWORD` in
-`lib/demo/seed.ts`), not a secret, rotated by editing it and reseeding.
+The one-click buttons on `/login` sign these three in without a password — no
+credential is presented at all. The credential form beside them accepts the same
+identities with the seeded demo password — a deliberately public constant
+(`DEMO_PERSONA_PASSWORD` in `lib/demo/seed.ts`), not a secret, rotated by editing
+it and reseeding.
 
 | Role | Persona | Email | Main area |
 | --- | --- | --- | --- |
 | Event admin | Maya Chen | `maya@greenroom-hq.com` | Forms, Abstracts, Agenda |
 | Evaluator | Ravi Patel | `ravi@greenroom-hq.com` | Evaluations |
 | Speaker | Sofia Marques | `sofia@greenroom-hq.com` | Speaker portal |
+
+The one-click buttons are always available outside production. In production
+they are off unless `DEMO_PERSONA_LOGIN_ENABLED=true` is set, and the server
+action refuses the sign-in — not just the buttons — when it is not. The hosted
+demo sets it on purpose; your own deployment does not have to.
 
 ### Repeatable verification
 
@@ -154,12 +147,55 @@ an external-origin embed proof, serve
 [`docs/judging/embed-schedule-proof.html`](docs/judging/embed-schedule-proof.html)
 from any static host or localhost.
 
+## Quickstart
+
+**Prerequisites:** Node.js **20.9+** (Next 16 requires it) and a Postgres
+database you can point at — a free [Neon](https://neon.tech) project works and is
+what the hosted demo uses.
+
+```bash
+npm install
+cp .env.example .env       # set DATABASE_URL (Postgres, e.g. Neon)
+npm run db:push            # apply the Prisma schema (also generates Prisma Client)
+npm run db:seed            # deterministic demo data (event, forms, 40 abstracts, schedule)
+npm run dev
+```
+
+Then open http://localhost:3000/login. Sign in with an email and password, or
+use the one-click demo personas (Admin / Evaluator / Speaker). You can also
+create an account at `/signup` and recover one at `/forgot`. A brand-new account
+belongs to no event yet, so it lands on `/welcome` to create its first event or
+wait for an organizer to add it.
+
+Demo personas: `maya@greenroom-hq.com` (admin), `ravi@greenroom-hq.com` (evaluator),
+`sofia@greenroom-hq.com` (speaker).
+
+`DATABASE_URL` is the only variable a local install must set; everything else
+defaults safely (external integrations mocked, demo reset disabled, public REST
+API off, persona logins on outside production). A production deployment
+additionally needs `SESSION_SECRET` — at least 32 characters — and fails closed
+on sessions without it; see [`docs/DEPLOY.md`](docs/DEPLOY.md). This path is
+rehearsed end-to-end from a clean clone and empty database in
+[`docs/judging/INSTALL-REHEARSAL.md`](docs/judging/INSTALL-REHEARSAL.md).
+
 ## Current limitations
 
-The authoritative, contextual list lives in one place: the
-[evaluation index](docs/judging/README.md#current-limitations). Keeping the
-limitations there prevents a shorter README copy from drifting away from the
-evidence package.
+The three an evaluator hits first:
+
+- **A new self-service account starts outside every event.** Sign-up grants no
+  membership, so a fresh account lands on `/welcome` to create its own event or
+  wait for an organizer to add its address.
+- **Event switching is bounded by your own memberships.** There is no way to
+  join an event you were not added to, and no cross-event view — every screen
+  shows exactly one event.
+- **Proposal attachments are portal-only and private to their uploader.** The
+  anonymous public CFP form takes no attachment at all, and a co-speaker on a
+  shared proposal can see that a document exists but cannot open it.
+
+The authoritative, contextual list — eleven entries, each with its reasoning —
+lives in one place: the
+[evaluation index](docs/judging/README.md#current-limitations). The three above
+are pointers to it, not a second copy of it.
 
 ## Stack
 
