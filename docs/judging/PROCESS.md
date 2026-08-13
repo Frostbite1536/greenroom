@@ -86,11 +86,13 @@ these gates in this order:
 7. Cross-track admission
 
 After PR #103, Jeremy disabled the automated-review service because its cost no
-longer justified a third opinion. PRs #104 and #105 retained the rest of the
-stack and replaced that unavailable step with an independent exact-head xhigh
-reviewer distinct from the author lane, followed by Track A's separate binding
-gate. This is a dated process boundary, not a retroactive claim that the earlier
-automated reviews did not run.
+longer justified a third opinion. PR #104 instead used two independent
+exact-head clean-install reviews covering install, unit, build, and type gates.
+PR #105 used an independent exact-head static review followed by Track A's
+focused/full tests, build and type gates, and disposable-database desktop and
+390px browser proof. This is a dated process boundary, not a retroactive claim
+that the earlier automated reviews did not run or that every later change ran
+every gate in the list above.
 
 The scoping in that first sentence is deliberate. The stack was not complete
 from the first commit, and PR #78 is the receipt for the gap: the schema-window
