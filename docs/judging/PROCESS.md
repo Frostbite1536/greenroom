@@ -427,9 +427,10 @@ From a checked-out repository, in this order:
 
 ```bash
 npm ci
+npm test
 npm run build       # generates .next/types, which the typecheck reads
 npm run typecheck
-npm test
+npx tsc -p e2e/tsconfig.json
 ```
 
 The unit suite requires no database.

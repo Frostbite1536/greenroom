@@ -108,7 +108,7 @@ Three entries need their labels read literally rather than rounded:
   link on any route, so landmark navigation is the only bypass mechanism a
   screen-reader user has, and on the admin shell it costs one press more than
   the threshold allows. A search of `app/`, `components/`, and `lib/` finds no
-  skip-link implementation, against 15 `<main>` landmark elements.
+  skip-link implementation, against 14 `<main>` landmark elements.
 - **"Not confirmed" is not a pass.** CP3.8 was reached but its outcome was not
   established. CP3.9 and journeys 4 through 10 were **not run** — no evidence
   exists for them in either direction.
