@@ -13,6 +13,8 @@ import {
   planRoomPatch,
   planTrackPatch,
   reconcileEventSettingsDraft,
+  supportedTimeZones,
+  timeZoneOptions,
   validateEventDatePair,
   type CategoryRowAuthority,
   type EventSettingsDraft,
@@ -66,6 +68,8 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
   const [eventError, setEventError] = useState<EventError | null>(null);
   const [eventNotice, setEventNotice] = useState<string | null>(null);
   const [savingEvent, setSavingEvent] = useState(false);
+  // Seeded with the list a SERVER render produces; upgraded after hydration.
+  const [zoneOptions, setZoneOptions] = useState<readonly string[]>(COMMON_TIME_ZONES);
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomCapacity, setNewRoomCapacity] = useState("");
   const [roomError, setRoomError] = useState<string | null>(null);
@@ -119,6 +123,19 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
     }
     applyAuthoritativeEvent(view.event);
   }, [applyAuthoritativeEvent, view.event.id, view.event.name, view.event.timezone, view.event.startsOn, view.event.endsOn]);
+
+  /**
+   * HYDRATION GUARD. `supportedTimeZones()` reads this runtime's ICU data,
+   * which Node and the browser answer differently, so it may only run after
+   * hydration has already matched on the server-rendered `COMMON_TIME_ZONES`.
+   *
+   * Only the SUGGESTIONS are upgraded here. Unlike the creation dialog this
+   * field shows a zone the event has already been saved with, and no detected
+   * or default value may ever be written over it.
+   */
+  useEffect(() => {
+    setZoneOptions(timeZoneOptions(supportedTimeZones()));
+  }, []);
 
   function updateEvent(field: keyof EventForm, value: string) {
     const next = { ...eventDraftRef.current, [field]: value };
@@ -451,14 +468,19 @@ export function EventSettings({ view }: { view: EventSettingsView }) {
               list="event-timezone-options"
               autoComplete="off"
               value={event.timezone}
+              // Same reason as the creation dialog: a datalist filters its
+              // options by substring against the current value, and this field
+              // always holds a complete saved zone name, so without this the
+              // dropdown offers only the zone already in the box.
+              onFocus={(change) => change.currentTarget.select()}
               onChange={(change) => updateEvent("timezone", change.target.value)}
               aria-invalid={eventError?.field === "timezone"}
               aria-describedby={eventError?.field === "timezone" ? "event-timezone-help event-settings-error" : "event-timezone-help"}
             />
             <datalist id="event-timezone-options">
-              {COMMON_TIME_ZONES.map((timezone) => <option key={timezone} value={timezone} />)}
+              {zoneOptions.map((timezone) => <option key={timezone} value={timezone} />)}
             </datalist>
-            <span className="hint" id="event-timezone-help">Choose the suggested city nearest to your event, such as Chicago, London, or Tokyo.</span>
+            <span className="hint" id="event-timezone-help">Start typing a city or region — Chicago, London, Tokyo — to search every IANA zone.</span>
           </label>
 
           <fieldset

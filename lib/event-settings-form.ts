@@ -4,9 +4,15 @@ import { normalizeHex } from "@/lib/color-contrast";
 const UNREADABLE = "unreadable";
 
 /**
- * Suggested IANA zones offered as a datalist. Shared by the settings editor and
- * the new-event dialog so the two suggest the same zones; both are free-text
- * inputs and the server remains the authority on what is a valid zone.
+ * Suggested IANA zones offered first in the datalist. Shared by the settings
+ * editor and the new-event dialog so the two suggest the same zones; both are
+ * free-text inputs and the server remains the authority on what is a valid zone.
+ *
+ * These are a curated HEAD of the list, not the whole of it — see
+ * `timeZoneOptions`. On its own this list caused GRA-TZ: a datalist filters its
+ * options by substring against the input's current value, so a field holding a
+ * complete zone name matched exactly one option and the organizer saw a
+ * one-entry dropdown ("only UTC is available").
  */
 export const COMMON_TIME_ZONES = [
   "America/Los_Angeles",
@@ -22,6 +28,66 @@ export const COMMON_TIME_ZONES = [
   "Australia/Sydney",
   "UTC",
 ];
+
+/**
+ * The zone a server render starts from, and the fallback whenever the runtime
+ * cannot name its own. The server has no visitor to ask and runs in UTC, so
+ * this is also the only honest value for a first paint.
+ */
+export const FALLBACK_TIME_ZONE = "UTC";
+
+/**
+ * Every zone this runtime knows, or `null` when it cannot say.
+ *
+ * ENVIRONMENT-DEPENDENT — read this from a mount effect, never while rendering.
+ * Node on the server and the organizer's browser ship different ICU data, so a
+ * value read during render would put a different `<datalist>` in the hydrated
+ * DOM than the server sent, which is a hydration mismatch.
+ */
+export function supportedTimeZones(): readonly string[] | null {
+  if (typeof Intl.supportedValuesOf !== "function") return null;
+  try {
+    return Intl.supportedValuesOf("timeZone");
+  } catch {
+    // A runtime that advertises the API but ships no zone data is still a
+    // runtime the organizer has to create an event from.
+    return null;
+  }
+}
+
+/**
+ * The zone the visitor's own machine is set to, or `FALLBACK_TIME_ZONE`.
+ *
+ * ENVIRONMENT-DEPENDENT for the same reason as `supportedTimeZones`, and more
+ * sharply: the server resolves to UTC and the organizer almost never does, so
+ * reading this during render would mismatch on nearly every hydration.
+ */
+export function detectTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || FALLBACK_TIME_ZONE;
+  } catch {
+    return FALLBACK_TIME_ZONE;
+  }
+}
+
+/**
+ * The suggestion list both time-zone fields render: the common zones first, in
+ * their curated order, then every other zone the runtime knows.
+ *
+ * Pure, so the ordering and de-duplication are testable without an environment.
+ * Passing `null` (an old runtime, or a render that must stay hydration-safe)
+ * degrades to exactly the old twelve rather than to nothing.
+ */
+export function timeZoneOptions(supported?: readonly string[] | null): string[] {
+  const options: string[] = [];
+  const seen = new Set<string>();
+  for (const zone of [...COMMON_TIME_ZONES, ...(supported ?? [])]) {
+    if (seen.has(zone)) continue;
+    seen.add(zone);
+    options.push(zone);
+  }
+  return options;
+}
 
 export type EventSettingsDraft = {
   name: string;
