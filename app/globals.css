@@ -222,8 +222,16 @@ button { letter-spacing: 0; }
 .landing-caps-note { margin: 0; padding: 13px 15px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; line-height: 1.55; }
 
 /* ---- the live programme block ---- */
+/* `min-width: 0` on the flex child AND `overflow-wrap: anywhere` on the text.
+   A flex item defaults to `min-width: auto`, so it refuses to shrink below its
+   own content, and a long event name may carry no space to break at — the two
+   together are what stop one 160-character or unbroken name from pushing the
+   heading past the shell and panning the whole document sideways at 390px.
+   Neither alone is enough: the first lets the box shrink, the second gives the
+   text somewhere to break. */
 .landing-programme-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
-.landing-event-name { color: var(--ink); font-size: 14px; letter-spacing: 0; text-transform: none; }
+.landing-programme-head .landing-section-heading { min-width: 0; overflow-wrap: anywhere; }
+.landing-event-name { color: var(--ink); font-size: 14px; letter-spacing: 0; text-transform: none; min-width: 0; overflow-wrap: anywhere; }
 .landing-programme-dates { margin: 0; color: var(--muted); font-size: 13px; }
 .landing-actions-quiet { margin-top: 2px; }
 .landing-metrics { border-radius: 12px; overflow: hidden; }
@@ -312,7 +320,15 @@ button { letter-spacing: 0; }
   .landing-cap-title { font-size: 14.5px; }
   .landing-panel { padding: 16px 17px; }
   .landing-programme-head { flex-direction: column; align-items: flex-start; }
-  .landing-links a { overflow-wrap: anywhere; }
+  /* A 24px anchor is a desktop target, and these four are the only links in the
+     panel. On a phone each one becomes a 40px row — the size this codebase
+     already uses for its touch-first controls — by filling its own list item
+     rather than by growing a shared control: `.landing-links` is rendered on
+     the landing page and nowhere else (one reference, `app/page.tsx`), so this
+     cannot reach another surface. The rows now carry a `?event=` too, so the
+     text wraps rather than pans the document. */
+  .landing-links li { padding: 6px 12px 10px; }
+  .landing-links a { min-height: 40px; width: 100%; align-items: center; overflow-wrap: anywhere; }
 }
 
 /* Route boundaries: loading.tsx, error.tsx and not-found.tsx.

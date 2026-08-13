@@ -46,6 +46,24 @@ type SearchParams = Promise<{ event?: string }>;
  * Nothing aspirational goes in this array. If a claim cannot be opened in the
  * codebase it does not belong on the front door.
  */
+/**
+ * The four public URLs the panel advertises, in the order it lists them.
+ *
+ * Every one of these is rendered through `publicSurfaceUrl` with the RESOLVED
+ * event, exactly as the hero's two buttons are. They were previously written as
+ * bare constants, which meant a visitor who arrived on `/?event=<other>` was
+ * shown a panel of links back to the *default* event — the page's own hero and
+ * its list of "the URLs this program lives at" describing two different
+ * programs. `lib/embed-alias.ts` already owns the "carry the `?event=` or the
+ * visitor silently changes event" rule; this list just has to use it.
+ */
+const publicSurfaces = [
+  { path: CANONICAL_SCHEDULE_PATH, blurb: "Every scheduled session, by day, room, and track." },
+  { path: CANONICAL_SPEAKERS_PATH, blurb: "The confirmed speaker directory with their sessions." },
+  { path: EMBED_SCHEDULE_PATH, blurb: "The schedule, chrome-free, for embedding in an iframe." },
+  { path: EMBED_SPEAKERS_PATH, blurb: "The speaker directory, chrome-free, for the same." },
+] as const;
+
 const CAPABILITIES = [
   {
     icon: ClipboardCheck,
@@ -165,10 +183,28 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
 
   // The one-click personas are switched off by default in production, so the
   // hero only promises a password-free way in when this deployment actually
-  // has one. Same source of truth as the sign-in page and the action that
-  // refuses — a landing page that oversells the demo is a landing page that
-  // lies. (`lib/env.ts` `arePersonaLoginsEnabled`.)
+  // has one. Same source of truth as the sign-in page and the server action
+  // that refuses — a landing page that oversells the demo is a landing page
+  // that lies. (`lib/env.ts` `arePersonaLoginsEnabled`.)
+  //
+  // The LABEL switches with the note, not just the note. An earlier revision
+  // kept the button reading "Open the live demo" in both branches and softened
+  // only the sentence under it, which still walked a visitor to a sign-in form
+  // that cannot let them in: there are no seeded roles to enter without
+  // credentials when the personas are off. The disabled branch therefore
+  // promises nothing beyond a sign-in, and in particular does not offer
+  // self-service event creation — no auth route in this repository creates an
+  // event, so that would be the same defect wearing different words.
   const demoOneClick = arePersonaLoginsEnabled();
+  const heroEntry = demoOneClick
+    ? {
+        label: "Open the live demo",
+        note: "One click on the sign-in page — no password and no sign-up. Enter as an organizer, a reviewer, or a speaker and you land in a fully seeded event.",
+      }
+    : {
+        label: "Organizer sign in",
+        note: "This deployment has no password-free demo accounts. Sign in with the email and password your organizer gave you.",
+      };
 
   return (
     <main className="landing">
@@ -192,7 +228,7 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
           </p>
           <div className="landing-actions">
             <Link className="landing-cta landing-cta-demo" href="/login">
-              <span>Open the live demo</span>
+              <span>{heroEntry.label}</span>
               <ArrowRight size={17} aria-hidden="true" />
             </Link>
             <Link className="landing-cta landing-cta-secondary" href={schedulePath}>
@@ -200,11 +236,7 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
               <span>See a published program</span>
             </Link>
           </div>
-          <p className="landing-demo-note">
-            {demoOneClick
-              ? "The demo is one click on the sign-in page — no password, no sign-up. Enter as an organizer, a reviewer, or a speaker and you land in a fully seeded event."
-              : "Sign in on the next page to enter the seeded demo event as an organizer, a reviewer, or a speaker."}
-          </p>
+          <p className="landing-demo-note">{heroEntry.note}</p>
         </section>
 
         <section className="landing-caps" aria-labelledby="landing-caps-heading">
@@ -293,22 +325,18 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
               header, for an iframe on your own site.
             </p>
             <ul className="landing-links">
-              <li>
-                <Link href={CANONICAL_SCHEDULE_PATH}>{CANONICAL_SCHEDULE_PATH}</Link>
-                <span>Every scheduled session, by day, room, and track.</span>
-              </li>
-              <li>
-                <Link href={CANONICAL_SPEAKERS_PATH}>{CANONICAL_SPEAKERS_PATH}</Link>
-                <span>The confirmed speaker directory with their sessions.</span>
-              </li>
-              <li>
-                <Link href={EMBED_SCHEDULE_PATH}>{EMBED_SCHEDULE_PATH}</Link>
-                <span>The schedule, chrome-free, for embedding in an iframe.</span>
-              </li>
-              <li>
-                <Link href={EMBED_SPEAKERS_PATH}>{EMBED_SPEAKERS_PATH}</Link>
-                <span>The speaker directory, chrome-free, for the same.</span>
-              </li>
+              {publicSurfaces.map(({ path, blurb }) => {
+                const href = publicSurfaceUrl(path, resolution.eventParam);
+                return (
+                  <li key={path}>
+                    {/* The link TEXT is the same string as the href, so what a
+                        visitor copies out of the page is the URL they were
+                        actually offered — including the `?event=`. */}
+                    <Link href={href}>{href}</Link>
+                    <span>{blurb}</span>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         </div>
