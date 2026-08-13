@@ -185,8 +185,8 @@ export default async function HomePage({ searchParams }: { searchParams: SearchP
           </p>
           <div className="landing-actions">
             <Link className="landing-cta landing-cta-demo" href="/login">
-              <ArrowRight size={17} aria-hidden="true" />
               <span>Open the live demo</span>
+              <ArrowRight size={17} aria-hidden="true" />
             </Link>
             <Link className="landing-cta landing-cta-secondary" href={schedulePath}>
               <CalendarDays size={17} aria-hidden="true" />
