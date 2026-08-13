@@ -82,8 +82,46 @@ re-measured:
 | `/admin/agenda` | 95 — white text at 2.14:1 on amber track chips | chip text colour now derived from background luminance | **100** |
 | `/admin/speakers` | 94 — `aria-pressed` on anchors | filter links use `aria-current="page"` | **100** |
 
-Automated tooling is not a complete accessibility review; no manual
-screen-reader pass has been performed, and that remains the honest gap.
+Automated tooling is not a complete accessibility review.
+
+### Manual screen-reader pass — partial
+
+A manual screen-reader pass was performed on production on **2026-08-12** by the
+project owner, using **NVDA with Brave on Windows**. It is **partial**: three of
+ten planned journeys were started, and not all of those completed. The results
+are recorded exactly as run.
+
+| Journey | Result |
+| --- | --- |
+| 1 — sign-in / demo persona login → admin dashboard | **6 of 6 checkpoints PASS** |
+| 2 — admin shell (landmarks and navigation) | **CP2.1–CP2.2 and CP2.4–CP2.7 PASS; CP2.3 minor FAIL** |
+| 3 — review queue → accept a proposal | **CP3.1–CP3.7 PASS; CP3.8 not confirmed; CP3.9 not run** |
+| 4–10 | **not run** |
+
+Three entries need their labels read literally rather than rounded:
+
+- **CP2.3 failed because reaching the main landmark took 6 <kbd>D</kbd> presses,
+  against a threshold of 5 or fewer.** The checkpoint, the measurement, and the
+  threshold are all recorded, so this is a located defect rather than an
+  unattributed one.
+- **The cause is the absence of a skip link.** The application ships no skip
+  link on any route, so landmark navigation is the only bypass mechanism a
+  screen-reader user has, and on the admin shell it costs one press more than
+  the threshold allows. A search of `app/`, `components/`, and `lib/` finds no
+  skip-link implementation, against 14 `<main>` landmark elements.
+- **"Not confirmed" is not a pass.** CP3.8 was reached but its outcome was not
+  established. CP3.9 and journeys 4 through 10 were **not run** — no evidence
+  exists for them in either direction.
+
+Scope limits that still stand:
+
+- NVDA on Brave on Windows only.
+- No VoiceOver, no JAWS, no real mobile screen reader, no braille display.
+- This is **not a WCAG conformance audit**.
+
+So the honest position is narrower than "manually tested": one journey is fully
+covered, one has a located minor defect with a known cause, one is incomplete,
+and seven were never attempted.
 
 ## Reproduce
 

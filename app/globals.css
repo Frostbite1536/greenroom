@@ -204,6 +204,36 @@ button { letter-spacing: 0; }
 .landing-cta:hover, .landing-cta:focus-visible { background: var(--brand-strong); }
 .landing-cta-secondary { border-color: var(--line); background: var(--surface); color: var(--brand-strong); }
 .landing-cta-secondary:hover, .landing-cta-secondary:focus-visible { border-color: var(--brand); background: var(--soft); color: var(--brand-strong); }
+/* The demo entry is the one action we want a stranger to take, so it is the
+   only filled control on the page — everything else is an outline. Weight and
+   size carry it, not hue alone, so it still reads as the primary action in
+   greyscale. */
+.landing-cta-demo { min-height: 46px; padding: 0 20px; font-size: 15px; box-shadow: 0 1px 2px rgba(15, 91, 79, 0.24); }
+.landing-demo-note { margin: 2px 0 0; max-width: 62ch; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+/* ---- capabilities ---- */
+.landing-caps, .landing-programme { display: grid; gap: 14px; }
+.landing-section-heading { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.landing-cap-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.landing-cap { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; display: grid; gap: 8px; align-content: start; }
+.landing-cap-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 8px; background: var(--soft); color: var(--brand-strong); }
+.landing-cap-title { margin: 0; font-size: 15px; line-height: 1.32; }
+.landing-cap-body { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.6; }
+.landing-caps-note { margin: 0; padding: 13px 15px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+/* ---- the live programme block ---- */
+/* `min-width: 0` on the flex child AND `overflow-wrap: anywhere` on the text.
+   A flex item defaults to `min-width: auto`, so it refuses to shrink below its
+   own content, and a long event name may carry no space to break at — the two
+   together are what stop one 160-character or unbroken name from pushing the
+   heading past the shell and panning the whole document sideways at 390px.
+   Neither alone is enough: the first lets the box shrink, the second gives the
+   text somewhere to break. */
+.landing-programme-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
+.landing-programme-head .landing-section-heading { min-width: 0; overflow-wrap: anywhere; }
+.landing-event-name { color: var(--ink); font-size: 14px; letter-spacing: 0; text-transform: none; min-width: 0; overflow-wrap: anywhere; }
+.landing-programme-dates { margin: 0; color: var(--muted); font-size: 13px; }
+.landing-actions-quiet { margin-top: 2px; }
 .landing-metrics { border-radius: 12px; overflow: hidden; }
 .landing-notice { margin: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 13.5px; line-height: 1.5; }
 .landing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
@@ -267,7 +297,38 @@ button { letter-spacing: 0; }
   .landing-hero { padding: 24px 20px; }
   .landing-hero h1 { font-size: 27px; }
   .landing-grid { grid-template-columns: minmax(0, 1fr); }
+  .landing-cap-grid { grid-template-columns: minmax(0, 1fr); }
   .landing-cta { width: 100%; justify-content: center; }
+}
+
+/* The 390px pass. A phone gets the same page, not a squeezed one: the shell
+   loses the gutter it cannot afford, the display sizes step down one notch
+   rather than wrapping into ragged three-word lines, and the header's sign-in
+   control grows to a 40px touch target — the size this codebase already uses
+   for touch-first controls elsewhere. The public URLs in the links panel can
+   break anywhere, because a path has no break opportunity of its own and one
+   long one used to pan the whole document sideways. */
+@media (max-width: 430px) {
+  .landing { padding: 20px 14px 40px; }
+  .landing-shell { gap: 18px; }
+  .landing-hero { padding: 22px 18px; border-radius: 12px; gap: 11px; }
+  .landing-hero h1 { font-size: 25px; }
+  .landing-lede { font-size: 14.5px; }
+  .landing-brand { font-size: 14px; }
+  .landing-signin { min-height: 40px; padding: 0 14px; }
+  .landing-cap { padding: 16px 17px; }
+  .landing-cap-title { font-size: 14.5px; }
+  .landing-panel { padding: 16px 17px; }
+  .landing-programme-head { flex-direction: column; align-items: flex-start; }
+  /* A 24px anchor is a desktop target, and these four are the only links in the
+     panel. On a phone each one becomes a 40px row — the size this codebase
+     already uses for its touch-first controls — by filling its own list item
+     rather than by growing a shared control: `.landing-links` is rendered on
+     the landing page and nowhere else (one reference, `app/page.tsx`), so this
+     cannot reach another surface. The rows now carry a `?event=` too, so the
+     text wraps rather than pans the document. */
+  .landing-links li { padding: 6px 12px 10px; }
+  .landing-links a { min-height: 40px; width: 100%; align-items: center; overflow-wrap: anywhere; }
 }
 
 /* Route boundaries: loading.tsx, error.tsx and not-found.tsx.
