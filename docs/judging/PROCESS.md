@@ -345,7 +345,7 @@ Each of these was decided and recorded, not overlooked. Several are enforced by
 tests, which is the difference between a scope decision and an absence.
 
 - **Outbox pattern.** Email and Airtable delivery run serially in-request.
-  `docs/judging/README.md:230-231` states this is adequate at demo scale and
+  `docs/judging/README.md:241-243` states this is adequate at demo scale and
   names an outbox as the real-scale answer.
 - **Webhooks and agent writes.** `docs/DECISIONS.md:431-434` holds generic
   webhooks and agent writes on the post-release roadmap explicitly.
@@ -360,7 +360,7 @@ tests, which is the difference between a scope decision and an absence.
 - **Versioned migrations.** Schema changes apply through audited `db push`
   windows; `prisma/` contains `schema.prisma` and `seed.ts` and no `migrations/`
   directory. Recorded as an accepted audit finding at
-  `docs/judging/README.md:229-230`. The windows themselves are logged on the PRs
+  `docs/judging/README.md:240-242`. The windows themselves are logged on the PRs
   that used them (PR #98 comments `5261283853` and `5261291002`, open and close).
 - **Incremental sync.** `docs/DECISIONS.md:422-429` states why it is unshipped
   rather than pending: a fixed application-time watermark alone cannot prove that
@@ -406,18 +406,18 @@ Scope limits that still stand: NVDA on Brave on Windows only. No VoiceOver, no
 JAWS, no real mobile screen reader, no braille display, and this is not a WCAG
 conformance audit.
 
-**Other gaps**, each already recorded in the limitations list at
-`docs/judging/README.md:150-236`: admin profile edits use last-write-wins rather
+**Other gaps**, each already recorded in the
+[limitations list](README.md#current-limitations): admin profile edits use last-write-wins rather
 than version checks; orphaned uploaded bytes accumulate with no reaper
 (`docs/DECISIONS.md:343-345`); the v1 API's `profile.slideDeckUrl` still reports
 only the global value, not the per-event one
-(`docs/judging/README.md:179-182`); and the demo deployment intentionally hands
-out admin, with the blast radius argued at `docs/judging/README.md:216-223`.
+(`docs/judging/README.md:187-194`); and the demo deployment intentionally hands
+out admin, with the blast radius argued at `docs/judging/README.md:228-235`.
 
 **Two external code audits** were commissioned and triaged. Confirmed defects
 were fixed and regression-tested; the remaining accepted findings are the
 roadmap items listed above rather than hidden ones
-(`docs/judging/README.md:224-236`).
+(`docs/judging/README.md:236-248`).
 
 ---
 
