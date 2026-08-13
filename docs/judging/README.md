@@ -6,20 +6,27 @@
 > program.
 
 **Deployed application:** <https://greenroom-hq.com>
-**Current deployed commit:** `8b2a1cf0b7aa95185a8a530e6e0adce8405fe0d0`
+
+**Pre-polish deployment basis:** `14c2d4025661d7e2c427b8e71c3068a96eca4459`
 
 **Captured evidence product commit:** `7f34b6ec14005f4e185722b09d894342da52383c`
 
 **Evidence tooling/artifact commit:** `db00ff88bcba043d13aba76daa7876e112e49c29`
 
+**Judge-extension source heads:** landing `5af7ece579fdb07e9ca3635354a6b191424c8711`;
+process documentation `ff2e32c6ccea13bd6e3026feefb29ec7abbe28af`
+
 Every primary screenshot, walkthrough, rehearsal, and golden-path artifact in
-this directory describes the captured evidence product commit. Those artifacts
-are preserved rather than relabeled. The current deployment adds only the
-reviewed, additive PR #100 tranche described in
-[Post-release deployment provenance](#post-release-deployment-provenance); its
-separate receipts do not imply that the earlier screenshots depict those new
-surfaces. Anything measured or captured on an older build remains labeled
-**historical** and is not presented as current evidence.
+this directory describes captured evidence product commit `7f34b6e`. Those
+artifacts are preserved rather than relabeled or deleted. The pre-polish
+deployment basis `14c2d40` is a documentation-only provenance merge on the
+prior PR #100 runtime `8b2a1cf`; its separate receipts below do not imply that
+earlier screenshots depict those new surfaces. The judge-extension landing
+polish also postdates `7f34b6e` and `db00ff8`, so its new landing page is not
+represented by `landing.png`. [PROCESS.md](PROCESS.md) records review and gate
+provenance; it does not rewrite or invalidate the product evidence. Anything
+measured or captured on an older build remains labeled **historical** and is
+not presented as current evidence.
 
 ## Start here
 
@@ -100,16 +107,21 @@ evidence window:
 
 ### Post-release deployment provenance
 
-Production now serves merge `8b2a1cf`, whose first parent is the prior deployed
-evidence closure `53bddcf` and whose second parent is reviewed PR #100 head
-`e259d5a`. Relative to the captured product tree, the later release history adds
-the final evidence tooling and artifact closure documented above and then PR
-#100's additive scoped v1 reads, bounded submission-pacing report, and
-dirty-form-safe speaker-roster refresh. It does not rewrite or invalidate the
-27 screenshots, the clean-install receipt, or the twice-run golden-path
-evidence; those remain truthfully attributed to `7f34b6e`.
+Before the judge-extension polish, production served merge `14c2d40`. Its first
+parent is the prior PR #100 deployment `8b2a1cf`; its second parent is docs-only
+PR #101 head `4a0adf1`. The PR #100 runtime receipts below were tested and
+reviewed at `e259d5a`; they are prior receipts, not receipts for the later
+landing/process integration.
 
-| Post-release gate | Tested/reviewed commit | Result | Recorded |
+Relative to the captured product tree, the later release history adds the final
+evidence tooling and artifact closure, then PR #100's additive scoped v1 reads,
+bounded submission-pacing report, and dirty-form-safe speaker-roster refresh.
+Merge `14c2d40` adds provenance documentation only. The judge-extension landing
+polish is a later, uncaptured runtime change; it does not rewrite or invalidate
+the 27 screenshots, clean-install rehearsal, or twice-run golden-path evidence,
+which remain truthfully attributed to `7f34b6e`.
+
+| Prior PR #100 receipt | Tested/reviewed commit | Result | Recorded |
 | --- | --- | --- | --- |
 | `npm test` | reviewed `e259d5a` | **1,960 pass / 0 fail / 5 gated skips** | 2026-08-12 CDT |
 | app + E2E typechecks and fresh build | reviewed `e259d5a` | **pass**, Next 16.3.0 | 2026-08-12 CDT |

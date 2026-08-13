@@ -139,11 +139,13 @@ based on, run before any edit in this branch existed:
 | E2E typecheck | pass |
 | `npm run build` | pass |
 
-**This branch's own tree** — the same four gates were re-run after the
-documentation edits and returned identical results. That is the expected
-outcome rather than a claim of new coverage: this branch changes only Markdown
-files under `docs/judging/`, which no gate compiles or executes, so the product
-gates measure the same code in both runs.
+**Documentation-only receipt tree** — the same four gates were re-run after the
+process-document edits and returned identical results. Those results cover
+`ff2e32c`, the documentation-only source head, not the later landing-page
+runtime change in the combined judge-extension integration. The process
+documentation does not alter product behavior or invalidate captured evidence;
+no result in this block is presented as a receipt for the combined tree or its
+eventual deployment.
 
 The suite grew across the cycles, and the counts are traceable: **1,507** at
 PR #93's admission (comment `5257072156`), **1,671** at PR #95's binding receipt
@@ -164,16 +166,17 @@ captured at one exact product commit, `7f34b6e`. Additive reviewed work merged
 afterwards, which meant the deployed head no longer equalled the captured head.
 
 The artifacts were not re-captured, re-dated, or relabelled. PR #101 added a
-provenance section that names **both** commits and states what each one covers:
-`docs/judging/README.md:101-119`, "Post-release deployment provenance", which
-records that production serves merge `8b2a1cf`, whose second parent is reviewed
-PR #100 head `e259d5a`, and that this "does not rewrite or invalidate the 27
-screenshots, the clean-install receipt, or the twice-run golden-path evidence;
-those remain truthfully attributed to `7f34b6e`."
+provenance section that separates the deployed tree from the captured product
+and states what each one covers:
+[`docs/judging/README.md`](README.md#post-release-deployment-provenance),
+"Post-release deployment provenance". The current addendum names `14c2d40` as
+the pre-polish deployment basis, keeps PR #100 receipts attached to reviewed
+head `e259d5a`, and says explicitly that the later landing-page runtime change
+is not depicted by the preserved screenshots.
 
-The same file's header carries three separate commit identities rather than one
-(`docs/judging/README.md:9-13`): the deployed commit, the captured evidence
-product commit, and the evidence tooling/artifact commit.
+The same file's header carries separate identities rather than collapsing them
+into one: pre-polish deployment basis, captured evidence product, evidence
+tooling/artifacts, and the two judge-extension source heads.
 `docs/judging/PERFORMANCE.md:10-15`
 applies the same rule to measurements, marking its public-route numbers as
 historical to a pre-cutover deployment rather than presenting them as current.
