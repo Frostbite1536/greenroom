@@ -212,8 +212,13 @@ enumeration oracle. Pinned by `lib/services/api-credential.test.ts:327`,
 `"cross-event and unknown selectors are 401 for a per-event credential, 404 only for a global key"`.
 
 The general rule is INV-EVENT-001 (`docs/INVARIANTS.md:4`): every protected read
-and write re-resolves the `EventMember` row server-side. The session cookie
-carries an email and an event, never a role (`docs/DECISIONS.md:57-66`).
+and write re-resolves the `EventMember` row server-side. The session cookie does
+carry a role — `lib/auth.ts:121` requires the field, `:206` returns it — but it
+never carries *authority*: `getResolvedSession` (`lib/auth.ts:224-244`) discards
+that claim and re-reads `membership.role` from Postgres on every read, so a forged
+role buys nothing (`docs/ARCHITECTURE.md:115-117`, `docs/DECISIONS.md:57-66`). The
+code says it best at `lib/auth.ts:254`: "a signed claim identifies someone, it
+never grants them anything."
 
 ### Concurrency, with a real blocking proof
 
@@ -227,8 +232,10 @@ sleeps or mocks. `lib/services/session-provisioning-fanout-race.test.ts` drives
 two Prisma clients through both interleavings of a four-cell matrix against a
 real Postgres, then asks the **server** whether the second writer is blocked:
 `:601-610` asserts `secondWriterBlocked: true` from `pg_blocking_pids`, and
-`:613-615` asserts the wait matches `/advisory/i` — "the block must be on the
-advisory fan-out lock". Test name (a template, expanding to four):
+`:613-615` asserts, *where the server populates the wait state* (`:613` guards on
+`blocked.wait !== null`), that the wait matches `/advisory/i` — "the block must be
+on the advisory fan-out lock". The unconditional proof is `:601-610`; the wait
+label is corroboration that skips rather than guesses when Postgres leaves it null. Test name (a template, expanding to four):
 `` `C33 (${mode}, ${order}): the new confirmed speaker holds the new required task exactly once` ``.
 The lock ordering is separately pinned statically by
 `lib/services/session-provisioning-lock.source.test.ts:146`,
@@ -327,7 +334,7 @@ rows inside one millisecond.
 
 The public v1 API deliberately keeps **bounded offset** paging
 (`lib/api/v1.ts:55-56`, `hasMore`/`nextOffset`), pinned by `lib/api/v1.test.ts:73`,
-`"v1 query requires an event and bounds offset pagination"`. `docs/DECISIONS.md:423`
+`"v1 query requires an event and bounds offset pagination"`. `docs/DECISIONS.md:422`
 states the position: offset remains the stable browse contract for that surface.
 
 ---
@@ -391,7 +398,7 @@ recorded in `docs/judging/PERFORMANCE.md`:
 The cause of the CP2.3 miss is known and checkable in this repository: there is
 **no skip link anywhere in the application**, so landmarks are the only bypass
 mechanism a screen-reader user has. A search of `app/`, `components/`, and
-`lib/` returns no skip-link implementation, against 15 `<main>` landmark
+`lib/` returns no skip-link implementation, against 14 `<main>` landmark
 elements — every bypass therefore costs landmark presses, and on the admin shell
 that count exceeds the threshold by one.
 
@@ -442,4 +449,4 @@ that "opting in and being quietly skipped is exactly the outcome a race proof
 must never have."
 
 Smoke and production verification commands are listed in
-[README.md](README.md#verification-receipts).
+[README.md](README.md#repeatable-verification).
