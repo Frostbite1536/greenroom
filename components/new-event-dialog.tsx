@@ -3,7 +3,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { CalendarPlus } from "lucide-react";
 import { apiPost, firstFieldErrors } from "@/lib/api-client";
-import { COMMON_TIME_ZONES, validateEventDatePair } from "@/lib/event-settings-form";
+import {
+  COMMON_TIME_ZONES,
+  FALLBACK_TIME_ZONE,
+  detectTimeZone,
+  supportedTimeZones,
+  timeZoneOptions,
+  validateEventDatePair,
+} from "@/lib/event-settings-form";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -58,7 +65,13 @@ export function NewEventDialog({
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [slugTouched, setSlugTouched] = useState(false);
-  const [timezone, setTimezone] = useState("UTC");
+  // Seeded with the values a SERVER render produces, never with the browser's
+  // own answers — see the mount effect below for why. `detectedZone` is state
+  // rather than a ref because `reset()` renders from it.
+  const [timezone, setTimezone] = useState(FALLBACK_TIME_ZONE);
+  const [detectedZone, setDetectedZone] = useState(FALLBACK_TIME_ZONE);
+  const [zoneOptions, setZoneOptions] = useState<readonly string[]>(COMMON_TIME_ZONES);
+  const timezoneTouched = useRef(false);
   const [startsOn, setStartsOn] = useState("");
   const [endsOn, setEndsOn] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -67,6 +80,29 @@ export function NewEventDialog({
   const ids = useId();
 
   const effectiveSlug = slugTouched ? slug : slugify(name);
+
+  /**
+   * HYDRATION GUARD. Both `supportedTimeZones()` and `detectTimeZone()` answer
+   * differently in Node than in the organizer's browser — the server has no
+   * visitor to ask and runs in UTC. Reading either while rendering would put a
+   * different default and a different `<datalist>` into the hydrated DOM than
+   * the server sent, so both are read here, once, after hydration has already
+   * matched on `FALLBACK_TIME_ZONE` + `COMMON_TIME_ZONES`.
+   *
+   * Their own zone is also simply the better default: most organizers are
+   * creating an event in the zone they are sitting in, so the common case now
+   * needs no interaction with this field at all.
+   */
+  useEffect(() => {
+    setZoneOptions(timeZoneOptions(supportedTimeZones()));
+    const detected = detectTimeZone();
+    setDetectedZone(detected);
+    // A zone the organizer already typed outranks the detected one. The dialog
+    // mounts closed so this is near-impossible in practice, but adopting a
+    // default over a deliberate choice is the kind of bug that only ever shows
+    // up on a slow machine.
+    if (!timezoneTouched.current) setTimezone(detected);
+  }, []);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -85,7 +121,10 @@ export function NewEventDialog({
     setName("");
     setSlug("");
     setSlugTouched(false);
-    setTimezone("UTC");
+    // Back to the organizer's own zone, not to UTC: reopening the dialog must
+    // land on the same sensible default a first open did.
+    setTimezone(detectedZone);
+    timezoneTouched.current = false;
     setStartsOn("");
     setEndsOn("");
     setErrors({});
@@ -252,11 +291,25 @@ export function NewEventDialog({
               autoComplete="off"
               value={timezone}
               aria-invalid={!!errors.timezone}
-              onChange={(event) => setTimezone(event.target.value)}
+              aria-describedby={`${ids}-timezone-hint`}
+              // A datalist ALWAYS filters its options by substring against the
+              // current value, so a field holding a complete zone name offers
+              // exactly one suggestion. Selecting the text on focus puts the
+              // whole list one keystroke away instead of behind a manual clear,
+              // without taking the free-text field away from an organizer in a
+              // zone no curated list would carry.
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => {
+                timezoneTouched.current = true;
+                setTimezone(event.target.value);
+              }}
             />
             <datalist id={`${ids}-timezone-options`}>
-              {COMMON_TIME_ZONES.map((zone) => <option key={zone} value={zone} />)}
+              {zoneOptions.map((zone) => <option key={zone} value={zone} />)}
             </datalist>
+            <span className="hint" id={`${ids}-timezone-hint`}>
+              Start typing a city or region — Tokyo, Europe, Auckland — to search every IANA zone.
+            </span>
             {errors.timezone ? <span className="field-error">{errors.timezone}</span> : null}
           </label>
 
