@@ -98,8 +98,10 @@ export async function generateMetadata({ searchParams }: { searchParams: SearchP
   // anyone who had not heard of the product, which is exactly the reader this
   // page exists for. The event name stays in the title because the programme
   // it links is real and worth finding.
+  // `absolute` because the root layout templates every child title as
+  // "%s | Greenroom"; a plain string here would render "Greenroom — X | Greenroom".
   return {
-    title: agenda ? `Greenroom — ${agenda.event.name}` : "Greenroom",
+    title: { absolute: agenda ? `Greenroom — ${agenda.event.name}` : "Greenroom" },
     description: agenda
       ? `Greenroom runs conference programs: reviewer queues, rubric scoring, accept and reject decisions, scheduling, and speaker email. Includes the public program for ${agenda.event.name}.`
       : "Greenroom runs conference programs: reviewer queues, rubric scoring, accept and reject decisions, scheduling, and speaker email.",
