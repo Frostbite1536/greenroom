@@ -30,18 +30,25 @@ The receipts are GitHub comments on the pull requests they held:
 
 PR #93 is the clearest example of the process doing work that a single track
 would not have done. The feature under review was the C33 provisioning/fan-out
-lock. Track A did not re-read the diff; it reproduced the concurrency proof on a
-**different database engine** — a uniquely named fresh local PostgreSQL 16
-instance rather than the shared hosted Postgres the building track used. All
-four product outcomes were correct in both interleavings, but the test's own
+lock. Track A did not re-read the diff; it reproduced the concurrency proof in a
+**different database environment** — a uniquely named fresh local PostgreSQL 16
+instance rather than the shared hosted Postgres the building track used: the
+same engine, a different target. All four product outcomes were correct in both
+interleavings, but the test's own
 blocking observer did not reproduce, and Track A held the merge on that alone
 (comment `5256377286`). In the same review it found a defect the building track
 had not: an observer or setup exception raised after the first racer parks could
 bypass the barrier release, strand that transaction, and block cleanup.
 
-That finding is closed by an executable test that is in the repository today —
-`lib/services/session-provisioning-fanout-race.test.ts:624`,
+That finding is closed by an executable test that is in the repository today. The
+fault is injected while the first transaction is parked
+(`lib/services/session-provisioning-fanout-race.test.ts:490-564`) and the
+release-settle-cleanup sequence is asserted at
+`lib/services/session-provisioning-fanout-race.test.ts:624-667`, under the test name
 `"C33 lifecycle: a fault while the first transaction is parked still releases, settles and cleans up"`.
+That the test genuinely exercises the liveness defect rather than restating it is
+recorded in commit `5dd3273`, which captures the red 300-second timeout produced
+when the release is moved after the cleanup.
 Admission followed at comment `5257072156` with the C33 matrix at **5/5**,
 proving `pg_blocking_pids` and `Lock:advisory`, with post-run residue of zero
 events, zero users, and zero connections.
@@ -67,15 +74,24 @@ is.
 
 ## 2. The gate stack
 
-Every change passed, in this order:
+Once this stack was established, every change admitted through it passed these
+gates in this order:
 
 1. Full unit suite
-2. Typecheck (application and E2E)
-3. Fresh production build
+2. Fresh production build
+3. Typecheck (application and E2E)
 4. Backend and frontend smokes, serialized
 5. Browser proof (Playwright / Chromium)
 6. Automated review pinned to the exact head
 7. Cross-track admission
+
+The scoping in that first sentence is deliberate. The stack was not complete
+from the first commit, and PR #78 is the receipt for the gap: the schema-window
+union procedure at that time ran build and smoke but not the full unit suite,
+which is how two independently green pull requests merged into a red `main`.
+The unit suite was added to that procedure in response. Claiming the stack held
+for *every* change in the project's history would be false, and this document
+does not claim it.
 
 Two of these orderings are not arbitrary, and both have mechanical receipts.
 
@@ -109,20 +125,30 @@ The C33 race proof is gated behind the same guard plus an explicit `RACE_PROOF=1
 opt-in (`lib/services/session-provisioning-fanout-race.test.ts:93-96`), which is
 why `npm test` needs no database at all.
 
-### Gate counts, verified at this document's own head
+### Gate counts
 
-Run by the author of this document at commit `14c2d40`:
+Two separate runs, labelled separately rather than merged into one number.
+
+**Product baseline** — commit `14c2d40`, the merge this document's branch is
+based on, run before any edit in this branch existed:
 
 | Gate | Result |
 | --- | --- |
 | `npm test` | **1,960 pass / 0 fail / 5 skipped** (1,965 total) |
 | `npm run typecheck` | pass |
+| E2E typecheck | pass |
 | `npm run build` | pass |
+
+**This branch's own tree** — the same four gates were re-run after the
+documentation edits and returned identical results. That is the expected
+outcome rather than a claim of new coverage: this branch changes only Markdown
+files under `docs/judging/`, which no gate compiles or executes, so the product
+gates measure the same code in both runs.
 
 The suite grew across the cycles, and the counts are traceable: **1,507** at
 PR #93's admission (comment `5257072156`), **1,671** at PR #95's binding receipt
-(comment `5258355726`), **1,960** at PR #100 and PR #101 (both PR bodies) and at
-this head.
+(comment `5258355726`), and **1,960** at PR #100 and PR #101 (both PR bodies)
+and at commit `14c2d40`.
 
 Smoke and browser results are not re-run here — this lane touches documentation
 only and runs no database tests. They are attributed to their own receipts:
@@ -247,7 +273,7 @@ side. This is pinned twice — behaviourally by
 `lib/assistant/client.test.ts:150`,
 `"the outbound request is non-retained, capped, and carries no tools, stream, or history"`
 (the assertion at `:169` checks `body.store` is a real `false`, not merely
-absent), and at source level by `:827`,
+absent), and at source level by `lib/assistant/client.test.ts:827`,
 `"the request stays non-retained, tool-free, stateless, and abort-bounded"`, so
 the flag cannot be silently removed.
 
@@ -312,7 +338,7 @@ Each of these was decided and recorded, not overlooked. Several are enforced by
 tests, which is the difference between a scope decision and an absence.
 
 - **Outbox pattern.** Email and Airtable delivery run serially in-request.
-  `docs/judging/README.md:226-227` states this is adequate at demo scale and
+  `docs/judging/README.md:230-231` states this is adequate at demo scale and
   names an outbox as the real-scale answer.
 - **Webhooks and agent writes.** `docs/DECISIONS.md:431-434` holds generic
   webhooks and agent writes on the post-release roadmap explicitly.
@@ -327,7 +353,7 @@ tests, which is the difference between a scope decision and an absence.
 - **Versioned migrations.** Schema changes apply through audited `db push`
   windows; `prisma/` contains `schema.prisma` and `seed.ts` and no `migrations/`
   directory. Recorded as an accepted audit finding at
-  `docs/judging/README.md:225-226`. The windows themselves are logged on the PRs
+  `docs/judging/README.md:229-230`. The windows themselves are logged on the PRs
   that used them (PR #98 comments `5261283853` and `5261291002`, open and close).
 - **Incremental sync.** `docs/DECISIONS.md:423-429` states why it is unshipped
   rather than pending: a fixed application-time watermark alone cannot prove that
@@ -350,33 +376,41 @@ on Lighthouse accessibility at the recorded measurement
 review.
 
 A **partial** manual screen-reader pass was performed on production on
-2026-08-12 by the project owner, using NVDA with Chrome on Windows. Results, as
+2026-08-12 by the project owner, using NVDA with Brave on Windows. Results, as
 recorded in `docs/judging/PERFORMANCE.md`:
 
-- Journey 1 (public landing → schedule): 6 of 6 checkpoints PASS.
-- Journey 2 (admin sign-in → dashboard): 6 PASS, 1 minor FAIL. The failing
-  checkpoint was not identified by the runner; severity was reported as minor
-  and non-blocking.
-- Journey 3 (review queue → accept a proposal): checkpoints 3.1–3.7 PASS,
-  checkpoint 3.8 **NOT CONFIRMED**, checkpoint 3.9 **NOT RUN**.
-- Journeys 4–10: **NOT RUN**.
+- Journey 1 (sign-in / demo persona login through to the admin dashboard):
+  6 of 6 checkpoints PASS.
+- Journey 2 (admin shell — landmarks and navigation): CP2.1–CP2.2 and CP2.4–CP2.7
+  PASS; **CP2.3 is a minor FAIL** — reaching the main landmark took 6 <kbd>D</kbd>
+  presses against a threshold of 5 or fewer.
+- Journey 3 (review queue → accept a proposal): CP3.1–CP3.7 PASS, CP3.8
+  **not confirmed**, CP3.9 **not run**.
+- Journeys 4–10: **not run**.
 
-Scope limits that still stand: NVDA on Chrome on Windows only. No VoiceOver, no
+The cause of the CP2.3 miss is known and checkable in this repository: there is
+**no skip link anywhere in the application**, so landmarks are the only bypass
+mechanism a screen-reader user has. A search of `app/`, `components/`, and
+`lib/` returns no skip-link implementation, against 15 `<main>` landmark
+elements — every bypass therefore costs landmark presses, and on the admin shell
+that count exceeds the threshold by one.
+
+Scope limits that still stand: NVDA on Brave on Windows only. No VoiceOver, no
 JAWS, no real mobile screen reader, no braille display, and this is not a WCAG
 conformance audit.
 
 **Other gaps**, each already recorded in the limitations list at
-`docs/judging/README.md:150-232`: admin profile edits use last-write-wins rather
+`docs/judging/README.md:150-236`: admin profile edits use last-write-wins rather
 than version checks; orphaned uploaded bytes accumulate with no reaper
 (`docs/DECISIONS.md:343-345`); the v1 API's `profile.slideDeckUrl` still reports
 only the global value, not the per-event one
 (`docs/judging/README.md:179-182`); and the demo deployment intentionally hands
-out admin, with the blast radius argued at `docs/judging/README.md:212-219`.
+out admin, with the blast radius argued at `docs/judging/README.md:216-223`.
 
 **Two external code audits** were commissioned and triaged. Confirmed defects
 were fixed and regression-tested; the remaining accepted findings are the
 roadmap items listed above rather than hidden ones
-(`docs/judging/README.md:220-232`).
+(`docs/judging/README.md:224-236`).
 
 ---
 
@@ -391,10 +425,21 @@ npm run typecheck
 npm test
 ```
 
-The unit suite requires no database. The concurrency race proof and the E2E
-suite are opt-in and refuse to run without an explicitly named disposable
-database — see `e2e/db-guard.ts` and
-`lib/services/session-provisioning-fanout-race.test.ts:60-96`.
+The unit suite requires no database.
+
+The two database-touching suites are guarded differently, and the difference is
+worth stating precisely. The E2E suite calls `assertDisposableDatabase()` before
+it seeds (`e2e/harness.ts:42`, via `guardAndReseed`), so it refuses to run
+against a database the operator has not named as disposable in
+`E2E_EXPECTED_DB`. The concurrency race proof adds an opt-in on top of that
+guard: without `RACE_PROOF=1` every case **skips**, which is why `npm test`
+never looks for a database; with `RACE_PROOF=1` set, the same disposable-database
+assertion must then pass, and a missing or mismatched one **fails** the run
+rather than skipping it. Both halves are documented at
+`lib/services/session-provisioning-fanout-race.test.ts:60-96` and implemented at
+`:93-96`. The stated reason for failing rather than skipping after opt-in is
+that "opting in and being quietly skipped is exactly the outcome a race proof
+must never have."
 
 Smoke and production verification commands are listed in
 [README.md](README.md#verification-receipts).

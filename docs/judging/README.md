@@ -195,12 +195,16 @@ Stated plainly, because an evaluator should not have to discover them.
 - **Accessibility evidence is automated plus one partial manual pass.** Every
   audited route scored 100 on Lighthouse accessibility at the recorded
   measurement, and the three admin modal overlays now use the native `<dialog>`
-  focus model. A manual NVDA + Chrome pass was run on production on 2026-08-12
-  and covered three of ten planned journeys: journey 1 passed 6 of 6; journey 2
-  passed 6 with 1 minor FAIL whose checkpoint the runner did not identify;
-  journey 3 passed 3.1–3.7 with 3.8 NOT CONFIRMED and 3.9 NOT RUN; journeys 4–10
-  were NOT RUN. No VoiceOver, JAWS, mobile screen reader, or braille testing, and
-  this is not a WCAG conformance audit. The gap is narrowed, not closed —
+  focus model. A manual NVDA + Brave pass was run on production on 2026-08-12
+  and covered three of ten planned journeys: journey 1 (sign-in through to the
+  admin dashboard) passed 6 of 6; journey 2 (admin shell landmarks and
+  navigation) passed CP2.1–CP2.2 and CP2.4–CP2.7, with CP2.3 a minor FAIL
+  because reaching the main landmark took 6 `D` presses against a threshold of
+  5 or fewer; journey 3 passed CP3.1–CP3.7 with CP3.8 not confirmed and CP3.9
+  not run; journeys 4–10 were not run. The CP2.3 cause is that the application
+  ships no skip link on any route, so landmarks are the only bypass. No
+  VoiceOver, JAWS, mobile screen reader, or braille testing, and this is not a
+  WCAG conformance audit. The gap is narrowed, not closed —
   see [PERFORMANCE.md](PERFORMANCE.md#manual-screen-reader-pass--partial).
 - **The Greenroom Assistant is optional and advisory.** Without a configured
   provider, deterministic resource templates, sanitized preview, manual HTML,
