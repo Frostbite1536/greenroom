@@ -68,11 +68,33 @@ test("every public description path reads through the sanitizer", () => {
   );
   assert.match(source("app/api/comms/calendar/route.ts"), /description: publicSessionSummary\(s\.description\)/);
 
-  for (const path of [
-    "lib/data/reads.ts",
-    "app/api/agenda/public/route.ts",
-    "app/api/comms/calendar/route.ts",
-  ]) {
+  for (const path of ["app/api/agenda/public/route.ts", "app/api/comms/calendar/route.ts"]) {
     assert.doesNotMatch(source(path), /description: (?:slot\.)?s(?:ession)?\.description/, path);
   }
+
+  // `lib/data/reads.ts` holds admin reads as well, so the guard is scoped to the
+  // public projection rather than the whole file (W24). Everything from the
+  // public agenda onwards must still go through the sanitizer.
+  const reads = source("lib/data/reads.ts");
+  const publicReads = reads.slice(reads.indexOf("export const getPublicAgenda"));
+  assert.doesNotMatch(
+    publicReads,
+    /description: (?:slot\.)?s(?:ession)?\.description/,
+    "lib/data/reads.ts (public projections)",
+  );
+});
+
+test("the admin agenda read carries the stored column, deliberately unsanitized", () => {
+  // The builder's "Edit session" dialog writes this value back, so it has to
+  // show what is actually stored: routing an editor's initial value through the
+  // public guard would blank an internal provenance sentence on screen and turn
+  // the next save into a silent deletion. The guard belongs on the way out to a
+  // reader, which is what the test above pins.
+  const reads = readFileSync(new URL("../lib/data/reads.ts", import.meta.url), "utf8");
+  const adminAgenda = reads.slice(
+    reads.indexOf("export async function readAgendaData"),
+    reads.indexOf("export const getPublicAgenda"),
+  );
+  assert.match(adminAgenda, /description: s\.description,/);
+  assert.doesNotMatch(adminAgenda, /publicSessionDescription/);
 });

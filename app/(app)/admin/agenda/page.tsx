@@ -2,7 +2,7 @@ import "@/components/feature.css";
 import { PageHeader } from "@/components/ui";
 import { AgendaBuilder } from "@/components/agenda-builder";
 import { NewSessionDialog } from "@/components/new-session-dialog";
-import { getAgendaData, readAgendaSpeakerOptions } from "@/lib/data/reads";
+import { getAgendaData, readAgendaCategoryOptions, readAgendaSpeakerOptions } from "@/lib/data/reads";
 import { boundedCount } from "@/lib/bounded-count";
 
 export const metadata = { title: "Agenda" };
@@ -12,7 +12,12 @@ export default async function AgendaPage() {
   // `getAgendaData()` resolves the ADMIN page context; the roster read is
   // addressed by the event id it returns, so it cannot run any earlier.
   const data = await getAgendaData();
-  const speakerOptions = await readAgendaSpeakerOptions(data.eventId);
+  // Both pickers are addressed by the event id that read resolved, so neither
+  // can run any earlier; they are independent of each other, so they run together.
+  const [speakerOptions, categoryOptions] = await Promise.all([
+    readAgendaSpeakerOptions(data.eventId),
+    readAgendaCategoryOptions(data.eventId),
+  ]);
   const scheduled = data.sessions.filter((s) => s.slot !== null).length;
 
   return (
@@ -34,7 +39,7 @@ export default async function AgendaPage() {
         </div>
         <div className="metric"><span>Rooms · Tracks</span><strong>{data.rooms.length} · {data.tracks.length}</strong></div>
       </div>
-      <AgendaBuilder data={data} />
+      <AgendaBuilder data={data} categoryOptions={categoryOptions} />
     </section>
   );
 }
