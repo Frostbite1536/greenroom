@@ -88,6 +88,12 @@ enum StoredFileKind {
   /// event is the event the file was uploaded under. Added as an enum VALUE so
   /// the change stays additive (M4 precedent) — no column is modified.
   SUPPORTING_DOCUMENT
+  /// A speaker's deliverable for one of their own onboarding tasks, recorded in
+  /// `SpeakerTask.artifactUrl` as this app's own `/api/files/<id>` path. Private
+  /// under exactly the SLIDE_DECK rule: the uploader, or an ADMIN whose active
+  /// event is the event the file was uploaded under. Added as an enum VALUE so
+  /// the change stays additive (M4 precedent) — no column is modified.
+  TASK_ARTIFACT
 }
 
 model Event {
