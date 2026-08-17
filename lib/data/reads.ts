@@ -726,6 +726,11 @@ export async function getAdminAbstracts(
 export type AgendaSession = {
   id: string;
   title: string;
+  /** The blurb the public programme shows. Loaded here because the builder's
+   *  "Edit session" dialog has to pre-fill it: a content form that opened with
+   *  an empty textarea would make every save a silent deletion. Already carried
+   *  at the same cardinality by `PublicAgendaSession`. */
+  description: string | null;
   format: string | null;
   durationMinutes: number;
   /** The proposal's topic, carried onto the talk at acceptance. Null for a
@@ -810,6 +815,36 @@ export async function readAgendaSpeakerOptions(eventId: string): Promise<AgendaS
   return [...byUserId.values()].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+/** One selectable topic for the "Edit session" dialog's category picker. */
+export type AgendaCategoryOption = { id: string; name: string };
+
+/**
+ * Which topics this event's programme may label a talk with.
+ *
+ * Split out for the same reason `readAgendaSpeakerOptions` is: `readAgendaData`
+ * is shared with `/admin/reports` and both agenda CSV exports, none of which
+ * need a picker's option list. `AgendaSession.category` names only the topics
+ * already in use, which is the wrong set to choose from — a talk being moved to
+ * a category no talk currently holds is exactly the edit this list exists for.
+ *
+ * Same order, same bound, and the same fail-closed shape as the form builder's
+ * and event settings' category reads, so all three offer the same list.
+ */
+export async function readAgendaCategoryOptions(eventId: string): Promise<AgendaCategoryOption[]> {
+  const categories = await prisma.category.findMany({
+    where: { eventId },
+    orderBy: [{ sortOrder: "asc" }, { name: "asc" }, { id: "asc" }],
+    take: OPERATOR_QUERY_LIMITS.settingsCategories + 1,
+    select: { id: true, name: true },
+  });
+  assertEventQueryBound(
+    categories,
+    OPERATOR_QUERY_LIMITS.settingsCategories,
+    "categories in the agenda builder",
+  );
+  return categories;
+}
+
 /**
  * The agenda read itself, addressed by event id.
  *
@@ -854,6 +889,7 @@ export async function readAgendaData(eventId: string): Promise<AgendaData> {
       select: {
         id: true,
         title: true,
+        description: true,
         format: true,
         durationMinutes: true,
         category: { select: { id: true, name: true } },
@@ -877,6 +913,7 @@ export async function readAgendaData(eventId: string): Promise<AgendaData> {
     sessions: sessions.slice(0, OPERATOR_QUERY_LIMITS.agendaSessions).map((s) => ({
       id: s.id,
       title: s.title,
+      description: s.description,
       format: s.format,
       durationMinutes: s.durationMinutes,
       category: s.category,

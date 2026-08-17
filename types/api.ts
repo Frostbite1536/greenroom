@@ -652,6 +652,68 @@ export const sessionPublicationSchema = z
   })
   .strict();
 
+/** The fields `sessionUpdateSchema` may name, beside the session id itself. */
+export const SESSION_UPDATE_FIELDS = [
+  "contentStatus",
+  "title",
+  "description",
+  "format",
+  "durationMinutes",
+  "categoryId",
+] as const;
+
+/**
+ * Edit one confirmed talk (admin) — its publication status, and now its content.
+ *
+ * A programme committee accepts a proposal and then has to fix its title's
+ * typo, tighten the blurb the public page shows, re-label its format, or move
+ * it to the topic it actually belongs to. Until now nothing could: the speaker
+ * owned the source `Abstract` (INV-EDIT-001) and the admin owned only
+ * `contentStatus`, so a confirmed talk's own text had no editor at all.
+ *
+ * A **superset** of `sessionPublicationSchema`, built from it by `.extend()` so
+ * the two cannot drift: every body the publication toggle ever sent is still
+ * accepted, unchanged, and still writes exactly `contentStatus`. Every field is
+ * optional and a patch is sparse — an absent key means "leave it alone", which
+ * is what lets one route serve both the one-field toggle and the content form
+ * without a second endpoint or a discriminator the old client never sent.
+ *
+ * `description` and `format` are nullable because clearing them is a real edit
+ * and `null` is the only way to say it; `""` is normalized to `null` by
+ * `sessionUpdateData` rather than stored as a blank string. `categoryId` is
+ * nullable for the same reason (`Session.categoryId` is optional) and is
+ * authorized against this event inside the write transaction — the schema can
+ * only say it is an id, never whose.
+ *
+ * Still no `eventId`: the signed ADMIN context is the only event authority
+ * (INV-EVENT-001). The speaker roster is deliberately absent too — naming who
+ * presents a confirmed talk is `POST /api/admin/speakers`' job under its own
+ * identity locks, and INV-EDIT-001 locks the roster once a `Session` exists.
+ */
+export const sessionUpdateSchema = sessionPublicationSchema
+  .extend({
+    contentStatus: z.enum(["DRAFT", "PUBLISHED"]).optional(),
+    title: z.string().trim().min(3).max(180).optional(),
+    description: z.string().trim().max(5000).nullable().optional(),
+    format: z.string().trim().max(80).nullable().optional(),
+    durationMinutes: z.number().int().min(5).max(480).optional(),
+    categoryId: idSchema.nullable().optional(),
+  })
+  .strict()
+  .superRefine((input, ctx) => {
+    // A body that names only a session id is not an edit. Refused at the
+    // boundary, where it is a named validation failure, rather than reaching
+    // the database as an empty `data: {}` update that would bump `updatedAt`
+    // and report success for a write nobody asked for.
+    if (SESSION_UPDATE_FIELDS.every((field) => input[field] === undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [],
+        message: "Name at least one field to change.",
+      });
+    }
+  });
+
 /**
  * How many people may be named on one directly authored talk. The same bound
  * `coSpeakerInputSchema` puts on a proposal's roster, for the same reason: a
@@ -917,6 +979,7 @@ export type EvaluationPlanInput = z.infer<typeof evaluationPlanInputSchema>;
 export type ReviewScoreInput = z.infer<typeof reviewScoreInputSchema>;
 export type ReviewAssignmentDeclineInput = z.infer<typeof reviewAssignmentDeclineSchema>;
 export type GuaranteedSessionInput = z.infer<typeof guaranteedSessionInputSchema>;
+export type SessionUpdateInput = z.infer<typeof sessionUpdateSchema>;
 export type ScheduleSlotInput = z.infer<typeof scheduleSlotInputSchema>;
 export type ScheduleConflict = z.infer<typeof scheduleConflictSchema>;
 export type SpeakerProfileUpdate = z.infer<typeof speakerProfileUpdateSchema>;
