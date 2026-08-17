@@ -8,6 +8,7 @@ import {
   FileStack,
   FileText,
   Gauge,
+  History,
   LayoutDashboard,
   LogOut,
   MailCheck,
@@ -84,6 +85,10 @@ const navigation: NavItem[] = [
   // stands, Reports says how the process performed, and it owns the CSV exports.
   // ADMIN-only, mirroring `pageContext(["ADMIN"])` in `getAdminReports()`.
   { href: "/admin/reports", label: "Reports", icon: BarChart3, roles: ["ADMIN"], group: "overview" },
+  // Third, beside the two read-only overviews it belongs with: where Reports says
+  // how the process performed, Change history says who changed what and when
+  // (W24). ADMIN-only, mirroring the page's own `ctx.role !== "ADMIN"` redirect.
+  { href: "/admin/history", label: "Change history", icon: History, roles: ["ADMIN"], group: "overview" },
   { href: "/admin/forms", label: "CFP forms", icon: FileText, roles: ["ADMIN"], group: "cfp" },
   { href: "/admin/abstracts", label: "Abstracts", icon: FileStack, roles: ["ADMIN"], group: "cfp" },
   { href: "/admin/evaluations", label: "Evaluations", icon: ClipboardCheck, roles: ["ADMIN", "EVALUATOR"], group: "cfp" },

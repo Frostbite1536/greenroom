@@ -64,6 +64,12 @@ export const OPERATOR_QUERY_LIMITS = {
   // that issues and revokes their own keys — the worst thing on this surface to
   // break on a long-running event.
   settingsApiCredentials: 100,
+  // The change history is append-only and unbounded by design, so it takes the
+  // email-log shape rather than the rooms shape: a newest-first page with an
+  // honest "older changes are not shown" notice. Failing closed here would break
+  // the one screen an auditor opens, on exactly the long-running events whose
+  // history matters most.
+  adminAuditLogPage: 200,
 } as const;
 
 export function assertEventQueryBound(
