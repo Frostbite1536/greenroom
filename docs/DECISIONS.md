@@ -432,3 +432,77 @@ Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
 and agent writes remain explicitly held by the post-release roadmap. In
 particular, no single-session read has been added: a placed-and-published
 schedule entry continues to be the only way a held or unplaced talk is exposed.
+
+## The change history is one generic append-only table, written in the change's own transaction
+
+An external audit found that an organizer's speaker-profile edit was
+last-write-wins with no record of who changed what, and that the product had no
+change history at all. The competitor benchmark is "track every change, with
+attribution and timestamps".
+
+`AuditLogEntry` is one generic table — event, actor, entity type, entity id,
+action, diff, timestamp — rather than a history column or a shadow table per
+audited record. What an auditor asks for is a single chronology across the
+programme; five per-entity shapes would answer that with a union nothing keeps in
+step, and each newly audited surface would need its own schema change instead of
+one line of instrumentation.
+
+**The row is written inside the transaction that made the change**
+(INV-AUDIT-001). `recordAudit(tx, …)` takes the caller's transaction client and
+cannot be called any other way, which rules out the two failures an audit trail
+exists to prevent: a change with no record because the second write failed, and a
+record of a change that rolled back. Every instrumented writer already had a
+transaction and a lock, so the record is decided by the same serialization point
+as the change — a schedule move under the S3 event key, a decision under the
+per-abstract advisory lock, a profile edit under the per-user profile lock. The
+before-values are read under that lock too, so what the history reports as "from"
+is the row the write actually replaced.
+
+**Only the changed fields are stored.** `diffChanges` builds `{field: {from, to}}`
+and returns null when nothing moved, and `recordAudit` writes nothing for a null
+diff — so pressing save on an unchanged form leaves no row, and the log reads as a
+list of changes rather than a list of requests. Storing before/after row snapshots
+was rejected for two reasons: a snapshot history is a second copy of the record,
+and it is a second place a bio or an address can be read out of long after the
+live row moved on. The diff's two asymmetries follow from what the callers hold: a
+field absent from a write is skipped (the roster editor sends only what the
+operator changed, GRA-05, so treating absence as a clear would record a bio being
+emptied on every status change), while an explicit null is recorded — which is
+also how a removal is expressed, so unscheduling needs no special case in the
+reader.
+
+**`entityType` and `action` are `String` columns, not PostgreSQL enums.**
+Instrumenting the next writer would otherwise require `ALTER TYPE ... ADD VALUE`,
+which `SCHEMA-WINDOW.md` records as the one *irreversible* statement in this
+repository's schema workflow. The accepted values are TypeScript unions in
+`lib/services/audit-log.ts`, the only module that writes the table, so the
+vocabulary is still one source of truth — enforced by the compiler rather than by
+the database, at the cost of a hand-written row being able to hold an unknown
+value. The read surface renders an unrecognized value verbatim rather than
+failing, for the same reason it tolerates a malformed diff: the history page is
+what an auditor opens precisely when something is already wrong, so it must not be
+the thing that breaks.
+
+Delete behaviour is chosen. The event cascades, because a history describes one
+event's programme and means nothing without it. The actor is `SetNull` and
+nullable, because deleting an organizer must not erase the record of what they
+changed — the same reasoning as `EmailDispatch.sender` and
+`ApiCredential.createdBy`. There is no `updatedAt` and no writer that updates or
+deletes a row: an audit row that can be edited is not an audit row.
+
+`/admin/history` is the read surface: ADMIN-only, a pure server component, newest
+first, bounded at 200 with an honest "older changes are not shown" notice rather
+than a fail-closed refusal — the append-only shape the email log and the
+API-credential panel already use, because running past one page is the normal
+state of a live event, not an error. It is ADMIN-only not merely because of the
+diffs but because a change history is a record of colleagues' actions, which is an
+organizer's view rather than a reviewer's or a speaker's. Timestamps print in the
+event's timezone, like every other operator surface.
+
+Instrumented in this pass: the admin speaker-profile PATCH (the finding's own
+route), the session publication toggle, schedule placement/move and unschedule,
+and the accept/reject/maybe decision write both decision routes share. Not yet
+covered, and named rather than implied: session content editing, form and settings
+changes, team and membership changes, task and evaluation writes, and imports.
+Adding one is a `recordAudit` call inside a transaction that already exists, plus a
+field list in `lib/services/audit-log.ts`.
