@@ -432,3 +432,90 @@ Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
 and agent writes remain explicitly held by the post-release roadmap. In
 particular, no single-session read has been added: a placed-and-published
 schedule entry continues to be the only way a held or unplaced talk is exposed.
+
+## A task deliverable is a second request key, not a second column
+`SpeakerTask.artifactUrl` already held a speaker's onboarding deliverable as a
+pasted link. Making it hold an uploaded file too could have been an
+`artifactFileId` column with an FK; it is instead the same one column, written
+by the server as this app's own `/api/files/<id>` path — exactly the shape
+`headshotUrl` and `slideDeckUrl` already use.
+
+A column was rejected because every consumer of `artifactUrl` would then have to
+learn about a second source of truth and decide which wins when both are set.
+That is four surfaces (the portal, the roster, the CSV export, and
+`onboarding-task-deletion`'s "has this speaker done anything?" predicate) newly
+able to disagree, in exchange for a foreign key on a value nothing joins to.
+`StoredFile` rows already outlive what points at them: clearing `slideDeckUrl`
+has never deleted the uploaded deck, so an `onDelete: SetNull` FK would not have
+bought a cleanup guarantee the product has anywhere else. Orphaned bytes
+accumulate here as they already do for decks and attachments; the reaper remains
+the same named follow-up, not a new one this change created.
+
+What *is* new is a second REQUEST key. `artifactFileId` exists because the
+locked contract validates `artifactUrl` with `z.string().url()`, and a served
+`/api/files/<id>` path is not a URL. Rather than loosen an Architect-owned
+schema, the client sends an id and the route writes the path — so no client ever
+names the string that lands in the column. Sending both keys is a 422 rather
+than a precedence rule: they address one column, and guessing which the speaker
+meant would be wrong half the time. The portal cannot trip that refusal, because
+it keeps ONE text field and `taskArtifactSubmission` picks the key from the
+field's own value.
+
+The server refuses any id that is not the caller's own `TASK_ARTIFACT` stored
+under this event, and collapses all four failure modes into one 404 so the route
+is not an existence oracle for a stranger's file id. The kind check is not
+redundant: without it a speaker could re-point their own private slide deck or a
+proposal's supporting document at a task, publishing it to a surface that
+feature never showed it on. The lookup runs inside the transaction, like the
+proposal attach route, because `eventId` is nullable and goes null on event
+delete — checking it outside the write would be a check-then-write on a fact
+that can change.
+
+### The accepted formats are bounded by the sniffer, not by the ask
+`TASK_ARTIFACT` accepts PDF, PNG, JPEG and WebP at 10 MiB. Office documents were
+asked about and are deliberately absent: `.docx`/`.pptx`/`.xlsx` are ZIP
+containers whose magic bytes are `PK\3\4`, indistinguishable from any other ZIP
+without parsing the archive, and `verifyStoredFile` refuses anything `sniffMime`
+cannot name. Listing them would therefore not have enabled them — it would have
+been a promise the UI's `accept=` kept making and the server kept refusing —
+unless the claimed content type were trusted, for exactly the file class most
+able to carry a macro. A speaker exports to PDF. A test asserts this property
+across every kind at once: each accepted mime must round-trip through the
+sniffer.
+
+The 10 MiB cap sits well above Vercel's ~4.5 MB request-body ceiling, so on that
+deployment a large artefact is refused by the platform before this code runs.
+That is the same stated interaction the 5 MiB deck cap already has, and the same
+conclusion: the refusal is still a 413 and no oversize file is ever stored, it
+just is not our envelope. A phone photo of a signed form is routinely 3–8 MB,
+which is what the cap is sized for; lowering it to make every refusal ours would
+be a product call.
+
+Authorization was not widened. `TASK_ARTIFACT` lands on the private branch of
+`canReadStoredFile` by being not-`HEADSHOT`, so no line of the matrix changed —
+the uploader, or an `ADMIN` whose active event is the file's event. The ADMIN
+test being against the FILE's event is what lets `/admin/speakers` open a
+deliverable: the write path only ever records a file stored under the caller's
+active event, which is the task's event, so the two cannot diverge. Disposition
+stays per kind rather than per stored mime, so an uploaded PNG artefact
+downloads rather than rendering inline on the app's own origin.
+
+### Rendering `artifactUrl` at all is the new exposure, and it is gated
+This change is the first to render `artifactUrl` as a link — before it, the
+column was written by an API nothing surfaced, which is its own bug: a speaker
+could hand something over and no organizer would see it. Because the column is
+validated `z.string().url()`, and that accepts non-HTTP schemes (the repo's
+documented GRA2-07), an `href` is gated on a stored-file path or `http(s)` at
+each renderer, following `safePublicImageUrl`'s established shape. A value that
+fails the gate is shown as text rather than dropped: the organizer still needs
+to see what the speaker put there in order to ask about it.
+
+Two smaller consequences, stated rather than discovered. The portal task page is
+now reachable for a task with NO form, because `artifactUrl` exists on every
+assignment and a task whose whole ask is "send us your signed release" had a
+column for the answer and nowhere to put it. And clearing a deliverable is still
+not possible — the route has always written `artifactUrl: artifactUrl ??
+undefined`, so an omitted key preserves. An empty field therefore sends no
+artifact key rather than an empty string, which would fail `.url()` and turn an
+otherwise valid save into a 422. A real clear needs a nullable contract key and
+is a named follow-up.
