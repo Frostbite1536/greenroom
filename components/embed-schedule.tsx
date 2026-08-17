@@ -6,6 +6,14 @@
  * inside a sandboxed iframe, and produces shareable URLs. Expansion uses native
  * <details>, which needs no hydration either. All filter arithmetic lives in
  * lib/embed-schedule-view.ts so it can be unit-tested without a DOM.
+ *
+ * The one exception is "My itinerary" (components/schedule-itinerary.tsx): there
+ * are no attendee accounts, so a starred set can only live in the reader's own
+ * browser, which nothing on the server can know. It is three small leaves —
+ * a star per card, one filter beside the day tabs, and a wrapper that swaps the
+ * server-rendered day sections for the reader's list — and every one of them
+ * renders nothing until it hydrates, so this page with JavaScript disabled is
+ * exactly the page it was before the feature existed.
  */
 import Link from "next/link";
 import { CalendarDays, CalendarPlus, Download, MapPin, Search, User, Users } from "lucide-react";
@@ -38,15 +46,33 @@ import {
   type ScheduleViewSession,
 } from "@/lib/embed-schedule-view";
 import { EmptyState } from "@/components/ui";
+import { ItineraryStar, ItineraryTab, ItineraryView } from "@/components/schedule-itinerary";
+import type { ItinerarySession } from "@/lib/itinerary";
+
+/** Slim, description-free projection the itinerary island renders rows from. */
+function itineraryProjection(session: ScheduleViewSession): ItinerarySession {
+  return {
+    sessionId: session.sessionId,
+    title: session.title,
+    startsAt: session.startsAt,
+    endsAt: session.endsAt,
+    roomName: session.room.name,
+    trackName: session.track?.name ?? null,
+    trackColor: session.track?.color ?? null,
+  };
+}
 
 function SessionCard({
   session,
   eventId,
+  eventKey,
   timeZone,
   speakersUrl,
 }: {
   session: ScheduleViewSession;
   eventId: string;
+  /** Namespaces this reader's starred set; the event as the page resolved it. */
+  eventKey: string;
   timeZone: string;
   /** The speaker directory on this same surface, for the name cross-links. */
   speakersUrl: string;
@@ -161,13 +187,18 @@ function SessionCard({
           </div>
         </details>
 
-        <a
-          className="ghost-button ics-button"
-          href={calendarExportUrl(eventId, session.sessionId)}
-          style={{ textDecoration: "none" }}
-        >
-          <Download size={14} /> Add to calendar
-        </a>
+        {/* The only client-side thing on the card, and the only one on the page
+            besides the itinerary tab and view. Everything above is server HTML. */}
+        <div className="embed-session-actions">
+          <a
+            className="ghost-button"
+            href={calendarExportUrl(eventId, session.sessionId)}
+            style={{ textDecoration: "none" }}
+          >
+            <Download size={14} /> Add to calendar
+          </a>
+          <ItineraryStar eventKey={eventKey} sessionId={session.sessionId} title={session.title} />
+        </div>
       </div>
     </article>
   );
@@ -217,6 +248,14 @@ export function EmbedSchedule({
   const href = (overrides: Partial<typeof filters>) => scheduleHref(eventParam, filters, overrides, basePath);
   const selectedDayLabel = tabs.find((tab) => tab.current)?.label ?? null;
   const speakersUrl = publicSurfaceUrl(speakersPath, eventParam ?? agenda.event.slug);
+  // The itinerary's localStorage namespace. The resolved slug, not `eventParam`:
+  // a host page linking the same programme by id and by slug must not give one
+  // reader two different starred sets.
+  const itineraryKey = agenda.event.slug;
+  // Every published, placed session — not `filtered`: the itinerary spans the
+  // whole programme, so a starred talk must not vanish from it because the
+  // reader has a day tab or a search term active.
+  const itineraryData = agenda.sessions.map(itineraryProjection);
 
   return (
     <div className="embed-page">
@@ -328,11 +367,20 @@ export function EmbedSchedule({
             ))}
           </nav>
         )}
+        {/* The one interactive filter, beside the server-rendered ones. It draws
+            nothing at all until it has hydrated. */}
+        <ItineraryTab eventKey={itineraryKey} />
       </header>
 
       {/* <main> (not <div>) so the embed exposes a landmark, matching
           embed-speakers.tsx — closes the Lighthouse a11y finding. */}
       <main className="embed-body">
+        <ItineraryView
+          eventKey={itineraryKey}
+          eventId={agenda.event.id}
+          timeZone={tz}
+          sessions={itineraryData}
+        >
         {agenda.sessions.length === 0 ? (
           <EmptyState icon={<CalendarDays size={22} />} title="Schedule coming soon">
             Sessions will appear here once the agenda is published.
@@ -358,11 +406,19 @@ export function EmbedSchedule({
             <section key={dayKey}>
               <h2 className="time-heading" style={{ fontSize: 13 }}>{formatDayLabel(dayKey, tz)}</h2>
               {items.map((s) => (
-                <SessionCard key={s.slotId} session={s} eventId={agenda.event.id} timeZone={tz} speakersUrl={speakersUrl} />
+                <SessionCard
+                  key={s.slotId}
+                  session={s}
+                  eventId={agenda.event.id}
+                  eventKey={itineraryKey}
+                  timeZone={tz}
+                  speakersUrl={speakersUrl}
+                />
               ))}
             </section>
           ))
         )}
+        </ItineraryView>
       </main>
     </div>
   );
