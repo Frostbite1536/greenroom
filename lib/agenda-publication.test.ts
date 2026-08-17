@@ -177,7 +177,9 @@ test("the session PATCH writes only what the body named, and only inside this ev
   assert.match(route, /requireContext\(\["ADMIN"\]\)/);
   // The event comes from the signed context; the body may not name one.
   assert.doesNotMatch(file, /eventId:\s*idSchema/);
-  assert.match(route, /requireEventOwnedRow\(session, ctx\.eventId, "SESSION_NOT_FOUND"/);
+  // The before-state is read with `FOR UPDATE` (pinned in audit-log.test.ts),
+  // so the row handed to the ownership check is the locked one, `rows[0]`.
+  assert.match(route, /requireEventOwnedRow\(rows\[0\], ctx\.eventId, "SESSION_NOT_FOUND"/);
   // W24: the route also edits a confirmed talk's content, so the write is a
   // sparse patch and no longer a literal. The projection therefore has to be
   // decided somewhere a test can hold it to behaviour — `sessionUpdateData`,

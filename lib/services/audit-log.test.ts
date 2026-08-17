@@ -397,3 +397,25 @@ test("the two route writers record before their transaction callback returns", (
     assert.match(writer, /await recordAudit\(/, `${path} must await its audit write`);
   }
 });
+
+test("the session editor reads its before-state under the row's write lock", () => {
+  // Two concurrent edits of the same talk must queue, not both read the same
+  // before-state: without `FOR UPDATE` the second writer diffs from a stale
+  // snapshot and the history records a transition that never happened
+  // (A->C beside A->B, with B orphaned). The speaker PATCH serializes with
+  // advisory locks and the slot writers with the event-wide lock; this pins
+  // the sessions PATCH to its own serialization.
+  const writer = source("app/api/agenda/sessions/route.ts").slice(
+    source("app/api/agenda/sessions/route.ts").indexOf("export const PATCH"),
+  );
+  const read = writer.indexOf("FOR UPDATE");
+  assert.ok(read > 0, "the sessions PATCH no longer locks its before-state read");
+  assert.ok(
+    read < writer.indexOf("session.update("),
+    "the FOR UPDATE read must precede the update it serializes",
+  );
+  assert.ok(
+    read < writer.indexOf("recordAudit("),
+    "the FOR UPDATE read must precede the audit write it feeds",
+  );
+});

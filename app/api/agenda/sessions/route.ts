@@ -151,26 +151,33 @@ export const PATCH = handle(async (req) => {
   const data = sessionUpdateData(input);
 
   const updated = await prisma.$transaction(async (tx) => {
-    // Read the owner inside the same transaction as the write: a session moved
-    // or removed between an outside check and the update would otherwise be
-    // written by an admin who no longer has authority over it.
-    const session = await tx.session.findUnique({
-      where: { id: input.sessionId },
-      // Every audited column is read here too, so the change history's "from"
-      // is the value this write replaced — read under the same transaction as
-      // the write.
-      select: {
-        id: true,
-        eventId: true,
-        contentStatus: true,
-        title: true,
-        description: true,
-        format: true,
-        durationMinutes: true,
-        categoryId: true,
-      },
-    });
-    const owned = requireEventOwnedRow(session, ctx.eventId, "SESSION_NOT_FOUND", "Session");
+    // Read the owner inside the same transaction as the write — and under the
+    // row's own write lock. `FOR UPDATE` does two jobs here: a session moved or
+    // removed between an outside check and the update cannot be written by an
+    // admin who no longer has authority over it, and a concurrent edit of the
+    // same talk queues behind this one instead of reading the same before-state.
+    // Without the lock, two simultaneous edits both read A, the second applies
+    // over B, and the history records A→C — a transition that never happened,
+    // with B orphaned from the trail (INV-AUDIT-001). Every audited column is
+    // read here, so the change history's "from" is exactly the value this write
+    // replaced.
+    const rows = await tx.$queryRaw<
+      {
+        id: string;
+        eventId: string;
+        contentStatus: string;
+        title: string;
+        description: string | null;
+        format: string | null;
+        durationMinutes: number;
+        categoryId: string | null;
+      }[]
+    >`
+      SELECT "id", "eventId", "contentStatus"::text AS "contentStatus", "title",
+             "description", "format", "durationMinutes", "categoryId"
+      FROM "Session" WHERE "id" = ${input.sessionId} FOR UPDATE
+    `;
+    const owned = requireEventOwnedRow(rows[0], ctx.eventId, "SESSION_NOT_FOUND", "Session");
 
     // `null` clears the label and needs no owner. A named id is checked under
     // the same transaction, so a category deleted or moved between an outside
