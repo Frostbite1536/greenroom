@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { buildIcsCalendar, icsFilename, type IcsEvent } from "@/lib/calendar/ics";
 import { PUBLIC_AGENDA_LIMITS } from "@/lib/embed-schedule-view";
+import { parseItinerarySessionIds } from "@/lib/itinerary";
 import { publicSessionSummary } from "@/lib/public-session-copy";
 import { CANONICAL_SCHEDULE_PATH, publicSurfaceUrl } from "@/lib/embed-alias";
 import type { ApiResponse } from "@/types/api";
@@ -16,18 +17,35 @@ function fail(code: string, message: string, status: number) {
 /**
  * Download an `.ics` calendar file.
  *
- * `?sessionId=` exports a single session; omitting it exports the event's whole
- * published schedule. This is intentionally **public and read-only** — golden
- * path step 7 has the public embed offering `.ics` export with a null session.
- * Only scheduled *and published* sessions are exposed, and everything is scoped
- * to `eventId`.
+ * `?sessionId=` exports a single session, `?sessions=` a comma-separated
+ * selection (the public schedule's client-persisted "My itinerary"), and
+ * omitting both exports the event's whole published schedule. This is
+ * intentionally **public and read-only** — golden path step 7 has the public
+ * embed offering `.ics` export with a null session. Only scheduled *and
+ * published* sessions are exposed, and everything is scoped to `eventId`.
+ *
+ * `?sessions=` is an anonymous, reader-supplied list, so it is treated purely
+ * as a *narrowing* filter layered on top of the predicate below — never as a
+ * grant. An id naming a held-back, unplaced or other-event session contributes
+ * nothing to the file, which is why the id list can be built in localStorage
+ * without a server-side itinerary record existing at all.
  */
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const eventId = url.searchParams.get("eventId");
   const sessionId = url.searchParams.get("sessionId");
+  // Bounded and deduped before it can reach a query. `sessionId` still wins so
+  // the single-session link's behaviour is byte-identical to before.
+  const itineraryIds = sessionId ? [] : parseItinerarySessionIds(url.searchParams.get("sessions"));
+  const isItinerary = itineraryIds.length > 0;
 
   if (!eventId) return fail("VALIDATION_ERROR", "eventId is required.", 422);
+  // A `sessions=` that survived normalization as nothing is a malformed
+  // request, not a request for the whole programme: silently widening it would
+  // hand a reader the entire schedule under an itinerary filename.
+  if (!sessionId && url.searchParams.has("sessions") && !isItinerary) {
+    return fail("VALIDATION_ERROR", "sessions must list at least one session id.", 422);
+  }
 
   const event = await prisma.event.findUnique({
     where: { id: eventId },
@@ -41,6 +59,10 @@ export async function GET(request: Request) {
     where: {
       eventId,
       ...(sessionId ? { id: sessionId } : {}),
+      // The itinerary narrows by id *inside* the same event-scoped predicate:
+      // `eventId`, placement and `PUBLISHED` below all still apply, so the list
+      // can only ever select from what the public schedule already shows.
+      ...(isItinerary ? { id: { in: itineraryIds } } : {}),
       // Only sessions that actually have a time and place can be exported.
       scheduleSlot: { isNot: null },
       // ...and only ones the event is actually announcing. This endpoint is
@@ -82,7 +104,11 @@ export async function GET(request: Request) {
     // them would let an anonymous caller detect that a held-back talk exists.
     return fail(
       "NOT_FOUND",
-      sessionId ? "That session is not on the published schedule." : "No published sessions to export.",
+      sessionId
+        ? "That session is not on the published schedule."
+        : isItinerary
+          ? "None of those sessions are on the published schedule."
+          : "No published sessions to export.",
       404,
     );
   }
@@ -117,7 +143,9 @@ export async function GET(request: Request) {
     // Named on the single-session file too. A one-event .ics that arrives with
     // no calendar name is filed by the client under an untitled calendar, or
     // silently merged into the user's default one.
-    calendarName: event.name,
+    // An itinerary is a personal subset, so it says so: a file named after the
+    // whole event would be filed by the client as the complete programme.
+    calendarName: isItinerary ? `${event.name} — My itinerary` : event.name,
     // Additive and honest, the same rule the JSON twin's `truncated` flag
     // serves: a reader who imports exactly the cap must be able to tell a
     // complete programme from a cut one. Omitted entirely when nothing was cut.
@@ -130,7 +158,9 @@ export async function GET(request: Request) {
       : {}),
   });
 
-  const filename = sessionId ? icsFilename(sessions[0].title) : icsFilename(event.name);
+  const filename = sessionId
+    ? icsFilename(sessions[0].title)
+    : icsFilename(isItinerary ? `${event.name} itinerary` : event.name);
 
   return new NextResponse(ics, {
     status: 200,
