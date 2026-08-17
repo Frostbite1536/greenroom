@@ -621,6 +621,13 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   overflow: hidden; overflow-wrap: anywhere; max-width: 40ch; margin: 4px 0 0;
 }
 .roster-bio-missing { margin: 4px 0 0; font-style: italic; }
+/* A speaker's task deliverables. A list, because each row names its own task —
+   and `overflow-wrap` because a stored value that is not a link is shown raw
+   and a long one must not push the table sideways. */
+.roster-artifacts {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: grid; gap: 2px; overflow-wrap: anywhere; max-width: 40ch;
+}
 .speaker-dialog-identity {
   display: grid; gap: 2px; margin: 0 0 14px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; font-size: 13px;
