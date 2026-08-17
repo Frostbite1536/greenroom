@@ -100,11 +100,15 @@ export function TaskChecklist({ tasks, timezone }: { tasks: PortalTask[]; timezo
                 </div>
                 {task.description ? <p className={styles.taskMeta}>{task.description}</p> : null}
                 {due ? <p className={styles.taskMeta}>Due {due}</p> : null}
-                {task.hasForm ? (
-                  <a className="link-button" href={`/portal/tasks/${task.taskId}`}>
-                    {isDone ? "Review your answers" : "Fill in the form"}
-                  </a>
-                ) : null}
+                {/* Always a link now, not only for form-carrying tasks: the task
+                    page is also where a deliverable is attached, and a task
+                    whose only ask is a file had no way in. The label says which
+                    of the two the speaker is walking into. */}
+                <a className="link-button" href={`/portal/tasks/${task.taskId}`}>
+                  {task.hasForm
+                    ? isDone ? "Review your answers" : "Fill in the form"
+                    : isDone ? "Review what you sent" : "Attach a file or link"}
+                </a>
               </div>
             </li>
           );
