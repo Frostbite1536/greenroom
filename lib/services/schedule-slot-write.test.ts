@@ -12,8 +12,10 @@ import {
   SLOT_NOT_FOUND_CODE,
   SLOT_NOT_FOUND_MESSAGE,
   unscheduleSessionSlot,
+  type OwnedScheduleSlot,
   type ScheduleSlotDeleteDependencies,
 } from "@/lib/services/schedule-slot-write";
+import type { RecordAuditInput } from "@/lib/services/audit-log";
 
 const source = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
 
@@ -137,12 +139,27 @@ test("the conflict-declaration path is untouched by the identity refusal", () =>
 /* GRA-02 — unschedule under the S3 event lock                                 */
 /* -------------------------------------------------------------------------- */
 
-type Recorder = { calls: string[]; dependencies: ScheduleSlotDeleteDependencies };
+type Recorder = {
+  calls: string[];
+  audited: RecordAuditInput[];
+  dependencies: ScheduleSlotDeleteDependencies;
+};
 
-function recorder(slot: { id: string } | null): Recorder {
+/** The placement the ownership read returns, widened for the W24 history diff. */
+const PLACED: OwnedScheduleSlot = {
+  id: "slot-1",
+  roomId: "room-1",
+  trackId: "track-1",
+  startsAt: new Date("2026-05-12T17:00:00.000Z"),
+  endsAt: new Date("2026-05-12T17:45:00.000Z"),
+};
+
+function recorder(slot: OwnedScheduleSlot | null): Recorder {
   const calls: string[] = [];
+  const audited: RecordAuditInput[] = [];
   return {
     calls,
+    audited,
     dependencies: {
       async lockScheduleWrite(_tx, eventId, dayKeys = []) {
         calls.push(`lock:${scheduleWriteLockKeys(eventId, dayKeys).join(",")}`);
@@ -154,12 +171,17 @@ function recorder(slot: { id: string } | null): Recorder {
       async deleteSlot(_tx, sessionId) {
         calls.push(`delete:${sessionId}`);
       },
+      async recordAudit(_tx, entry) {
+        calls.push(`audit:${entry.action}:${entry.entityId}`);
+        audited.push(entry);
+        return entry.changes !== null;
+      },
     },
   };
 }
 
 test("unschedule takes the event lock first, then re-reads, then deletes", async () => {
-  const { calls, dependencies } = recorder({ id: "slot-1" });
+  const { calls, dependencies } = recorder(PLACED);
 
   const result = await unscheduleSessionSlot(
     tx,
@@ -168,14 +190,52 @@ test("unschedule takes the event lock first, then re-reads, then deletes", async
   );
 
   // Order is the whole fix: the ownership read must happen under the lock, not
-  // before it, or the row can move between the check and the delete.
+  // before it, or the row can move between the check and the delete. The W24
+  // history row is appended last, still inside the lock and the transaction.
   assert.deepEqual(calls, [
     "lock:schedule-write:event-1",
     "read:event-1:session-1",
     "delete:session-1",
+    "audit:UNSCHEDULE:session-1",
   ]);
   // Success shape unchanged.
   assert.deepEqual(result, { sessionId: "session-1", unscheduled: true });
+});
+
+test("the removal is recorded against the session, from the values read under the lock", async () => {
+  const { audited, dependencies } = recorder(PLACED);
+
+  await unscheduleSessionSlot(
+    tx,
+    { eventId: "event-1", sessionId: "session-1", actorUserId: "admin-1" },
+    dependencies,
+  );
+
+  assert.equal(audited.length, 1);
+  assert.deepEqual(audited[0], {
+    eventId: "event-1",
+    actorUserId: "admin-1",
+    entityType: "SCHEDULE_SLOT",
+    // The session, not the slot: the slot row is gone and re-placing the talk
+    // creates a different one, so slot ids would split one talk's history.
+    entityId: "session-1",
+    action: "UNSCHEDULE",
+    changes: {
+      roomId: { from: "room-1", to: null },
+      trackId: { from: "track-1", to: null },
+      startsAt: { from: "2026-05-12T17:00:00.000Z", to: null },
+      endsAt: { from: "2026-05-12T17:45:00.000Z", to: null },
+    },
+  });
+});
+
+test("an unattributed caller still records the removal, with a null actor", async () => {
+  // `actorUserId` is optional here because the service is reachable from a
+  // context that has no signed user; the row must still exist. The shipped
+  // DELETE route always passes `ctx.userId` (asserted at source below).
+  const { audited, dependencies } = recorder(PLACED);
+  await unscheduleSessionSlot(tx, { eventId: "event-1", sessionId: "session-1" }, dependencies);
+  assert.equal(audited[0]!.actorUserId, null);
 });
 
 test("a missing slot is the same 404 as before, taken under the lock and writing nothing", async () => {
@@ -191,8 +251,10 @@ test("a missing slot is the same 404 as before, taken under the lock and writing
       return true;
     },
   );
-  // The lock is still taken first, and no delete is attempted.
+  // The lock is still taken first, and no delete is attempted — and a refused
+  // delete records no history, because nothing changed.
   assert.ok(calls.every((call) => !call.startsWith("delete:")));
+  assert.ok(calls.every((call) => !call.startsWith("audit:")));
   assert.deepEqual(calls, ["lock:schedule-write:event-1", "read:event-1:session-1"]);
 });
 
@@ -210,7 +272,9 @@ test("the cross-event slot is refused by the production ownership predicate", ()
   // The predicate itself lives in the route module's production dependencies,
   // so it is pinned at source: unknown and foreign must stay indistinguishable.
   const service = source("lib/services/schedule-slot-write.ts");
-  assert.match(service, /slot && slot\.session\.eventId === eventId \? \{ id: slot\.id \} : null/);
+  // The predicate, not the projection: W24 widened what the read returns (the
+  // placement columns the history diff needs) without touching the decision.
+  assert.match(service, /if \(!slot \|\| slot\.session\.eventId !== eventId\) return null;/);
   assert.match(service, /where: \{ sessionId \}/);
 });
 
@@ -265,7 +329,9 @@ test("the DELETE handler holds no unlocked read or write of its own", () => {
   const del = route.slice(route.indexOf("export const DELETE"));
 
   // One transaction, and the slot work happens inside it.
-  assert.match(del, /await prisma\.\$transaction\(\(tx\) =>[\s\S]*?unscheduleSessionSlot\(tx, \{ eventId: ctx\.eventId, sessionId \}\)/);
+  // Still one delegating call inside one transaction; W24 added the actor id it
+  // attributes the history row to, and nothing else.
+  assert.match(del, /await prisma\.\$transaction\(\(tx\) =>[\s\S]*?unscheduleSessionSlot\(tx, \{ eventId: ctx\.eventId, sessionId, actorUserId: ctx\.userId \}\)/);
   // Nothing touches the base client directly any more — that was the bug.
   assert.doesNotMatch(del, /prisma\.scheduleSlot\./);
   // Same guard, same admin gate, same success payload.

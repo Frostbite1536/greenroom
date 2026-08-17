@@ -1,6 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import {
+  AUDITED_SESSION_CONTENT_FIELDS,
+  AUDITED_SESSION_PUBLICATION_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
 import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import { provisionGuaranteedSession } from "@/lib/services/session-provisioning";
 import { sessionUpdateData } from "@/lib/services/session-content-edit";
@@ -130,6 +136,12 @@ export const POST = handle(async (req) => {
  * as the write, by the same `requireEventOwnedRow` the taxonomy routes use, so
  * another event's topics cannot be attached to this event's programme or
  * enumerated through it.
+ *
+ * Each accepted patch appends one `AuditLogEntry` inside this same transaction
+ * (W24, INV-AUDIT-001). A patch that changes `contentStatus` is named `PUBLISH`
+ * or `UNPUBLISH` — with any content fields it also moved carried in the same
+ * diff — and a content-only edit is named `UPDATE`. A patch that changes
+ * nothing records nothing.
  */
 export const PATCH = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -144,9 +156,21 @@ export const PATCH = handle(async (req) => {
     // written by an admin who no longer has authority over it.
     const session = await tx.session.findUnique({
       where: { id: input.sessionId },
-      select: { id: true, eventId: true },
+      // Every audited column is read here too, so the change history's "from"
+      // is the value this write replaced — read under the same transaction as
+      // the write.
+      select: {
+        id: true,
+        eventId: true,
+        contentStatus: true,
+        title: true,
+        description: true,
+        format: true,
+        durationMinutes: true,
+        categoryId: true,
+      },
     });
-    requireEventOwnedRow(session, ctx.eventId, "SESSION_NOT_FOUND", "Session");
+    const owned = requireEventOwnedRow(session, ctx.eventId, "SESSION_NOT_FOUND", "Session");
 
     // `null` clears the label and needs no owner. A named id is checked under
     // the same transaction, so a category deleted or moved between an outside
@@ -159,7 +183,7 @@ export const PATCH = handle(async (req) => {
       requireEventOwnedRow(category, ctx.eventId, "CATEGORY_NOT_FOUND", "Category");
     }
 
-    return tx.session.update({
+    const updated = await tx.session.update({
       where: { id: input.sessionId },
       data,
       // Read back from the row that was written, never echoed from the request.
@@ -175,6 +199,31 @@ export const PATCH = handle(async (req) => {
         contentStatus: true,
       },
     });
+
+    // W24 / INV-AUDIT-001: the history row commits with the change it records.
+    // Announcing a talk and withdrawing it from the public programme are named
+    // separately (`PUBLISH` / `UNPUBLISH`), because "Edited contentStatus" is
+    // not what an organizer asks the history about; a content-only edit is the
+    // generic `UPDATE`. One row per accepted patch: a request that flips the
+    // status and fixes the title carries both in one diff under the act's name.
+    // A patch that changes nothing — re-publishing an already published talk,
+    // re-saving an unchanged form — records nothing.
+    const statusChanged = owned.contentStatus !== updated.contentStatus;
+    await recordAudit(tx, {
+      eventId: ctx.eventId,
+      actorUserId: ctx.userId,
+      entityType: "SESSION",
+      entityId: updated.id,
+      action: statusChanged
+        ? (updated.contentStatus === "PUBLISHED" ? "PUBLISH" : "UNPUBLISH")
+        : "UPDATE",
+      changes: diffChanges(owned, updated, [
+        ...AUDITED_SESSION_PUBLICATION_FIELDS,
+        ...AUDITED_SESSION_CONTENT_FIELDS,
+      ]),
+    });
+
+    return updated;
   });
 
   return ok(updated);

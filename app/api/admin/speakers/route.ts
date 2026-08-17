@@ -8,6 +8,11 @@ import {
 } from "@/lib/services/event-member-lock";
 import { lockPublicSubmissionIdentities } from "@/lib/services/public-submission";
 import {
+  AUDITED_SPEAKER_PROFILE_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
+import {
   SPEAKER_SHARED_ACROSS_EVENTS,
   SPEAKER_SHARED_MESSAGE,
   adminSpeakerCreateSchema,
@@ -172,6 +177,10 @@ export const POST = handle(async (req) => {
  * on one of this event's sessions (session speakers are created from an accepted
  * abstract's roster and need no membership row of their own). Anyone else — a
  * reviewer, another event's speaker, an id that does not exist — is the same 404.
+ *
+ * Every accepted edit also appends one `AuditLogEntry` inside this transaction
+ * (W24, INV-AUDIT-001), holding only the fields that actually changed. The write
+ * itself is unchanged: same locks, same order, same refusals, same response.
  */
 export const PATCH = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -208,11 +217,29 @@ export const PATCH = handle(async (req) => {
     if ((await countOtherEventMemberships(tx, userId, ctx.eventId)) > 0) {
       throw new ApiError(409, SPEAKER_SHARED_ACROSS_EVENTS, SPEAKER_SHARED_MESSAGE);
     }
+    // The before-state for the change history (W24), read under the same profile
+    // lock as the write below — so what the history reports as "from" is the row
+    // the write actually replaced, not one a concurrent portal edit had already
+    // moved on from. Null when this is the person's first stored profile.
+    const previous = await tx.speakerProfile.findUnique({ where: { userId }, select: profileSelect });
     const stored = await tx.speakerProfile.upsert({
       where: { userId },
       update: profileData,
       create: { userId, ...profileData },
       select: profileSelect,
+    });
+
+    // The audit flagged this route by name: it was last-write-wins with no
+    // record of who changed what. Diffed against the stored row rather than
+    // against the request body, so a field the operator re-sent unchanged
+    // records nothing and a partial write cannot read as a clear.
+    await recordAudit(tx, {
+      eventId: ctx.eventId,
+      actorUserId: ctx.userId,
+      entityType: "SPEAKER_PROFILE",
+      entityId: userId,
+      action: "UPDATE",
+      changes: diffChanges(previous ?? {}, stored, AUDITED_SPEAKER_PROFILE_FIELDS),
     });
 
     return { speaker: { userId: user.id, name: user.name, email: user.email }, profile: stored };

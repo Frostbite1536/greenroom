@@ -57,6 +57,9 @@ export const POST = handle(async (req) => {
         // not found rather than as a different-event error, so this endpoint
         // is not an existence oracle for another event's proposals.
         eventId: ctx.eventId,
+        // Every row this batch writes is attributed to the admin who ran it, in
+        // the same transaction as the decision (W24). A skipped row writes none.
+        actorUserId: ctx.userId,
         decision: input.decision,
         requireAwaitingDecision: true,
       }),

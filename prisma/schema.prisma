@@ -124,6 +124,7 @@ model Event {
   storedFiles                 StoredFile[]
   apiCredentials              ApiCredential[]
   speakerDecks                EventSpeakerDeck[]
+  auditLog                    AuditLogEntry[]
 
   @@index([startsAt])
 }
@@ -154,6 +155,7 @@ model User {
   apiCredentials     ApiCredential[]
   abstractAttachments AbstractAttachment[]
   eventSpeakerDecks   EventSpeakerDeck[]
+  auditLogEntries     AuditLogEntry[]
 }
 
 model EventMember {
@@ -804,4 +806,72 @@ model ApiCredential {
   createdBy User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   @@index([eventId])
+}
+
+/**
+ * Append-only change history: who changed what, and when (external audit
+ * finding — admin profile edits were last-write-wins with nothing recorded, and
+ * the competitor benchmark is "track every change, with attribution and
+ * timestamps").
+ *
+ * One generic table rather than a history column per surface, because the thing
+ * an auditor asks for is a single chronology across the programme, and five
+ * per-entity shapes would answer it with a union that nothing keeps in step.
+ *
+ * `entityType` and `action` are deliberately `String`, not enums. Every audited
+ * surface added later would otherwise need `ALTER TYPE ... ADD VALUE`, which
+ * this repository's schema-window contract records as its one *irreversible*
+ * statement (`SCHEMA-WINDOW.md`); a vocabulary expected to grow with each newly
+ * instrumented writer must not carry that cost. The accepted values are owned in
+ * code by `lib/services/audit-log.ts`, the only module that writes this table,
+ * so the vocabulary is still one source of truth — enforced by TypeScript rather
+ * than by PostgreSQL.
+ *
+ * `changes` holds a compact `{field: {from, to}}` diff over ONLY the fields that
+ * actually changed. Storing whole before/after rows would make every history row
+ * a second copy of the record: larger, and a second place a bio or an address
+ * could be read out of long after the live row moved on. A write whose diff is
+ * empty records nothing (`diffChanges` returns null), so this holds changes
+ * rather than save-button presses.
+ *
+ * There is deliberately no `updatedAt`. An audit row that can be edited is not
+ * an audit row, and nothing in the application updates or deletes one.
+ *
+ * Delete behaviour is chosen, not defaulted:
+ *   - `event` Cascade. The history describes one event's programme and means
+ *     nothing once that event is gone — the prevailing convention for every
+ *     event-owned row here.
+ *   - `actor` SetNull, and the column is nullable. Deleting an organizer must
+ *     not erase the record of what they changed, so the row outlives the account
+ *     and the attribution degrades to "a removed account" instead of taking the
+ *     history with it. Same reasoning, and the same convention, as
+ *     `EmailDispatch.sender` and `ApiCredential.createdBy`.
+ *
+ * Both indexes lead with `eventId` because every read is event-scoped: the
+ * four-column one serves one entity's own chronology, and the two-column one
+ * serves the newest-first event-wide page `/admin/history` renders.
+ */
+model AuditLogEntry {
+  id String @id @default(cuid())
+  /// The event whose programme this change belongs to. Every read is scoped to it.
+  eventId String
+  /// Who made the change. Null only once that account is deleted (SetNull below).
+  actorUserId String?
+  /// What kind of record changed, e.g. "SPEAKER_PROFILE" (`AuditEntityType`).
+  entityType String
+  /// The changed record's own id. For `SCHEDULE_SLOT` this is the *session* id, so
+  /// a talk's placement history survives being unscheduled and re-placed — a new
+  /// `ScheduleSlot` row, the same talk (see `lib/services/audit-log.ts`).
+  entityId String
+  /// What was done, e.g. "UPDATE" | "PUBLISH" | "MOVE" (`AuditAction`).
+  action String
+  /// `{field: {from, to}}` over the changed fields only. Never written empty.
+  changes   Json
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([eventId, entityType, entityId, createdAt])
+  @@index([eventId, createdAt])
 }
