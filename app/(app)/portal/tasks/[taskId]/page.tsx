@@ -10,8 +10,14 @@ export const metadata = { title: "Your task" };
 export const dynamic = "force-dynamic";
 
 /**
- * One onboarding task that carries a form — the hotel-stay and
- * flight-reimbursement examples the director called must-haves.
+ * One of the caller's onboarding tasks: its form, if it has one, and its
+ * deliverable either way.
+ *
+ * The form half is the hotel-stay and flight-reimbursement examples the director
+ * called must-haves. The deliverable half is why this page is now reachable for
+ * a task with NO form at all: `SpeakerTask.artifactUrl` exists on every
+ * assignment, so a task whose whole ask is "send us your signed release" had a
+ * column for the answer and nowhere to put it.
  *
  * Server-rendered with the speaker's saved answers already in place, so a
  * half-finished form survives a closed tab. Authorization is the same rule the
@@ -34,6 +40,7 @@ export default async function PortalTaskPage({
       status: true,
       responses: true,
       notes: true,
+      artifactUrl: true,
       task: {
         select: {
           id: true,
@@ -82,6 +89,7 @@ export default async function PortalTaskPage({
         timezone={assignment.task.event.timezone}
         fields={fields}
         initialResponses={normalizeStoredResponses(assignment.responses)}
+        initialArtifactUrl={assignment.artifactUrl}
       />
     </section>
   );

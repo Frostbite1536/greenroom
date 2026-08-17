@@ -68,9 +68,18 @@ test("oversize is 413 REQUEST_TOO_LARGE and a wrong type is 422, matching the re
   assert.match(read("lib/api/bounded-json.ts"), /413, "REQUEST_TOO_LARGE"/);
 });
 
-test("the route's published kind vocabulary includes supporting documents", () => {
-  assert.match(upload, /kind=headshot\|slide-deck\|supporting-document/);
-  assert.match(upload, /Expected `headshot`, `slide-deck`, or `supporting-document`\./);
+test("the route's published kind vocabulary includes supporting documents and task artifacts", () => {
+  assert.match(upload, /kind=headshot\|slide-deck\|supporting-document\|task-artifact/);
+  assert.match(upload, /Expected `headshot`, `slide-deck`, `supporting-document`, or `task-artifact`\./);
+});
+
+test("the refusal's accepted-format wording is derived from the kind, not a ternary over kinds", () => {
+  // A ternary was exactly right for two kinds and silently wrong for the first
+  // kind that accepts both a PDF and an image: it would have told a speaker
+  // uploading a photo of a signed form that the file "must be a PDF".
+  assert.match(upload, /const expected = storedFileAcceptDescription\(kind\);/);
+  assert.doesNotMatch(upload, /kind === "HEADSHOT" \?/);
+  assert.doesNotMatch(upload, /"a PDF"|"a PNG, JPEG or WebP image"/);
 });
 
 test("the stored mime is the server's verdict, and the claimed header is never written", () => {

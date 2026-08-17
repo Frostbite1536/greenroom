@@ -8,6 +8,7 @@ import { enforceUploadRateLimit } from "@/lib/services/upload-rate";
 import {
   normalizeMime,
   parseStoredFileKind,
+  storedFileAcceptDescription,
   storedFileMaxBytes,
   storedFilePath,
   verifyStoredFile,
@@ -22,7 +23,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/files?kind=headshot|slide-deck|supporting-document — store one file.
+ * POST /api/files?kind=headshot|slide-deck|supporting-document|task-artifact — store one file.
  *
  * The body is the raw bytes and `Content-Type` is the claim about them. That is
  * deliberately not multipart: a headshot or a deck is a single file with no
@@ -101,7 +102,10 @@ function refuse(reason: "UNSUPPORTED_KIND" | "UNSUPPORTED_TYPE" | "TYPE_MISMATCH
       file: ["The file's contents do not match the type it was sent as."],
     });
   }
-  const expected = kind === "HEADSHOT" ? "a PNG, JPEG or WebP image" : "a PDF";
+  // Derived from the kind's own accepted-mime list, never a ternary over kinds:
+  // a kind that accepts both a PDF and an image must not be told it "must be a
+  // PDF" (`lib/uploads/stored-file.ts`).
+  const expected = storedFileAcceptDescription(kind);
   return new ApiError(422, "FILE_TYPE_UNSUPPORTED", `This upload must be ${expected}.`, {
     file: [`Choose ${expected}.`],
   });
@@ -113,7 +117,7 @@ export const POST = handle(async (req) => {
   const kind = parseStoredFileKind(new URL(req.url).searchParams.get("kind"));
   if (!kind) {
     throw new ApiError(422, "FILE_KIND_UNSUPPORTED", "Say what this upload is for.", {
-      kind: ["Expected `headshot`, `slide-deck`, or `supporting-document`."],
+      kind: ["Expected `headshot`, `slide-deck`, `supporting-document`, or `task-artifact`."],
     });
   }
   const maxBytes = storedFileMaxBytes(kind);
@@ -140,9 +144,10 @@ export const POST = handle(async (req) => {
   const dedupe = storedFileDedupeKey(dedupeInput);
 
   // Re-uploading under the same authorization scope returns the existing id.
-  // Headshots are public and dedupe across events; a private deck or supporting
-  // document includes the active event in its fingerprint, so another event
-  // can never inherit this row's organizer access merely because bytes match.
+  // Headshots are public and dedupe across events; every private kind — deck,
+  // supporting document, task artefact — includes the active event in its
+  // fingerprint, so another event can never inherit this row's organizer access
+  // merely because bytes match.
   let existing = await prisma.storedFile.findUnique({
     where: { uploaderUserId_kind_sha256: dedupe },
     select: { id: true, mime: true, size: true, eventId: true },
