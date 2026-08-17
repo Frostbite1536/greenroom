@@ -432,3 +432,38 @@ Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
 and agent writes remain explicitly held by the post-release roadmap. In
 particular, no single-session read has been added: a placed-and-published
 schedule entry continues to be the only way a held or unplaced talk is exposed.
+
+## Admins may edit a confirmed talk's content; the speaker roster stays locked
+`PATCH /api/agenda/sessions` used to write one column, `contentStatus`. A
+committee that accepted a proposal therefore had no way to fix the resulting
+talk's title, summary, format, length, or topic: the speaker owned the source
+`Abstract` (INV-EDIT-001) and a speaker edit deliberately never touches the
+`Session`, so the confirmed programme's own text had no editor anywhere in the
+product. The route now takes `title`, `description`, `format`,
+`durationMinutes`, and `categoryId` as a sparse patch — an absent key is left
+alone, so every request the publication toggle ever sent still means exactly what
+it meant, and `sessionUpdateSchema` is `sessionPublicationSchema` extended so the
+two cannot drift.
+
+What was deliberately left out. The **speaker roster** is not a field on a
+content form: naming who presents a confirmed talk is
+`POST /api/admin/speakers`' write under the C17 identity locks, with the
+onboarding-task fan-out that hangs off it (INV-TASK-001), and INV-EDIT-001 locks
+the roster once a `Session` exists. **Placement** stays with `/api/agenda/slots`
+and **status** stays with decisions. A `categoryId` is authorized against the
+event inside the write transaction and refused with the same indistinguishable
+404 (`CATEGORY_NOT_FOUND`) an unknown id gets, so another event's taxonomy can
+neither be attached to this programme nor enumerated through it.
+
+`durationMinutes` on a scheduled talk does **not** re-derive its slot.
+`ScheduleSlot` stores `startsAt`/`endsAt` outright and nothing derives them from
+a session's length: the slot writer takes both timestamps from its request, and
+conflict detection compares slot intervals only. Editing the length therefore
+leaves the event's overlap predicate untouched — it can neither create nor clear
+a conflict, so it needs no S3 schedule lock and no re-check to satisfy
+INV-SCHEDULE-001. Re-deriving `endsAt` here is the alternative that was
+rejected: that is a placement, and a placement made outside a conflict check is
+exactly what the invariant forbids. A placed talk keeps its slot, as it already
+did when an organizer dragged the block instead, and the dialog says so —
+resizing on the grid stays the schedule editor's job, where the server re-checks
+overlap and can refuse.
