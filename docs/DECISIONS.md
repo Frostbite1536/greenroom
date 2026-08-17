@@ -432,3 +432,244 @@ Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
 and agent writes remain explicitly held by the post-release roadmap. In
 particular, no single-session read has been added: a placed-and-published
 schedule entry continues to be the only way a held or unplaced talk is exposed.
+
+## My itinerary is anonymous and client-persisted; the server filters the .ics
+There are no attendee accounts, so the sessions a public reader stars on
+`/schedule` (and its frameable twin `/embed/schedule`) cannot be a row in the
+database. The selection lives in that browser's `localStorage` under
+`greenroom.itinerary.v1:<event slug>` — versioned so a future shape change is a
+clean discard rather than a mis-parse, and event-scoped so two programmes on one
+origin never share a starred set. Nothing about the itinerary is written
+server-side, and no new anonymous write endpoint exists.
+
+The public schedule stays a server-rendered tree (`components/embed-schedule.tsx`
+explains why: day tabs, the track filter and search are links and a GET form
+that work with JavaScript disabled). "My itinerary" is therefore three small
+leaves in one client file, `components/schedule-itinerary.tsx`: a star per
+session card, a `My itinerary (N)` filter beside the day tabs, and a wrapper that
+swaps the server-rendered day sections for the reader's own list. Each renders
+`null` until it has mounted, so the server HTML — and the page with JavaScript
+off — is the schedule as it was before the feature existed. The leaves share a
+module-level store read through `useSyncExternalStore` rather than a React
+context provider, so no wrapper has to be threaded through both surfaces and
+`getServerSnapshot` can be honestly empty; the server never mutates it. The
+itinerary view swaps the subtree instead of hiding cards with injected CSS —
+hiding by id would leave empty day headings above hidden cards, and would still
+need client rendering to decide what to hide, since only the browser knows the
+starred set. Overlaps between chosen sessions are stated in words ("Overlaps
+with X"), on half-open intervals so a back-to-back pair is a walk and not a
+clash, matching the agenda builder and the schedule service.
+
+`.ics` export reuses the existing public route: `GET /api/comms/calendar` now
+accepts `?sessions=<comma-separated ids>` alongside its `?sessionId=` and
+whole-programme forms, so "Download my itinerary (.ics)" is a plain link with no
+fetch and no client-side file construction. The id list is anonymous and
+reader-supplied, so it is a **narrowing filter only**: it is bounded and
+normalized by `parseItinerarySessionIds` (deduped, cap 100, ids outside
+`[A-Za-z0-9_-]{1,64}` dropped) and then layered *inside* the route's existing
+event-scoped, placed-and-`PUBLISHED` predicate. An id naming a held-back,
+unplaced or other-event session therefore contributes nothing to the file, which
+is what lets the itinerary exist with no server-side record. A `sessions=` that
+normalizes to nothing is refused with `422` rather than silently widened into the
+whole programme under an itinerary filename, and the itinerary file is named
+`<event> — My itinerary` so a calendar client cannot file a personal subset as
+the complete programme.
+
+The itinerary lives inside the existing schedule surface, so no new embed surface
+and no `/admin/embeds` snippet change was added.
+
+## Admins may edit a confirmed talk's content; the speaker roster stays locked
+`PATCH /api/agenda/sessions` used to write one column, `contentStatus`. A
+committee that accepted a proposal therefore had no way to fix the resulting
+talk's title, summary, format, length, or topic: the speaker owned the source
+`Abstract` (INV-EDIT-001) and a speaker edit deliberately never touches the
+`Session`, so the confirmed programme's own text had no editor anywhere in the
+product. The route now takes `title`, `description`, `format`,
+`durationMinutes`, and `categoryId` as a sparse patch — an absent key is left
+alone, so every request the publication toggle ever sent still means exactly what
+it meant, and `sessionUpdateSchema` is `sessionPublicationSchema` extended so the
+two cannot drift.
+
+What was deliberately left out. The **speaker roster** is not a field on a
+content form: naming who presents a confirmed talk is
+`POST /api/admin/speakers`' write under the C17 identity locks, with the
+onboarding-task fan-out that hangs off it (INV-TASK-001), and INV-EDIT-001 locks
+the roster once a `Session` exists. **Placement** stays with `/api/agenda/slots`
+and **status** stays with decisions. A `categoryId` is authorized against the
+event inside the write transaction and refused with the same indistinguishable
+404 (`CATEGORY_NOT_FOUND`) an unknown id gets, so another event's taxonomy can
+neither be attached to this programme nor enumerated through it.
+
+`durationMinutes` on a scheduled talk does **not** re-derive its slot.
+`ScheduleSlot` stores `startsAt`/`endsAt` outright and nothing derives them from
+a session's length: the slot writer takes both timestamps from its request, and
+conflict detection compares slot intervals only. Editing the length therefore
+leaves the event's overlap predicate untouched — it can neither create nor clear
+a conflict, so it needs no S3 schedule lock and no re-check to satisfy
+INV-SCHEDULE-001. Re-deriving `endsAt` here is the alternative that was
+rejected: that is a placement, and a placement made outside a conflict check is
+exactly what the invariant forbids. A placed talk keeps its slot, as it already
+did when an organizer dragged the block instead, and the dialog says so —
+resizing on the grid stays the schedule editor's job, where the server re-checks
+overlap and can refuse.
+
+## A task deliverable is a second request key, not a second column
+`SpeakerTask.artifactUrl` already held a speaker's onboarding deliverable as a
+pasted link. Making it hold an uploaded file too could have been an
+`artifactFileId` column with an FK; it is instead the same one column, written
+by the server as this app's own `/api/files/<id>` path — exactly the shape
+`headshotUrl` and `slideDeckUrl` already use.
+
+A column was rejected because every consumer of `artifactUrl` would then have to
+learn about a second source of truth and decide which wins when both are set.
+That is four surfaces (the portal, the roster, the CSV export, and
+`onboarding-task-deletion`'s "has this speaker done anything?" predicate) newly
+able to disagree, in exchange for a foreign key on a value nothing joins to.
+`StoredFile` rows already outlive what points at them: clearing `slideDeckUrl`
+has never deleted the uploaded deck, so an `onDelete: SetNull` FK would not have
+bought a cleanup guarantee the product has anywhere else. Orphaned bytes
+accumulate here as they already do for decks and attachments; the reaper remains
+the same named follow-up, not a new one this change created.
+
+What *is* new is a second REQUEST key. `artifactFileId` exists because the
+locked contract validates `artifactUrl` with `z.string().url()`, and a served
+`/api/files/<id>` path is not a URL. Rather than loosen an Architect-owned
+schema, the client sends an id and the route writes the path — so no client ever
+names the string that lands in the column. Sending both keys is a 422 rather
+than a precedence rule: they address one column, and guessing which the speaker
+meant would be wrong half the time. The portal cannot trip that refusal, because
+it keeps ONE text field and `taskArtifactSubmission` picks the key from the
+field's own value.
+
+The server refuses any id that is not the caller's own `TASK_ARTIFACT` stored
+under this event, and collapses all four failure modes into one 404 so the route
+is not an existence oracle for a stranger's file id. The kind check is not
+redundant: without it a speaker could re-point their own private slide deck or a
+proposal's supporting document at a task, publishing it to a surface that
+feature never showed it on. The lookup runs inside the transaction, like the
+proposal attach route, because `eventId` is nullable and goes null on event
+delete — checking it outside the write would be a check-then-write on a fact
+that can change.
+
+### The accepted formats are bounded by the sniffer, not by the ask
+`TASK_ARTIFACT` accepts PDF, PNG, JPEG and WebP at 10 MiB. Office documents were
+asked about and are deliberately absent: `.docx`/`.pptx`/`.xlsx` are ZIP
+containers whose magic bytes are `PK\3\4`, indistinguishable from any other ZIP
+without parsing the archive, and `verifyStoredFile` refuses anything `sniffMime`
+cannot name. Listing them would therefore not have enabled them — it would have
+been a promise the UI's `accept=` kept making and the server kept refusing —
+unless the claimed content type were trusted, for exactly the file class most
+able to carry a macro. A speaker exports to PDF. A test asserts this property
+across every kind at once: each accepted mime must round-trip through the
+sniffer.
+
+The 10 MiB cap sits well above Vercel's ~4.5 MB request-body ceiling, so on that
+deployment a large artefact is refused by the platform before this code runs.
+That is the same stated interaction the 5 MiB deck cap already has, and the same
+conclusion: the refusal is still a 413 and no oversize file is ever stored, it
+just is not our envelope. A phone photo of a signed form is routinely 3–8 MB,
+which is what the cap is sized for; lowering it to make every refusal ours would
+be a product call.
+
+Authorization was not widened. `TASK_ARTIFACT` lands on the private branch of
+`canReadStoredFile` by being not-`HEADSHOT`, so no line of the matrix changed —
+the uploader, or an `ADMIN` whose active event is the file's event. The ADMIN
+test being against the FILE's event is what lets `/admin/speakers` open a
+deliverable: the write path only ever records a file stored under the caller's
+active event, which is the task's event, so the two cannot diverge. Disposition
+stays per kind rather than per stored mime, so an uploaded PNG artefact
+downloads rather than rendering inline on the app's own origin.
+
+### Rendering `artifactUrl` at all is the new exposure, and it is gated
+This change is the first to render `artifactUrl` as a link — before it, the
+column was written by an API nothing surfaced, which is its own bug: a speaker
+could hand something over and no organizer would see it. Because the column is
+validated `z.string().url()`, and that accepts non-HTTP schemes (the repo's
+documented GRA2-07), an `href` is gated on a stored-file path or `http(s)` at
+each renderer, following `safePublicImageUrl`'s established shape. A value that
+fails the gate is shown as text rather than dropped: the organizer still needs
+to see what the speaker put there in order to ask about it.
+
+Two smaller consequences, stated rather than discovered. The portal task page is
+now reachable for a task with NO form, because `artifactUrl` exists on every
+assignment and a task whose whole ask is "send us your signed release" had a
+column for the answer and nowhere to put it. And clearing a deliverable is still
+not possible — the route has always written `artifactUrl: artifactUrl ??
+undefined`, so an omitted key preserves. An empty field therefore sends no
+artifact key rather than an empty string, which would fail `.url()` and turn an
+otherwise valid save into a 422. A real clear needs a nullable contract key and
+is a named follow-up.
+
+## The change history is one generic append-only table, written in the change's own transaction
+
+An external audit found that an organizer's speaker-profile edit was
+last-write-wins with no record of who changed what, and that the product had no
+change history at all. The competitor benchmark is "track every change, with
+attribution and timestamps".
+
+`AuditLogEntry` is one generic table — event, actor, entity type, entity id,
+action, diff, timestamp — rather than a history column or a shadow table per
+audited record. What an auditor asks for is a single chronology across the
+programme; five per-entity shapes would answer that with a union nothing keeps in
+step, and each newly audited surface would need its own schema change instead of
+one line of instrumentation.
+
+**The row is written inside the transaction that made the change**
+(INV-AUDIT-001). `recordAudit(tx, …)` takes the caller's transaction client and
+cannot be called any other way, which rules out the two failures an audit trail
+exists to prevent: a change with no record because the second write failed, and a
+record of a change that rolled back. Every instrumented writer already had a
+transaction and a lock, so the record is decided by the same serialization point
+as the change — a schedule move under the S3 event key, a decision under the
+per-abstract advisory lock, a profile edit under the per-user profile lock. The
+before-values are read under that lock too, so what the history reports as "from"
+is the row the write actually replaced.
+
+**Only the changed fields are stored.** `diffChanges` builds `{field: {from, to}}`
+and returns null when nothing moved, and `recordAudit` writes nothing for a null
+diff — so pressing save on an unchanged form leaves no row, and the log reads as a
+list of changes rather than a list of requests. Storing before/after row snapshots
+was rejected for two reasons: a snapshot history is a second copy of the record,
+and it is a second place a bio or an address can be read out of long after the
+live row moved on. The diff's two asymmetries follow from what the callers hold: a
+field absent from a write is skipped (the roster editor sends only what the
+operator changed, GRA-05, so treating absence as a clear would record a bio being
+emptied on every status change), while an explicit null is recorded — which is
+also how a removal is expressed, so unscheduling needs no special case in the
+reader.
+
+**`entityType` and `action` are `String` columns, not PostgreSQL enums.**
+Instrumenting the next writer would otherwise require `ALTER TYPE ... ADD VALUE`,
+which `SCHEMA-WINDOW.md` records as the one *irreversible* statement in this
+repository's schema workflow. The accepted values are TypeScript unions in
+`lib/services/audit-log.ts`, the only module that writes the table, so the
+vocabulary is still one source of truth — enforced by the compiler rather than by
+the database, at the cost of a hand-written row being able to hold an unknown
+value. The read surface renders an unrecognized value verbatim rather than
+failing, for the same reason it tolerates a malformed diff: the history page is
+what an auditor opens precisely when something is already wrong, so it must not be
+the thing that breaks.
+
+Delete behaviour is chosen. The event cascades, because a history describes one
+event's programme and means nothing without it. The actor is `SetNull` and
+nullable, because deleting an organizer must not erase the record of what they
+changed — the same reasoning as `EmailDispatch.sender` and
+`ApiCredential.createdBy`. There is no `updatedAt` and no writer that updates or
+deletes a row: an audit row that can be edited is not an audit row.
+
+`/admin/history` is the read surface: ADMIN-only, a pure server component, newest
+first, bounded at 200 with an honest "older changes are not shown" notice rather
+than a fail-closed refusal — the append-only shape the email log and the
+API-credential panel already use, because running past one page is the normal
+state of a live event, not an error. It is ADMIN-only not merely because of the
+diffs but because a change history is a record of colleagues' actions, which is an
+organizer's view rather than a reviewer's or a speaker's. Timestamps print in the
+event's timezone, like every other operator surface.
+
+Instrumented in this pass: the admin speaker-profile PATCH (the finding's own
+route), the session publication toggle, schedule placement/move and unschedule,
+and the accept/reject/maybe decision write both decision routes share. Not yet
+covered, and named rather than implied: session content editing, form and settings
+changes, team and membership changes, task and evaluation writes, and imports.
+Adding one is a `recordAudit` call inside a transaction that already exists, plus a
+field list in `lib/services/audit-log.ts`.

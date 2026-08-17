@@ -28,6 +28,26 @@ import {
   resolveRosterDecks,
   type ResolvedSpeakerDeck,
 } from "@/lib/speakers/event-deck";
+import { isUploadedTaskArtifact, taskArtifactHref } from "@/lib/portal/task-artifact";
+
+/**
+ * One deliverable a speaker has handed over for one onboarding task.
+ *
+ * `href` is null when the stored string may not be rendered as a link at all.
+ * That case is real rather than theoretical: `artifactUrl` is validated
+ * `z.string().url()`, which accepts non-HTTP schemes (the repo's GRA2-07), and
+ * nothing rendered this column before — so the filter belongs at this, the first
+ * renderer, exactly as `safePublicImageUrl` sits at the gallery's.
+ */
+export type SpeakerTaskArtifact = {
+  taskId: string;
+  taskTitle: string;
+  /** The stored value, always shown; `href` decides whether it is clickable. */
+  url: string;
+  href: string | null;
+  /** True for a file held by this app, false for a link away from it. */
+  uploaded: boolean;
+};
 
 /** Same bounded-read discipline as the operator API routes (INV-EVENT-001). */
 export const SPEAKER_ROSTER_LIMITS = {
@@ -58,6 +78,17 @@ export type SpeakerRosterView = {
    * widening it would have made all four speak a contract only one screen needs.
    */
   decks: Record<string, ResolvedSpeakerDeck>;
+  /**
+   * Each rendered speaker's task deliverables, keyed by userId. Only tasks that
+   * actually carry one appear, so an absent key means "nothing handed over".
+   *
+   * Beside the rows for the same reason `decks` is, and the file's own warning
+   * about `SpeakerStatusRow` is the argument: that projection is shared with the
+   * `/admin` dashboard card, the CSV export and the report metrics, none of
+   * which asked for a deliverable. Widening it would make four surfaces speak a
+   * contract one screen needs.
+   */
+  artifacts: Record<string, SpeakerTaskArtifact[]>;
   /** The confirmed-session cohort: everyone on at least one talk. */
   confirmed: SpeakerStatusRow[];
   /** `summarizeSpeakerStatus(confirmed)` — the five headline organizer metrics. */
@@ -107,6 +138,9 @@ export async function readSpeakerRoster(eventId: string): Promise<SpeakerRosterV
       select: {
         userId: true,
         status: true,
+        // Read with the assignment it belongs to: the rows are already bounded
+        // and already event-scoped, so a deliverable costs no extra round trip.
+        artifactUrl: true,
         task: { select: { id: true, title: true, required: true, sortOrder: true, dueAt: true } },
       },
       orderBy: [{ userId: "asc" }, { task: { sortOrder: "asc" } }],
@@ -156,6 +190,23 @@ export async function readSpeakerRoster(eventId: string): Promise<SpeakerRosterV
     dueAt: row.task.dueAt ? row.task.dueAt.toISOString() : null,
   }));
 
+  // Derived from the SAME filtered slice the status rows are built from, so a
+  // speaker excluded for being partially loaded cannot come back with a
+  // deliverable attached to a row that is not rendered.
+  const artifacts: Record<string, SpeakerTaskArtifact[]> = {};
+  for (const row of taskSlice) {
+    if (!isComplete(row.userId)) continue;
+    const url = row.artifactUrl?.trim();
+    if (!url) continue;
+    (artifacts[row.userId] ??= []).push({
+      taskId: row.task.id,
+      taskTitle: row.task.title,
+      url,
+      href: taskArtifactHref(url),
+      uploaded: isUploadedTaskArtifact(url),
+    });
+  }
+
   const rows = buildSpeakerRosterRows(members, assignments, taskAssignments);
 
   // A second round trip, deliberately, and keyed on the ids this read actually
@@ -194,6 +245,7 @@ export async function readSpeakerRoster(eventId: string): Promise<SpeakerRosterV
     timezone: event?.timezone ?? null,
     rows,
     decks,
+    artifacts,
     confirmed,
     summary: summarizeSpeakerStatus(confirmed),
     awaitingSession: rows.length - confirmed.length,

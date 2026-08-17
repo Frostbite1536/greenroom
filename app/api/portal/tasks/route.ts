@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
+import { storedFilePath } from "@/lib/uploads/stored-file";
 import { lockFormFieldsForAnswerWrite } from "@/lib/services/form-field-lock";
 import type { ApiResponse } from "@/types/api";
 import {
@@ -25,6 +26,13 @@ function fail(code: string, message: string, status: number, fieldErrors?: Recor
  * INV-TASK-001: completion lives on the per-speaker `SpeakerTask` assignment,
  * never on the `OnboardingTask` template. INV-EVENT-001: the task must belong to
  * the session's event, and we only ever touch the caller's own assignment row.
+ *
+ * A deliverable is one column, `artifactUrl`, reachable two ways: `artifactUrl`
+ * carries a pasted link exactly as before, and `artifactFileId` names a file the
+ * caller already uploaded through `POST /api/files?kind=task-artifact`. The
+ * second path never trusts the id — the row must be the caller's own
+ * TASK_ARTIFACT stored under this event — and the served path is written by this
+ * server, so no client ever names the string that lands in the column.
  */
 export async function PATCH(request: Request) {
   const session = await getSession();
@@ -42,7 +50,7 @@ export async function PATCH(request: Request) {
     return fail("VALIDATION_ERROR", "Task update is invalid.", 422, parsed.error.flatten().fieldErrors);
   }
 
-  const { taskId, status, artifactUrl, notes, responses } = parsed.data;
+  const { taskId, status, artifactUrl, artifactFileId, notes, responses } = parsed.data;
   const user = await resolveSessionUser(session);
   if (!user) return fail("UNAUTHORIZED", "Sign in to update your tasks.", 401);
 
@@ -127,6 +135,49 @@ export async function PATCH(request: Request) {
       } as const;
     }
 
+    // An uploaded deliverable: the CLIENT sent an id, and the string that
+    // reaches the column is built here from a row this server has verified.
+    //
+    // All four conditions are load-bearing and collapse into one 404, so the
+    // route cannot be used to learn that someone else's file id is real:
+    //   - the row exists;
+    //   - its kind is TASK_ARTIFACT, so a speaker cannot re-point their own
+    //     private slide deck or a proposal's supporting document at a task and
+    //     thereby publish it to a surface its own feature never showed it on;
+    //   - its uploader is the caller, so one speaker cannot attach another's
+    //     file — the reason a bare id is never trusted;
+    //   - its event is this task's event, which is also the caller's active
+    //     event. That is what keeps `canReadStoredFile`'s ADMIN test (made
+    //     against the FILE's event) and "the organizers of the event that asked
+    //     for this task" the same question forever after.
+    //
+    // Read inside the transaction, like the proposal attach route: `eventId` is
+    // nullable and goes null when an event is deleted, so a check outside the
+    // write would be a check-then-write on a fact that can change.
+    let uploadedArtifactUrl: string | null = null;
+    if (artifactFileId !== undefined) {
+      const file = await tx.storedFile.findUnique({
+        where: { id: artifactFileId },
+        select: { id: true, kind: true, uploaderUserId: true, eventId: true },
+      });
+      if (
+        !file
+        || file.kind !== "TASK_ARTIFACT"
+        || file.uploaderUserId !== user.id
+        || file.eventId !== session.event.id
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "ARTIFACT_FILE_NOT_FOUND",
+            message: "That uploaded file is not available. Upload it again and retry.",
+            status: 404,
+          },
+        } as const;
+      }
+      uploadedArtifactUrl = storedFilePath(file.id);
+    }
+
     const mergedResponses = hasForm
       ? pruneToFields(mergeTaskResponses(fresh.responses, responses), fields)
       : null;
@@ -156,7 +207,10 @@ export async function PATCH(request: Request) {
       where: { taskId_userId: { taskId, userId: user.id } },
       data: {
         status,
-        artifactUrl: artifactUrl ?? undefined,
+        // One column, filled two ways. The schema refuses both keys at once, so
+        // this `??` chain is a fallback, never a precedence rule; omitting both
+        // preserves the stored value exactly as it always has.
+        artifactUrl: uploadedArtifactUrl ?? artifactUrl ?? undefined,
         notes: notes ?? undefined,
         ...(mergedResponses ? { responses: mergedResponses as never } : {}),
         completedAt: status === "COMPLETED" ? new Date() : null,

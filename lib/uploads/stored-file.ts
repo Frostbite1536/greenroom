@@ -13,7 +13,12 @@
  * on the app's own origin.
  */
 
-export const STORED_FILE_KINDS = ["HEADSHOT", "SLIDE_DECK", "SUPPORTING_DOCUMENT"] as const;
+export const STORED_FILE_KINDS = [
+  "HEADSHOT",
+  "SLIDE_DECK",
+  "SUPPORTING_DOCUMENT",
+  "TASK_ARTIFACT",
+] as const;
 export type StoredFileKindValue = (typeof STORED_FILE_KINDS)[number];
 
 /**
@@ -28,7 +33,15 @@ const STORED_FILE_KIND_PARAMS = new Map<string, StoredFileKindValue>([
   ["headshot", "HEADSHOT"],
   ["slide-deck", "SLIDE_DECK"],
   ["supporting-document", "SUPPORTING_DOCUMENT"],
+  ["task-artifact", "TASK_ARTIFACT"],
 ]);
+
+/**
+ * Every wire spelling, in declaration order — for the one refusal that has to
+ * name them. Derived from the map so the 422 telling a client what to send
+ * cannot list a kind the parser rejects, or omit one it accepts.
+ */
+export const STORED_FILE_KIND_PARAMS_LIST: readonly string[] = [...STORED_FILE_KIND_PARAMS.keys()];
 
 /** Accepted case-insensitively; `HEADSHOT` and `headshot` are the same request. */
 export function parseStoredFileKind(value: string | null | undefined): StoredFileKindValue | null {
@@ -71,6 +84,29 @@ export const STORED_FILE_LIMITS = {
   // exactly rather than inventing a second set of numbers to drift from it.
   // The Vercel body-ceiling note above therefore applies to this kind too.
   SUPPORTING_DOCUMENT: { maxBytes: 5 * 1024 * 1024, mimes: ["application/pdf"] },
+  // A task artefact is whatever the organizer's checklist asked a speaker to
+  // hand over — a signed release form, a scan of a receipt, a photo of an ID
+  // page, a slide export — so unlike a deck it is not one format.
+  //
+  // The accepted list is bounded by what this file's sniffer can actually
+  // IDENTIFY, not by what an organizer might ask for. `SIGNATURES` below knows
+  // four formats, so those four are the list. Office documents (`.docx`,
+  // `.pptx`, `.xlsx`) are deliberately absent: they are ZIP containers whose
+  // magic bytes are `PK\3\4`, indistinguishable from any other ZIP without
+  // parsing the archive's central directory, and `verifyStoredFile` refuses
+  // anything it cannot name. Accepting them would mean trusting the client's
+  // claimed type for exactly the file class most able to carry a macro — the
+  // one thing this module exists not to do. A speaker exports to PDF instead.
+  //
+  // 10 MiB because a phone photo of a signed form is routinely 3–8 MB, where a
+  // deck is an already-compressed export. That is well ABOVE Vercel's ~4.5 MB
+  // request-body ceiling, so on that deployment the platform refuses a large
+  // artefact before this code runs, exactly as the deck note above describes;
+  // the refusal is still a 413 and no oversize file is ever stored.
+  TASK_ARTIFACT: {
+    maxBytes: 10 * 1024 * 1024,
+    mimes: ["application/pdf", "image/png", "image/jpeg", "image/webp"],
+  },
 } as const satisfies Record<StoredFileKindValue, { maxBytes: number; mimes: readonly string[] }>;
 
 export function storedFileMaxBytes(kind: StoredFileKindValue): number {
@@ -79,6 +115,39 @@ export function storedFileMaxBytes(kind: StoredFileKindValue): number {
 
 export function storedFileAllowsMime(kind: StoredFileKindValue, mime: string): boolean {
   return (STORED_FILE_LIMITS[kind].mimes as readonly string[]).includes(mime);
+}
+
+/** Short human name for an accepted content type. */
+const STORED_FILE_MIME_LABELS = new Map<string, string>([
+  ["application/pdf", "PDF"],
+  ["image/png", "PNG"],
+  ["image/jpeg", "JPEG"],
+  ["image/webp", "WebP"],
+]);
+
+function joinOr(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} or ${parts[parts.length - 1]}`;
+}
+
+/**
+ * What a kind accepts, as a phrase a refusal can be built from: "a PDF",
+ * "a PNG, JPEG or WebP image", "a PDF, PNG, JPEG or WebP file".
+ *
+ * DERIVED from the same `mimes` list the verifier enforces, rather than written
+ * beside it. The upload route used to pick its wording with
+ * `kind === "HEADSHOT" ? images : "a PDF"`, which was exactly right for two
+ * kinds and silently wrong for the first kind that accepted both an image and a
+ * PDF — it would have told a speaker uploading a photo of a signed form that
+ * the file "must be a PDF" while the server was happily accepting PNGs.
+ */
+export function storedFileAcceptDescription(kind: StoredFileKindValue): string {
+  const mimes = STORED_FILE_LIMITS[kind].mimes as readonly string[];
+  const labels = mimes.map((mime) => STORED_FILE_MIME_LABELS.get(mime) ?? mime);
+  const noun = mimes.every((mime) => mime.startsWith("image/"))
+    ? " image"
+    : mimes.length > 1 ? " file" : "";
+  return `a ${joinOr(labels)}${noun}`;
 }
 
 /** Strip parameters and case from a `Content-Type`: `image/PNG; x=1` → `image/png`. */
@@ -205,6 +274,14 @@ export type StoredFileSubject = {
  *   - The ADMIN test is against the FILE's event, not the proposal's. The
  *     attach route only ever links a file whose event is the proposal's event
  *     and the caller's active event, so the two cannot diverge.
+ *
+ * A TASK_ARTIFACT takes that same private branch, unwidened, for the same
+ * reason: `SpeakerTask.artifactUrl` is a speaker's own onboarding deliverable,
+ * visible to that speaker and to the event's organizers. Nothing below changed
+ * when the kind was added — it lands on the private branch by being
+ * not-HEADSHOT, and the ADMIN test being against the FILE's event is what makes
+ * `/admin/speakers` able to open it: the task write path only ever records a
+ * file whose event is the caller's active event, which is the task's event.
  */
 export function canReadStoredFile(subject: StoredFileSubject, viewer: StoredFileViewer): boolean {
   if (subject.kind === "HEADSHOT") return true;
@@ -227,6 +304,13 @@ export function storedFileCacheControl(kind: StoredFileKindValue): string {
  * A PDF is offered as a download rather than rendered in place: it is
  * same-origin by construction here, and an inline viewer is the one surface
  * where an uploaded document gets to run anything at all. Images render.
+ *
+ * Stated because TASK_ARTIFACT accepts images too and still lands here: an
+ * uploaded artefact DOWNLOADS even when it is a PNG. That is the conservative
+ * side of the choice and it is kept deliberately — the kind's whole point is
+ * that a speaker may hand over either a form or a photo, and deciding
+ * disposition per stored mime rather than per kind would make one kind serve
+ * some of its rows inline on the app's own origin.
  */
 export function storedFileDisposition(kind: StoredFileKindValue): string {
   return kind === "HEADSHOT" ? "inline" : "attachment";

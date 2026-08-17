@@ -9,6 +9,11 @@ import {
   sessionPublicationForDecision,
   type AbstractDecision,
 } from "@/lib/services/abstract-decision";
+import {
+  AUDITED_ABSTRACT_DECISION_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
 import { provisionAcceptedAbstract } from "@/lib/services/session-provisioning";
 
 /**
@@ -81,6 +86,13 @@ export type AbstractDecisionWriteInput = {
   abstractId: string;
   /** The caller's own event. A row outside it is reported as not found. */
   eventId: string;
+  /**
+   * The admin whose decision this is, for the change history. Required, not
+   * optional: an unattributed decision is the gap the external audit found, and
+   * both callers already hold `ctx.userId`, so the compiler is what keeps a third
+   * caller from recording an anonymous one.
+   */
+  actorUserId: string;
   decision: AbstractDecision;
   /**
    * When true, only a proposal still awaiting a decision is written; anything
@@ -170,6 +182,28 @@ export async function writeAbstractDecision(
       data: { contentStatus: publication },
     });
   }
+
+  // W24 / INV-AUDIT-001: the decision's history row commits with the decision,
+  // inside the same per-abstract advisory lock — so a bulk batch produces one
+  // attributed row per proposal it actually wrote, and none for the ones it
+  // skipped. The "from" is the status read under the lock above, which is the
+  // value this write replaced.
+  //
+  // Re-deciding to the status a proposal already holds records nothing: the diff
+  // is empty. That is the same rule everywhere else in the history, and it keeps
+  // a re-accept that only tops up provisioning from reading as a new decision.
+  await recordAudit(tx, {
+    eventId: input.eventId,
+    actorUserId: input.actorUserId,
+    entityType: "ABSTRACT_DECISION",
+    entityId: input.abstractId,
+    action: "DECIDE",
+    changes: diffChanges(
+      { status: abstract.status },
+      { status: decided.status },
+      AUDITED_ABSTRACT_DECISION_FIELDS,
+    ),
+  });
 
   return {
     decided: true,

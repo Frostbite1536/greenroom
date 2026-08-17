@@ -52,9 +52,40 @@ const taskResponsesSchema = z
     message: "A task form cannot contain more than 200 answers.",
   });
 
-export const taskUpdateWithResponsesSchema = speakerTaskUpdateSchema.extend({
-  responses: taskResponsesSchema.optional(),
-});
+/**
+ * The id of a `StoredFile` the caller uploaded as this task's deliverable.
+ *
+ * A SECOND KEY rather than a widening of `artifactUrl`, and the shape is the
+ * reason. `artifactUrl` is validated `z.string().url()` by the locked contract,
+ * and `/api/files/<id>` is a path, not a URL — so an uploaded file cannot ride
+ * that key without either loosening an Architect-owned schema or letting a
+ * client name the string that lands in the column. Neither is necessary: the
+ * client sends an ID, the route verifies the row is the caller's own
+ * TASK_ARTIFACT for this event, and the SERVER writes `storedFilePath(id)`.
+ *
+ * Bounded like `idSchema` values elsewhere — a cuid, and nothing near a column's
+ * limit. It is looked up by primary key, never interpolated into anything.
+ */
+const artifactFileIdSchema = z.string().trim().min(1).max(191);
+
+/**
+ * Both artifact keys at once is a refusal, not a precedence rule.
+ *
+ * They address the same single column, so accepting both would mean this schema
+ * silently deciding which of two things a speaker meant — and whichever it chose
+ * would be wrong half the time. The portal sends exactly one
+ * (`lib/portal/task-artifact.ts` picks it from the one field's value), so the
+ * only caller that can trip this is one that is already confused.
+ */
+export const taskUpdateWithResponsesSchema = speakerTaskUpdateSchema
+  .extend({
+    responses: taskResponsesSchema.optional(),
+    artifactFileId: artifactFileIdSchema.optional(),
+  })
+  .refine((body) => body.artifactUrl === undefined || body.artifactFileId === undefined, {
+    message: "Send either an artifact link or an uploaded file, not both.",
+    path: ["artifactFileId"],
+  });
 
 export type TaskUpdateWithResponses = z.infer<typeof taskUpdateWithResponsesSchema>;
 

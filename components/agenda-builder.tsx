@@ -2,8 +2,8 @@
 
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, Layers, LayoutGrid, List, Wand2, X } from "lucide-react";
-import type { AgendaData, AgendaSession } from "@/lib/data/reads";
+import { AlertTriangle, CalendarDays, CalendarRange, CalendarX, Layers, LayoutGrid, List, Pencil, Wand2, X } from "lucide-react";
+import type { AgendaCategoryOption, AgendaData, AgendaSession } from "@/lib/data/reads";
 import { conflictedSessionIds, conflictSentences, findConflicts, placedSessions } from "@/lib/agenda-conflicts";
 import { gridBounds, hourMarks, packLanes } from "@/lib/agenda-layout";
 import { readableChip } from "@/lib/color-contrast";
@@ -19,6 +19,7 @@ import {
   trackViewEmptyCopy,
 } from "@/lib/agenda-track-view";
 import { apiDelete, apiPatch, apiPost } from "@/lib/api-client";
+import { EditSessionDialog } from "@/components/edit-session-dialog";
 import { EmptyState, Pill } from "@/components/ui";
 import {
   formatDayLabel,
@@ -76,11 +77,22 @@ function toIntervals(sessions: Placed[], tz: string) {
   });
 }
 
-export function AgendaBuilder({ data }: { data: AgendaData }) {
+export function AgendaBuilder({
+  data,
+  /** This event's topics, for the edit dialog's picker. Empty is a real state:
+   *  an event with no categories can still have its talks edited. */
+  categoryOptions = [],
+}: {
+  data: AgendaData;
+  categoryOptions?: AgendaCategoryOption[];
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [view, setView] = useState<View>("day");
   const [scheduling, setScheduling] = useState<AgendaSession | null>(null);
+  // The talk whose content is open for editing, if any. Separate from
+  // `scheduling` on purpose: one is where a talk sits, the other is what it says.
+  const [editing, setEditing] = useState<AgendaSession | null>(null);
   const [overrides, setOverrides] = useState<Record<string, SlotOverride>>({});
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
@@ -421,12 +433,25 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           </p>
           <div className="row wrap" style={{ gap: 8 }}>
             {unscheduled.map((s) => (
-              <button key={s.id} className="ghost-button" onClick={() => setScheduling(s)}>
-                {s.title}{" "}
-                <span className="hint">
-                  · {s.durationMinutes}m{s.category ? ` · ${s.category.name}` : ""}
-                </span>
-              </button>
+              /* Two actions, two buttons: a nested one would be invalid HTML,
+                 and an accepted talk in the backlog is exactly the one whose
+                 title an organizer is most likely to have to fix before it goes
+                 anywhere near the public program. */
+              <span className="row" style={{ gap: 4 }} key={s.id}>
+                <button className="ghost-button" onClick={() => setScheduling(s)}>
+                  {s.title}{" "}
+                  <span className="hint">
+                    · {s.durationMinutes}m{s.category ? ` · ${s.category.name}` : ""}
+                  </span>
+                </button>
+                <button
+                  className="ghost-button"
+                  onClick={() => setEditing(s)}
+                  aria-label={`Edit “${s.title}”`}
+                >
+                  <Pencil size={14} aria-hidden="true" />
+                </button>
+              </span>
             ))}
           </div>
         </div>
@@ -440,6 +465,7 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
           roomName={roomName}
           trackColor={trackColor}
           onReschedule={setScheduling}
+          onEdit={setEditing}
           onUnschedule={unschedule}
           onPublication={setPublication}
           busy={pending}
@@ -509,6 +535,22 @@ export function AgendaBuilder({ data }: { data: AgendaData }) {
         />
       ) : null}
 
+      {/* Content, not placement: the server re-reads the talk under this event's
+          scope and can refuse, and the grid is re-read from it afterwards rather
+          than patched, so what shows here is what the public surfaces will read. */}
+      {editing ? (
+        <EditSessionDialog
+          session={editing}
+          categoryOptions={categoryOptions}
+          onClose={() => setEditing(null)}
+          onSaved={(savedTitle) => {
+            setEditing(null);
+            setNotice(`“${savedTitle}” was updated. Its schedule and speakers are unchanged.`);
+            startTransition(() => router.refresh());
+          }}
+        />
+      ) : null}
+
       {scheduling ? (
         <ScheduleDialog
           session={scheduling}
@@ -545,6 +587,7 @@ function ListView({
   roomName,
   trackColor,
   onReschedule,
+  onEdit,
   onUnschedule,
   onPublication,
   busy,
@@ -556,6 +599,7 @@ function ListView({
   roomName: (id: string) => string;
   trackColor: (id: string | null) => string;
   onReschedule: (s: AgendaSession) => void;
+  onEdit: (s: AgendaSession) => void;
   onUnschedule: (id: string, title?: string) => void;
   onPublication: (s: AgendaSession) => void;
   busy: boolean;
@@ -605,6 +649,12 @@ function ListView({
             {busyId === s.id ? "Working…" : publicationControl(s.contentStatus).label}
           </button>
           <button className="ghost-button" onClick={() => onReschedule(s)}>Move</button>
+          {/* The talk's own content — title, summary, format, length, topic.
+              Distinct from "Move", which is where it sits, and from the
+              Speakers page, which is who presents it. */}
+          <button className="ghost-button" onClick={() => onEdit(s)} aria-label={`Edit “${s.title}”`}>
+            <Pencil size={15} aria-hidden="true" /> Edit
+          </button>
           <button className="ghost-button danger-button" disabled={busy || busyId !== null} onClick={() => onUnschedule(s.id, s.title)} aria-label={`Unschedule ${s.title}`}>
             <CalendarX size={15} />
           </button>

@@ -1,5 +1,5 @@
 /**
- * Source contract for the workspace sidebar: its sixteen destinations, the
+ * Source contract for the workspace sidebar: its seventeen destinations, the
  * labelled groups they now render in, and the two overflow declarations that
  * make the nav reachable on a phone and on a short laptop screen.
  *
@@ -48,6 +48,7 @@ const css = () => source("app/globals.css");
 const DESTINATIONS = [
   { href: "/admin", label: "Dashboard", roles: '["ADMIN"]', group: "overview" },
   { href: "/admin/reports", label: "Reports", roles: '["ADMIN"]', group: "overview" },
+  { href: "/admin/history", label: "Change history", roles: '["ADMIN"]', group: "overview" },
   { href: "/admin/forms", label: "CFP forms", roles: '["ADMIN"]', group: "cfp" },
   { href: "/admin/abstracts", label: "Abstracts", roles: '["ADMIN"]', group: "cfp" },
   { href: "/admin/evaluations", label: "Evaluations", roles: '["ADMIN", "EVALUATOR"]', group: "cfp" },
@@ -80,7 +81,7 @@ const entries = () =>
     /\{ href: "([^"]+)", label: "([^"]+)", icon: \w+, roles: (\[[^\]]*\]|EVERYONE), group: "(\w+)" \}/g,
   )].map(([, href, label, roles, group]) => ({ href, label, roles, group }));
 
-test("grouping kept all sixteen destinations, with their hrefs and role sets", () => {
+test("grouping kept all seventeen destinations, with their hrefs and role sets", () => {
   const found = entries();
   // Exact count first: the whole risk of reordering a list into blocks is that
   // one entry does not survive the move, and a subset assertion would pass.

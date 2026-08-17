@@ -130,9 +130,10 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   by the unchanged save path; decision output must be plain text. No assistant
   route saves, publishes, sends mail, or changes a decision.
 - Uploads use validated server-side storage adapters; URLs are not trusted as authorization.
-  Concretely, the adapter is the database: `POST /api/files?kind=headshot|slide-deck|supporting-document` takes a raw
+  Concretely, the adapter is the database:
+  `POST /api/files?kind=headshot|slide-deck|supporting-document|task-artifact` takes a raw
   authenticated body, refuses an oversize stream mid-read (`413 REQUEST_TOO_LARGE`, 1 MiB for a
-  headshot, 5 MiB for a deck), sniffs the magic bytes and refuses anything whose real format is
+  headshot, 5 MiB for a deck, 10 MiB for a task artifact), sniffs the magic bytes and refuses anything whose real format is
   not accepted for that kind or does not match the claimed content type (`422`), then stores the
   bytes in `StoredFile` keyed by `(uploader, kind, fingerprint)` so a same-scope re-upload
   returns the id that already exists. A public headshot's fingerprint is its raw content SHA;
@@ -146,7 +147,14 @@ Request schemas and API envelope types are locked in `types/api.ts`. Workers mus
   immutable`), a `SLIDE_DECK` is the uploader's or that event's ADMIN's only (`private, no-store`,
   served as an attachment), and a file that does not exist is the same 404 as one the caller may
   not read. Supporting documents use that same private/no-store rule and can be linked only to
-  the uploader's own editable proposal, up to three links per proposal. The matrix, caps and
+  the uploader's own editable proposal, up to three links per proposal. A `TASK_ARTIFACT` takes
+  that same unwidened private rule and is a speaker's own onboarding deliverable: it accepts a PDF
+  or a PNG/JPEG/WebP image — bounded by what the sniffer can actually identify, which is why
+  office formats (ZIP containers sharing `PK\3\4`) are absent — and `PATCH /api/portal/tasks`
+  records it in `SpeakerTask.artifactUrl` as the served path only after verifying the row is the
+  caller's own artifact for this event. That single column still also holds a pasted link, and
+  `/admin/speakers` renders whichever it holds, gating the `href` on a stored-file path or
+  `http(s)` because the column's `.url()` validation admits other schemes. The matrix, caps and
   sniffer are one pure module (`lib/uploads/stored-file.ts`); the
   per-user throttle reuses the S19 durable bucket table rather than counting the product table,
   which dedupe would undercount. Bytes in Postgres was chosen over a blob service deliberately: a

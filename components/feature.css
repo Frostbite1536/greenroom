@@ -302,7 +302,24 @@ textarea.text-input { resize: vertical; min-height: 96px; }
 /* A card jumped to from a session link must not sit under a sticky header. */
 .speaker-card { scroll-margin-top: 96px; }
 .speaker-card:target { border-color: var(--brand); box-shadow: 0 0 0 2px var(--soft); }
-.ics-button { margin-top: 10px; }
+/* The card's footer row: "Add to calendar" plus, once hydrated, the itinerary
+   star. Replaces the single-button `.ics-button` offset now that two controls
+   sit side by side and must share one baseline. */
+.embed-session-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+
+/* ---- My itinerary (client island; see components/schedule-itinerary.tsx) ---- */
+/* Pressed state is carried by `.ghost-button[aria-pressed="true"]` already, so
+   these rules only handle the star's own filled/hollow icon and the panel. */
+.itinerary-star, .itinerary-tab { white-space: nowrap; }
+.itinerary-tab { font-variant-numeric: tabular-nums; }
+.itinerary-filters { align-items: center; }
+.itinerary-mode-note { white-space: nowrap; }
+.itinerary-panel { display: grid; gap: 12px; }
+.itinerary-row { align-items: flex-start; }
+.itinerary-remove { min-width: 34px; padding: 0 9px; flex-shrink: 0; }
+/* Amber, not red: an overlap is a warning about the reader's own choice, never a
+   refusal. The words carry the meaning; the tint only draws the eye. */
+.itinerary-overlap { margin: 8px 0 0; padding: 6px 9px; border: 1px solid #e6d3a3; border-radius: 6px; background: #fdf8ec; color: #7a5a12; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
 .time-heading { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 8px 2px 0; }
 
 /* Filter state must never be colour-only: the selected link also carries weight,
@@ -621,6 +638,13 @@ textarea.text-input { resize: vertical; min-height: 96px; }
   overflow: hidden; overflow-wrap: anywhere; max-width: 40ch; margin: 4px 0 0;
 }
 .roster-bio-missing { margin: 4px 0 0; font-style: italic; }
+/* A speaker's task deliverables. A list, because each row names its own task —
+   and `overflow-wrap` because a stored value that is not a link is shown raw
+   and a long one must not push the table sideways. */
+.roster-artifacts {
+  list-style: none; margin: 4px 0 0; padding: 0;
+  display: grid; gap: 2px; overflow-wrap: anywhere; max-width: 40ch;
+}
 .speaker-dialog-identity {
   display: grid; gap: 2px; margin: 0 0 14px; padding: 10px 12px;
   border: 1px solid var(--line); border-radius: 8px; background: #fbfcfb; font-size: 13px;

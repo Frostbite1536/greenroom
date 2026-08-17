@@ -42,6 +42,9 @@ export const POST = handle(async (req) => {
     const result = await writeAbstractDecision(tx, {
       abstractId: input.abstractId,
       eventId: ctx.eventId,
+      // Attribution for the change history the service appends inside this
+      // transaction (W24); the decision itself is unchanged.
+      actorUserId: ctx.userId,
       decision: input.decision,
     });
     if (!result.decided) {

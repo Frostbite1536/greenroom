@@ -21,7 +21,7 @@ import {
   filterSpeakerStatusRows,
   parseSpeakerStatusFilter,
 } from "@/lib/speakers/status";
-import { readSpeakerRoster } from "@/lib/speakers/roster-read";
+import { readSpeakerRoster, type SpeakerTaskArtifact } from "@/lib/speakers/roster-read";
 import {
   speakerDeckSourceHint,
   speakerDeckSourceLabel,
@@ -66,6 +66,40 @@ function SpeakerDeckCell({ deck }: { deck: ResolvedSpeakerDeck | null }) {
       {speakerDeckSourceLabel(deck.source)}
       {hint ? <span className="sr-only"> {hint}</span> : null}
     </div>
+  );
+}
+
+/**
+ * What a speaker has actually handed over for their onboarding tasks.
+ *
+ * This is the organizer end of the deliverable: `SpeakerTask.artifactUrl` was a
+ * column no screen rendered, so a speaker could attach a file and no one whose
+ * job it is to chase it would ever see it. An uploaded artifact is a working
+ * link here because `canReadStoredFile` already grants an ADMIN whose active
+ * event is the file's event — and the task write path only ever records a file
+ * stored under that same event, so the two cannot diverge.
+ *
+ * A stored value that may not be a link (`href: null`) is shown as text. It is
+ * not silently dropped: the organizer still needs to see what the speaker put
+ * there in order to ask them about it.
+ */
+function SpeakerArtifactCell({ artifacts }: { artifacts: SpeakerTaskArtifact[] }) {
+  if (artifacts.length === 0) return null;
+  return (
+    <ul className="cell-sub roster-artifacts">
+      {artifacts.map((artifact) => (
+        <li key={artifact.taskId}>
+          {artifact.taskTitle}:{" "}
+          {artifact.href ? (
+            <a href={artifact.href} rel="noreferrer">
+              {artifact.uploaded ? "Uploaded file" : "Link"}
+            </a>
+          ) : (
+            <span className="muted">{artifact.url}</span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -145,7 +179,7 @@ export default async function AdminSpeakersPage({
     )
     .sort(compareOnboardingTasks);
 
-  const { rows, decks, summary, awaitingSession, truncated } = roster;
+  const { rows, decks, artifacts, summary, awaitingSession, truncated } = roster;
   const searched = filterSpeakerRosterRows(rows, query);
   const visible = filterSpeakerStatusRows(searched, filter);
 
@@ -346,6 +380,7 @@ export default async function AdminSpeakersPage({
                           {row.tasksDone} / {row.tasksTotal} done
                           {row.requiredOutstanding.length > 0 ? ` · required open: ${row.requiredOutstanding.join(", ")}` : ""}
                         </div>
+                        <SpeakerArtifactCell artifacts={artifacts[row.userId] ?? []} />
                       </td>
                       <td>
                         {/* The deadline the operator is actually chasing: the
