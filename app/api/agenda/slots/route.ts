@@ -2,6 +2,11 @@ import { prisma } from "@/lib/prisma";
 import { scheduleSlotInputSchema } from "@/types/api";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, fail, handle, ok, parseBody } from "@/lib/api/http";
+import {
+  AUDITED_SCHEDULE_SLOT_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
 import { detectConflicts, type SlotInterval } from "@/lib/services/schedule";
 import { lockScheduleWrite } from "@/lib/services/schedule-lock";
 import { resolveCandidateSlotId, unscheduleSessionSlot } from "@/lib/services/schedule-slot-write";
@@ -151,6 +156,34 @@ export const POST = handle(async (req) => {
         endsAt,
       },
     });
+
+    // W24 / INV-AUDIT-001: the placement's history commits with the placement,
+    // inside the same S3 lock that decided it. First placement and move are named
+    // separately from `ownSlot` — the same read the conflict check already used,
+    // so this adds no query — and the diff is taken against the slot's own stored
+    // values, so re-placing a talk where it already sits records nothing.
+    //
+    // The history is keyed on the SESSION id, not the slot id: unscheduling
+    // deletes the slot row and re-placing creates a new one, and one talk's
+    // placement history must not scatter across identities nothing joins.
+    await recordAudit(tx, {
+      eventId: ctx.eventId,
+      actorUserId: ctx.userId,
+      entityType: "SCHEDULE_SLOT",
+      entityId: slot.sessionId,
+      action: ownSlot ? "MOVE" : "SCHEDULE",
+      changes: diffChanges(
+        {
+          roomId: ownSlot?.roomId,
+          trackId: ownSlot?.trackId,
+          startsAt: ownSlot?.startsAt,
+          endsAt: ownSlot?.endsAt,
+        },
+        { roomId: slot.roomId, trackId: slot.trackId, startsAt: slot.startsAt, endsAt: slot.endsAt },
+        AUDITED_SCHEDULE_SLOT_FIELDS,
+      ),
+    });
+
     return { slot, conflicts, conflictDetails: [] as string[] };
   });
 
@@ -186,6 +219,10 @@ export const POST = handle(async (req) => {
  * checked against, so it runs in one transaction and takes the S3 event lock
  * first — the same key, in the same position, as POST above and bulk
  * auto-placement apply. Responses are unchanged.
+ *
+ * The removal's history row is appended by `unscheduleSessionSlot` itself, under
+ * that same lock (W24, INV-AUDIT-001), which is why the actor id is passed in:
+ * the service owns the whole locked write, so it owns the record of it too.
  */
 export const DELETE = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -193,7 +230,7 @@ export const DELETE = handle(async (req) => {
   if (!sessionId) throw new ApiError(400, "MISSING_SESSION", "sessionId is required.");
 
   const result = await prisma.$transaction((tx) =>
-    unscheduleSessionSlot(tx, { eventId: ctx.eventId, sessionId }),
+    unscheduleSessionSlot(tx, { eventId: ctx.eventId, sessionId, actorUserId: ctx.userId }),
   );
   return ok(result);
 });

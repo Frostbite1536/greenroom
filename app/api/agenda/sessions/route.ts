@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { assertEventScope, requireContext } from "@/lib/api/context";
 import { ApiError, handle, ok, parseBody } from "@/lib/api/http";
+import {
+  AUDITED_SESSION_PUBLICATION_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
 import { requireEventOwnedRow } from "@/lib/services/event-owned-row";
 import { provisionGuaranteedSession } from "@/lib/services/session-provisioning";
 import { readEventRosterMembership } from "@/lib/services/speaker-roster";
@@ -93,6 +98,10 @@ export const POST = handle(async (req) => {
  * Event scope comes from the signed ADMIN context and never from the body. An
  * id belonging to another event is the same 404 as an unknown one, so this
  * cannot be used to discover another event's sessions.
+ *
+ * Each accepted toggle appends one `AuditLogEntry` inside this same transaction
+ * (W24, INV-AUDIT-001), named `PUBLISH` or `UNPUBLISH`. The write, the refusals
+ * and the response are unchanged.
  */
 export const PATCH = handle(async (req) => {
   const ctx = await requireContext(["ADMIN"]);
@@ -104,15 +113,37 @@ export const PATCH = handle(async (req) => {
     // written by an admin who no longer has authority over it.
     const session = await tx.session.findUnique({
       where: { id: input.sessionId },
-      select: { id: true, eventId: true },
+      // `contentStatus` is read here too, so the change history's "from" is the
+      // value this write replaced — read under the same transaction as the write.
+      select: { id: true, eventId: true, contentStatus: true },
     });
-    requireEventOwnedRow(session, ctx.eventId, "SESSION_NOT_FOUND", "Session");
+    const owned = requireEventOwnedRow(session, ctx.eventId, "SESSION_NOT_FOUND", "Session");
 
-    return tx.session.update({
+    const updated = await tx.session.update({
       where: { id: input.sessionId },
       data: { contentStatus: input.contentStatus },
       select: { id: true, title: true, contentStatus: true },
     });
+
+    // W24 / INV-AUDIT-001: the history row commits with the publication change.
+    // Announcing a talk and withdrawing it from the public programme are named
+    // separately, because "Edited contentStatus" is not what an organizer asks
+    // the history about. Re-publishing an already published talk changes nothing
+    // and therefore records nothing.
+    await recordAudit(tx, {
+      eventId: ctx.eventId,
+      actorUserId: ctx.userId,
+      entityType: "SESSION",
+      entityId: updated.id,
+      action: input.contentStatus === "PUBLISHED" ? "PUBLISH" : "UNPUBLISH",
+      changes: diffChanges(
+        { contentStatus: owned.contentStatus },
+        { contentStatus: updated.contentStatus },
+        AUDITED_SESSION_PUBLICATION_FIELDS,
+      ),
+    });
+
+    return updated;
   });
 
   return ok(updated);

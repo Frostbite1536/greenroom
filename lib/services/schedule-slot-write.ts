@@ -1,5 +1,10 @@
 import type { Prisma } from "@prisma/client";
 import { ApiError } from "@/lib/api/http";
+import {
+  AUDITED_SCHEDULE_SLOT_FIELDS,
+  diffChanges,
+  recordAudit,
+} from "@/lib/services/audit-log";
 import { lockScheduleWrite } from "@/lib/services/schedule-lock";
 
 /**
@@ -62,7 +67,21 @@ export function resolveCandidateSlotId(
 export const SLOT_NOT_FOUND_CODE = "SLOT_NOT_FOUND";
 export const SLOT_NOT_FOUND_MESSAGE = "No schedule slot for this session.";
 
-export type OwnedScheduleSlot = { id: string };
+/**
+ * The removed slot, as the ownership read returns it.
+ *
+ * It carries the placement columns as well as the id because the change history
+ * records what was removed (W24): the values have to be read under the lock,
+ * before the delete, and this read is the only one that happens there. The
+ * ownership decision itself is unchanged and still uses `id` alone.
+ */
+export type OwnedScheduleSlot = {
+  id: string;
+  roomId: string;
+  trackId: string | null;
+  startsAt: Date;
+  endsAt: Date;
+};
 
 export type ScheduleSlotDeleteDependencies = {
   lockScheduleWrite: typeof lockScheduleWrite;
@@ -71,6 +90,8 @@ export type ScheduleSlotDeleteDependencies = {
     input: { eventId: string; sessionId: string },
   ) => Promise<OwnedScheduleSlot | null>;
   deleteSlot: (tx: Prisma.TransactionClient, sessionId: string) => Promise<void>;
+  /** Injected so the audit write is asserted by behaviour, not by a comment. */
+  recordAudit: typeof recordAudit;
 };
 
 const productionDependencies: ScheduleSlotDeleteDependencies = {
@@ -78,15 +99,25 @@ const productionDependencies: ScheduleSlotDeleteDependencies = {
   async findOwnedSlot(tx, { eventId, sessionId }) {
     const slot = await tx.scheduleSlot.findUnique({
       where: { sessionId },
-      select: { id: true, session: { select: { eventId: true } } },
+      select: {
+        id: true,
+        roomId: true,
+        trackId: true,
+        startsAt: true,
+        endsAt: true,
+        session: { select: { eventId: true } },
+      },
     });
     // Unknown and cross-event are the same answer, as before: a caller must not
     // be able to tell another event's session from a nonexistent one.
-    return slot && slot.session.eventId === eventId ? { id: slot.id } : null;
+    if (!slot || slot.session.eventId !== eventId) return null;
+    const { session: _session, ...placement } = slot;
+    return placement;
   },
   async deleteSlot(tx, sessionId) {
     await tx.scheduleSlot.delete({ where: { sessionId } });
   },
+  recordAudit,
 };
 
 /**
@@ -111,10 +142,16 @@ const productionDependencies: ScheduleSlotDeleteDependencies = {
  *
  * Responses are deliberately unchanged: the same 404 code and message, and the
  * same success payload.
+ *
+ * Since W24 it also appends the removal to the change history, last, inside the
+ * same transaction and the same lock (INV-AUDIT-001). The record lives here
+ * rather than in the route because this function owns the whole locked write:
+ * the values it reports as removed are the ones it read under the lock, and a
+ * refused delete (the 404 above) records nothing because nothing changed.
  */
 export async function unscheduleSessionSlot(
   tx: Prisma.TransactionClient,
-  input: { eventId: string; sessionId: string },
+  input: { eventId: string; sessionId: string; actorUserId?: string | null },
   dependencies: ScheduleSlotDeleteDependencies = productionDependencies,
 ): Promise<{ sessionId: string; unscheduled: true }> {
   // Step 1 of LOCK-ORDER-v1, and the first statement of the transaction. The
@@ -126,5 +163,23 @@ export async function unscheduleSessionSlot(
   if (!slot) throw new ApiError(404, SLOT_NOT_FOUND_CODE, SLOT_NOT_FOUND_MESSAGE);
 
   await dependencies.deleteSlot(tx, input.sessionId);
+
+  // A removal is a change to every placement field, expressed as nulls — the
+  // same `{field: {from, to}}` shape as a move, so the history reader needs no
+  // special case for it. Keyed on the session, because the slot row it describes
+  // no longer exists and re-placing the talk creates a different one.
+  await dependencies.recordAudit(tx, {
+    eventId: input.eventId,
+    actorUserId: input.actorUserId ?? null,
+    entityType: "SCHEDULE_SLOT",
+    entityId: input.sessionId,
+    action: "UNSCHEDULE",
+    changes: diffChanges(
+      { roomId: slot.roomId, trackId: slot.trackId, startsAt: slot.startsAt, endsAt: slot.endsAt },
+      { roomId: null, trackId: null, startsAt: null, endsAt: null },
+      AUDITED_SCHEDULE_SLOT_FIELDS,
+    ),
+  });
+
   return { sessionId: input.sessionId, unscheduled: true };
 }
