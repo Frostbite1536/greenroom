@@ -167,22 +167,37 @@ test("the reads this slice deliberately leaves on the old contract are still ung
   assert.doesNotMatch(source("lib/services/schedule.ts"), /contentStatus/);
 });
 
-test("the publication route writes only contentStatus, and only inside this event", () => {
+test("the session PATCH writes only what the body named, and only inside this event", () => {
   const file = source("app/api/agenda/sessions/route.ts");
   const route = file.slice(file.indexOf("export const PATCH"));
   assert.match(route, /requireContext\(\["ADMIN"\]\)/);
   // The event comes from the signed context; the body may not name one.
   assert.doesNotMatch(file, /eventId:\s*idSchema/);
   assert.match(route, /requireEventOwnedRow\(session, ctx\.eventId, "SESSION_NOT_FOUND"/);
-  assert.match(route, /data: \{ contentStatus: input\.contentStatus \}/);
+  // W24: the route also edits a confirmed talk's content, so the write is a
+  // sparse patch and no longer a literal. The projection therefore has to be
+  // decided somewhere a test can hold it to behaviour — `sessionUpdateData`,
+  // asserted in lib/services/session-content-edit.test.ts, including that a
+  // publication-only body still writes exactly `{ contentStatus }`.
+  assert.match(route, /const data = sessionUpdateData\(input\);/);
+  // The update takes that object and nothing else: no inline `data: { … }`
+  // payload may grow beside it, which is what kept this assertion exact before.
+  assert.match(route, /^\s*data,\r?$/m);
+  assert.equal((route.match(/data: /g) ?? []).length, 0);
   // Ownership is proven inside the same transaction that performs the write.
   assert.ok(route.indexOf("prisma.$transaction") < route.indexOf("requireEventOwnedRow"));
   assert.ok(route.indexOf("requireEventOwnedRow") < route.indexOf("tx.session.update"));
-  // One write, and it carries one field. `title` appears only in the response
-  // projection, never in a `data:` payload.
-  assert.deepEqual(route.match(/data: \{[^}]*\}/g), ["data: { contentStatus: input.contentStatus }"]);
-  for (const forbidden of ["durationMinutes", "scheduleSlot", "delete("]) {
-    assert.ok(!route.includes(forbidden), `publication route must not touch ${forbidden}`);
+  // A named category is authorized against this event under the same
+  // transaction, with the same indistinguishable 404 the taxonomy routes give.
+  assert.match(
+    route,
+    /requireEventOwnedRow\(category, ctx\.eventId, "CATEGORY_NOT_FOUND", "Category"\)/,
+  );
+  assert.ok(route.indexOf("requireEventOwnedRow(category") < route.indexOf("tx.session.update"));
+  // Placement, the roster and decisions all stay where they live: this route
+  // still touches no slot, deletes nothing, and reads no abstract.
+  for (const forbidden of ["scheduleSlot", "delete(", "abstract"]) {
+    assert.ok(!route.includes(forbidden), `the session PATCH must not touch ${forbidden}`);
   }
 });
 
