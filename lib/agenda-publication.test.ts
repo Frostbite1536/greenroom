@@ -91,6 +91,10 @@ test("the calendar export cannot hand out an unpublished talk", () => {
   const refusals = ics.match(/"[^"]*(?:published|scheduled)[^"]*\."/g) ?? [];
   assert.deepEqual(refusals, [
     '"That session is not on the published schedule."',
+    // The itinerary form: a reader-supplied id list whose every id is unknown,
+    // held back, unplaced or another event's gets this one sentence, for the
+    // same reason — the list must not become a probe for held-back talks.
+    '"None of those sessions are on the published schedule."',
     '"No published sessions to export."',
   ]);
   for (const refusal of refusals) {

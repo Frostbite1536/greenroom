@@ -432,3 +432,48 @@ Event discovery, resource visibility, held/unplaced sessions, generic webhooks,
 and agent writes remain explicitly held by the post-release roadmap. In
 particular, no single-session read has been added: a placed-and-published
 schedule entry continues to be the only way a held or unplaced talk is exposed.
+
+## My itinerary is anonymous and client-persisted; the server filters the .ics
+There are no attendee accounts, so the sessions a public reader stars on
+`/schedule` (and its frameable twin `/embed/schedule`) cannot be a row in the
+database. The selection lives in that browser's `localStorage` under
+`greenroom.itinerary.v1:<event slug>` — versioned so a future shape change is a
+clean discard rather than a mis-parse, and event-scoped so two programmes on one
+origin never share a starred set. Nothing about the itinerary is written
+server-side, and no new anonymous write endpoint exists.
+
+The public schedule stays a server-rendered tree (`components/embed-schedule.tsx`
+explains why: day tabs, the track filter and search are links and a GET form
+that work with JavaScript disabled). "My itinerary" is therefore three small
+leaves in one client file, `components/schedule-itinerary.tsx`: a star per
+session card, a `My itinerary (N)` filter beside the day tabs, and a wrapper that
+swaps the server-rendered day sections for the reader's own list. Each renders
+`null` until it has mounted, so the server HTML — and the page with JavaScript
+off — is the schedule as it was before the feature existed. The leaves share a
+module-level store read through `useSyncExternalStore` rather than a React
+context provider, so no wrapper has to be threaded through both surfaces and
+`getServerSnapshot` can be honestly empty; the server never mutates it. The
+itinerary view swaps the subtree instead of hiding cards with injected CSS —
+hiding by id would leave empty day headings above hidden cards, and would still
+need client rendering to decide what to hide, since only the browser knows the
+starred set. Overlaps between chosen sessions are stated in words ("Overlaps
+with X"), on half-open intervals so a back-to-back pair is a walk and not a
+clash, matching the agenda builder and the schedule service.
+
+`.ics` export reuses the existing public route: `GET /api/comms/calendar` now
+accepts `?sessions=<comma-separated ids>` alongside its `?sessionId=` and
+whole-programme forms, so "Download my itinerary (.ics)" is a plain link with no
+fetch and no client-side file construction. The id list is anonymous and
+reader-supplied, so it is a **narrowing filter only**: it is bounded and
+normalized by `parseItinerarySessionIds` (deduped, cap 100, ids outside
+`[A-Za-z0-9_-]{1,64}` dropped) and then layered *inside* the route's existing
+event-scoped, placed-and-`PUBLISHED` predicate. An id naming a held-back,
+unplaced or other-event session therefore contributes nothing to the file, which
+is what lets the itinerary exist with no server-side record. A `sessions=` that
+normalizes to nothing is refused with `422` rather than silently widened into the
+whole programme under an itinerary filename, and the itinerary file is named
+`<event> — My itinerary` so a calendar client cannot file a personal subset as
+the complete programme.
+
+The itinerary lives inside the existing schedule surface, so no new embed surface
+and no `/admin/embeds` snippet change was added.
