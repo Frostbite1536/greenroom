@@ -49,3 +49,46 @@ test("drops unknown elements but is not fooled by nesting", () => {
 test("removes html comments", () => {
   assert.equal(sanitizeHtml("<!-- sneaky --><p>x</p>"), "<p>x</p>");
 });
+
+/**
+ * The sanitizer emits exactly two tag spellings: a bare `<name>`/`</name>`, and
+ * the one decorated `<a>` with a vetted href. Removing those from an output
+ * leaves the `<` characters the walk let through as TEXT — and the invariant
+ * below is that there are none, because an output destined to be concatenated
+ * with more HTML cannot be trusted to carry a half-open `<`.
+ */
+function strayLessThans(html: string): string[] {
+  const emitted = /<a href="[^"]*" rel="noopener noreferrer nofollow" target="_blank">|<\/?[a-z0-9]+>/g;
+  const text = html.replace(emitted, "");
+  return text.split("<").slice(1).map((rest) => `<${rest.slice(0, 40)}`);
+}
+
+test("an unterminated tag is never passed through verbatim", () => {
+  // The walk regex requires a closing `>`, so each of these used to come out of
+  // the sanitizer byte-for-byte unchanged.
+  for (const payload of [
+    "<p>ok<img src=x onerror=alert(1)",
+    '<script src="https://evil.test/x.js"',
+    '<p>fine</p><iframe src="https://evil.test"',
+    '<a href="javascript:alert(1)"',
+    "<svg onload=alert(1)",
+    "<p>x<style",
+    "<p>x<!-- unterminated comment",
+    "<<p>double",
+  ]) {
+    const out = sanitizeHtml(payload);
+    assert.deepEqual(
+      strayLessThans(out),
+      [],
+      `${JSON.stringify(payload)} left a raw "<" in ${JSON.stringify(out)}`,
+    );
+  }
+  // Non-vacuity: the text is still there for a human to read, just inert.
+  const img = sanitizeHtml("<p>ok<img src=x onerror=alert(1)");
+  assert.match(img, /&lt;img src=x onerror=alert\(1\)/);
+  assert.doesNotMatch(img, /<img/i);
+});
+
+test("a bare less-than in prose is escaped rather than left to start a tag", () => {
+  assert.equal(sanitizeHtml("<p>1 < 2 and 3 > 2</p>"), "<p>1 &lt; 2 and 3 > 2</p>");
+});
