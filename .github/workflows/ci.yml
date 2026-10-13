@@ -1,0 +1,102 @@
+# Mechanical gates for every pull request into main and every push to main.
+#
+# This complements the two-track review rather than replacing it: a reviewer
+# still re-runs and judges the exact head, while this catches the escapes that
+# need no judgment — two green PRs that turn main red together (PR #78), and a
+# fresh clone whose `npm ci && npm test` fails (the missing postinstall, c204492).
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  verify:
+    name: Typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      # No DATABASE_URL on purpose: `npm test` and `next build` must stay
+      # runnable from a fresh clone with nothing configured.
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  race-proofs:
+    name: Unit tests against Postgres (race proofs on)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: greenroom_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d greenroom_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/greenroom_ci
+      # The disposable-database assertion in e2e/db-guard.ts: the URL above
+      # must contain this, or the race proofs refuse to run.
+      E2E_EXPECTED_DB: greenroom_ci
+      RACE_PROOF: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma db push --skip-generate
+      # With a database and RACE_PROOF=1 nothing has a reason to skip, so a
+      # skipped test here means a prerequisite went missing; fail rather than
+      # pass quietly.
+      - name: npm test (no skips allowed)
+        run: |
+          npm test 2>&1 | tee test-output.txt
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then exit "$status"; fi
+          # spec reporter prints "ℹ skipped N"; tap prints "# skipped N".
+          skipped=$(grep -E '^(ℹ|#) skipped [0-9]+' test-output.txt | tail -1 | awk '{print $3}')
+          if [ "${skipped:-missing}" != "0" ]; then
+            echo "::error::Expected 0 skipped tests with RACE_PROOF=1 and a database; got '${skipped:-no summary line}'."
+            exit 1
+          fi
+
+  audit:
+    name: Production dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # Critical, not high: the Prisma CLI chain (deepmerge-ts < 8) has high
+      # advisories with no stable fix yet, and a job that is always red gets
+      # ignored. Raise this to high once Prisma ships the fix.
+      - run: npm audit --omit=dev --audit-level=critical
