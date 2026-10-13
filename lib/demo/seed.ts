@@ -155,6 +155,31 @@ function demoCredentialPlaintext(): Map<string, string> {
   return byEmail;
 }
 
+/**
+ * Every address the seed gives a repository-known password (SEC-01).
+ *
+ * The passwords above are public, so a credential for one of these addresses
+ * proves nothing about who is signing in. Credential sign-in consults this set
+ * and admits these identities only where demo logins are enabled — the same gate
+ * as the one-click persona buttons. Addresses only: the plaintexts stay in this
+ * file.
+ */
+export const DEMO_CREDENTIAL_EMAILS: ReadonlySet<string> = new Set(demoCredentialPlaintext().keys());
+
+/**
+ * Why the demo seed may not run here, or null when it may (SEC-01, INV-RESET-001).
+ *
+ * The seed wipes and rebuilds the demo event and writes the public demo
+ * credentials, so in production it needs the same explicit opt-in as the admin
+ * reset route. Pure over its environment so the rule is testable on its own.
+ */
+export function demoSeedRefusal(env: Readonly<Record<string, string | undefined>> = process.env): string | null {
+  if (env.NODE_ENV === "production" && env.ALLOW_DEMO_RESET !== "true") {
+    return "Refusing to seed demo data with NODE_ENV=production. Set ALLOW_DEMO_RESET=true to seed a demo deployment on purpose.";
+  }
+  return null;
+}
+
 const CATEGORIES = [
   { key: "ai", name: "AI & Machine Learning", teamKey: "team-ai" },
   { key: "platform", name: "Platform Engineering", teamKey: "team-platform" },
@@ -581,6 +606,10 @@ const SEED_LOCK_KEY = 8_675_309;
  * The timeout is generous because a full seed issues several hundred statements.
  */
 export async function seedDemo(prisma: PrismaClient): Promise<SeedSummary> {
+  // Checked before any hashing or database work, so a refusal writes nothing.
+  const refusal = demoSeedRefusal();
+  if (refusal) throw new Error(refusal);
+
   // scrypt is deliberately expensive, so derive every credential BEFORE the
   // transaction opens. Hashing inside it would hold the advisory lock for
   // hundreds of milliseconds of pure CPU for no reason.
