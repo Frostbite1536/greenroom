@@ -23,6 +23,7 @@ import {
 } from "@/lib/speakers/status";
 import { readSpeakerRoster, type SpeakerTaskArtifact } from "@/lib/speakers/roster-read";
 import {
+  speakerDeckHref,
   speakerDeckSourceHint,
   speakerDeckSourceLabel,
   type ResolvedSpeakerDeck,
@@ -55,13 +56,25 @@ const LIMITS = {
  * speaker cannot be told two different things about one deck. The fallback case
  * carries its explanation for a screen reader too, because "Global profile
  * (fallback)" is a label, not a sentence.
+ *
+ * The stored value only becomes an `href` when `speakerDeckHref` says it may
+ * (GRA2-07): `slideDeckUrl` is validated with `z.string().url()`, which accepts
+ * `javascript:` and `data:`, so this surface re-filters exactly as
+ * `SpeakerArtifactCell` below and `safePublicImageUrl` already do. A value that
+ * may not be a link is shown as text rather than dropped — the organizer still
+ * has to see what the speaker put there in order to ask them about it.
  */
 function SpeakerDeckCell({ deck }: { deck: ResolvedSpeakerDeck | null }) {
   if (!deck?.url) return <div className="cell-sub muted">No slide deck</div>;
   const hint = speakerDeckSourceHint(deck.source);
+  const href = speakerDeckHref(deck);
   return (
     <div className="cell-sub">
-      <a href={deck.url}>Slide deck</a>
+      {href ? (
+        <a href={href} rel="noreferrer">Slide deck</a>
+      ) : (
+        <span className="muted">{deck.url}</span>
+      )}
       {" · "}
       {speakerDeckSourceLabel(deck.source)}
       {hint ? <span className="sr-only"> {hint}</span> : null}

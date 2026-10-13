@@ -755,3 +755,18 @@ before this change is signed out once at deploy, and a demo reseed (which
 rewrites the demo identities' hashes) signs out those identities' sessions.
 Sign-out still deletes only the browser's copy; revoking every device on
 sign-out remains the column's job, if it is ever needed.
+
+## Production boot fails without SESSION_SECRET
+The schema keeps `SESSION_SECRET` `.optional()` so `npm test`, `next dev`, the
+seeds and the local golden path run with `DATABASE_URL` as the only variable
+anyone must set — `lib/server-signing.ts` supplies a clearly-labelled
+non-production fallback. Production inherited that optionality: a deployment
+with no secret booted green, reported healthy, and then 503'd every sign-in from
+`signCookiePayload`, while DECISIONS, DEPLOY.md and README all already claimed
+it was required. `getServerEnv` now adds the production requirement outside the
+schema (`productionSessionSecretIssue`), so `register()` refuses the boot and a
+deploy gate sees a failed deploy rather than a healthy one that cannot
+authenticate anybody. `next build` is unaffected — Next calls `register()` when a
+server instance starts, not during a build. The comparison is an exact
+`NODE_ENV === "production"`, the same fail-closed rule the persona-login gate
+uses, and non-production behaviour is unchanged.

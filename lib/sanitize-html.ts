@@ -28,7 +28,15 @@ function safeHref(value: string): string | null {
   if (normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
     return trimmed;
   }
-  if (normalized.startsWith("/") && !normalized.startsWith("//")) return trimmed;
+  // A leading `/` is this app's own path — unless the NEXT character is another
+  // slash or a backslash. `//evil.test` is a protocol-relative URL, and browsers
+  // normalize `\` to `/` in the authority position, so `/\evil.test` resolves to
+  // `https://evil.test/` exactly as `//evil.test` does. The control-character
+  // strip above has already collapsed `/ \evil.test` and `/<TAB>\evil.test` into
+  // the same two characters, so one check covers the padded forms too. A
+  // backslash further along a path is left alone: no browser reads an authority
+  // there.
+  if (normalized.startsWith("/") && !/^\/[\\/]/.test(normalized)) return trimmed;
   return null;
 }
 
@@ -52,23 +60,55 @@ export function sanitizeHtml(input: string): string {
   html = html.replace(/<!--[\s\S]*?-->/g, "");
 
   // 2. Walk remaining tags; keep allowlisted ones, escape everything else.
-  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g, (match, rawName: string, rawAttrs: string) => {
-    const name = rawName.toLowerCase();
-    if (!ALLOWED_TAGS.has(name)) return "";
+  //
+  // Done as an explicit scan rather than one `String.replace`, because what is
+  // BETWEEN the matches matters as much as the matches themselves. The tag
+  // pattern requires a closing `>`, so a half-open `<img src=x onerror=alert(1)`
+  // matched nothing and used to be copied through byte-for-byte. Every caller of
+  // this function then concatenates the result with more HTML
+  // (`lib/comms/notifications.ts` puts trusted paragraphs after an admin note),
+  // and the next part's first `>` closes the tag the sanitizer declined to see —
+  // with `alert(1)<p` as its `onerror`, which still runs.
+  //
+  // So the inter-tag text is escaped on its own: after this walk the only `<`
+  // left in the output is one this function emitted for an allowlisted tag.
+  const tagPattern = /<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>/g;
+  let out = "";
+  let cursor = 0;
+  for (let match = tagPattern.exec(html); match !== null; match = tagPattern.exec(html)) {
+    out += escapeStrayMarkup(html.slice(cursor, match.index));
+    out += emitTag(match[0], match[1], match[2]);
+    cursor = match.index + match[0].length;
+  }
+  return out + escapeStrayMarkup(html.slice(cursor));
+}
 
-    const isClosing = match.startsWith("</");
-    if (isClosing) return `</${name}>`;
+/**
+ * Text that is not part of any tag this sanitizer recognised.
+ *
+ * Only `<` is rewritten. A stray `>` cannot open anything, and escaping it
+ * would churn every existing resource template and email body for no gain.
+ */
+function escapeStrayMarkup(text: string): string {
+  return text.replace(/</g, "&lt;");
+}
 
-    // Only <a> keeps attributes, and only a vetted href/title.
-    if (name === "a") {
-      const hrefMatch = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i.exec(rawAttrs);
-      const raw = hrefMatch ? (hrefMatch[1] ?? hrefMatch[2] ?? hrefMatch[3] ?? "") : "";
-      const href = raw ? safeHref(raw) : null;
-      if (!href) return "<a>";
-      // External links get noopener/noreferrer.
-      return `<a href="${escapeText(href)}" rel="noopener noreferrer nofollow" target="_blank">`;
-    }
+function emitTag(match: string, rawName: string, rawAttrs: string): string {
+  const name = rawName.toLowerCase();
+  if (!ALLOWED_TAGS.has(name)) return "";
 
-    return `<${name}>`;
-  });
+  const isClosing = match.startsWith("</");
+  if (isClosing) return `</${name}>`;
+
+  // Only <a> keeps attributes, and only a vetted href/title.
+  if (name === "a") {
+    const hrefMatch = /\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))/i.exec(rawAttrs);
+    const raw = hrefMatch ? (hrefMatch[1] ?? hrefMatch[2] ?? hrefMatch[3] ?? "") : "";
+    const href = raw ? safeHref(raw) : null;
+    if (!href) return "<a>";
+    // External links get noopener/noreferrer.
+    return `<a href="${escapeText(href)}" rel="noopener noreferrer nofollow" target="_blank">`;
+  }
+
+  return `<${name}>`;
 }

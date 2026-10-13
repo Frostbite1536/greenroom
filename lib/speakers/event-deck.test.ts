@@ -4,6 +4,7 @@ import {
   indexEventDecks,
   resolveRosterDecks,
   resolveSpeakerDeck,
+  speakerDeckHref,
   speakerDeckSourceHint,
   speakerDeckSourceLabel,
 } from "@/lib/speakers/event-deck";
@@ -112,4 +113,59 @@ test("a deck for a user not on the roster is not projected", () => {
   const resolved = resolveRosterDecks(["u-1"], eventDecks, new Map());
   assert.deepEqual(Object.keys(resolved), ["u-1"]);
   assert.deepEqual(resolved["u-1"], { url: null, source: null });
+});
+
+/**
+ * GRA2-07 at the organizer's end of the deck.
+ *
+ * Both deck columns are validated with `z.string().url()`, which accepts
+ * `javascript:alert(1)` and `data:text/html,…`. The repo's answer to that has
+ * never been the schema — it re-filters at every renderer
+ * (`safePublicImageUrl`, `taskArtifactHref`) — and the organizer roster is a
+ * renderer, so it filters too.
+ */
+test("a deck that may not be a link resolves to no href, and keeps its raw value", () => {
+  for (const hostile of [
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "  javascript:alert(1)  ",
+    "/etc/passwd",
+    "//evil.example.test/deck.pdf",
+    "not a url at all",
+  ]) {
+    const deck = resolveSpeakerDeck({ eventDeckUrl: hostile, profileDeckUrl: null });
+    assert.equal(
+      speakerDeckHref(deck),
+      null,
+      `${JSON.stringify(hostile)} must not become an href on the roster`,
+    );
+    // The organizer still has to be able to SEE what the speaker stored, which
+    // is why the caller renders `deck.url` as text instead of dropping the row.
+    assert.equal(deck.url, hostile.trim());
+  }
+});
+
+test("an http(s) deck and an uploaded deck both stay clickable", () => {
+  assert.equal(
+    speakerDeckHref(resolveSpeakerDeck({ eventDeckUrl: "https://slides.example.test/deck.pdf" })),
+    "https://slides.example.test/deck.pdf",
+  );
+  assert.equal(
+    speakerDeckHref(resolveSpeakerDeck({ eventDeckUrl: "http://slides.example.test/deck.pdf" })),
+    "http://slides.example.test/deck.pdf",
+  );
+  // This app's own serving path, which `new URL()` cannot parse and a naive
+  // http(s)-only check would therefore have thrown away.
+  assert.equal(
+    speakerDeckHref(resolveSpeakerDeck({ eventDeckUrl: "/api/files/clx1111111111" })),
+    "/api/files/clx1111111111",
+  );
+});
+
+test("no deck at all is no href, with no throw on an absent row", () => {
+  assert.equal(speakerDeckHref(resolveSpeakerDeck({})), null);
+  assert.equal(speakerDeckHref(null), null);
+  assert.equal(speakerDeckHref(undefined), null);
 });

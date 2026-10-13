@@ -22,6 +22,7 @@ const read = (relative: string) => readFileSync(path.join(repoRoot, relative), "
 const upload = read("app/api/files/route.ts");
 const dedupe = read("lib/uploads/stored-file-dedupe.ts");
 const serve = read("app/api/files/[id]/route.ts");
+const policy = read("lib/uploads/stored-file.ts");
 const field = read("components/file-upload-field.tsx");
 const portalForm = read("app/(app)/portal/profile-form.tsx");
 const roster = read("components/speaker-roster-manager.tsx");
@@ -151,8 +152,16 @@ test("the backend smoke proves identical private bytes stay inside each event au
 });
 
 test("the served content type comes from the stored column and is pinned with nosniff", () => {
-  assert.match(serve, /"Content-Type": file\.mime,/);
-  assert.match(serve, /"X-Content-Type-Options": "nosniff",/);
+  // The header SET is the policy module's (unit-tested in `stored-file.test.ts`,
+  // including the sandboxing CSP `next.config.mjs` cannot supply for `/api/`);
+  // what only the route can get wrong is which values it hands over.
+  assert.match(serve, /headers: storedFileResponseHeaders\(\{/);
+  assert.match(serve, /mime: file\.mime,/);
+  assert.match(serve, /kind: file\.kind,/);
+  // The length written is the materialized body's own, not a client's claim.
+  assert.match(serve, /byteLength: body\.byteLength,/);
+  // No second, inline header set beside the shared one.
+  assert.doesNotMatch(serve, /"Content-Type":|"X-Content-Type-Options":|"Content-Security-Policy":/);
   // Nothing in the serving route reads a request header to decide the type.
   assert.doesNotMatch(serve, /req\.headers\.get/);
 });
@@ -174,10 +183,11 @@ test("a public headshot resolves no session, so it stays cacheable", () => {
   // session-dependent response.
   assert.match(serve, /const viewer = file\.kind === "HEADSHOT" \? null : await getApiContext\(\);/);
   assert.equal(serve.split("getApiContext(").length - 1, 1);
-  // Caching and disposition are the policy module's, not restated here.
-  assert.match(serve, /"Cache-Control": storedFileCacheControl\(file\.kind\)/);
-  assert.match(serve, /"Content-Disposition": storedFileDisposition\(file\.kind\)/);
-  assert.doesNotMatch(serve, /max-age=|immutable|no-store/);
+  // Caching and disposition are the policy module's, not restated here — they
+  // now travel with the rest of the header set through one function.
+  assert.match(policy, /"Cache-Control": storedFileCacheControl\(file\.kind\)/);
+  assert.match(policy, /"Content-Disposition": storedFileDisposition\(file\.kind\)/);
+  assert.doesNotMatch(serve, /max-age=|immutable|no-store|Cache-Control|Content-Disposition/);
 });
 
 test("the upload field fills the URL column beside it rather than replacing the field", () => {

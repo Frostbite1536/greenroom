@@ -76,6 +76,26 @@ test("an admin's personal note keeps basic formatting but cannot inject script",
   assert.doesNotMatch(mail.html, /script/i);
 });
 
+test("an unterminated tag in the note cannot be completed by the HTML that follows it", () => {
+  // This builder CONCATENATES the sanitized note with more trusted HTML, so a
+  // half-open tag the sanitizer let through is finished off by the next part's
+  // first `>`: `<img src=x onerror=alert(1)` + `<p>We'll follow up` parses as an
+  // `<img>` whose onerror is `alert(1)<p` — which still calls `alert`.
+  const mail = buildDecisionEmail({
+    eventName: event,
+    speaker,
+    title: "T",
+    decision: "ACCEPTED",
+    personalNote: "<p>Lovely work.</p><img src=x onerror=alert(1)",
+    feedback: [{ comment: "Good structure." }],
+  });
+  assert.doesNotMatch(mail.html, /<img/i);
+  assert.match(mail.html, /&lt;img/);
+  // The trusted HTML around it is untouched.
+  assert.match(mail.html, /<p>Lovely work\.<\/p>/);
+  assert.match(mail.html, /Notes from the review team/);
+});
+
 test("delivery is refused unless the deployment is genuinely configured", () => {
   assert.equal(canDeliverEmail({ mocked: false, apiKey: "re_x", from: "a@b.c" }), true);
   assert.equal(canDeliverEmail({ mocked: true, apiKey: "re_x", from: "a@b.c" }), false);
