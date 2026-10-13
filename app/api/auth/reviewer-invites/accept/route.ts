@@ -118,7 +118,7 @@ const accept = handle(async (req) => {
   // Never use the request origin for an authentication redirect: an invite is
   // a bearer capability, so the configured APP_URL is the only trusted base.
   const response = NextResponse.redirect(`${appUrl}/admin/evaluations`, 303);
-  response.cookies.set(SESSION_COOKIE, encodeSession(session), {
+  response.cookies.set(SESSION_COOKIE, await encodeSession(session), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",

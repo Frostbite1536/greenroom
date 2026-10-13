@@ -92,7 +92,7 @@ export const POST = handle(async (req) => {
       // through the one shared helper so its attributes cannot drift from the
       // login route's.
       const response = NextResponse.json({ ok: true, data: body }, { status: 201 });
-      return noStore(setSessionCookie(response, encodeSession({
+      return noStore(setSessionCookie(response, await encodeSession({
         user: creator.user,
         event: { id: created.id, name: created.name, slug: created.slug },
         role: "ADMIN",

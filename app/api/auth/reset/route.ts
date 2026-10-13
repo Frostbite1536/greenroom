@@ -112,8 +112,8 @@ export async function POST(req: Request): Promise<Response> {
     const membership = pickCredentialMembership(resolved.memberships);
     const home = membership ? homeForRole(membership.role) : "/welcome";
     const signed = membership
-      ? encodeSession({ user: resolved.user, event: membership.event, role: membership.role })
-      : encodePendingSession(resolved.user);
+      ? await encodeSession({ user: resolved.user, event: membership.event, role: membership.role })
+      : await encodePendingSession(resolved.user);
     const response = formEncoded
       ? authRedirect(req, home)
       : NextResponse.json({ ok: true, data: { redirectTo: home, pending: !membership } }, { status: 200 });

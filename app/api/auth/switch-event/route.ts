@@ -117,7 +117,7 @@ function refuse(
   return noStore(NextResponse.json({ ok: false, error: { code, message } }, { status }));
 }
 
-function establish(req: Request, formEncoded: boolean, session: DemoSession): Response {
+async function establish(req: Request, formEncoded: boolean, session: DemoSession): Promise<Response> {
   const home = homeForRole(session.role);
   const response = formEncoded
     ? redirectTo(req, home)
@@ -125,7 +125,7 @@ function establish(req: Request, formEncoded: boolean, session: DemoSession): Re
         { ok: true, data: { redirectTo: home, role: session.role, eventId: session.event.id } },
         { status: 200 },
       );
-  response.cookies.set(SESSION_COOKIE, encodeSession(session), {
+  response.cookies.set(SESSION_COOKIE, await encodeSession(session), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
@@ -179,7 +179,7 @@ export async function POST(req: Request): Promise<Response> {
   try {
     const next = await resolveEventSwitch({ user: current.user, eventId: requested, findMembership });
     if (!next) return refuse(req, formEncoded, 404, NOT_FOUND_CODE, NOT_FOUND_MESSAGE, current);
-    return establish(req, formEncoded, next);
+    return await establish(req, formEncoded, next);
   } catch (error) {
     // Deliberately NOT folded into the 404: a database outage is not "you are
     // not a member of that event", and reporting it as one would send an

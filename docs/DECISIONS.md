@@ -720,3 +720,38 @@ The route now calls `isSameOriginAuthRequest` before it reads the body, and
 refuses with the shared `CROSS_ORIGIN_REFUSED` response. The accept page's own
 `fetch` is same-origin and sends `Origin`, so it is unaffected. The rule is that
 any new route that sets the session cookie takes this gate first.
+
+## A session is bound to the credential it was issued under (SEC-03)
+
+A 2026-10-13 security review proved that sessions could not be revoked. Session
+cookies are stateless, signed and valid for seven days, and nothing on the
+server remembered them. After a password reset, a cookie issued before the reset
+still got `200` on an admin endpoint. A stolen cookie therefore outlived the
+victim's sign-out and password change.
+
+**Every cookie now carries `cf`, an HMAC of the user's stored password hash at
+issue time.** `getResolvedSession` and `getPendingIdentity` already re-read the
+`User` row on every request; they now also read `passwordHash`, recompute the
+fingerprint, and compare in constant time. A password reset writes a new hash,
+so every cookie issued before it stops resolving. The HMAC is keyed to the
+server secret and domain-separated (`greenroom:session:credential:v1`), so the
+cookie reveals nothing about the hash. A user without a password gets the
+fingerprint of the empty credential, which changes when they set one.
+
+`encodeSession` and `encodePendingSession` became async and read the credential
+themselves, by email (the same key the resolvers use). Every issuer gets the
+binding without having to remember it, and the compiler found all eight issuers,
+because `cookies.set` refuses a `Promise`. `signSession` is the pure form for
+tests. The two portal routes that read the unresolved `getSession()` now use
+`getResolvedSession()`. Their access rule is unchanged (the same user plus
+membership check they already did through `resolveSessionUser`), but they now
+honour revocation too.
+
+A `User.sessionsValidAfter` column was the alternative. It would also let
+sign-out revoke every device, but it is a schema change that must reach the
+production database before the deploy, or every authenticated request fails.
+The fingerprint needs no schema change. Its known costs: every cookie issued
+before this change is signed out once at deploy, and a demo reseed (which
+rewrites the demo identities' hashes) signs out those identities' sessions.
+Sign-out still deletes only the browser's copy; revoking every device on
+sign-out remains the column's job, if it is ever needed.

@@ -210,6 +210,10 @@ test("passwordHash is confined to the credential path and never projected", () =
     "lib/services/password-reset-redeem.ts",
     "lib/services/password-reset-token.ts",
     "lib/demo/seed.ts",
+    // SEC-03: the session layer reads the hash only to derive the HMAC
+    // fingerprint a cookie is bound to; neither the hash nor the fingerprint
+    // leaves `lib/auth.ts` in any session object.
+    "lib/auth.ts",
   ]);
   const offenders: string[] = [];
   const walk = (dir: string) => {

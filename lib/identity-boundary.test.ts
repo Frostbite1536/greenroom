@@ -43,7 +43,7 @@ test("login issues sessions from fixed personas or a verified credential, never 
   // The only session issuance on the credential path is gated on the verified
   // resolver returning a session.
   assert.equal(loginRoute.split("encodeSession(").length - 1, 1);
-  assert.match(loginRoute, /if \(!session\) return refuse\(req, formEncoded\);\s*\r?\n\s*return establish\(/);
+  assert.match(loginRoute, /if \(!session\) return refuse\(req, formEncoded\);\s*\r?\n\s*return (?:await )?establish\(/);
   assert.match(loginRoute, /resolveCredentialSession\(/);
 });
 
