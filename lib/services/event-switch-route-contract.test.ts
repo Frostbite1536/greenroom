@@ -68,7 +68,7 @@ test("unknown and non-member event ids are one refusal, and a refusal writes no 
   // `cookies.set` appears exactly once, inside the success path.
   assert.equal(route.match(/cookies\.set\(/g)?.length, 1);
   const establish = route.slice(route.indexOf("function establish"), route.indexOf("async function findMembership"));
-  assert.match(establish, /cookies\.set\(SESSION_COOKIE, encodeSession\(session\)/);
+  assert.match(establish, /cookies\.set\(SESSION_COOKIE, await encodeSession\(session\)/);
 });
 
 test("the switch lands on the role-correct home for the event switched INTO", () => {
@@ -77,7 +77,7 @@ test("the switch lands on the role-correct home for the event switched INTO", ()
   // `session` here is the resolved NEXT session, so the home follows the new
   // event's role rather than the one the caller arrived with.
   assert.match(route, /const next = await resolveEventSwitch\(/);
-  assert.match(route, /return establish\(req, formEncoded, next\)/);
+  assert.match(route, /return (?:await )?establish\(req, formEncoded, next\)/);
 });
 
 test("the frontend smoke proves switch-back restoration through the scoped API, not view-dependent markup", () => {

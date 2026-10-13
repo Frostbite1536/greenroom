@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
-import { getSession } from "@/lib/auth";
+import { getResolvedSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { lockSpeakerProfile } from "@/lib/services/speaker-roster";
@@ -18,7 +18,7 @@ function fail(code: string, message: string, status: number, fieldErrors?: Recor
 
 /** Update the signed-in speaker's own profile. A speaker can only ever edit themselves. */
 export async function PATCH(request: Request) {
-  const session = await getSession();
+  const session = await getResolvedSession();
   if (!session) return fail("UNAUTHORIZED", "Sign in to update your speaker profile.", 401);
 
   let body: unknown;

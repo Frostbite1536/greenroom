@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth";
+import { getResolvedSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { resolveSessionUser } from "@/lib/portal/user";
 import { storedFilePath } from "@/lib/uploads/stored-file";
@@ -35,7 +35,7 @@ function fail(code: string, message: string, status: number, fieldErrors?: Recor
  * server, so no client ever names the string that lands in the column.
  */
 export async function PATCH(request: Request) {
-  const session = await getSession();
+  const session = await getResolvedSession();
   if (!session) return fail("UNAUTHORIZED", "Sign in to update your tasks.", 401);
 
   let body: unknown;

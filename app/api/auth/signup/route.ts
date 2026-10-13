@@ -132,7 +132,7 @@ export async function POST(req: Request): Promise<Response> {
     // A brand-new account is a member of nothing, so the real session type
     // cannot describe it. The pending variant carries the identity and no
     // authority; `/welcome` is the only surface that reads it.
-    const signed = encodePendingSession(user);
+    const signed = await encodePendingSession(user);
     const response = formEncoded
       ? authRedirect(req, "/welcome")
       : NextResponse.json({ ok: true, data: { redirectTo: "/welcome", pending: true } }, { status: 201 });

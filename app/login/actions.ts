@@ -14,7 +14,7 @@ import {
 
 async function establish(session: DemoSession): Promise<never> {
   const jar = await cookies();
-  jar.set(SESSION_COOKIE, encodeSession(session), {
+  jar.set(SESSION_COOKIE, await encodeSession(session), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",

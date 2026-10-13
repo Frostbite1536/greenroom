@@ -21,7 +21,7 @@ golden-path verification harness `scripts/install-rehearsal.mjs`.
    | `DATABASE_URL` | ✅ | Neon **pooled** URL (contains `-pooler`), `sslmode=require`. |
    | `MOCK_EXTERNAL_APIS` | recommended `true` | Email/Accelevents/Airtable run as logged mocks. |
    | `ALLOW_DEMO_RESET` | optional | `true` only if you want the reset endpoint live. Keep unset in prod. |
-   | `DEMO_PERSONA_LOGIN_ENABLED` | **production required for the demo** | Must be exactly `true` for the one-click `/login` personas to work in production (GRA2-01). Anything else — unset, `false`, `TRUE`, `1` — refuses them and hides the buttons; the email/password form still works. The gate keys on `NODE_ENV=production`, which `next start` also sets — so the smoke harnesses (which run a production build) pass the flag explicitly, while `next dev` and unit tests need nothing. |
+   | `DEMO_PERSONA_LOGIN_ENABLED` | **production required for the demo** | Must be exactly `true` for the one-click `/login` personas to work in production (GRA2-01). Anything else — unset, `false`, `TRUE`, `1` — refuses them and hides the buttons; the email/password form still works for real accounts, but it also refuses the seeded demo identities, because their passwords are public in this repository (SEC-01). The gate keys on `NODE_ENV=production`, which `next start` also sets — so the smoke harnesses (which run a production build) pass the flag explicitly, while `next dev` and unit tests need nothing. |
    | `APP_URL` | optional | Public URL for absolute links in emails/`.ics`; production should use the canonical `https://greenroom-hq.com`. |
    | `RESEND_API_KEY` / `RESEND_FROM` | optional | Both are required for live email; use a sender verified for the deployment's domain and keep mocks on otherwise. Submission, decision, and reminder mail share the same audited delivery path—see "Email status" below. |
    | `ACCELEVENTS_BASE_URL` / `AIRTABLE_API_KEY` | optional | Enable the corresponding real integration when present. |
@@ -174,6 +174,11 @@ Idempotent, deterministic seed for the whole golden path.
 npm run db:seed          # = tsx prisma/seed.ts
 ```
 
+With `NODE_ENV=production` the seed refuses to run unless `ALLOW_DEMO_RESET=true`
+(SEC-01). It writes demo identities whose passwords are public in this
+repository, so seeding a production database has to be deliberate. Even then,
+those identities can sign in only where `DEMO_PERSONA_LOGIN_ENABLED=true`.
+
 Rebuilds all demo-event data (wipes + recreates): 1 event, 4 categories,
 3 tracks, 4 rooms, **4 forms** (the public CFP plus three used inside tasks),
 40 abstracts across every status, an evaluation plan with 3 evaluators +
@@ -198,7 +203,7 @@ follow-ups become required only when the speaker asks for that support.
 
 ## Demo reset
 Two ways to rebuild demo data from a clean state:
-- **Script:** `npm run db:seed` (server-side, always available to operators).
+- **Script:** `npm run db:seed` (server-side; under `NODE_ENV=production` it requires `ALLOW_DEMO_RESET=true`, see "Demo seed").
 - **Endpoint:** `POST /api/admin/reset` — guarded by INV-RESET-001:
   - environment-gated: refused unless `ALLOW_DEMO_RESET=true`;
   - authorized: requires an **ADMIN** session;

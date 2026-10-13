@@ -149,12 +149,12 @@ function refuseUnavailable(req: Request, formEncoded: boolean, error: ApiError):
   return noStore(NextResponse.json({ ok: false, error: { code: error.code, message: error.message } }, { status: 503 }));
 }
 
-function establish(req: Request, formEncoded: boolean, session: DemoSession): Response {
+async function establish(req: Request, formEncoded: boolean, session: DemoSession): Promise<Response> {
   const home = homeForRole(session.role);
   const response = formEncoded
     ? loginRedirect(req, home)
     : NextResponse.json({ ok: true, data: { redirectTo: home, role: session.role } }, { status: 200 });
-  response.cookies.set(SESSION_COOKIE, encodeSession(session), {
+  response.cookies.set(SESSION_COOKIE, await encodeSession(session), {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
@@ -223,7 +223,7 @@ export async function POST(req: Request): Promise<Response> {
       findUser: findCredentialUser,
     });
     if (!session) return refuse(req, formEncoded);
-    return establish(req, formEncoded, session);
+    return await establish(req, formEncoded, session);
   } catch (error) {
     console.error("[login] attempt could not be completed", diagnosticLabel(error));
     return refuseUnavailable(req, formEncoded, new ApiError(503, "LOGIN_UNAVAILABLE", "Sign-in is temporarily unavailable."));
