@@ -92,3 +92,30 @@ test("an unterminated tag is never passed through verbatim", () => {
 test("a bare less-than in prose is escaped rather than left to start a tag", () => {
   assert.equal(sanitizeHtml("<p>1 < 2 and 3 > 2</p>"), "<p>1 &lt; 2 and 3 > 2</p>");
 });
+
+test("a leading slash followed by a backslash is not a same-origin path", () => {
+  // `safeHref` admits a leading `/` as this app's own path. Browsers normalize
+  // `\` to `/` in the authority position, so `/\evil.test` and `/\/evil.test`
+  // resolve to `https://evil.test/` — a protocol-relative URL wearing the shape
+  // of a local path. `//evil.test` was already refused; these are the same URL.
+  for (const href of [
+    "/\\evil.test",
+    "/\\\\evil.test",
+    "/\\/evil.test",
+    "/\t\\evil.test",
+    "/ \\evil.test",
+    "/\\evil.test/phish?next=/admin",
+  ]) {
+    const attribute = href.replace(/"/g, "&quot;");
+    assert.equal(
+      sanitizeHtml(`<a href="${attribute}">x</a>`),
+      "<a>x</a>",
+      `${JSON.stringify(href)} must not survive as an href`,
+    );
+  }
+  // Non-vacuity: an ordinary internal path is still a link.
+  assert.match(sanitizeHtml('<a href="/admin/speakers">x</a>'), /^<a href="\/admin\/speakers"/);
+  assert.match(sanitizeHtml('<a href="/api/files/clx1111111111">x</a>'), /^<a href="\/api\/files\//);
+  // And a backslash INSIDE a path, where no browser reads an authority, is fine.
+  assert.match(sanitizeHtml('<a href="/docs/a\\b">x</a>'), /^<a href="\/docs\/a\\b"/);
+});

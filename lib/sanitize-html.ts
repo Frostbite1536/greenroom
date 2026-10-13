@@ -28,7 +28,15 @@ function safeHref(value: string): string | null {
   if (normalized.startsWith("http://") || normalized.startsWith("https://") || normalized.startsWith("mailto:")) {
     return trimmed;
   }
-  if (normalized.startsWith("/") && !normalized.startsWith("//")) return trimmed;
+  // A leading `/` is this app's own path — unless the NEXT character is another
+  // slash or a backslash. `//evil.test` is a protocol-relative URL, and browsers
+  // normalize `\` to `/` in the authority position, so `/\evil.test` resolves to
+  // `https://evil.test/` exactly as `//evil.test` does. The control-character
+  // strip above has already collapsed `/ \evil.test` and `/<TAB>\evil.test` into
+  // the same two characters, so one check covers the padded forms too. A
+  // backslash further along a path is left alone: no browser reads an authority
+  // there.
+  if (normalized.startsWith("/") && !/^\/[\\/]/.test(normalized)) return trimmed;
   return null;
 }
 
