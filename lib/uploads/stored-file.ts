@@ -315,3 +315,51 @@ export function storedFileCacheControl(kind: StoredFileKindValue): string {
 export function storedFileDisposition(kind: StoredFileKindValue): string {
   return kind === "HEADSHOT" ? "inline" : "attachment";
 }
+
+/**
+ * The policy a stored file is served under: fetch nothing, frame nothing, run
+ * nothing, and be its own opaque origin.
+ *
+ * `next.config.mjs` deliberately excludes `/api/` from its Content-Security-
+ * Policy rule, because several API routes set stricter headers of their own and
+ * two matching rules for one header emit two policies. The consequence is that
+ * `GET /api/files/:id` — the ONE route in this app that hands back bytes a user
+ * chose — had no CSP at all. `nosniff` plus a server-derived `Content-Type`
+ * already stops a `.png` full of HTML coming back as a document, but it is the
+ * only thing that does, and it says nothing about a file whose real type a
+ * browser is entitled to render (an SVG headshot, a PDF opened inline).
+ *
+ * `default-src 'none'` denies every fetch the file could make; `sandbox` with
+ * no tokens withholds scripts, forms, popups and — because `allow-same-origin`
+ * is absent — same-origin privileges, so the bytes cannot reach this app's
+ * cookies or storage even while served from its own host. Both are the
+ * strictest form of their directive; neither is widened per kind, because the
+ * uploader of a public headshot and the uploader of a private deck are the same
+ * kind of untrusted author.
+ */
+export const STORED_FILE_CONTENT_SECURITY_POLICY = "default-src 'none'; sandbox";
+
+/**
+ * Every header the serving route answers with, so the policy lives beside the
+ * caching and disposition rules it belongs with rather than inline in the route
+ * — the same reason `storedFileCacheControl` is not an inline ternary there.
+ *
+ * `byteLength` is the length of the body actually being written, never a
+ * client's claim: the route passes the materialized `Uint8Array`'s own length.
+ */
+export function storedFileResponseHeaders(file: {
+  mime: string;
+  kind: StoredFileKindValue;
+  byteLength: number;
+}): Record<string, string> {
+  return {
+    // The server's verdict on what these bytes are, from the stored column.
+    "Content-Type": file.mime,
+    "Content-Length": String(file.byteLength),
+    "Cache-Control": storedFileCacheControl(file.kind),
+    "Content-Disposition": storedFileDisposition(file.kind),
+    // Makes the declared type binding, which is the whole point of storing it.
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": STORED_FILE_CONTENT_SECURITY_POLICY,
+  };
+}

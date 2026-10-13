@@ -13,6 +13,7 @@ import {
   sniffMime,
   storedFileCacheControl,
   storedFileDisposition,
+  storedFileResponseHeaders,
   storedFileIdFromPath,
   storedFileMaxBytes,
   storedFilePath,
@@ -329,6 +330,48 @@ test("only the public kind gets a shared cache, and only the public kind renders
     // never serve some of its rows inline on the app's own origin.
     assert.equal(storedFileDisposition(kind), "attachment", kind);
   }
+});
+
+/**
+ * `GET /api/files/:id` is the one route that hands back bytes a user chose, and
+ * `next.config.mjs` excludes `/api/` from its Content-Security-Policy rule, so
+ * nothing above the route supplies one. These headers are therefore the whole
+ * policy for a user-supplied file opened on this app's own origin.
+ */
+test("a served file carries a policy that lets it fetch, frame and run nothing", () => {
+  for (const kind of STORED_FILE_KINDS) {
+    const headers = storedFileResponseHeaders({ mime: "application/pdf", kind, byteLength: 11 });
+    const csp = headers["Content-Security-Policy"];
+    assert.equal(csp, "default-src 'none'; sandbox", kind);
+    // Stated as properties too, so a later widening has to argue with the test
+    // rather than just change a string it happens to match.
+    assert.match(String(csp), /\bdefault-src 'none'/, kind);
+    assert.match(String(csp), /\bsandbox\b/, kind);
+    assert.doesNotMatch(String(csp), /unsafe-inline|unsafe-eval|allow-scripts|allow-same-origin|https?:|\*/, kind);
+    // The declared type stays binding: nosniff is what makes it so, and it is
+    // not traded away for the new header.
+    assert.equal(headers["X-Content-Type-Options"], "nosniff", kind);
+  }
+});
+
+test("the served headers are the stored row's own facts, with the shared cache and disposition policy", () => {
+  const headshot = storedFileResponseHeaders({ mime: "image/png", kind: "HEADSHOT", byteLength: 2048 });
+  assert.equal(headshot["Content-Type"], "image/png");
+  // The real byte length of what is being written, never a client's claim.
+  assert.equal(headshot["Content-Length"], "2048");
+  assert.equal(headshot["Cache-Control"], storedFileCacheControl("HEADSHOT"));
+  assert.equal(headshot["Content-Disposition"], storedFileDisposition("HEADSHOT"));
+
+  const deck = storedFileResponseHeaders({ mime: "application/pdf", kind: "SLIDE_DECK", byteLength: 7 });
+  assert.equal(deck["Cache-Control"], "private, no-store");
+  assert.equal(deck["Content-Disposition"], "attachment");
+
+  // A real Response built from them exposes exactly these, so the route cannot
+  // be carrying a policy the unit test never sees.
+  const response = new Response(new Uint8Array(7), { status: 200, headers: deck });
+  assert.equal(response.headers.get("content-security-policy"), "default-src 'none'; sandbox");
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(response.headers.get("content-type"), "application/pdf");
 });
 
 const artifact = { kind: "TASK_ARTIFACT" as StoredFileKindValue, uploaderUserId: "owner", eventId: "e1" };

@@ -1,11 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getApiContext } from "@/lib/api/context";
 import { ApiError, handle } from "@/lib/api/http";
-import {
-  canReadStoredFile,
-  storedFileCacheControl,
-  storedFileDisposition,
-} from "@/lib/uploads/stored-file";
+import { canReadStoredFile, storedFileResponseHeaders } from "@/lib/uploads/stored-file";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -27,6 +23,11 @@ export const dynamic = "force-dynamic";
  * server sniffed out of the bytes at upload, never a string a client supplied.
  * With the deployment-wide `X-Content-Type-Options: nosniff` that makes the
  * declared type binding, which is the whole point of storing it.
+ *
+ * The response headers are `storedFileResponseHeaders`', not this file's:
+ * caching, disposition and the sandboxing Content-Security-Policy are all
+ * policy, and `next.config.mjs` excludes `/api/` from its CSP rule on purpose,
+ * so the one route serving user-chosen bytes has to carry its own.
  */
 
 type Params = { params: Promise<{ id: string }> };
@@ -52,17 +53,15 @@ export function GET(req: Request, ctx: Params) {
     if (!canReadStoredFile(file, viewer)) throw notFound();
 
     const body = Uint8Array.from(file.bytes);
+    // Every header comes from the policy module, including the sandboxing CSP
+    // that `next.config.mjs` cannot supply because it excludes `/api/`.
     return new Response(body, {
       status: 200,
-      headers: {
-        "Content-Type": file.mime,
-        "Content-Length": String(body.byteLength),
-        "Cache-Control": storedFileCacheControl(file.kind),
-        "Content-Disposition": storedFileDisposition(file.kind),
-        // Belt and braces beside the deployment-wide header: this is the one
-        // route that serves bytes a user chose.
-        "X-Content-Type-Options": "nosniff",
-      },
+      headers: storedFileResponseHeaders({
+        mime: file.mime,
+        kind: file.kind,
+        byteLength: body.byteLength,
+      }),
     });
   })(req);
 }
