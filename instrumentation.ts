@@ -11,6 +11,11 @@ import { getServerEnv, ServerEnvError } from "@/lib/env";
  * request first happened to touch the broken thing, which is both later and
  * much harder to read than a failed deploy.
  *
+ * The same gap applied to a variable the schema could not express at all: a
+ * production deployment with NO `SESSION_SECRET` booted green, because the
+ * schema has to keep that variable optional for development. It now refuses
+ * here, where a deploy can see it, instead of 503-ing every sign-in later.
+ *
  * `register()` is Next's supported hook for exactly this: it runs once per
  * server instance and **must complete before the server handles requests**
  * (`node_modules/next/dist/docs/01-app/03-api-reference/03-file-conventions/`

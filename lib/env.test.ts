@@ -136,6 +136,112 @@ test("D-02: the refusal never echoes the rejected value", () => {
   assert.equal(rendered.includes("hunter2"), false);
 });
 
+/**
+ * `NODE_ENV` is deliberately NOT one of the managed variables above: it is
+ * Node's, not this deployment's, and the schema never reads it as data. It is
+ * patched here because it is the one input that decides whether a missing
+ * `SESSION_SECRET` is a supported configuration or a refusal.
+ */
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+
+function withNodeEnv<T>(nodeEnv: string | undefined, fn: () => T): T {
+  const env = process.env as Record<string, string | undefined>;
+  try {
+    if (nodeEnv === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = nodeEnv;
+    return fn();
+  } finally {
+    if (ORIGINAL_NODE_ENV === undefined) delete env.NODE_ENV;
+    else env.NODE_ENV = ORIGINAL_NODE_ENV;
+  }
+}
+
+const GOOD_DATABASE_URL = "postgresql://user:pw@db.example.test:5432/greenroom";
+const GOOD_SECRET = "a".repeat(32);
+
+test("a production boot with no SESSION_SECRET is refused, by name", () => {
+  // The documented rule (DECISIONS: \"required in production\"; DEPLOY: \"fails
+  // closed without it\") was enforced at the FIRST SIGN-IN, not at boot: the
+  // schema made it `.optional()`, so `register()` passed, the health check
+  // answered 200, and every `/login` then 503'd. A deployment that cannot
+  // authenticate anyone is a failed deployment and must look like one.
+  for (const value of [undefined, "", "    "]) {
+    assert.throws(
+      () => withNodeEnv("production", () => withEnv({ DATABASE_URL: GOOD_DATABASE_URL, SESSION_SECRET: value }, getServerEnv)),
+      (error: unknown) =>
+        error instanceof ServerEnvError &&
+        error.variables.includes("SESSION_SECRET") &&
+        /SESSION_SECRET/.test(error.message),
+      `${JSON.stringify(value)} must be refused in production`,
+    );
+  }
+  // And the reason names production, so an operator is not left guessing why
+  // the same configuration worked locally.
+  try {
+    withNodeEnv("production", () => withEnv({ DATABASE_URL: GOOD_DATABASE_URL }, getServerEnv));
+    assert.fail("a production boot with no SESSION_SECRET must throw");
+  } catch (error) {
+    assert.ok(error instanceof ServerEnvError);
+    assert.match(error.message, /SESSION_SECRET is required in production/);
+  }
+});
+
+test("a production SESSION_SECRET below the floor is refused without echoing it", () => {
+  const short = "hunter2-SHORT-PRODUCTION-SECRET";
+  assert.equal(short.length < 32, true, "the fixture must actually be short");
+  try {
+    withNodeEnv("production", () => withEnv({ DATABASE_URL: GOOD_DATABASE_URL, SESSION_SECRET: short }, getServerEnv));
+    assert.fail("a short production secret must throw");
+  } catch (error) {
+    assert.ok(error instanceof ServerEnvError);
+    assert.ok(error.variables.includes("SESSION_SECRET"));
+    const rendered = `${error.message} ${JSON.stringify(error.variables)} ${error.stack ?? ""}`;
+    assert.equal(rendered.includes(short), false, "this string reaches a deploy log");
+    assert.equal(rendered.includes("hunter2"), false);
+    assert.match(error.message, /at least 32 characters/);
+  }
+});
+
+test("a production boot with a usable SESSION_SECRET parses", () => {
+  const env = withNodeEnv("production", () =>
+    withEnv({ DATABASE_URL: GOOD_DATABASE_URL, SESSION_SECRET: GOOD_SECRET }, getServerEnv),
+  );
+  assert.equal(env.SESSION_SECRET, GOOD_SECRET);
+  // Trimmed by the schema, exactly as `getServerSigningSecret` trims it, so the
+  // boot check and the signer cannot disagree about what counts.
+  const padded = withNodeEnv("production", () =>
+    withEnv({ DATABASE_URL: GOOD_DATABASE_URL, SESSION_SECRET: `  ${GOOD_SECRET}  ` }, getServerEnv),
+  );
+  assert.equal(padded.SESSION_SECRET, GOOD_SECRET);
+});
+
+test("outside production an absent SESSION_SECRET is still a supported configuration", () => {
+  // This is what keeps `npm test`, `next dev`, the seeds and the local golden
+  // path running with DATABASE_URL as the only variable anyone must set —
+  // `lib/server-signing.ts` supplies the non-production fallback.
+  for (const nodeEnv of [undefined, "development", "test"]) {
+    const env = withNodeEnv(nodeEnv, () => withEnv({ DATABASE_URL: GOOD_DATABASE_URL }, getServerEnv));
+    assert.equal(env.SESSION_SECRET, undefined, `NODE_ENV=${String(nodeEnv)} must stay bootable`);
+  }
+  // A near-miss spelling is not production: the check is an exact match, the
+  // same rule `arePersonaLoginsEnabled` already applies.
+  for (const nodeEnv of ["PRODUCTION", "prod", "production-like"]) {
+    const env = withNodeEnv(nodeEnv, () => withEnv({ DATABASE_URL: GOOD_DATABASE_URL }, getServerEnv));
+    assert.equal(env.SESSION_SECRET, undefined, `NODE_ENV=${nodeEnv} is not production`);
+  }
+});
+
+test("a production refusal reports every broken variable at once, not just the first", () => {
+  try {
+    withNodeEnv("production", () => withEnv({ DATABASE_URL: "mysql://user:pw@db/greenroom" }, getServerEnv));
+    assert.fail("must throw");
+  } catch (error) {
+    assert.ok(error instanceof ServerEnvError);
+    // One deploy, one list of things to fix.
+    assert.deepEqual([...error.variables].sort(), ["DATABASE_URL", "SESSION_SECRET"]);
+  }
+});
+
 test("D-02: getServerEnv is actually wired to Next's boot hook", () => {
   // The whole finding was an unreferenced schema. Pin the call site, or the
   // validation quietly becomes dead code again.

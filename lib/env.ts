@@ -53,6 +53,8 @@ const envSchema = z.object({
   OPENAI_API_KEY: openAiApiKeySchema,
   // Required in production for signed auth cookies; development/test gets an
   // intentionally non-production fallback so local demo tooling stays usable.
+  // `.optional()` is what makes that fallback possible, so the production
+  // requirement cannot live in the schema — see `productionSessionSecretIssue`.
   SESSION_SECRET: sessionSecretSchema,
   // Public base URL of the deployment (used for absolute links in emails/.ics).
   APP_URL: z.string().url().optional(),
@@ -119,20 +121,70 @@ function describeIssue(issue: z.ZodIssue): string {
   }
 }
 
+/**
+ * The one rule the schema cannot carry: a production deployment must HAVE a
+ * session secret.
+ *
+ * `sessionSecretSchema` is `.optional()` on purpose — `lib/server-signing.ts`
+ * supplies a non-production fallback so `npm test`, `next dev`, the seeds and
+ * the local golden path run with `DATABASE_URL` as the only variable anyone
+ * must set. The side effect was that production inherited the same optionality:
+ * a deployment with no `SESSION_SECRET` booted green and reported healthy, and
+ * then `signCookiePayload` threw on every sign-in, which the API surfaces as a
+ * 503. Every doc already claimed otherwise — DECISIONS ("required in
+ * production"), DEPLOY.md ("the app fails closed without it in production"),
+ * README — and a deployment that can authenticate nobody is a failed
+ * deployment that must look like one, at boot, where a deploy gate can see it.
+ *
+ * `NODE_ENV` is read here rather than through `readServerEnv` because it is
+ * Node's variable, not this deployment's, and is never schema data. The
+ * comparison is an exact `=== "production"`, the same fail-closed rule
+ * `arePersonaLoginsEnabled` applies, so `"PRODUCTION"` or `"prod"` is not
+ * production.
+ *
+ * `next build` is unaffected: Next calls `register()` when a SERVER instance
+ * starts, not during a build — confirmed on this tree by `npm run build`
+ * passing with no `DATABASE_URL`, which this same schema requires.
+ *
+ * The returned reason is value-free, and the too-short wording is byte-identical
+ * to `describeIssue`'s `too_small` so the de-duplication below collapses the two
+ * into one line rather than saying it twice.
+ */
+function productionSessionSecretIssue(
+  value: string | undefined,
+  nodeEnv: string | undefined,
+): string | null {
+  if (nodeEnv !== "production") return null;
+  const trimmed = (value ?? "").trim();
+  if (trimmed.length >= SESSION_SECRET_MIN_LENGTH) return null;
+  if (trimmed.length === 0) return "is required in production";
+  return `must be at least ${SESSION_SECRET_MIN_LENGTH} characters`;
+}
+
 export function getServerEnv(): ServerEnv {
   const parsed = envSchema.safeParse(readServerEnv());
-  if (parsed.success) return parsed.data;
+  const sessionSecret = productionSessionSecretIssue(
+    process.env.SESSION_SECRET,
+    process.env.NODE_ENV,
+  );
+  if (parsed.success && !sessionSecret) return parsed.data;
 
   // De-duplicated per variable: `DATABASE_URL` alone can raise two issues (not
   // a URL, and not postgresql://) and an operator does not need it twice.
   const byVariable = new Map<string, string[]>();
-  for (const issue of parsed.error.issues) {
-    const name = issue.path.map(String).join(".") || "(unknown variable)";
+  const addReason = (name: string, reason: string) => {
     const reasons = byVariable.get(name) ?? [];
-    const reason = describeIssue(issue);
     if (!reasons.includes(reason)) reasons.push(reason);
     byVariable.set(name, reasons);
+  };
+  if (!parsed.success) {
+    for (const issue of parsed.error.issues) {
+      addReason(issue.path.map(String).join(".") || "(unknown variable)", describeIssue(issue));
+    }
   }
+  // Reported alongside the schema's own issues rather than thrown separately, so
+  // one deploy still produces one list of everything to fix.
+  if (sessionSecret) addReason("SESSION_SECRET", sessionSecret);
   const variables = [...byVariable.keys()];
   const detail = variables
     .map((name) => {
