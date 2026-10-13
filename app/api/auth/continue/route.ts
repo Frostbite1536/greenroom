@@ -62,7 +62,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     const home = homeForRole(membership.role);
-    const signed = encodeSession({ user: pending.user, event: membership.event, role: membership.role });
+    const signed = await encodeSession({ user: pending.user, event: membership.event, role: membership.role });
     const response = formEncoded
       ? authRedirect(req, home)
       : NextResponse.json({ ok: true, data: { redirectTo: home, pending: false } }, { status: 200 });
