@@ -673,3 +673,33 @@ covered, and named rather than implied: session content editing, form and settin
 changes, team and membership changes, task and evaluation writes, and imports.
 Adding one is a `recordAudit` call inside a transaction that already exists, plus a
 field list in `lib/services/audit-log.ts`.
+
+## Public demo credentials sign in only where demo logins are enabled (SEC-01)
+
+A 2026-10-13 security review proved an admin takeover on a self-hosted
+deployment. The seed writes demo identities whose passwords are committed to this
+repository (D-C5-6 made them public on purpose, for the evaluation harness), and
+nothing stopped those identities from signing in through the email/password form.
+`DEMO_PERSONA_LOGIN_ENABLED` gated only the one-click buttons. So an operator who
+followed the documented install path and ran `npm run db:seed` against a
+production database gave ADMIN to anyone who had read the repository. The proof
+was a seed run with `NODE_ENV=production`, then a sign-in as the admin persona,
+then a speaker-roster export with emails.
+
+**Credential sign-in now refuses the seeded demo identities unless demo logins
+are enabled.** `resolveCredentialSession` checks `DEMO_CREDENTIAL_EMAILS` (the
+persona and fixture addresses, exported from the seed without their passwords)
+against the same `arePersonaLoginsEnabled()` gate as the buttons. A demo
+deployment sets the flag and keeps every documented credential working; a real
+deployment that seeded by mistake exposes nothing. The check runs after password
+verification and returns the ordinary refusal, so it costs and reads exactly like
+a wrong password.
+
+**The seed itself refuses `NODE_ENV=production` unless `ALLOW_DEMO_RESET=true`**,
+the same opt-in the reset route already required (INV-RESET-001). The refusal is
+raised before any hashing or database work.
+
+Gating at sign-in rather than only at the seed was deliberate. An operator who
+seeds production from a laptop does not have `NODE_ENV=production` set, so only
+the sign-in gate covers that path. Rotating the passwords was rejected: they are
+public by design, and a new value committed here would be just as public.

@@ -1,6 +1,8 @@
 import type { UserRole } from "@prisma/client";
 import type { DemoSession } from "@/lib/auth";
 import { DEFAULT_PUBLIC_EVENT } from "@/lib/default-event";
+import { DEMO_CREDENTIAL_EMAILS } from "@/lib/demo/seed";
+import { arePersonaLoginsEnabled } from "@/lib/env";
 import { PASSWORD_MAX_LENGTH, verifyPassword } from "@/lib/password-credential";
 
 /**
@@ -99,6 +101,8 @@ export async function resolveCredentialSession(input: {
   password: string;
   findUser: (email: string) => Promise<CredentialUserRecord | null>;
   verify?: (password: string, stored: string | null) => Promise<boolean>;
+  /** Defaults to the persona-login gate; injected only so tests can pin it. */
+  demoCredentialsAllowed?: boolean;
 }): Promise<DemoSession | null> {
   const verify = input.verify ?? verifyPassword;
   const email = normalizeLoginEmail(input.email);
@@ -110,6 +114,12 @@ export async function resolveCredentialSession(input: {
   // derivation. Short-circuiting here would reintroduce the timing oracle.
   const matches = await verify(password, user?.passwordHash ?? null);
   if (!user || !matches) return null;
+
+  // SEC-01: a seeded demo identity's password is public, so it signs in only
+  // where demo logins are enabled. Checked after verification so the refusal
+  // costs and looks exactly like a wrong password.
+  const demoCredentialsAllowed = input.demoCredentialsAllowed ?? arePersonaLoginsEnabled();
+  if (!demoCredentialsAllowed && DEMO_CREDENTIAL_EMAILS.has(user.email.toLowerCase())) return null;
 
   const membership = pickCredentialMembership(user.memberships);
   // A credentialed identity with no membership has nowhere to land. Refusing it
