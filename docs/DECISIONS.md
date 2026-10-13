@@ -674,6 +674,53 @@ changes, team and membership changes, task and evaluation writes, and imports.
 Adding one is a `recordAudit` call inside a transaction that already exists, plus a
 field list in `lib/services/audit-log.ts`.
 
+## Public demo credentials sign in only where demo logins are enabled (SEC-01)
+
+A 2026-10-13 security review proved an admin takeover on a self-hosted
+deployment. The seed writes demo identities whose passwords are committed to this
+repository (D-C5-6 made them public on purpose, for the evaluation harness), and
+nothing stopped those identities from signing in through the email/password form.
+`DEMO_PERSONA_LOGIN_ENABLED` gated only the one-click buttons. So an operator who
+followed the documented install path and ran `npm run db:seed` against a
+production database gave ADMIN to anyone who had read the repository. The proof
+was a seed run with `NODE_ENV=production`, then a sign-in as the admin persona,
+then a speaker-roster export with emails.
+
+**Credential sign-in now refuses the seeded demo identities unless demo logins
+are enabled.** `resolveCredentialSession` checks `DEMO_CREDENTIAL_EMAILS` (the
+persona and fixture addresses, exported from the seed without their passwords)
+against the same `arePersonaLoginsEnabled()` gate as the buttons. A demo
+deployment sets the flag and keeps every documented credential working; a real
+deployment that seeded by mistake exposes nothing. The check runs after password
+verification and returns the ordinary refusal, so it costs and reads exactly like
+a wrong password.
+
+**The seed itself refuses `NODE_ENV=production` unless `ALLOW_DEMO_RESET=true`**,
+the same opt-in the reset route already required (INV-RESET-001). The refusal is
+raised before any hashing or database work.
+
+Gating at sign-in rather than only at the seed was deliberate. An operator who
+seeds production from a laptop does not have `NODE_ENV=production` set, so only
+the sign-in gate covers that path. Rotating the passwords was rejected: they are
+public by design, and a new value committed here would be just as public.
+
+## Every session-issuing route requires a same-origin request (SEC-02)
+
+A 2026-10-13 security review found that `POST /api/auth/reviewer-invites/accept`
+was the one session-issuing route without the same-origin gate that login,
+signup, forgot, reset, continue and switch-event all apply. A request from a
+foreign origin with a `text/plain` body (what an auto-submitting cross-site form
+produces, and it parses as JSON) consumed a valid invite and returned
+`Set-Cookie` for that invite's EVALUATOR identity. That is session fixation: a
+page holding the attacker's own invite could swap a visiting victim's session
+for the attacker's, so the victim's later reviews land in the attacker's
+account.
+
+The route now calls `isSameOriginAuthRequest` before it reads the body, and
+refuses with the shared `CROSS_ORIGIN_REFUSED` response. The accept page's own
+`fetch` is same-origin and sends `Origin`, so it is unaffected. The rule is that
+any new route that sets the session cookie takes this gate first.
+
 ## A session is bound to the credential it was issued under (SEC-03)
 
 A 2026-10-13 security review proved that sessions could not be revoked. Session

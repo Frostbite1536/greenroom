@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { SESSION_COOKIE, SESSION_TTL_SECONDS, encodeSession } from "@/lib/auth";
 import { ApiError, handle } from "@/lib/api/http";
+import { isSameOriginAuthRequest, refuseCrossOrigin } from "@/lib/api/auth-request";
 import { parseBoundedJson } from "@/lib/api/bounded-json";
 import { reviewerInviteAcceptSchema } from "@/types/api";
 import {
@@ -127,5 +128,16 @@ const accept = handle(async (req) => {
   return response;
 });
 
-/** POST only: scanners may fetch a link but cannot consume its fragment bearer. */
-export const POST = async (req: Request): Promise<Response> => noStore(await accept(req));
+/**
+ * POST only: scanners may fetch a link but cannot consume its fragment bearer.
+ *
+ * SEC-02: this route issues a session, so like every other session-issuing auth
+ * route it requires a positively same-origin request before anything else.
+ * Without it, a page holding the attacker's own invite could cross-site POST it
+ * (a `text/plain` form body parses as JSON) and swap the victim's session for the
+ * attacker's EVALUATOR identity.
+ */
+export const POST = async (req: Request): Promise<Response> => {
+  if (!isSameOriginAuthRequest(req)) return refuseCrossOrigin(req, false, "/reviewer-invite");
+  return noStore(await accept(req));
+};

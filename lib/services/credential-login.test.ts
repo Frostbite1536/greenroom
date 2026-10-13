@@ -188,3 +188,69 @@ test("the resolved session never carries the stored credential", async () => {
   assert.ok(session);
   assert.doesNotMatch(JSON.stringify(session), /passwordHash|stored-credential|right-password/);
 });
+
+/* SEC-01: seeded demo identities carry repository-known passwords. */
+
+const DEMO_ADMIN_EMAIL = "maya@greenroom-hq.com";
+
+function demoRecord(): CredentialUserRecord {
+  return record({ id: "demo-admin", name: "Maya Chen", email: DEMO_ADMIN_EMAIL, memberships: [{ role: "ADMIN", event: EVENT }] });
+}
+
+test("a demo identity's public credential is refused where demo logins are disabled, at the same cost", async () => {
+  const { verify, calls } = fakeVerify("right-password");
+  const session = await resolveCredentialSession({
+    email: DEMO_ADMIN_EMAIL,
+    password: "right-password",
+    findUser: async () => demoRecord(),
+    verify,
+    demoCredentialsAllowed: false,
+  });
+  assert.equal(session, null);
+  // The password was still verified once, exactly like a wrong-password attempt.
+  assert.equal(calls.length, 1);
+});
+
+test("the same demo identity signs in where demo logins are enabled", async () => {
+  const { verify } = fakeVerify("right-password");
+  const session = await resolveCredentialSession({
+    email: DEMO_ADMIN_EMAIL,
+    password: "right-password",
+    findUser: async () => demoRecord(),
+    verify,
+    demoCredentialsAllowed: true,
+  });
+  assert.equal(session?.role, "ADMIN");
+});
+
+test("disabling demo logins never affects a real identity", async () => {
+  const { verify } = fakeVerify("right-password");
+  const session = await resolveCredentialSession({
+    email: "speaker@example.test",
+    password: "right-password",
+    findUser: async () => record(),
+    verify,
+    demoCredentialsAllowed: false,
+  });
+  assert.equal(session?.role, "SPEAKER");
+});
+
+test("by default the demo gate follows the production persona-login flag", async () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, flag: process.env.DEMO_PERSONA_LOGIN_ENABLED };
+  const env = process.env as Record<string, string | undefined>;
+  const attempt = async () => {
+    const { verify } = fakeVerify("right-password");
+    return resolveCredentialSession({ email: DEMO_ADMIN_EMAIL, password: "right-password", findUser: async () => demoRecord(), verify });
+  };
+  try {
+    env.NODE_ENV = "production";
+    delete env.DEMO_PERSONA_LOGIN_ENABLED;
+    assert.equal(await attempt(), null);
+    env.DEMO_PERSONA_LOGIN_ENABLED = "true";
+    assert.equal((await attempt())?.role, "ADMIN");
+  } finally {
+    env.NODE_ENV = saved.NODE_ENV;
+    if (saved.flag === undefined) delete env.DEMO_PERSONA_LOGIN_ENABLED;
+    else env.DEMO_PERSONA_LOGIN_ENABLED = saved.flag;
+  }
+});
