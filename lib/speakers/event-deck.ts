@@ -20,6 +20,8 @@
  * and the second one is the reason this feature exists.
  */
 
+import { taskArtifactHref } from "@/lib/portal/task-artifact";
+
 export type SpeakerDeckSource = "event" | "profile";
 
 export type ResolvedSpeakerDeck = {
@@ -51,6 +53,32 @@ export function resolveSpeakerDeck(input: {
   const profileDeck = usable(input.profileDeckUrl);
   if (profileDeck) return { url: profileDeck, source: "profile" };
   return { url: null, source: null };
+}
+
+/**
+ * The `href` a resolved deck may be rendered with, or null when it may not be a
+ * link at all.
+ *
+ * GRA2-07. Both deck columns are validated with `z.string().url()`
+ * (`types/api.ts`, Architect-owned), and that accepts `javascript:alert(1)` and
+ * `data:text/html,…` — a speaker stores either through the ordinary profile
+ * save. The repo's standing answer is to re-filter at every renderer rather
+ * than at the schema (`safePublicImageUrl` in `lib/public-speakers.ts`,
+ * `taskArtifactHref` in `lib/portal/task-artifact.ts`), and the organizer
+ * roster is a renderer, so it filters too. React 19 already refuses to emit a
+ * `javascript:` href, so this is the consistency half of that rule, not its
+ * only line of defence — but a deck's address and a task artefact's address
+ * are the same kind of stored string and must not be judged by two different
+ * rules depending on which column they landed in.
+ *
+ * The decision is deliberately `taskArtifactHref`'s rather than a second
+ * predicate: this app's own `/api/files/<id>` path, or an http(s) URL, or not a
+ * link. Null is a rendering instruction, not an error — the caller shows
+ * `deck.url` as plain text, because an organizer chasing a deck still needs to
+ * see whatever the speaker actually stored.
+ */
+export function speakerDeckHref(deck: ResolvedSpeakerDeck | null | undefined): string | null {
+  return taskArtifactHref(deck?.url);
 }
 
 /**

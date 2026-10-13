@@ -94,6 +94,14 @@ test("the deck rides beside the roster rows, not on them", () => {
   assert.doesNotMatch(exportRoute, /deck|Deck/);
 });
 
+test("the organizer roster links a deck only when the shared filter admits it", () => {
+  // GRA2-07 provenance: the decision is the shared function's, and the raw
+  // stored value is never the `href` on its own. Unit-tested in
+  // `event-deck.test.ts`; pinned here because only the page can be wrong.
+  assert.match(rosterPage, /const href = speakerDeckHref\(deck\);/);
+  assert.doesNotMatch(rosterPage, /<a href=\{deck\.url\}>/);
+});
+
 test("every surface that shows a deck names where it came from", () => {
   // Organizer roster.
   assert.match(rosterPage, /speakerDeckSourceLabel\(deck\.source\)/);
