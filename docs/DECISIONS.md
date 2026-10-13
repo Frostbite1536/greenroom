@@ -673,3 +673,20 @@ covered, and named rather than implied: session content editing, form and settin
 changes, team and membership changes, task and evaluation writes, and imports.
 Adding one is a `recordAudit` call inside a transaction that already exists, plus a
 field list in `lib/services/audit-log.ts`.
+
+## Every session-issuing route requires a same-origin request (SEC-02)
+
+A 2026-10-13 security review found that `POST /api/auth/reviewer-invites/accept`
+was the one session-issuing route without the same-origin gate that login,
+signup, forgot, reset, continue and switch-event all apply. A request from a
+foreign origin with a `text/plain` body (what an auto-submitting cross-site form
+produces, and it parses as JSON) consumed a valid invite and returned
+`Set-Cookie` for that invite's EVALUATOR identity. That is session fixation: a
+page holding the attacker's own invite could swap a visiting victim's session
+for the attacker's, so the victim's later reviews land in the attacker's
+account.
+
+The route now calls `isSameOriginAuthRequest` before it reads the body, and
+refuses with the shared `CROSS_ORIGIN_REFUSED` response. The accept page's own
+`fetch` is same-origin and sends `Origin`, so it is unaffected. The rule is that
+any new route that sets the session cookie takes this gate first.
