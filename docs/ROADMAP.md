@@ -4,7 +4,8 @@ What the product covers, in the order the capability areas were established.
 The live "not yet" list — the limitations an operator should know about before
 adopting Greenroom — is maintained in one place, the
 [evaluation index](judging/README.md#current-limitations), so it cannot drift
-from the shipped application.
+from the shipped application. The current state of `main`, the October security
+cycle, and the prioritized open work are in the [handoff](HANDOFF.md).
 
 ## Foundation
 
