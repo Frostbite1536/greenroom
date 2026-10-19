@@ -113,21 +113,88 @@ Greenroom did not place. Comparing it against the three winning entries:
   exploitable, because React 19 rewrites such hrefs at render. Another seemed
   minor and was a full admin takeover.
 
-## Open work, in priority order
+## Open work
+
+Product work comes first; it is what the project owner cares about most. Measure
+it against the official eval kit (`swyx/killmysaas-evals`) as it lands, rather
+than only at the end. That loop is the main lesson above.
+
+### Product improvements, in priority order
+
+1. **Automated reminders and scheduled sends.** The brief asks for "automated,
+   templated speaker communications"; today every reminder needs an admin to
+   click. The send path already exists, audited and idempotent
+   (`lib/comms/send.ts`, `app/api/comms/reminders`). What is missing is a trigger:
+   - a Vercel Cron entry in `vercel.json`, or an external scheduler, calling an
+     authenticated route;
+   - per-task "remind N days before the deadline" and "remind overdue speakers"
+     rules;
+   - a visible "next send" schedule on the admin side, so an organizer can see
+     what will go out.
+2. **Advisory AI review that keeps scoring human.** Scoring stays human by
+   design, and AI stays optional. The brief's "optional AI-assisted review" can
+   still be met without the AI ever scoring:
+   - a labelled AI summary on the review screen: key claims, fit to the
+     category, missing information, likely duplicates;
+   - kept out of every tally, never saved as a score, behind an on/off setting.
+
+   Reuse the closed-projection pattern in `lib/assistant/decision-note.ts` (only
+   allow-listed fields reach the prompt) and the client in
+   `lib/assistant/client.ts`.
+3. **Multi-round review: promote a shortlist.** Rounds exist (`EvaluationPlan`
+   with a per-event `ordinal`, `prisma/schema.prisma`), but round 2 means
+   assigning everything again by hand. Add "advance the top N, or everything
+   above a score, to the next round", carrying reviewer pools and blind
+   settings, with a preview before it writes (the pattern
+   `app/api/agenda/autoplace` already uses).
+4. **HTML embeds in resource/wiki pages.** The brief asks for "HTML embed
+   support for existing reference material". The sanitizer drops every `iframe`
+   (`lib/sanitize-html.ts`); the editor says so honestly
+   (`components/resource-manager.tsx`). Add an allowlist of embed hosts (Google
+   Docs and Slides, YouTube, Loom, Notion), rendered as sandboxed iframes.
+   Keep INV-HTML-001 (sanitize before store and render), and test it the way the
+   sanitizer is tested.
+5. **The first five minutes, for organizers and evaluators.**
+   - A new sign-up lands on an empty `/welcome` (`app/welcome/page.tsx`; README
+     limitation #1). Offer a guided "create your first event" with a sample
+     programme, or one click into the demo event.
+   - Record the walkthrough video (`docs/judging/VIDEO-SCRIPT.md` is ready).
+   - Put copyable demo credentials beside the persona buttons.
+   - Lead the evaluation docs with "what to try", not commit provenance.
+6. **Airtable as a two-way source.** Today it is a one-way mirror
+   (`lib/airtable/mirror.ts`). The organizer said the bonus is "airtable as
+   source of truth": pull team-side edits back on a schedule, with explicit
+   conflict rules, and never read Airtable inside a request.
+7. **Agenda polish.**
+   - Day-grid blocks clip their own text (visible in
+     `docs/judging/screenshots/agenda-day.png`).
+   - Consider an organizer setting to flag rather than block a speaker
+     double-booking, since some chairs want that. Room clashes must stay refused
+     (INV-SCHEDULE-001), and the current strict behaviour must remain the default
+     (`components/agenda-builder.tsx`).
+8. **Multi-event organizers.** Every screen shows one event, and speaker
+   profiles don't carry across events. Add a cross-event speaker directory
+   (reuse a speaker's bio and headshot next year) and an event switcher that
+   shows everything a person belongs to.
+9. **Accelevents, for real.** `lib/accelevents/push.ts` posts a
+   Greenroom-shaped envelope to an operator-supplied endpoint, not to
+   Accelevents' API. The organizer waived this item ("skip accelevents its
+   fine"), so it is last. Build it only if a buyer asks.
+
+### Engineering and operations, in priority order
 
 1. **Click-test a one-click persona button** on the live `/login`. That path
    (`app/login/actions.ts`) changed in #116; only its email/password sibling was
    verified live.
 2. **Make Playwright part of CI.** `e2e/golden-path.spec.ts` exists but no
    workflow runs it. It needs the Postgres service, `E2E_EXPECTED_DB`, and a
-   seeded database.
+   seeded database. Do this before the product work above grows the surface.
 3. **Shrink the source-text tests.** 94 of 210 test files `readFileSync` their
    subject. Convert the ones that guard behaviour into tests that run it, and
    report the rest separately so the headline count isn't discounted.
 4. **Add a linter.** There is no ESLint config or `lint` script.
-5. **Automate reminders.** There is no scheduler; reminders go out only when an
-   admin clicks. Vercel Cron, or an external trigger hitting an authenticated
-   route, would cover the brief's "automated" communications.
+5. **Move uploaded files out of Postgres.** They are stored as `Bytes`; object
+   storage (Vercel Blob, or S3/R2) is needed before real speaker decks pile up.
 6. **Product decisions left open by the security review** (need a call, not a
    bug fix):
    - a per-user / per-event **upload byte quota** (attempts are throttled, bytes
@@ -143,5 +210,3 @@ Greenroom did not place. Comparing it against the three winning entries:
    the trade-off).
 8. **Raise the CI audit to `--audit-level=high`** once Prisma ships a stable
    release with `deepmerge-ts` ≥ 8.
-9. **Design debts:** uploaded files stored as Postgres `Bytes`, and screens
-   showing one event at a time.
